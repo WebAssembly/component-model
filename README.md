@@ -1,27 +1,13 @@
 # Component Model design and specification
 
-This repository contains documents describing the high-level [goals],
-[use cases], [design choices] and [FAQ] of the component model.
+This repository describes the high-level [goals], [use cases], [design choices]
+and [FAQ] of the component model as well as a more-detailed [explainer] and
+[binary format] covering the initial Minimum Viable Product (MVP) release.
 
-In the future, as proposals get merged, the repository will additionally
-contain the spec, a reference interpreter, a test suite, and directories for
-each proposal with the proposal's explainer and specific design documents.
+In the future, this repository will additionally contain a [formal spec],
+reference interpreter and test suite.
 
-## Design Process & Contributing
-
-At this early stage, this repository only contains high-level design documents
-and discussions about the Component Model in general. Detailed explainers,
-specifications and discussions are broken into the following two repositories
-which, together, will form the "MVP" of the Component Model:
-
-* The [module-linking] proposal will initialize the Component Model
-  specification, adding the ability for WebAssembly to import, nest,
-  instantiate and link multiple Core WebAssembly modules without host-specific
-  support.
-
-* The [interface-types] proposal will extend the Component Model specification
-  with a new set of high-level types for defining shared-nothing,
-  language-neutral "components".
+## Contributing
 
 All Component Model work is done as part of the [W3C WebAssembly Community Group].
 To contribute to any of these repositories, see the Community Group's
@@ -32,7 +18,8 @@ To contribute to any of these repositories, see the Community Group's
 [use cases]: design/high-level/UseCases.md
 [design choices]: design/high-level/Choices.md
 [FAQ]: design/high-level/FAQ.md
-[module-linking]: https://github.com/webassembly/module-linking/
-[interface-types]: https://github.com/webassembly/interface-types/
+[explainer]: design/mvp/Explainer.md
+[binary format]: design/mvp/Binary.md
+[formal spec]: spec/
 [W3C WebAssembly Community Group]: https://www.w3.org/community/webassembly/
 [Contributing Guidelines]: https://webassembly.org/community/contributing/
