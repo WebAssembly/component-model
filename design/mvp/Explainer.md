@@ -172,9 +172,9 @@ there are two kinds of "targets" for an alias: the `export` of a component
 instance, or a local definition of an `outer` component that contains the
 current component:
 ```
-alias       ::= (alias <aliastarget>)
-aliastarget ::= export <instanceidx> <name> <aliaskind>
-              | outer <outeridx> <idx> <aliaskind>
+alias       ::= (alias <aliastarget> <aliaskind>)
+aliastarget ::= export <instanceidx> <name>
+              | outer <outeridx> <idx>
 aliaskind   ::= (module <id>?)
               | (component <id>?)
               | (instance <id>?)
