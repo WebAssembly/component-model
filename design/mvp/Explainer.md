@@ -745,7 +745,7 @@ WebAssembly.instantiateStreaming(fetch('./a.wasm'), {
   two: "hi",
   three: {
     four: {
-      five: await WebAssembly.instantiateStreaming(fetch('./b.wasm'))
+      five: await WebAssembly.compileStreaming(fetch('./b.wasm'))
     }
   }
 });
