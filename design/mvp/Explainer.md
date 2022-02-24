@@ -304,22 +304,22 @@ deftype           ::= <moduletype>
                     | <instancetype>
                     | <functype>
                     | <valuetype>
-moduletype        ::= (module <moduletype-def>*)
+moduletype        ::= (module <id>? <moduletype-def>*)
 moduletype-def    ::= <core:deftype>
                     | <core:import>
                     | (export <name> <core:importdesc>)
 core:deftype      ::= <core:functype>
                     | ... Post-MVP additions
-componenttype     ::= (component (componenttype-def)*)
+componenttype     ::= (component <id>? <componenttype-def>*)
 componenttype-def ::= <import>
                     | <instancetype-def>
 import            ::= (import <name> <deftype>)
-instancetype      ::= (instance (instancetype-def)*)
+instancetype      ::= (instance <id>? <instancetype-def>*)
 instancetype-def  ::= <type>
                     | <alias>
                     | (export <name> <deftype>)
-functype          ::= (func (param <name> <intertype>)* (result <intertype>))
-valuetype         ::= (value <intertype>)
+functype          ::= (func <id>? (param <name> <intertype>)* (result <intertype>))
+valuetype         ::= (value <id>? <intertype>)
 intertype         ::= unit | bool
                     | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64
                     | float32 | float64
@@ -342,6 +342,11 @@ restrict the target type while the formal text format would use something like
 resolving to a type definition (using `(type $T)` in cases where there is a
 grammatical ambiguity), or (3) an inline type definition that is desugared into
 a deduplicated out-of-line type definition.
+
+On another technical note: the optional `id` in all the `deftype` type
+constructors (e.g., `(module <id>? ...)`) is only allowed to be present in the
+context of `import` since this is the only context in which binding an
+identifier makes sense.
 
 Starting with interface types, the set of values allowed for the *fundamental*
 interface types is given by the following table:
@@ -609,7 +614,7 @@ definitions have actually already been defined above (with the caveat that the
 real text format for `import` definitions would additionally allow binding an
 identifier (e.g., adding the `$foo` in `(import "foo" (func $foo))`):
 ```
-import ::= already defined above as part of <type>, but allow binding an <id>
+import ::= already defined above as part of <type>
 export ::= already defined above as part of <instance>
 ```
 
