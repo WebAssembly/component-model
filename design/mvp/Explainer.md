@@ -17,6 +17,7 @@ native JavaScript runtime.
   * [JS API](#JS-API)
   * [ESM-integration](#ESM-integration)
 * [Examples](#examples)
+* [TODO](#TODO)
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
 this repo merges and supersedes the [Module Linking] and [Interface Types]
@@ -858,6 +859,17 @@ For some use-case-focused, worked examples, see:
 * [Link-time virtualization example](examples/LinkTimeVirtualization.md)
 * [Shared-everything dynamic linking example](examples/SharedEverythingDynamicLinking.md)
 * [Component Examples presentation](https://docs.google.com/presentation/d/11lY9GBghZJ5nCFrf4MKWVrecQude0xy_buE--tnO9kQ)
+
+
+## TODO
+
+The following features are needed to address the [MVP Use Cases](../high-level/UseCases.md)
+and will be added over the coming months to complete the MVP proposal:
+* concurrency support ([slides][Future And Stream Types])
+* abstract ("resource") types ([slides][Resource and Handle Types])
+* optional imports, definitions and exports (subsuming
+  [WASI Optional Imports](https://github.com/WebAssembly/WASI/blob/main/legacy/optional-imports.md)
+  and maybe [conditional-sections](https://github.com/WebAssembly/conditional-sections/issues/22))
 
 
 
