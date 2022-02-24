@@ -722,7 +722,7 @@ For example, the following component:
     (export "four" (instance
       (export "five" (module
         (import "six" "a" (func))
-        (export "six" "b" (func))
+        (import "six" "b" (func))
       ))
     ))
   ))
