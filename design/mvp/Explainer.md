@@ -830,14 +830,20 @@ Otherwise, function or value imports are treated like an [Imported Default Bindi
 and the Module Record is converted to its default value. This allows the following
 component:
 ```wasm
+;; bar.wasm
 (component
   (import "./foo.js" (func (result string)))
+  ...
 )
 ```
 to be satisfied by a JavaScript module via ESM-integration:
 ```js
 // foo.js
 export default () => "hi";
+```
+when `bar.wasm` is loaded as an ESM:
+```
+<script src="bar.wasm" type="module"></script>
 ```
 
 
