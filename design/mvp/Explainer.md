@@ -674,7 +674,8 @@ runtime invariants:
    the interim. This establishes a clear contract between separate components
    that both prevents obscure composition-time bugs and also enables
    more-efficient non-reentrant runtime glue code (particularly in the middle
-   of the [Canonical ABI](CanonicalABI.md)).
+   of the [Canonical ABI](CanonicalABI.md)). This implies that components by
+   default don't allow concurrency and multi-threaded access will trap.
 3. Components enforce the current informal rule that `start` functions are
    only for "internal" initialization by trapping if a component attempts to
    call a component import during instantiation. In Core WebAssembly, this
