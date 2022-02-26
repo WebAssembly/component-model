@@ -317,7 +317,7 @@ instancetype      ::= (instance <id>? <instancetype-def>*)
 instancetype-def  ::= <type>
                     | <alias>
                     | (export <name> <deftype>)
-functype          ::= (func <id>? (param <name> <intertype>)* (result <intertype>))
+functype          ::= (func <id>? (param <name>? <intertype>)* (result <intertype>))
 valuetype         ::= (value <id>? <intertype>)
 intertype         ::= unit | bool
                     | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64

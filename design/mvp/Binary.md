@@ -131,7 +131,8 @@ instancetype-def  ::= 0x01 t:<type>                             => t
 import            ::= n:<name> dt:<deftypeuse>                  => (import n dt)
 deftypeuse        ::= i:<typeidx>                               => type-index-space[i] (must be <deftype>)
 functype          ::= 0x4c param*:vec(<param>) t:<intertypeuse> => (func param* (result t))
-param             ::= n:<name> t:<intertypeuse>                 => (param n t)
+param             ::= 0x00 t:<intertypeuse>                     => (param t)
+                    | 0x01 n:<name> t:<intertypeuse>            => (param n t)
 valuetype         ::= 0x4b t:<intertypeuse>                     => (value t)
 intertypeuse      ::= i:<typeidx>                               => type-index-space[i] (must be <intertype>)
                     | pit:<primintertype>                       => pit
