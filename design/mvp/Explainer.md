@@ -113,9 +113,9 @@ instance     ::= (instance <id>? <instanceexpr>)
 instanceexpr ::= (instantiate (module <moduleidx>) (import <name> <modulearg>)*)
                | (instantiate (component <componentidx>) (import <name> <componentarg>)*)
                | <export>*
-               | <core:export>+
+               | core <core:export>*
 modulearg    ::= (instance <instanceidx>)
-               | (instance <core:export>+)
+               | (instance <core:export>*)
 componentarg ::= (module <moduleidx>)
                | (component <componentidx>)
                | (instance <instanceidx>)
@@ -153,12 +153,10 @@ passed as a `componentarg` when instantiating a component, not just instances.
 Component instantiation will be revisited below after introducing the
 prerequisite type and import definitions.
 
-Lastly, the `(instance <export>*)` and `(instance <core:export>+)`
+Lastly, the `(instance <export>*)` and `(instance <core:export>*)`
 expressions allow component and module instances to be created by directly
 tupling together preceding definitions, without the need to `instantiate`
-anything. To disambiguate the empty case, we observe that there is never
-a need to import an empty module instance and thus `(instance)` is an empty
-*component* instance. The "inline" forms of these expressions in `modulearg`
+anything. The "inline" forms of these expressions in `modulearg`
 and `componentarg` are text format sugar for the "out of line" form in
 `instanceexpr`. To show an example of how these instance-creation forms are
 useful, we'll first need to introduce the `alias` definitions in the next
