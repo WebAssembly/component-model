@@ -11,14 +11,14 @@ But roughly speaking:
 | `s8`, `s16`, `s32`, `s64`, `u8`, `u16`, `u32`, `u64` | lossless coercions are allowed |
 | `float32`, `float64`      | `float32 <: float64` |
 | `char`                    | |
-| `record`                  | fields can be reordered; covariant field payload subtyping; superfluous fields can be ignored in the subtype; `optional` fields can be ignored in the supertype |
+| `record`                  | fields can be reordered; covariant field payload subtyping; superfluous fields can be ignored in the subtype; `option` fields can be ignored in the supertype |
 | `variant`                 | cases can be reordered; contravariant case payload subtyping; superfluous cases can be ignored in the supertype; `defaults-to` cases can be ignored in the subtype |
 | `list`                    | covariant element subtyping |
 | `tuple`                   | `(tuple T ...) <: T` |
-| `optional`                | `T <: (optional T)` |
+| `option`                  | `T <: (option T)` |
 | `expected`                | `T <: (expected T _)` |
 | `union`                   | `T <: (union ... T ...)` |
-| `func`                    | parameter names must match in order; covariant parameter subtyping; superfluous parameters can be ignored in the subtype; `optional` parameters can be ignored in the supertype; contravariant result subtyping |
+| `func`                    | parameter names must match in order; covariant parameter subtyping; superfluous parameters can be ignored in the subtype; `option` parameters can be ignored in the supertype; contravariant result subtyping |
 
 The remaining specialized interface types inherit their subtyping from their
 fundamental interface types.

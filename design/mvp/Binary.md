@@ -158,7 +158,7 @@ intertype         ::= pit:<primintertype>                       => pit
                     | 0x6d n*:vec(<name>)                       => (flags n*)
                     | 0x6c n*:vec(<name>)                       => (enum n*)
                     | 0x6b t*:vec(<intertypeuse>)               => (union t*)
-                    | 0x6a t:<intertypeuse>                     => (optional t)
+                    | 0x6a t:<intertypeuse>                     => (option t)
                     | 0x69 t:<intertypeuse> u:<intertypeuse>    => (expected t u)
 field             ::= n:<name> t:<intertypeuse>                 => (field n t)
 case              ::= n:<name> t:<intertypeuse> 0x0             => (case n t)

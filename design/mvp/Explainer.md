@@ -330,7 +330,7 @@ intertype         ::= unit | bool
                     | (flags <name>*)
                     | (enum <name>*)
                     | (union <intertype>*)
-                    | (optional <intertype>)
+                    | (option <intertype>)
                     | (expected <intertype> <intertype>)
 ```
 On a technical note: this type grammar uses `<intertype>` and `<deftype>`
@@ -368,7 +368,7 @@ defined by the following mapping:
               (tuple <intertype>*) ↦ (record ("𝒊" <intertype>)*) for 𝒊=0,1,...
                    (flags <name>*) ↦ (record (field <name> bool)*)
                     (enum <name>*) ↦ (variant (case <name> unit)*)
-            (optional <intertype>) ↦ (variant (case "none") (case "some" <intertype>))
+              (option <intertype>) ↦ (variant (case "none") (case "some" <intertype>))
               (union <intertype>*) ↦ (variant (case "𝒊" <intertype>)*) for 𝒊=0,1,...
 (expected <intertype> <intertype>) ↦ (variant (case "ok" <intertype>) (case "error" <intertype>))
 ```
@@ -570,7 +570,7 @@ As with any other definition kind, value definitions may be supplied to
 components through `import` definitions. Using the grammar of `import` already
 defined [above](#type-definitions), an example *value import* can be written:
 ```
-(import "env" (value $env (record (field "locale" (optional string)))))
+(import "env" (value $env (record (field "locale" (option string)))))
 ```
 As this example suggests, value imports can serve as generalized [environment
 variables], allowing not just `string`, but the full range of interface types
@@ -778,7 +778,7 @@ At a high level, the additional coercions would be:
 | `tuple` | TBD: maybe a [JS Tuple]? | TBD |
 | `flags` | TBD: maybe a [JS Record]? | same as [`dictionary`] of `boolean` fields |
 | `enum` | same as [`enum`] | same as [`enum`] |
-| `optional` | same as [`T?`] | same as [`T?`] |
+| `option` | same as [`T?`] | same as [`T?`] |
 | `union` | same as [`union`] | same as [`union`] |
 | `expected` | same as `variant`, but coerce a top-level `error` return value to a thrown exception | same as `variant`, but coerce uncaught exceptions to top-level `error` return values |
 
