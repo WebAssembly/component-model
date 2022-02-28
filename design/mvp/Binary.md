@@ -60,7 +60,7 @@ componentarg ::= n:<name> 0x00 m:<moduleidx>                       => n (module 
                | n:<name> 0x02 i:<instanceidx>                     => n (instance i)
                | n:<name> 0x03 f:<funcidx>                         => n (func f)
                | n:<name> 0x04 v:<valueidx>                        => n (value v)
-               | n:<name> 0x05 t:<typeidx>                         => n (type t) (t must be an <intertype>)
+               | n:<name> 0x05 t:<typeidx>                         => n (type t)
 export       ::= a:<componentarg>                                  => (export a)
 name         ::= n:<core:name>                                     => n
 ```
