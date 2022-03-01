@@ -365,7 +365,7 @@ The sets of values allowed for the remaining *specialized* interface types are
 defined by the following mapping:
 ```
                             string ↦ (list char)
-              (tuple <intertype>*) ↦ (record ("𝒊" <intertype>)*) for 𝒊=0,1,...
+              (tuple <intertype>*) ↦ (record (field "𝒊" <intertype>)*) for 𝒊=0,1,...
                    (flags <name>*) ↦ (record (field <name> bool)*)
                     (enum <name>*) ↦ (variant (case <name> unit)*)
               (option <intertype>) ↦ (variant (case "none") (case "some" <intertype>))
