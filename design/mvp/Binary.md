@@ -50,8 +50,8 @@ Notes:
 (See [Instance Definitions](Explainer.md#instance-definitions) in the explainer.)
 ```
 instance     ::= ie:<instance-expr>                                => (instance ie)
-instanceexpr ::= 0x00 0x00 m:<moduleidx> a*:vec(<modulearg>)       => (instantiate (module m) (import a)*)
-               | 0x00 0x01 c:<componentidx> a*:vec(<componentarg>) => (instantiate (component c) (import a)*)
+instanceexpr ::= 0x00 0x00 m:<moduleidx> a*:vec(<modulearg>)       => (instantiate (module m) (arg a)*)
+               | 0x00 0x01 c:<componentidx> a*:vec(<componentarg>) => (instantiate (component c) (arg a)*)
                | 0x01 e*:vec(<export>)                             => e*
                | 0x02 e*:vec(<core:export>)                        => e*
 modulearg    ::= n:<name> 0x02 i:<instanceidx>                     => n (instance i)
