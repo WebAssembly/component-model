@@ -110,8 +110,8 @@ supplying a set of named *arguments* which satisfy all the named *imports* of
 the selected module/component:
 ```
 instance     ::= (instance <id>? <instanceexpr>)
-instanceexpr ::= (instantiate (module <moduleidx>) (arg <name> <modulearg>)*)
-               | (instantiate (component <componentidx>) (arg <name> <componentarg>)*)
+instanceexpr ::= (instantiate (module <moduleidx>) (with <name> <modulearg>)*)
+               | (instantiate (component <componentidx>) (with <name> <componentarg>)*)
                | <export>*
                | core <core:export>*
 modulearg    ::= (instance <instanceidx>)
@@ -126,7 +126,7 @@ componentarg ::= (module <moduleidx>)
 export       ::= (export <name> <componentarg>)
 ```
 When instantiating a module via
-`(instantiate (module $M) (arg <name> <modulearg>)*)`, the two-level imports of
+`(instantiate (module $M) (with <name> <modulearg>)*)`, the two-level imports of
 the module `$M` are resolved as follows:
 1. The first `name` of an import is looked up in the named list of `modulearg`
    to select a module instance.
@@ -145,7 +145,7 @@ following component:
     (func (import "a" "one") (result i32))
   )
   (instance $a (instantiate (module $A)))
-  (instance $b (instantiate (module $B) (arg "a" (instance $a))))
+  (instance $b (instantiate (module $B) (with "a" (instance $a))))
 )
 ```
 Components, as we'll see below, have single-level imports, i.e., each import
@@ -217,13 +217,13 @@ For `export` aliases, the inline sugar has the form `(kind <instanceidx> <name>+
 and can be used anywhere a `kind` index appears in the AST. For example, the
 following snippet uses an inline function alias:
 ```wasm
-(instance $j (instantiate (component $J) (arg "f" (func $i "f"))))
+(instance $j (instantiate (component $J) (with "f" (func $i "f"))))
 (export "x" (func $j "g" "h"))
 ```
 which is desugared into:
 ```wasm
 (alias export $i "f" (func $f_alias))
-(instance $j (instantiate (component $J) (arg "f" (func $f_alias))))
+(instance $j (instantiate (component $J) (with "f" (func $f_alias))))
 (alias export $j "g" (instance $g_alias))
 (alias export $g_alias "h" (func $h_alias))
 (export "x" (func $h_alias))
@@ -264,16 +264,16 @@ With what's defined so far, we're able to link modules with arbitrary renamings:
   )
   (instance $a (instantiate (module $A)))
   (instance $b1 (instantiate (module $B)
-    (arg "a" (instance $a))             ;; no renaming
+    (with "a" (instance $a))            ;; no renaming
   ))
   (alias export $a "two" (func $a_two))
   (instance $b2 (instantiate (module $B)
-    (arg "a" (instance
+    (with "a" (instance
       (export "one" (func $a_two))      ;; renaming, using explicit alias
     ))
   ))
   (instance $b3 (instantiate (module $B)
-    (arg "a" (instance
+    (with "a" (instance
       (export "one" (func $a "three"))  ;; renaming, using inline alias sugar
     ))
   ))
@@ -522,8 +522,8 @@ does some logging, then returns a string.
     )
   )
   (instance $main (instantiate (module $Main)
-    (arg "libc" (instance $libc))
-    (arg "wasi:logging" (instance (export "log" (func $log))))
+    (with "libc" (instance $libc))
+    (with "wasi:logging" (instance (export "log" (func $log))))
   ))
   (func (export "run")
     (canon.lift (func (param string) (result string)) (into $libc) (func $main "run"))
@@ -594,7 +594,7 @@ exported string, all at instantiation time:
       ... general-purpose compute
     )
   )
-  (instance $main (instantiate (module $Main) (arg "libc" (instance $libc))))
+  (instance $main (instantiate (module $Main) (with "libc" (instance $libc))))
   (func $start
     (canon.lift (func (param string) (result string)) (into $libc) (func $main "start"))
   )
@@ -632,10 +632,10 @@ exports other components:
     (export "g" (func (result string)))
   ))
   (instance $d1 (instantiate (component $D)
-    (arg "c" (instance $c))
+    (with "c" (instance $c))
   ))
   (instance $d2 (instantiate (component $D)
-    (arg "c" (instance
+    (with "c" (instance
       (export "f" (func $d1 "g"))
     ))
   ))
