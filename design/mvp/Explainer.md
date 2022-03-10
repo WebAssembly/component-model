@@ -380,11 +380,16 @@ fifth type will be added for [resource types][Resource and Handle Types].)
 A `functype` describes a component function whose parameters and results are
 `intertype` values. Thus `functype` is completely disjoint from
 [`core:functype`] in the WebAssembly Core spec, whose parameters and results
-are [`core:valtype`] values. Morever, since `core:functype` can only appear
-syntactically within the `(module ...)` S-expression of a `moduletype`, there
-is never a need to syntactically distinguish `functype` from `core:functype`
-in the text format: the context dictates which one a `(func ...)` S-expression
-parses into.
+are [`core:valtype`] values. As a low-level compiler target, `core:functype`
+returns zero or more results. In contrast, as a high-level interface type
+designed to be maximally bound to a variety of source languages, `functype`
+always returns a single type, with `unit` being used for functions that don't
+return an interesting value (analogous to "void" in some languages). As
+syntactic sugar, the text format of `functype` additionally allows `result` to
+be absent, interpreting this as `(result unit)`. Since `core:functype` can only
+appear syntactically within a `(module ...)` S-expression, there is never a
+need to syntactically distinguish `functype` from `core:functype` in the text
+format: the context dictates which one a `(func ...)` S-expression parses into.
 
 A `valuetype` describes a single `intertype` value this is to be consumed
 exactly once during component instantiation. How this happens is described
