@@ -10,7 +10,7 @@ native JavaScript runtime.
   * [Alias definitions](#alias-definitions)
   * [Type definitions](#type-definitions)
   * [Function definitions](#function-definitions)
-  * [Start definitions](#start-definitions)
+  * [Invoke definitions](#invoke-definitions)
   * [Import and export definitions](#import-and-export-definitions)
 * [Component invariants](#component-invariants)
 * [JavaScript embedding](#JavaScript-embedding)
@@ -57,7 +57,7 @@ definition ::= <core:module>
              | <alias>
              | <type>
              | <func>
-             | <start>
+             | <invoke>
              | <import>
              | <export>
 ```
@@ -400,7 +400,7 @@ format: the context dictates which one a `(func ...)` S-expression parses into.
 
 A `valuetype` describes a single `intertype` value this is to be consumed
 exactly once during component instantiation. How this happens is described
-below along with [`start` definitions](#start-definitions).
+below along with [`invoke` definitions](#invoke-definitions).
 
 As described above, components and modules are immutable values representing
 code that cannot be run until instantiated via `instance` definition. Thus,
@@ -564,15 +564,13 @@ bind exceptions to the `error` case. Similarly, the future addition of
 in Component Model function signatures.
 
 
-### Start Definitions
+### Invoke Definitions
 
-Like modules, components can have start functions that are called during
-instantiation. Unlike modules, components can call start functions at multiple
-points during instantiation with each such call having interface-typed
-parameters and results. Thus, `start` definitions in components look like
-function calls:
+Modules may export initializer functions which Components can then invoke at
+various points during instantiation. Each such call has interface-typed
+parameters and results.
 ```
-start ::= (start <funcidx> (value <valueidx>)* (result (value <id>))?)
+invoke ::= (invoke <funcidx> (value <valueidx>)* (result (value <id>))?)
 ```
 The `(value <valueidx>)*` list specifies the arguments passed to `funcidx` by
 indexing into the *value index space*. Value definitions (in the value index
@@ -602,21 +600,25 @@ exported string, all at instantiation time:
   (instance $libc (instantiate (module $Libc)))
   (module $Main
     (import "libc" ...)
-    (func (export "start") (param i32 i32) (result i32 i32)
+    (func (export "init") (param i32 i32) (result i32 i32)
       ... general-purpose compute
     )
   )
   (instance $main (instantiate (module $Main) (with "libc" (instance $libc))))
-  (func $start
-    (canon.lift (func (param string) (result string)) (into $libc) (func $main "start"))
+  (func $init
+    (canon.lift (func (param string) (result string)) (into $libc) (func $main "init"))
   )
-  (start $start (value $name) (result (value $greeting)))
+  (invoke $init (value $name) (result (value $greeting)))
   (export "greeting" (value $greeting))
 )
 ```
-As this example shows, start functions reuse the same Canonical ABI machinery
-as normal imports and exports for getting interface typed values into and out
-of linear memory.
+As this example shows, invoking a function during initialization reuses the same
+Canonical ABI machinery as normal imports and exports for getting interface
+typed values into and out of linear memory.
+
+Note: invoking functions during component initialization is distinct from Core
+WebAssembly's [start function], which is run during
+`(instantiate (module ...))`.
 
 
 ### Import and Export Definitions
@@ -687,18 +689,22 @@ runtime invariants:
    more-efficient non-reentrant runtime glue code (particularly in the middle
    of the [Canonical ABI](CanonicalABI.md)). This implies that components by
    default don't allow concurrency and multi-threaded access will trap.
-3. Components enforce the current informal rule that `start` functions are
-   only for "internal" initialization by trapping if a component attempts to
-   call a component import during instantiation. In Core WebAssembly, this
-   invariant is not viable since cross-module calls are often necessary when
-   initializing shared linear memory (e.g., calling `libc`'s `malloc`).
-   However, at the granularity of components, this invariant appears viable and
-   would allow runtimes and toolchains considerable optimization flexibility
-   based on the resulting purity of instantiation. As one example, tools like
-   [`wizer`] could be used to *transparently* snapshot the post-instantiation
-   state of a component to reuse in future instantiations. As another example,
-   a component runtime could optimize the instantiation of a component DAG by
-   transparently instantiating non-root components lazily and/or in parallel.
+3. Components enforce that function invocations during initialization trap when
+   they attempt to call a component import. This enforces the current informal
+   rule that `start` functions are for "internal" initialization only. In Core
+   WebAssembly, this invariant is not viable since cross-module calls are often
+   necessary when initializing shared linear memory (e.g., calling `libc`'s
+   `malloc`). However, at the granularity of components, this invariant appears
+   viable and would allow runtimes and toolchains considerable optimization
+   flexibility based on the resulting purity of instantiation. As one example,
+   tools like [`wizer`] could be used to *transparently* snapshot the
+   post-instantiation state of a component to reuse in future instantiations. As
+   another example, a component runtime could optimize the instantiation of a
+   component DAG by transparently instantiating non-root components lazily
+   and/or in parallel. The purity restriction applies to both Core WebAssembly's
+   `start` function and any additional `(invoke ...)` inside the component
+   definition.
+
 
 
 ## JavaScript Embedding
@@ -897,6 +903,7 @@ and will be added over the coming months to complete the MVP proposal:
 [Abbreviations]: https://webassembly.github.io/spec/core/text/conventions.html#abbreviations
 [`core:typeuse`]: https://webassembly.github.io/spec/core/text/modules.html#type-uses
 [func-import-abbrev]: https://webassembly.github.io/spec/core/text/modules.html#text-func-abbrev
+[start functions]: https://github.com/WebAssembly/design/blob/main/Modules.md#module-start-function
 
 [Binary Format Section]: https://webassembly.github.io/spec/core/binary/index.html
 [`version`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-version

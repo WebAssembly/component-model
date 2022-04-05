@@ -207,11 +207,11 @@ Notes:
   in `i`'s `instancetype`.
 
 
-## Start Definitions
+## Invoke Definitions
 
-(See [Start Definitions](Explainer.md#start-definitions) in the explainer.)
+(See [Invoke Definitions](Explainer.md#invoke-definitions) in the explainer.)
 ```
-start ::= f:<funcidx> arg*:vec(<valueidx>) => (start f (value arg)*)
+invoke ::= f:<funcidx> arg*:vec(<valueidx>) => (invoke f (value arg)*)
 ```
 Notes:
 * Validation requires `f` have `functype` with `param` arity and types matching `arg*`.
@@ -222,8 +222,8 @@ In addition to the type-compatibility checks mentioned above, the validation
 rules for value definitions additionally require that each value is consumed
 exactly once. Thus, during validation, each value has an associated "consumed"
 boolean flag. When a value is first added to the value index space (via
-`import`, `instance`, `alias` or `start`), the flag is clear. When a value is
-used (via `export`, `instantiate` or `start`), the flag is set. After
+`import`, `instance`, `alias` or `invoke`), the flag is clear. When a value is
+used (via `export`, `instantiate` or `invoke`), the flag is set. After
 validating the last definition of a component, validation requires all values'
 flags are set.
 
