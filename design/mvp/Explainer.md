@@ -327,7 +327,8 @@ instancetype-def  ::= <type>
                     | (export <name> <deftype>)
 functype          ::= (func <id>? (param <name>? <intertype>)* (result <intertype>))
 valuetype         ::= (value <id>? <intertype>)
-intertype         ::= unit | bool
+intertype         ::= <id>
+                    | unit | bool
                     | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64
                     | float32 | float64
                     | char | string
