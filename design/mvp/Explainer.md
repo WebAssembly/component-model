@@ -251,6 +251,13 @@ is desugared into:
 )
 ```
 
+Lastly, for symmetry with [imports][func-import-abbrev], aliases can be written
+in an inverted form that puts the definition kind first:
+```wasm
+(func $f (import "i" "f")) ≡ (import "i" "f" (func $f))  ;; (existing)
+(func $g (alias $i "g1"))  ≡ (alias $i "g1" (func $g))   ;; (new)
+```
+
 With what's defined so far, we're able to link modules with arbitrary renamings:
 ```wasm
 (component
@@ -266,7 +273,7 @@ With what's defined so far, we're able to link modules with arbitrary renamings:
   (instance $b1 (instantiate (module $B)
     (with "a" (instance $a))            ;; no renaming
   ))
-  (alias export $a "two" (func $a_two))
+  (func $a_two (alias export $a "two")) ;; ≡ (alias export $a "two" (func $a_two))
   (instance $b2 (instantiate (module $B)
     (with "a" (instance
       (export "one" (func $a_two))      ;; renaming, using explicit alias
