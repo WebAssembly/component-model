@@ -48,7 +48,7 @@ sandboxing technology):
 #### Invoking component exports from the host
 
 Once a host chooses to embed wasm (for one of the preceding reasons), the first
-design choice is how host executes the wasm code. The core wasm [start function]
+design choice is how the host executes the wasm code. The core wasm [start function]
 is sometimes used for this purpose, however the lack of parameters or results
 miss out on several use cases listed below, which suggest the use of exported
 wasm functions with typed signatures instead. However, there are a number of
@@ -324,8 +324,6 @@ to call imports, which could break other components' single-threaded assumptions
 * A component explicitly annotates a function import with `shared`, requiring
   the imported function to have been explicitly `shared` and thus callable from
   any `fork`ed thread.
-
-
 
 [RLBox]: https://plsyssec.github.io/rlbox_sandboxing_api/sphinx/
 [Principle of Least Authority]: https://en.wikipedia.org/wiki/Principle_of_least_privilege

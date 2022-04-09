@@ -398,7 +398,7 @@ appear syntactically within a `(module ...)` S-expression, there is never a
 need to syntactically distinguish `functype` from `core:functype` in the text
 format: the context dictates which one a `(func ...)` S-expression parses into.
 
-A `valuetype` describes a single `intertype` value this is to be consumed
+A `valuetype` describes a single `intertype` value that is to be consumed
 exactly once during component instantiation. How this happens is described
 below along with [`start` definitions](#start-definitions).
 
