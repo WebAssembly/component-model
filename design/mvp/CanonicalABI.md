@@ -320,6 +320,7 @@ def load_list(opts, ptr, elem_type):
   return load_list_from_range(opts, begin, length, elem_type)
 
 def load_list_from_range(opts, ptr, length, elem_type):
+  trap_if(ptr != align_to(ptr, alignment(elem_type)))
   trap_if(ptr + length * elem_size(elem_type) > len(opts.memory))
   a = []
   for i in range(length):
@@ -644,6 +645,7 @@ def store_list_into_range(opts, v, elem_type):
   byte_length = len(v) * elem_size(elem_type)
   trap_if(byte_length >= (1 << 32))
   ptr = opts.realloc(0, 0, alignment(elem_type), byte_length)
+  trap_if(ptr != align_to(ptr, alignment(elem_type)))
   trap_if(ptr + byte_length > len(opts.memory))
   for i,e in enumerate(v):
     store(opts, e, elem_type, ptr + i * elem_size(elem_type))
@@ -1040,7 +1042,10 @@ values with types `ts`:
 def lift(opts, max_flat, vi, ts):
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
-    return list(load(opts, vi.next('i32'), Tuple(ts)).values())
+    ptr = vi.next('i32')
+    tuple_type = Tuple(ts)
+    trap_if(ptr != align_to(ptr, alignment(tuple_type)))
+    return list(load(opts, ptr, tuple_type).values())
   else:
     return [ lift_flat(opts, vi, t) for t in ts ]
 ```
@@ -1060,6 +1065,7 @@ def lower(opts, max_flat, vs, ts, out_param = None):
       ptr = opts.realloc(0, 0, alignment(tuple_type), byte_size(tuple_type))
     else:
       ptr = out_param.next('i32')
+    trap_if(ptr != align_to(ptr, alignment(tuple_type)))
     store(opts, tuple_value, tuple_type, ptr)
     return [ Value('i32', ptr) ]
   else:

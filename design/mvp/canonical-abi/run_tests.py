@@ -211,6 +211,7 @@ test_heap(List(Bool()), [True,False,True], [0,3], [1,0,1])
 test_heap(List(Bool()), [True,False,True], [3,3], [0xff,0xff,0xff, 1,0,1])
 test_heap(List(U8()), [1,2,3], [0,3], [1,2,3])
 test_heap(List(U16()), [1,2,3], [0,3], [1,0, 2,0, 3,0 ])
+test_heap(List(U16()), None, [1,3], [0, 1,0, 2,0, 3,0 ])
 test_heap(List(U32()), [1,2,3], [0,3], [1,0,0,0, 2,0,0,0, 3,0,0,0])
 test_heap(List(U64()), [1,2], [0,2], [1,0,0,0,0,0,0,0, 2,0,0,0,0,0,0,0])
 test_heap(List(S8()), [-1,-2,-3], [0,3], [0xff,0xfe,0xfd])
@@ -224,6 +225,12 @@ test_heap(List(String()), [mk_str("hi"),mk_str("wat")], [0,2],
 test_heap(List(List(U8())), [[3,4,5],[],[6,7]], [0,3],
           [24,0,0,0, 3,0,0,0, 0,0,0,0, 0,0,0,0, 27,0,0,0, 2,0,0,0,
           3,4,5,  6,7])
+test_heap(List(List(U16())), [[5,6]], [0,1],
+          [8,0,0,0, 2,0,0,0,
+          5,0, 6,0])
+test_heap(List(List(U16())), None, [0,1],
+          [9,0,0,0, 2,0,0,0,
+          0, 5,0, 6,0])
 test_heap(List(Tuple([U8(),U8(),U16(),U32()])), [mk_tup(6,7,8,9),mk_tup(4,5,6,7)], [0,2],
           [6, 7, 8,0, 9,0,0,0,   4, 5, 6,0, 7,0,0,0])
 test_heap(List(Tuple([U8(),U16(),U8(),U32()])), [mk_tup(6,7,8,9),mk_tup(4,5,6,7)], [0,2],
