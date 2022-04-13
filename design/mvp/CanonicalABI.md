@@ -720,9 +720,9 @@ non-dynamically-sized interface types into core parameters and results.
 For a variety of [practical][Implementation Limits] reasons, we need to limit
 the total number of flattened parameters and results, falling back to storing
 everything in linear memory. The number of flattened results is currently
-limited to 1 due to various parts of the toolchain (notably LLVM) not yet fully
-supporting [multi-value]. Hopefully this limitation is temporary and can be
-lifted before the Component Model is fully standardized.
+limited to 1 due to various parts of the toolchain (notably the C ABI) not yet
+being able to express [multi-value] returns. Hopefully this limitation is
+temporary and can be lifted before the Component Model is fully standardized.
 
 When there are too many flat values, in general, a single `i32` pointer can be
 passed instead (pointing to a tuple in linear memory). When lowering *into*
