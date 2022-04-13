@@ -361,8 +361,8 @@ def store(opts, v, t, ptr):
     case S16()          : store_int(opts, v, ptr, 2, signed=True)
     case S32()          : store_int(opts, v, ptr, 4, signed=True)
     case S64()          : store_int(opts, v, ptr, 8, signed=True)
-    case Float32()      : store_int(opts, reinterpret_float_as_i32(v), ptr, 4)
-    case Float64()      : store_int(opts, reinterpret_float_as_i64(v), ptr, 8)
+    case Float32()      : store_int(opts, reinterpret_float_as_i32(canonicalize32(v)), ptr, 4)
+    case Float64()      : store_int(opts, reinterpret_float_as_i64(canonicalize64(v)), ptr, 8)
     case Char()         : store_int(opts, char_to_i32(v), ptr, 4)
     case String()       : store_string(opts, v, ptr)
     case List(t)        : store_list(opts, v, ptr, t)
@@ -766,8 +766,8 @@ def lower_flat(opts, v, t):
     case S16()          : return lower_flat_signed(v, 32)
     case S32()          : return lower_flat_signed(v, 32)
     case S64()          : return lower_flat_signed(v, 64)
-    case Float32()      : return [Value('f32', v)]
-    case Float64()      : return [Value('f64', v)]
+    case Float32()      : return [Value('f32', canonicalize32(v))]
+    case Float64()      : return [Value('f64', canonicalize64(v))]
     case Char()         : return [Value('i32', char_to_i32(v))]
     case String()       : return lower_flat_string(opts, v)
     case List(t)        : return lower_flat_list(opts, v, t)
