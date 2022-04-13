@@ -247,10 +247,10 @@ Floats are loaded from memory and then "canonicalized", mapping all
 Not-a-Number values to a single canonical `nan` bit-pattern:
 ```python
 def reinterpret_i32_as_float(i):
-  return struct.unpack('!f', struct.pack('!I', i))[0]
+  return struct.unpack('!f', struct.pack('!I', i))[0] # f32.reinterpret_i32
 
 def reinterpret_i64_as_float(i):
-  return struct.unpack('!d', struct.pack('!Q', i))[0]
+  return struct.unpack('!d', struct.pack('!Q', i))[0] # f64.reinterpret_i64
 
 def canonicalize32(f):
   if math.isnan(f):
@@ -438,10 +438,10 @@ assume is the canonical one), no additional runtime canonicalization is
 necessary.
 ```python
 def reinterpret_float_as_i32(f):
-  return struct.unpack('!I', struct.pack('!f', f))[0]
+  return struct.unpack('!I', struct.pack('!f', f))[0] # i32.reinterpret_f32
 
 def reinterpret_float_as_i64(f):
-  return struct.unpack('!Q', struct.pack('!d', f))[0]
+  return struct.unpack('!Q', struct.pack('!d', f))[0] # i64.reinterpret_f64
 ```
 
 The integral value of a `char` (a [Unicode Scalar Value]) is a valid unsigned
