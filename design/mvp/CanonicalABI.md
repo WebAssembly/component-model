@@ -274,16 +274,15 @@ def i32_to_char(opts, i):
   return chr(i)
 ```
 
-Strings can be decoded in one of three ways, according to the `string-encoding`
-option in [`canonopt`]. String interface values include their original encoding
-and byte length as a "hint" that enables `store_string` (defined below) to make
-better up-front allocation size choices in many cases. Thus, the interface
-value produced by `load_string` isn't simply a Python `str`, but a *tuple*
-containing a `str`, the original encoding and the original byte length. Lastly,
-the custom `latin1+utf16` encoding represents a dynamic choice between `latin1`
-(when all code points fit the one-byte Latin-1 encoding) and `utf16`
-(otherwise). This dynamic choice is encoded in the high bit of the `i32`
-containing the string's byte length.
+Strings are loaded from two `i32` values: a pointer (offset in linear memory)
+and a number of bytes. There are three supported string encodings in [`canonopt`]:
+[UTF-8], [UTF-16] and `latin1+utf16`. This last options allows a *dynamic*
+choice between [Latin-1] and UTF-16, indicated by the high bit of the second `i32`.
+String interface values include their original encoding and byte length as a
+"hint" that enables `store_string` (defined below) to make better up-front
+allocation size choices in many cases. Thus, the interface value produced by
+`load_string` isn't simply a Python `str`, but a *tuple* containing a `str`,
+the original encoding and the original byte length.
 ```python
 def load_string(opts, ptr):
   begin = load_int(opts, ptr, 4)
@@ -1269,6 +1268,9 @@ well as post-MVP [adapter functions].
 [Exceptions]: https://github.com/WebAssembly/exception-handling/blob/main/proposals/exception-handling/Exceptions.md
 
 [Alignment]: https://en.wikipedia.org/wiki/Data_structure_alignment
+[UTF-8]: https://en.wikipedia.org/wiki/UTF-8
+[UTF-16]: https://en.wikipedia.org/wiki/UTF-16
+[Latin-1]: https://en.wikipedia.org/wiki/ISO/IEC_8859-1
 [Unicode Scalar Value]: https://unicode.org/glossary/#unicode_scalar_value
 [Unicode Code Point]: https://unicode.org/glossary/#code_point
 [Surrogate]: https://unicode.org/faq/utf_bom.html#utf16-2
