@@ -225,8 +225,8 @@ def load(opts, ptr, t):
     case S16()          : return load_int(opts, ptr, 2, signed=True)
     case S32()          : return load_int(opts, ptr, 4, signed=True)
     case S64()          : return load_int(opts, ptr, 8, signed=True)
-    case Float32()      : return canonicalize(reinterpret_i32_as_float(load_int(opts, ptr, 4)))
-    case Float64()      : return canonicalize(reinterpret_i64_as_float(load_int(opts, ptr, 8)))
+    case Float32()      : return canonicalize32(reinterpret_i32_as_float(load_int(opts, ptr, 4)))
+    case Float64()      : return canonicalize64(reinterpret_i64_as_float(load_int(opts, ptr, 8)))
     case Char()         : return i32_to_char(opts, load_int(opts, ptr, 4))
     case String()       : return load_string(opts, ptr)
     case List(t)        : return load_list(opts, ptr, t)
@@ -252,7 +252,12 @@ def reinterpret_i32_as_float(i):
 def reinterpret_i64_as_float(i):
   return struct.unpack('!d', struct.pack('!Q', i))[0]
 
-def canonicalize(f):
+def canonicalize32(f):
+  if math.isnan(f):
+    return reinterpret_i32_as_float(0x7fc00000)
+  return f
+
+def canonicalize64(f):
   if math.isnan(f):
     return reinterpret_i64_as_float(0x7ff8000000000000)
   return f
@@ -831,8 +836,8 @@ def lift_flat(opts, vi, t):
     case S16()          : return lift_flat_signed(vi, 32, 16)
     case S32()          : return lift_flat_signed(vi, 32, 32)
     case S64()          : return lift_flat_signed(vi, 64, 64)
-    case Float32()      : return canonicalize(vi.next('f32'))
-    case Float64()      : return canonicalize(vi.next('f64'))
+    case Float32()      : return canonicalize32(vi.next('f32'))
+    case Float64()      : return canonicalize64(vi.next('f64'))
     case Char()         : return i32_to_char(opts, vi.next('i32'))
     case String()       : return lift_flat_string(opts, vi)
     case List(t)        : return lift_flat_list(opts, vi, t)
