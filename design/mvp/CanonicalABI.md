@@ -243,8 +243,9 @@ def load_int(opts, ptr, nbytes, signed = False):
   return int.from_bytes(opts.memory[ptr : ptr+nbytes], 'little', signed=signed)
 ```
 
-Floats are loaded from memory and then "canonicalized", mapping all
-Not-a-Number values to a single canonical `nan` bit-pattern:
+For reasons [given](Explainer.md#type-definitions) in the explainer, floats are
+loaded from memory and then "canonicalized", mapping all Not-a-Number bit
+patterns to a single canonical `nan` value.
 ```python
 def reinterpret_i32_as_float(i):
   return struct.unpack('!f', struct.pack('!I', i))[0] # f32.reinterpret_i32

@@ -368,6 +368,14 @@ interface types is given by the following table:
 | `variant`                 | heterogeneous [tagged unions] of named `intertype` values |
 | `list`                    | homogeneous, variable-length [sequences] of `intertype` values |
 
+NaN values are canonicalized to a single value so that:
+1. consumers of NaN values are free to use the rest of the NaN payload for
+   optimization purposes (like [NaN boxing]) without needing to worry about
+   whether the NaN payload bits were significant; and
+2. producers of NaN values across component boundaries do not develop brittle
+   assumptions that NaN payload bits are preserved by the other side (since
+   they often aren't).
+
 The sets of values allowed for the remaining *specialized* interface types are
 defined by the following mapping:
 ```
@@ -954,6 +962,7 @@ and will be added over the coming months to complete the MVP proposal:
 [Bottom Type]: https://en.wikipedia.org/wiki/Bottom_type
 [IEEE754]: https://en.wikipedia.org/wiki/IEEE_754
 [NaN]: https://en.wikipedia.org/wiki/NaN
+[NaN Boxing]: https://wingolog.org/archives/2011/05/18/value-representation-in-javascript-implementations
 [Unicode Scalar Values]: https://unicode.org/glossary/#unicode_scalar_value
 [Tuples]: https://en.wikipedia.org/wiki/Tuple
 [Tagged Unions]: https://en.wikipedia.org/wiki/Tagged_union
