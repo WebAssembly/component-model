@@ -376,6 +376,13 @@ NaN values are canonicalized to a single value so that:
    assumptions that NaN payload bits are preserved by the other side (since
    they often aren't).
 
+The subtyping between all these types is described in a separate
+[subtyping explainer](Subtyping.md). Of note here, though: the optional
+`defaults-to` field in the `case`s of `variant`s is exclusively concerned with
+subtyping. In particular, a `variant` subtype can contain a `case` not present
+in the supertype if the subtype's `case` `defaults-to` (directly or transitively)
+some `case` in the supertype.
+
 The sets of values allowed for the remaining *specialized* interface types are
 defined by the following mapping:
 ```
@@ -443,9 +450,6 @@ that import name *pairs* must be *pair*-wise unique. Since the current Core
 WebAssembly validation rules allow duplicate imports, this means that some
 valid modules will not be typeable and will fail validation if used with the
 Component Model.
-
-The subtyping between all these types is described in a separate
-[subtyping explainer](Subtyping.md).
 
 With what's defined so far, we can define component types using a mix of inline
 and out-of-line type definitions:
