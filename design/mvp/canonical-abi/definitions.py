@@ -237,7 +237,7 @@ def reinterpret_i64_as_float(i):
 
 def canonicalize32(f):
   if math.isnan(f):
-    return reinterpret_i64_as_float(0x7fc00000)
+    return reinterpret_i32_as_float(0x7fc00000)
   return f
 
 def canonicalize64(f):
