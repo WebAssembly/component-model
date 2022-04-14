@@ -164,31 +164,32 @@ test_pairs(Char(), [(0,'\x00'), (65,'A'), (0xD7FF,'\uD7FF'), (0xD800,None), (0xD
 test_pairs(Char(), [(0xE000,'\uE000'), (0x10FFFF,'\U0010FFFF'), (0x110000,None), (0xFFFFFFFF,None)])
 test_pairs(Enum(['a','b']), [(0,{'a':{}}), (1,{'b':{}}), (2,None)])
 
-def test_string_internal(src_encoding, dst_encoding, s, encoded, utf16_bit = False):
+def test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units):
   heap = Heap(len(encoded))
   heap.memory[:] = encoded[:]
   opts = mk_opts(heap.memory, src_encoding, None, None)
-  packed_byte_length = len(encoded)
-  if utf16_bit:
-    packed_byte_length |= UTF16_BIT
-  v = (s, src_encoding, packed_byte_length)
-  test(String(), [0, packed_byte_length], v, opts, dst_encoding)
+  v = (s, src_encoding, tagged_code_units)
+  test(String(), [0, tagged_code_units], v, opts, dst_encoding)
 
 def test_string(src_encoding, dst_encoding, s):
   if src_encoding == 'utf8':
     encoded = s.encode('utf-8')
-    test_string_internal(src_encoding, dst_encoding, s, encoded)
+    tagged_code_units = len(encoded)
+    test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units)
   elif src_encoding == 'utf16':
     encoded = s.encode('utf-16-le')
-    test_string_internal(src_encoding, dst_encoding, s, encoded)
+    tagged_code_units = int(len(encoded) / 2)
+    test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units)
   elif src_encoding == 'latin1+utf16':
     try:
       encoded = s.encode('latin-1')
-      test_string_internal(src_encoding, dst_encoding, s, encoded)
+      tagged_code_units = len(encoded)
+      test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units)
     except UnicodeEncodeError:
       pass
     encoded = s.encode('utf-16-le')
-    test_string_internal(src_encoding, dst_encoding, s, encoded, utf16_bit = True)
+    tagged_code_units = int(len(encoded) / 2) | UTF16_TAG
+    test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units)
 
 encodings = ['utf8', 'utf16', 'latin1+utf16']
 

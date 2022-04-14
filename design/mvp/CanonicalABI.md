@@ -286,25 +286,25 @@ the original encoding and the original byte length.
 ```python
 def load_string(opts, ptr):
   begin = load_int(opts, ptr, 4)
-  packed_byte_length = load_int(opts, ptr + 4, 4)
-  return load_string_from_range(opts, begin, packed_byte_length)
+  tagged_code_units = load_int(opts, ptr + 4, 4)
+  return load_string_from_range(opts, begin, tagged_code_units)
 
-UTF16_BIT = 1 << 31
+UTF16_TAG = 1 << 31
 
-def load_string_from_range(opts, ptr, packed_byte_length):
+def load_string_from_range(opts, ptr, tagged_code_units):
   match opts.string_encoding:
     case 'utf8':
-      byte_length = packed_byte_length
+      byte_length = tagged_code_units
       encoding = 'utf-8'
     case 'utf16':
-      byte_length = packed_byte_length
+      byte_length = 2 * tagged_code_units
       encoding = 'utf-16-le'
     case 'latin1+utf16':
-      if bool(packed_byte_length & UTF16_BIT):
-        byte_length = packed_byte_length ^ UTF16_BIT
+      if bool(tagged_code_units & UTF16_TAG):
+        byte_length = 2 * (tagged_code_units ^ UTF16_TAG)
         encoding = 'utf-16-le'
       else:
-        byte_length = packed_byte_length
+        byte_length = tagged_code_units
         encoding = 'latin-1'
 
   trap_if(ptr + byte_length > len(opts.memory))
@@ -313,7 +313,7 @@ def load_string_from_range(opts, ptr, packed_byte_length):
   except UnicodeError:
     trap()
 
-  return (s, opts.string_encoding, packed_byte_length)
+  return (s, opts.string_encoding, tagged_code_units)
 ```
 
 Lists and records are loaded by recursively loading their elements/fields.
@@ -472,43 +472,43 @@ combinations, subdividing the `latin1+utf16` encoding into either `latin1` or
 `utf16` based on the `UTF16_BIT` flag set by `load_string`:
 ```python
 def store_string(opts, v, ptr):
-  begin, packed_byte_length = store_string_into_range(opts, v)
+  begin, tagged_code_units = store_string_into_range(opts, v)
   store_int(opts, begin, ptr, 4)
-  store_int(opts, packed_byte_length, ptr + 4, 4)
+  store_int(opts, tagged_code_units, ptr + 4, 4)
 
 def store_string_into_range(opts, v):
-  src, src_encoding, src_packed_byte_length = v
+  src, src_encoding, src_tagged_code_units = v
 
   if src_encoding == 'latin1+utf16':
-    if bool(src_packed_byte_length & UTF16_BIT):
-      src_byte_length = src_packed_byte_length ^ UTF16_BIT
-      src_unpacked_encoding = 'utf16'
+    if bool(src_tagged_code_units & UTF16_TAG):
+      src_simple_encoding = 'utf16'
+      src_code_units = src_tagged_code_units ^ UTF16_TAG
     else:
-      src_byte_length = src_packed_byte_length
-      src_unpacked_encoding = 'latin1'
+      src_simple_encoding = 'latin1'
+      src_code_units = src_tagged_code_units
   else:
-    src_byte_length = src_packed_byte_length
-    src_unpacked_encoding = src_encoding
+    src_simple_encoding = src_encoding
+    src_code_units = src_tagged_code_units
 
   match opts.string_encoding:
     case 'utf8':
-      match src_unpacked_encoding:
-        case 'utf8'         : return store_string_copy(opts, src, src_byte_length, 'utf-8')
-        case 'utf16'        : return store_utf16_to_utf8(opts, src, src_byte_length)
-        case 'latin1'       : return store_latin1_to_utf8(opts, src, src_byte_length)
+      match src_simple_encoding:
+        case 'utf8'         : return store_string_copy(opts, src, src_code_units, 1, 'utf-8')
+        case 'utf16'        : return store_utf16_to_utf8(opts, src, src_code_units)
+        case 'latin1'       : return store_latin1_to_utf8(opts, src, src_code_units)
     case 'utf16':
-      match src_unpacked_encoding:
-        case 'utf8'         : return store_utf8_to_utf16(opts, src, src_byte_length)
-        case 'utf16'        : return store_string_copy(opts, src, src_byte_length, 'utf-16-le')
-        case 'latin1'       : return store_string_copy(opts, src, src_byte_length, 'utf-16-le', inflation = 2)
+      match src_simple_encoding:
+        case 'utf8'         : return store_utf8_to_utf16(opts, src, src_code_units)
+        case 'utf16'        : return store_string_copy(opts, src, src_code_units, 2, 'utf-16-le')
+        case 'latin1'       : return store_string_copy(opts, src, src_code_units, 2, 'utf-16-le')
     case 'latin1+utf16':
       match src_encoding:
-        case 'utf8'         : return store_utf8_to_latin1_or_utf16(opts, src, src_byte_length)
-        case 'utf16'        : return store_utf16_to_latin1_or_utf16(opts, src, src_byte_length)
+        case 'utf8'         : return store_string_to_latin1_or_utf16(opts, src, src_code_units)
+        case 'utf16'        : return store_string_to_latin1_or_utf16(opts, src, src_code_units)
         case 'latin1+utf16' :
-          match src_unpacked_encoding:
-            case 'latin1'   : return store_string_copy(opts, src, src_byte_length, 'latin-1')
-            case 'utf16'    : return store_probably_utf16_to_latin1_or_utf16(opts, src, src_byte_length)
+          match src_simple_encoding:
+            case 'latin1'   : return store_string_copy(opts, src, src_code_units, 1, 'latin-1')
+            case 'utf16'    : return store_probably_utf16_to_latin1_or_utf16(opts, src, src_code_units)
 ```
 
 The simplest 4 cases above can compute the exact destination size and then copy
@@ -517,100 +517,99 @@ byte after every Latin-1 byte).
 ```python
 MAX_STRING_BYTE_LENGTH = (1 << 31) - 1
 
-def store_string_copy(opts, src, src_byte_length, dst_encoding, inflation = 1):
-  byte_length = src_byte_length * inflation
-  trap_if(byte_length > MAX_STRING_BYTE_LENGTH)
-  ptr = opts.realloc(0, 0, 1, byte_length)
+def store_string_copy(opts, src, src_code_units, dst_code_unit_size, dst_encoding):
+  dst_byte_length = dst_code_unit_size * src_code_units
+  trap_if(dst_byte_length > MAX_STRING_BYTE_LENGTH)
+  ptr = opts.realloc(0, 0, dst_code_unit_size, dst_byte_length)
   encoded = src.encode(dst_encoding)
-  assert(byte_length == len(encoded))
+  assert(dst_byte_length == len(encoded))
   opts.memory[ptr : ptr+len(encoded)] = encoded
-  return (ptr, byte_length)
+  return (ptr, src_code_units)
 ```
 The choice of `MAX_STRING_BYTE_LENGTH` constant ensures that the high bit of a
 string's byte length is never set, keeping it clear for `UTF16_BIT`.
 
-The next 3 cases can all be mapped down to a generic transcoding algorithm that
-makes an initial optimistic size allocation that falls back to a second worst-case
-size reallocation that is "fixed up" at the end with a third (hopefully O(1))
-shrinking reallocation.
+The 2 cases of transcoding into UTF-8 share an algorithm that starts by
+optimistically assuming that each code unit of the source string fits in a
+single UTF-8 byte and then, failing that, reallocates to a worst-case size,
+finishes the copy, and then finishes with a shrinking reallocation.
 ```python
-def store_utf16_to_utf8(opts, src, src_byte_length):
-  optimistic_size = int(src_byte_length / 2)
-  worst_case_size = optimistic_size * 3
-  return store_string_transcode(opts, src, 'utf-8', optimistic_size, worst_case_size)
+def store_utf16_to_utf8(opts, src, src_code_units):
+  worst_case_size = src_code_units * 3
+  return store_string_to_utf8(opts, src, src_code_units, worst_case_size)
 
-def store_latin1_to_utf8(opts, src, src_byte_length):
-  optimistic_size = src_byte_length
-  worst_case_size = optimistic_size * 2
-  return store_string_transcode(opts, src, 'utf-8', optimistic_size, worst_case_size)
+def store_latin1_to_utf8(opts, src, src_code_units):
+  worst_case_size = src_code_units * 2
+  return store_string_to_utf8(opts, src, src_code_units, worst_case_size)
 
-def store_utf8_to_utf16(opts, src, src_byte_length):
-  optimistic_size = src_byte_length * 2
-  worst_case_size = optimistic_size
-  return store_string_transcode(opts, src, 'utf-16-le', optimistic_size, worst_case_size)
-
-def store_string_transcode(opts, src, dst_encoding, optimistic_size, worst_case_size):
-  trap_if(optimistic_size > MAX_STRING_BYTE_LENGTH)
-  ptr = opts.realloc(0, 0, 1, optimistic_size)
-  encoded = src.encode(dst_encoding)
-  bytes_copied = min(len(encoded), optimistic_size)
-  opts.memory[ptr : ptr+bytes_copied] = encoded[0 : bytes_copied]
-  if bytes_copied < optimistic_size:
-    ptr = opts.realloc(ptr, optimistic_size, 1, bytes_copied)
-  elif bytes_copied < len(encoded):
+def store_string_to_utf8(opts, src, src_code_units, worst_case_size):
+  assert(src_code_units <= MAX_STRING_BYTE_LENGTH)
+  ptr = opts.realloc(0, 0, 1, src_code_units)
+  encoded = src.encode('utf-8')
+  assert(src_code_units <= len(encoded))
+  opts.memory[ptr : ptr+src_code_units] = encoded[0 : src_code_units]
+  if src_code_units < len(encoded):
     trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
-    ptr = opts.realloc(ptr, optimistic_size, 1, worst_case_size)
-    opts.memory[ptr+bytes_copied : ptr+len(encoded)] = encoded[bytes_copied : ]
+    ptr = opts.realloc(ptr, src_code_units, 1, worst_case_size)
+    opts.memory[ptr+src_code_units : ptr+len(encoded)] = encoded[src_code_units : ]
     if worst_case_size > len(encoded):
       ptr = opts.realloc(ptr, worst_case_size, 1, len(encoded))
   return (ptr, len(encoded))
 ```
 
-The remaining cases handle the `latin1+utf16` encoding, where there general
-goal is to fit the incoming string into Latin-1 if possible based on the code
-points of the incoming string. The UTF-8 and UTF-16 cases are similar to the
-preceding transcoding algorithm in that they make a best-effort optimistic
-allocation, speculating that all code points *do* fit into Latin-1, before
-falling back to a worst-case allocation size when a code point is found outside
-Latin-1. In this fallback case, the previously-stored Latin-1 bytes are
-inflated *in place*, inserting a 0 byte after every Latin-1 byte (iterating
-in reverse to avoid clobbering later bytes):
+Converting from UTF-8 to UTF-16 performs an initial worst-case size allocation
+(assuming each UTF-8 byte encodes a whole code point that inflates into a
+two-byte UTF-16 code unit) and then does a shrinking reallocation at the end
+if multiple UTF-8 bytes were collapsed into a single 2-byte UTF-16 code unit:
 ```python
-def store_utf8_to_latin1_or_utf16(opts, src, src_byte_length):
-  optimistic_size = src_byte_length
-  worst_case_size = 2 * src_byte_length
-  return store_string_to_latin1_or_utf16(opts, src, optimistic_size, worst_case_size)
+def store_utf8_to_utf16(opts, src, src_code_units):
+  worst_case_size = 2 * src_code_units
+  trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
+  ptr = opts.realloc(0, 0, 2, worst_case_size)
+  encoded = src.encode('utf-16-le')
+  opts.memory[ptr : ptr+len(encoded)] = encoded
+  if len(encoded) < worst_case_size:
+    ptr = opts.realloc(ptr, worst_case_size, 2, len(encoded))
+  code_units = int(len(encoded) / 2)
+  return (ptr, code_units)
+```
 
-def store_utf16_to_latin1_or_utf16(opts, src, src_byte_length):
-  optimistic_size = int(src_byte_length / 2)
-  worst_case_size = src_byte_length
-  return store_string_to_latin1_or_utf16(opts, src, optimistic_size, worst_case_size)
-
-def store_string_to_latin1_or_utf16(opts, src, optimistic_size, worst_case_size):
-  trap_if(optimistic_size > MAX_STRING_BYTE_LENGTH)
-  ptr = opts.realloc(0, 0, 1, optimistic_size)
+The next transcoding case handles `latin1+utf16` encoding, where there general
+goal is to fit the incoming string into Latin-1 if possible based on the code
+points of the incoming string. The algorithm speculates that all code points
+*do* fit into Latin-1 and then falls back to a worst-case allocation size when
+a code point is found outside Latin-1. In this fallback case, the
+previously-copied Latin-1 bytes are inflated *in place*, inserting a 0 byte
+after every Latin-1 byte (iterating in reverse to avoid clobbering later
+bytes):
+```python
+def store_string_to_latin1_or_utf16(opts, src, src_code_units):
+  assert(src_code_units <= MAX_STRING_BYTE_LENGTH)
+  ptr = opts.realloc(0, 0, 1, src_code_units)
   dst_byte_length = 0
   for usv in src:
     if ord(usv) < (1 << 8):
       opts.memory[ptr + dst_byte_length] = ord(usv)
       dst_byte_length += 1
     else:
+      worst_case_size = 2 * src_code_units
       trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
-      ptr = opts.realloc(ptr, optimistic_size, 1, worst_case_size)
+      ptr = opts.realloc(ptr, src_code_units, 2, worst_case_size)
       for j in range(dst_byte_length-1, -1, -1):
         opts.memory[ptr + 2*j] = opts.memory[ptr + j]
         opts.memory[ptr + 2*j + 1] = 0
       encoded = src.encode('utf-16-le')
       opts.memory[ptr+2*dst_byte_length : ptr+len(encoded)] = encoded[2*dst_byte_length : ]
       if worst_case_size > len(encoded):
-        ptr = opts.realloc(ptr, worst_case_size, 1, len(encoded))
-      return (ptr, len(encoded) | UTF16_BIT)
-  if dst_byte_length < optimistic_size:
-    ptr = opts.realloc(ptr, optimistic_size, 1, dst_byte_length)
+        ptr = opts.realloc(ptr, worst_case_size, 2, len(encoded))
+      tagged_code_units = int(len(encoded) / 2) | UTF16_TAG
+      return (ptr, tagged_code_units)
+  if dst_byte_length < src_code_units:
+    ptr = opts.realloc(ptr, src_code_units, 1, dst_byte_length)
   return (ptr, dst_byte_length)
 ```
 
-The final string transcoding case takes advantage of the extra heuristic
+The final transcoding case takes advantage of the extra heuristic
 information that the incoming UTF-16 bytes were intentionally chosen over
 Latin-1 by the producer, indicating that they *probably* contain code points
 outside Latin-1 and thus *probably* require inflation. Based on this
@@ -621,13 +620,15 @@ are all using `latin1+utf16` and *one* component over-uses UTF-16, other
 components can recover the Latin-1 compression. (The Latin-1 check can be
 inexpensively fused with the UTF-16 validate+copy loop.)
 ```python
-def store_probably_utf16_to_latin1_or_utf16(opts, src, src_byte_length):
+def store_probably_utf16_to_latin1_or_utf16(opts, src, src_code_units):
+  src_byte_length = 2 * src_code_units
   trap_if(src_byte_length > MAX_STRING_BYTE_LENGTH)
-  ptr = opts.realloc(0, 0, 1, src_byte_length)
+  ptr = opts.realloc(0, 0, 2, src_byte_length)
   encoded = src.encode('utf-16-le')
   opts.memory[ptr : ptr+len(encoded)] = encoded
   if any(ord(c) >= (1 << 8) for c in src):
-    return (ptr, len(encoded) | UTF16_BIT)
+    tagged_code_units = int(len(encoded) / 2) | UTF16_TAG
+    return (ptr, tagged_code_units)
   latin1_size = int(len(encoded) / 2)
   for i in range(latin1_size):
     opts.memory[ptr + i] = opts.memory[ptr + 2*i]
@@ -877,8 +878,8 @@ memory:
 ```python
 def lift_flat_string(opts, vi):
   ptr = vi.next('i32')
-  packed_byte_length = vi.next('i32')
-  return load_string_from_range(opts, ptr, packed_byte_length)
+  packed_length = vi.next('i32')
+  return load_string_from_range(opts, ptr, packed_length)
 
 def lift_flat_list(opts, vi, elem_type):
   ptr = vi.next('i32')
@@ -986,8 +987,8 @@ previous definitions; only the resulting pointers are returned differently
 (as `i32` values instead of as a pair in linear memory):
 ```python
 def lower_flat_string(opts, v):
-  ptr, packed_byte_length = store_string_into_range(opts, v)
-  return [Value('i32', ptr), Value('i32', packed_byte_length)]
+  ptr, packed_length = store_string_into_range(opts, v)
+  return [Value('i32', ptr), Value('i32', packed_length)]
 
 def lower_flat_list(opts, v, elem_type):
   (ptr, length) = store_list_into_range(opts, v, elem_type)
