@@ -239,14 +239,14 @@ test_heap(List(Tuple([U8(),U16(),U8(),U32()])), [mk_tup(6,7,8,9),mk_tup(4,5,6,7)
 test_heap(List(Tuple([U16(),U8()])), [mk_tup(6,7),mk_tup(8,9)], [0,2],
           [6,0, 7, 0x0ff, 8,0, 9, 0xff])
 test_heap(List(Tuple([Tuple([U16(),U8()]),U8()])), [mk_tup([4,5],6),mk_tup([7,8],9)], [0,2],
-          [4,0, 5, 6,  7,0, 8, 9])
+          [4,0, 5,0xff, 6,0xff,  7,0, 8,0xff, 9,0xff])
 test_heap(List(Union([Unit(),U8(),Tuple([U8(),U16()])])), [{'0':{}}, {'1':42}, {'2':mk_tup(6,7)}], [0,3],
           [0,0xff,0xff,0xff,0xff,0xff,  1,0xff,42,0xff,0xff,0xff,  2,0xff,6,0xff,7,0])
 test_heap(List(Union([U32(),U8()])), [{'0':256}, {'1':42}], [0,2],
           [0,0xff,0xff,0xff,0,1,0,0,  1,0xff,0xff,0xff,42,0xff,0xff,0xff])
 test_heap(List(Tuple([Union([U8(),Tuple([U16(),U8()])]),U8()])),
           [mk_tup({'1':mk_tup(5,6)},7),mk_tup({'0':8},9)], [0,2],
-          [1,0xff,5,0,6,7,  0,0xff,8,0xff,0xff,9])
+          [1,0xff,5,0,6,0xff,7,0xff,  0,0xff,8,0xff,0xff,0xff,9,0xff])
 test_heap(List(Union([U8()])), [{'0':6},{'0':7},{'0':8}], [0,3],
           [0,6, 0,7, 0,8])
 t = List(Flags(['a','b']))

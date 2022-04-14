@@ -141,23 +141,10 @@ def alignment_flags(labels):
 
 ### Size
 
-Each interface type is assigned two slightly-different measures of "size":
-* its "byte size", which is the smallest number of bytes covering all its
-  fields when stored at an aligned address in linear memory; and
-* its "element size", which is the size of the type when stored as an element
-  of a list, which may include additional padding at the end to ensure the
-  alignment of the next element.
-
-These two measures are defined by the following functions, which build on
-the preceding alignment functions:
+Each interface type is also assigned a `size`, measured in bytes, which
+corresponds the `sizeof` operator in C:
 ```python
-def elem_size(t):
-  return align_to(byte_size(t), alignment(t))
-
-def align_to(ptr, alignment):
-  return math.ceil(ptr / alignment) * alignment
-
-def byte_size(t):
+def size(t):
   match despecialize(t):
     case Bool()             : return 1
     case S8() | U8()        : return 1
@@ -168,26 +155,30 @@ def byte_size(t):
     case Float64()          : return 8
     case Char()             : return 4
     case String() | List(_) : return 8
-    case Record(fields)     : return byte_size_record(fields)
-    case Variant(cases)     : return byte_size_variant(cases)
-    case Flags(labels)      : return byte_size_flags(labels)
+    case Record(fields)     : return size_record(fields)
+    case Variant(cases)     : return size_variant(cases)
+    case Flags(labels)      : return size_flags(labels)
 
-def byte_size_record(fields):
+def size_record(fields):
   s = 0
   for f in fields:
     s = align_to(s, alignment(f.t))
-    s += byte_size(f.t)
-  return s
+    s += size(f.t)
+  return align_to(s, alignment(Record(fields)))
 
-def byte_size_variant(cases):
-  s = byte_size(discriminant_type(cases))
+def align_to(ptr, alignment):
+  return math.ceil(ptr / alignment) * alignment
+
+def size_variant(cases):
+  s = size(discriminant_type(cases))
   s = align_to(s, max_alignment(types_of(cases)))
   cs = 0
   for c in cases:
-    cs = max(cs, byte_size(c.t))
-  return s + cs
+    cs = max(cs, size(c.t))
+  s += cs
+  return align_to(s, alignment(Variant(cases)))
 
-def byte_size_flags(labels):
+def size_flags(labels):
   n = len(labels)
   if n <= 8: return 1
   if n <= 16: return 2
@@ -316,8 +307,7 @@ def load_string_from_range(opts, ptr, tagged_code_units):
   return (s, opts.string_encoding, tagged_code_units)
 ```
 
-Lists and records are loaded by recursively loading their elements/fields.
-Note that lists use `elem_size` while records use `byte_size`.
+Lists and records are loaded by recursively loading their elements/fields:
 ```python
 def load_list(opts, ptr, elem_type):
   begin = load_int(opts, ptr, 4)
@@ -326,10 +316,10 @@ def load_list(opts, ptr, elem_type):
 
 def load_list_from_range(opts, ptr, length, elem_type):
   trap_if(ptr != align_to(ptr, alignment(elem_type)))
-  trap_if(ptr + length * elem_size(elem_type) > len(opts.memory))
+  trap_if(ptr + length * size(elem_type) > len(opts.memory))
   a = []
   for i in range(length):
-    a.append(load(opts, ptr + i * elem_size(elem_type), elem_type))
+    a.append(load(opts, ptr + i * size(elem_type), elem_type))
   return a
 
 def load_record(opts, ptr, fields):
@@ -337,7 +327,7 @@ def load_record(opts, ptr, fields):
   for field in fields:
     ptr = align_to(ptr, alignment(field.t))
     record[field.label] = load(opts, ptr, field.t)
-    ptr += byte_size(field.t)
+    ptr += size(field.t)
   return record
 ```
 As a technical detail: the `align_to` in the loop in `load_record` is
@@ -354,7 +344,7 @@ tables at compile-time so that variant-passing is always O(1) and not involving
 string operations.
 ```python
 def load_variant(opts, ptr, cases):
-  disc_size = byte_size(discriminant_type(cases))
+  disc_size = size(discriminant_type(cases))
   disc = load_int(opts, ptr, disc_size)
   ptr += disc_size
   trap_if(disc >= len(cases))
@@ -382,7 +372,7 @@ derived from the ordered labels of the `flags` type. The code here takes
 advantage of Python's support for integers of arbitrary width.
 ```python
 def load_flags(opts, ptr, labels):
-  i = load_int(opts, ptr, byte_size_flags(labels))
+  i = load_int(opts, ptr, size_flags(labels))
   return unpack_flags_from_int(i, labels)
 
 def unpack_flags_from_int(i, labels):
@@ -647,20 +637,20 @@ def store_list(opts, v, ptr, elem_type):
   store_int(opts, length, ptr + 4, 4)
 
 def store_list_into_range(opts, v, elem_type):
-  byte_length = len(v) * elem_size(elem_type)
+  byte_length = len(v) * size(elem_type)
   trap_if(byte_length >= (1 << 32))
   ptr = opts.realloc(0, 0, alignment(elem_type), byte_length)
   trap_if(ptr != align_to(ptr, alignment(elem_type)))
   trap_if(ptr + byte_length > len(opts.memory))
   for i,e in enumerate(v):
-    store(opts, e, elem_type, ptr + i * elem_size(elem_type))
+    store(opts, e, elem_type, ptr + i * size(elem_type))
   return (ptr, len(v))
 
 def store_record(opts, v, ptr, fields):
   for f in fields:
     ptr = align_to(ptr, alignment(f.t))
     store(opts, v[f.label], f.t, ptr)
-    ptr += byte_size(f.t)
+    ptr += size(f.t)
 ```
 
 Variants are stored using the `|`-separated list of `defaults-to` cases built
@@ -672,7 +662,7 @@ case indices to the consumer's case indices.
 ```python
 def store_variant(opts, v, ptr, cases):
   case_index, case_value = match_case(v, cases)
-  disc_size = byte_size(discriminant_type(cases))
+  disc_size = size(discriminant_type(cases))
   store_int(opts, case_index, ptr, disc_size)
   ptr += disc_size
   ptr = align_to(ptr, max_alignment(types_of(cases)))
@@ -697,7 +687,7 @@ to variants.
 ```python
 def store_flags(opts, v, ptr, labels):
   i = pack_flags_into_int(v, labels)
-  store_int(opts, i, ptr, byte_size_flags(labels))
+  store_int(opts, i, ptr, size_flags(labels))
 
 def pack_flags_into_int(v, labels):
   i = 0
@@ -1067,7 +1057,7 @@ def lower(opts, max_flat, vs, ts, out_param = None):
     tuple_type = Tuple(functype.params)
     tuple_value = {str(i): v for i,v in enumerate(vs)}
     if out_param is None:
-      ptr = opts.realloc(0, 0, alignment(tuple_type), byte_size(tuple_type))
+      ptr = opts.realloc(0, 0, alignment(tuple_type), size(tuple_type))
     else:
       ptr = out_param.next('i32')
     trap_if(ptr != align_to(ptr, alignment(tuple_type)))
