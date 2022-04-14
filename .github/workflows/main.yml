@@ -1,0 +1,16 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  canonical_abi:
+    name: Run Canonical ABI Tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-python@v3
+      with:
+        python-version: '>= 3.10.0'
+    - run: python design/mvp/canonical-abi/run_tests.py
