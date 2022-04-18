@@ -336,8 +336,8 @@ intertype         ::= unit | bool
                     | (list <intertype>)
                     | (tuple <intertype>*)
                     | (flags <name>*)
-                    | (enum <name>*)
-                    | (union <intertype>*)
+                    | (enum <name>+)
+                    | (union <intertype>+)
                     | (option <intertype>)
                     | (expected <intertype> <intertype>)
 ```
