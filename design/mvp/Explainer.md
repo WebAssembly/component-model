@@ -1,15 +1,15 @@
 # Component Model Explainer
 
 This explainer walks through the assembly-level definition of a
-[component](../high-level) and the proposed embedding of components into a
-native JavaScript runtime.
+[component](../high-level) and the proposed embedding of components into
+native JavaScript runtimes.
 
 * [Grammar](#grammar)
   * [Component definitions](#component-definitions)
   * [Instance definitions](#instance-definitions)
   * [Alias definitions](#alias-definitions)
   * [Type definitions](#type-definitions)
-  * [Function definitions](#function-definitions)
+  * [Canonical definitions](#canonical-definitions)
   * [Start definitions](#start-definitions)
   * [Import and export definitions](#import-and-export-definitions)
 * [Component invariants](#component-invariants)
@@ -20,7 +20,7 @@ native JavaScript runtime.
 * [TODO](#TODO)
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
-this repo merges and supersedes the [Module Linking] and [Interface Types]
+this repo merges and supersedes the [module-linking] and [interface-types]
 proposals, pushing some of their original features into the post-MVP [future
 feature](FutureFeatures.md) backlog.)
 
@@ -51,44 +51,62 @@ below.
 At the top-level, a `component` is a sequence of definitions of various kinds:
 ```
 component  ::= (component <id>? <definition>*)
-definition ::= <core:module>
+definition ::= core-prefix(<core:module>)
+             | core-prefix(<core:instance>)
+             | core-prefix(<core:alias>)
+             | core-prefix(<core:type>)
              | <component>
              | <instance>
              | <alias>
              | <type>
-             | <func>
+             | <canon>
              | <start>
              | <import>
              | <export>
 ```
-Core WebAssembly modules (henceforth just "modules") are also sequences of
-(different kinds of) definitions. However, unlike modules, components allow
-arbitrarily interleaving the different kinds of definitions. As we'll see
-below, this arbitrary interleaving reflects the need for different kinds of
-definitions to be able to refer back to each other. Importantly, though,
-component definitions are acyclic: definitions can only refer back to preceding
-definitions (in the AST, text format or binary format).
+Components are like Core WebAssembly modules in that their contained
+definitions are acyclic: definitions can only refer to preceding definitions
+(in the AST, text format and binary format). However, unlike modules,
+components can arbitrarily interleave different kinds of definitions.
 
-The first kind of component definition is a module, as defined by the existing
-Core WebAssembly specification's [`core:module`] top-level production. Thus,
-components physically embed one or more modules and can be thought of as a
-kind of container format for modules.
+The `core-prefix` meta-function transforms a grammatical rule for parsing a
+Core WebAssembly definition into a grammatical rule for parsing the same
+definition, but with a `core` token added right after the leftmost paren:
+```
+core-prefix(X) ::= '(' 'core' Y ')' where X = '(' Y ')'
+```
+For example, `core:module` accepts `(module (func))` so
+`core-prefix(<core:module>)` accepts `(core module (func))`. Note that the
+inner `func` doesn't need a `core` prefix; the `core` token is used to mark the
+*transition* from parsing component definitions into core definitions.
 
-The second kind of definition is, recursively, a component itself. Thus,
-components form trees with modules (and all other kinds of definitions) only
-appearing at the leaves.
+The [`core:module`] production is unmodified by the Component Model and thus
+components embed Core WebAssemby (text and binary format) modules as currently
+standardized, allowing reuse of an unmodified Core WebAssembly implementation.
+The next two productions, `core:instance` and `core:alias`, are not currently
+included in Core WebAssembly, but would be if Core WebAssembly adopted the
+[module-linking] proposal. These two new core definitions are introduced below,
+alongside their component-level counterparts. Finally, the existing
+[`core:type`] production is extended below to add core module types as proposed
+for module-linking. Thus, the overall idea is to represent core definitions (in
+the AST, binary and text format) as-if they had already been added to Core
+WebAssembly so that, if they eventually are, the implementation of decoding and
+validation can be shared in a layered fashion.
 
-With what's defined so far, we can define the following component:
+The next kind of definition is, recursively, a component itself. Thus,
+components form trees with all other kinds of definitions only appearing at the
+leaves. For example, with what's defined so far, we can write the following
+component:
 ```wasm
 (component
   (component
-    (module (func (export "one") (result i32) (i32.const 1)))
-    (module (func (export "two") (result f32) (f32.const 2)))
+    (core module (func (export "one") (result i32) (i32.const 1)))
+    (core module (func (export "two") (result f32) (f32.const 2)))
   )
-  (module (func (export "three") (result i64) (i64.const 3)))
+  (core module (func (export "three") (result i64) (i64.const 3)))
   (component
     (component
-      (module (func (export "four") (result f64) (f64.const 4)))
+      (core module (func (export "four") (result f64) (f64.const 4)))
     )
   )
   (component)
@@ -96,7 +114,7 @@ With what's defined so far, we can define the following component:
 ```
 This top-level component roots a tree with 4 modules and 1 component as
 leaves. However, in the absence of any `instance` definitions (introduced
-next), nothing will be instantiated or executed at runtime: everything here is
+next), nothing will be instantiated or executed at runtime; everything here is
 dead code.
 
 
@@ -105,125 +123,150 @@ dead code.
 Whereas modules and components represent immutable *code*, instances associate
 code with potentially-mutable *state* (e.g., linear memory) and thus are
 necessary to create before being able to *run* the code. Instance definitions
-create module or component instances by selecting a module/component and
-supplying a set of named *arguments* which satisfy all the named *imports* of
-the selected module/component:
-```
-instance     ::= (instance <id>? <instanceexpr>)
-instanceexpr ::= (instantiate (module <moduleidx>) (with <name> <modulearg>)*)
-               | (instantiate (component <componentidx>) (with <name> <componentarg>)*)
-               | <export>*
-               | core <core:export>*
-modulearg    ::= (instance <instanceidx>)
-               | (instance <core:export>*)
-componentarg ::= (module <moduleidx>)
-               | (component <componentidx>)
-               | (instance <instanceidx>)
-               | (func <funcidx>)
-               | (value <valueidx>)
-               | (type <typeidx>)
-               | (instance <export>*)
-export       ::= (export <name> <componentarg>)
-```
-When instantiating a module via
-`(instantiate (module $M) (with <name> <modulearg>)*)`, the two-level imports of
-the module `$M` are resolved as follows:
-1. The first `name` of an import is looked up in the named list of `modulearg`
-   to select a module instance.
-2. The second `name` of an import is looked up in the named list of exports of
-   the module instance found by the first step to select the imported
-   core definition (a `func`, `memory`, `table`, `global`, etc).
+create module or component instances by selecting a module or component and
+then supplying a set of named *arguments* which satisfy all the named *imports*
+of the selected module or component.
 
-Based on this, we can link two modules `$A` and `$B` together with the
+The syntax for defining a core module instance is:
+```
+core:instance       ::= (instance <id>? <core:instancexpr>)
+core:instanceexpr   ::= (instantiate <core:moduleidx> <core:instantiatearg>*)
+                      | <core:export>*
+core:instantiatearg ::= (with <name> <core:sortidx>)
+                      | (with <name> (instance <core:export>*))
+core:sortidx        ::= (<core:sort> <varu32>)
+core:sort           ::= func
+                      | table
+                      | memory
+                      | global
+                      | type
+                      | module
+                      | instance
+core:export         ::= (export <name> <core:sortidx>)
+```
+When instantiating a module via `instantiate`, the two-level imports of the
+core modules are resolved as follows:
+1. The first `name` of the import is looked up in the named list of
+   `core:instantiatearg` to select a core module instance.
+2. The second `name` of the import is looked up in the named list of exports of
+   the core module instance found by the first step to select the imported
+   core definition.
+
+Each `core:sort` corresponds 1:1 with a distinct [index space] that contains
+only core definitions of that *sort*. The `varu32` field of `core:sortidx`
+indexes into the sort's associated index space to select a definition.
+
+Based on this, we can link two core modules `$A` and `$B` together with the
 following component:
 ```wasm
 (component
-  (module $A
+  (core module $A
     (func (export "one") (result i32) (i32.const 1))
   )
-  (module $B
+  (core module $B
     (func (import "a" "one") (result i32))
   )
-  (instance $a (instantiate (module $A)))
-  (instance $b (instantiate (module $B) (with "a" (instance $a))))
+  (core instance $a (instantiate $A))
+  (core instance $b (instantiate $B (with "a" (instance $a))))
 )
 ```
-Components, as we'll see below, have single-level imports, i.e., each import
-has only a single `name`, and thus every different kind of definition can be
-passed as a `componentarg` when instantiating a component, not just instances.
-Component instantiation will be revisited below after introducing the
-prerequisite type and import definitions.
+To see examples of other sorts, we'll need `alias` definitions, which are
+introduced in the next section.
 
-Lastly, the `(instance <export>*)` and `(instance <core:export>*)`
-expressions allow component and module instances to be created by directly
-tupling together preceding definitions, without the need to `instantiate`
-anything. The "inline" forms of these expressions in `modulearg`
-and `componentarg` are text format sugar for the "out of line" form in
-`instanceexpr`. To show an example of how these instance-creation forms are
-useful, we'll first need to introduce the `alias` definitions in the next
-section.
+The `<core:export>*` form of `core:instanceexpr` allows module instances to be
+created by directly tupling together preceding definitions, without the need to
+`instantiate` a helper module. The "inline" form of `<core:export>*` inside
+`(with ...)` is syntactic sugar that is expanded during text format parsing
+into an out-of-line instance definition referenced by `with`. To show an
+example of these, we'll also need the `alias` definitions introduced in the
+next section.
+
+The syntax for defining component instances is symmetric to core module
+instances, but with a distinct component-level definition of `sort`:
+```
+instance       ::= (instance <id>? <instanceexpr>)
+instanceexpr   ::= (instantiate <componentidx> <instantiatearg>*)
+                 | <export>*
+instantiatearg ::= (with <name> <sortidx>)
+                 | (with <name> (instance <export>*))
+sortidx        ::= (<sort> <varu32>)
+sort           ::= core-prefix(<core:sortidx>)
+                 | func
+                 | value
+                 | type
+                 | component
+                 | instance
+export         ::= (export <name> <sortidx>)
+```
+Because component-level function, type and instance definitions are different
+than core-level function, type and instance definitions, they are put into
+disjoint index spaces which are indexed separately by `sortidx` and
+`core:sortidx`, respectively. Components may import or export core modules
+(since core modules are immutable values and thus do not break the
+[shared-nothing] model) and so `sortidx` includes `core:sortidx` (which
+validation then restricts to core modules; in the future, other immutable core
+definitions could be allowed, such as `data` segments).
+
+To see a non-trivial example of component instantiation, we'll first need to
+introduce a few other definitions below that allow components to import, define
+and export component functions.
 
 
 ### Alias Definitions
 
-Alias definitions project definitions out of other components' index spaces
+Alias definitions project definitions out of other components' index spaces and
 into the current component's index spaces. As represented in the AST below,
-there are two kinds of "targets" for an alias: the `export` of a component
-instance, or a local definition of an `outer` component that contains the
-current component:
+there are two kinds of "targets" for an alias: the `export` of an instance and
+a definition in an index space of an `outer` component (containing the current
+component):
 ```
-alias       ::= (alias <aliastarget> <aliaskind>)
-aliastarget ::= export <instanceidx> <name>
-              | outer <outeridx> <idx>
-aliaskind   ::= (module <id>?)
-              | (component <id>?)
-              | (instance <id>?)
-              | (func <id>?)
-              | (value <id>?)
-              | (type <id>?)
-              | (table <id>?)
-              | (memory <id>?)
-              | (global <id>?)
-              | ... other Post-MVP Core definition kinds
+core:alias       ::= (alias <core:aliastarget> (<core:sort> <id>?))
+core:aliastarget ::= export <core:instanceidx> <name>
+                   | outer <varu32> <varu32>
+
+alias            ::= (alias <aliastarget> (<sort> <id>?))
+aliastarget      ::= export <instanceidx> <name>
+                   | outer <varu32> <varu32>
 ```
-Aliases add a new element to the index space indicated by `aliaskind`.
-(Validation ensures that the `aliastarget` does indeed refer to a matching
-definition kind.) The `id` in `aliaskind` is bound to this new index and
-thus can be used anywhere a normal `id` can be used.
+The `core:sort`/`sort` immediate of the alias specifies which index space in
+the target component is being read from and which index space of the containing
+component is being added to. If present, the `id` of the alias is bound to the
+new index added by the alias and can be used anywhere a normal `id` can be
+used.
 
-In the case of `export` aliases, validation requires that `instanceidx` refers
-to an instance which exports `name`.
+In the case of `export` aliases, validation ensures `name` is an export in the
+target instance and has a matching sort.
 
-In the case of `outer` aliases, the (`outeridx`, `idx`) pair serves as a
-[de Bruijn index], with `outeridx` being the number of enclosing components to
-skip and `idx` being an index into the target component's `aliaskind` index
-space. In particular, `outeridx` can be `0`, in which case the outer alias
-refers to the current component. To maintain the acyclicity of module
+In the case of `outer` aliases, the `varu32` pair serves as a [de Bruijn
+index], with first `varu32` being the number of enclosing components to skip
+and the second `varu32` being an index into the target component's sort's index
+space. In particular, the first `varu32` can be `0`, in which case the outer
+alias refers to the current component. To maintain the acyclicity of module
 instantiation, outer aliases are only allowed to refer to *preceding* outer
 definitions.
 
 Components containing outer aliases effectively produce a [closure] at
 instantiation time, including a copy of the outer-aliased definitions. Because
-of the prevalent assumption that components are (stateless) *values*, outer
-aliases are restricted to only refer to stateless definitions: components,
-modules and types. (In the future, outer aliases to all kinds of definitions
-could be allowed by recording the statefulness of the resulting component in
-its type via some kind of "`stateful`" type attribute.)
+of the prevalent assumption that components are immutable values, outer aliases
+are restricted to only refer to immutable definitions: types, modules and
+components. (In the future, outer aliases to all sorts of definitions could be
+allowed by recording the statefulness of the resulting component in its type
+via some kind of "`stateful`" type attribute.)
 
 Both kinds of aliases come with syntactic sugar for implicitly declaring them
 inline:
 
-For `export` aliases, the inline sugar has the form `(kind <instanceidx> <name>+)`
-and can be used anywhere a `kind` index appears in the AST. For example, the
+For `export` aliases, the inline sugar has the form `(sort <instanceidx> <name>+)`
+and can be used anywhere a `sort` index appears in the AST. For example, the
 following snippet uses an inline function alias:
 ```wasm
-(instance $j (instantiate (component $J) (with "f" (func $i "f"))))
-(export "x" (func $j "g" "h"))
+(instance $j (instantiate $J (with "f" (func $i "f"))))
+(export "x" (func (func $j "g" "h")))
 ```
 which is desugared into:
 ```wasm
 (alias export $i "f" (func $f_alias))
-(instance $j (instantiate (component $J) (with "f" (func $f_alias))))
+(instance $j (instantiate $J (with "f" (func $f_alias))))
 (alias export $j "g" (instance $g_alias))
 (alias export $g_alias "h" (func $h_alias))
 (export "x" (func $h_alias))
@@ -234,129 +277,186 @@ definition, resolved using normal lexical scoping rules. For example, the
 following component:
 ```wasm
 (component
-  (module $M ...)
+  (core module $M ...)
   (component
-    (instance (instantiate (module $M)))
+    (core instance (instantiate $M))
   )
 )
 ```
 is desugared into:
 ```wasm
 (component $C
-  (module $M ...)
+  (core module $M ...)
   (component
-    (alias outer $C $M (module $C_M))
-    (instance (instantiate (module $C_M)))
+    (core alias outer $C $M (module $C_M))
+    (core instance (instantiate $C_M))
   )
 )
 ```
 
 Lastly, for symmetry with [imports][func-import-abbrev], aliases can be written
-in an inverted form that puts the definition kind first:
+in an inverted form that puts the sort first:
 ```wasm
-(func $f (import "i" "f")) ≡ (import "i" "f" (func $f))  ;; (existing)
-(func $g (alias $i "g1"))  ≡ (alias $i "g1" (func $g))   ;; (new)
+(func $f (import "i" "f"))            ≡ (import "i" "f" (func $f))             (WebAssembly 1.0)
+(func $g (alias export $i "g1"))      ≡ (alias export $i "g1" (func $g))
+(core func $g (alias export $i "g1")) ≡ (core alias export $i "g1" (func $g))
 ```
 
 With what's defined so far, we're able to link modules with arbitrary renamings:
 ```wasm
 (component
-  (module $A
+  (core module $A
     (func (export "one") (result i32) (i32.const 1))
     (func (export "two") (result i32) (i32.const 2))
     (func (export "three") (result i32) (i32.const 3))
   )
-  (module $B
+  (core module $B
     (func (import "a" "one") (result i32))
   )
-  (instance $a (instantiate (module $A)))
-  (instance $b1 (instantiate (module $B)
-    (with "a" (instance $a))            ;; no renaming
+  (core instance $a (instantiate $A))
+  (core instance $b1 (instantiate $B
+    (with "a" (instance $a))                  ;; no renaming
   ))
-  (func $a_two (alias export $a "two")) ;; ≡ (alias export $a "two" (func $a_two))
-  (instance $b2 (instantiate (module $B)
+  (core func $a_two (alias export $a "two"))  ;; ≡ (core alias export $a "two" (func $a_two))
+  (core instance $b2 (instantiate $B
     (with "a" (instance
-      (export "one" (func $a_two))      ;; renaming, using explicit alias
+      (export "one" (func $a_two))            ;; renaming, using out-of-line alias
     ))
   ))
-  (instance $b3 (instantiate (module $B)
+  (core instance $b3 (instantiate $B
     (with "a" (instance
-      (export "one" (func $a "three"))  ;; renaming, using inline alias sugar
+      (export "one" (func $a "three"))        ;; renaming, using inline alias sugar
     ))
   ))
 )
 ```
-To show analogous examples of linking components, we'll first need to define
-a new set of types and functions for components to use.
+To show analogous examples of linking components, we'll need component-level
+type and function definitions which are introduced in the next two sections.
 
 
 ### Type Definitions
 
-The type grammar below defines two levels of types, with the second level
-building on the first:
-1. `intertype` (also referred to as "interface types" below): the set of
-    types of first-class, high-level values communicated across shared-nothing
-    component interface boundaries
-2. `deftype`: the set of types of second-class component definitions which are
-   imported/exported at instantiation-time.
-
-The top-level `type` definition is used to define types out-of-line so that
-they can be reused via `typeidx` by future definitions.
+The syntax for defining core types extends the existing core type definition
+syntax, adding a `module` type constructor:
 ```
-type              ::= (type <id>? <typeexpr>)
-typeexpr          ::= <deftype>
-                    | <intertype>
-deftype           ::= <moduletype>
-                    | <componenttype>
-                    | <instancetype>
-                    | <functype>
-                    | <valuetype>
-moduletype        ::= (module <id>? <moduletype-def>*)
-moduletype-def    ::= <core:deftype>
-                    | <core:import>
-                    | (export <name> <core:importdesc>)
-core:deftype      ::= <core:functype>
-                    | ... Post-MVP additions
-componenttype     ::= (component <id>? <componenttype-def>*)
-componenttype-def ::= <import>
-                    | <instancetype-def>
-import            ::= (import <name> <deftype>)
-instancetype      ::= (instance <id>? <instancetype-def>*)
-instancetype-def  ::= <type>
-                    | <alias>
-                    | (export <name> <deftype>)
-functype          ::= (func <id>? (param <name>? <intertype>)* (result <intertype>))
-valuetype         ::= (value <id>? <intertype>)
-intertype         ::= unit | bool
-                    | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64
-                    | float32 | float64
-                    | char | string
-                    | (record (field <name> <intertype>)*)
-                    | (variant (case <name> <intertype> (refines <name>)?)+)
-                    | (list <intertype>)
-                    | (tuple <intertype>*)
-                    | (flags <name>*)
-                    | (enum <name>+)
-                    | (union <intertype>+)
-                    | (option <intertype>)
-                    | (expected <intertype> <intertype>)
+core:type       ::= (type <id>? <core:deftype>)               (GC proposal)
+core:deftype    ::= <core:functype>                           (WebAssembly 1.0)
+                  | <core:structtype>                         (GC proposal)
+                  | <core:arraytype>                          (GC proposal)
+                  | <core:moduletype>
+core:moduletype ::= (module <id>? <core:moduledecl>*)
+core:moduledecl ::= <core:importdecl>
+                  | <core:type>
+                  | <core:alias>
+                  | <core:exportdecl>
+core:importdecl ::= (import <name> <name> <core:externdesc>)
+core:exportdecl ::= (export <name> <core:externdesc>)
+core:externdesc ::= <core:importdesc>                         (WebAssembly 1.0)
 ```
-On a technical note: this type grammar uses `<intertype>` and `<deftype>`
-recursively to allow it to more-precisely indicate the kinds of types allowed.
-The formal spec AST would instead use a `<typeidx>` with validation rules to
-restrict the target type while the formal text format would use something like
-[`core:typeuse`], allowing any of: (1) a `typeidx`, (2) an identifier `$T`
-resolving to a type definition (using `(type $T)` in cases where there is a
-grammatical ambiguity), or (3) an inline type definition that is desugared into
-a deduplicated out-of-line type definition.
+Here, `core:deftype` (short for "defined type") is inherited from the [gc]
+proposal and extended with a `module` type constructor. If module-linking is
+added to Core WebAssembly, an `instance` type constructor would be added as
+well but, for now, it's left out since it's unnecessary. Also, in the MVP,
+validation will reject nested `core:moduletype`, since, before module-linking,
+core modules cannot themselves import or export other core modules.
 
-On another technical note: the optional `id` in all the `deftype` type
-constructors (e.g., `(module <id>? ...)`) is only allowed to be present in the
-context of `import` since this is the only context in which binding an
-identifier makes sense.
+The body of a module type contains an ordered list of "module declarators"
+which describe, at a type level, the imports and exports of the module. In a
+module-type context, import and export declarators can both reuse the existing
+[`core:importdesc`] production defined in WebAssembly 1.0. To avoid confusion,
+`core:importdesc` is renamed to `core:externdesc` (for symmetry with
+[`core:externtype`]).
 
-Starting with interface types, the set of values allowed for the *fundamental*
-interface types is given by the following table:
+In preparation for the forthcoming addition of [type-imports] to Core
+WebAssembly, module types start with an empty type index space so that the type
+index space can be populated with fresh type definitions constructed from type
+imports. Thus, `core:moduledecl` also includes a `type` declarator for defining
+the types used by the `import` and `export` declarators. An `alias` declarator
+is also necessary in the future for defining type-sharing constraints between
+type imports. In the short-term, `alias` declarators are restricted to only
+allowing `outer` `type` aliases, thereby enabling a module type to reuse a
+parent's type definition instead of re-defining it locally.
+
+As an example, the following component defines two equivalent module types,
+where the former defines the function via `type` declarator and the latter via
+`alias` declarator. In both cases, the type is given index `0` since the module
+type starts with an empty type index space.
+```wasm
+(component $C
+  (core type $M1 (module
+    (type (func (param i32) (result i32)))
+    (import "a" "b" (func (type 0)))
+    (export "c" (func (type 0)))
+  ))
+  (core type $F (func (param i32) (result i32)))
+  (core type $M2 (module
+    (alias outer $C $F (type))
+    (import "a" "b" (func (type 0)))
+    (export "c" (func (type 0)))
+  ))
+)
+```
+
+Component-level type definitions are symmetric to core-level type definitions,
+but use a completely different set of value types. Unlike [`core:valtype`]
+which is low-level and assumes a shared linear memory for communicating
+compound values, component-level value types assume no shared memory and must
+therefore be high-level, describing entire compound values.
+```
+type          ::= (type <id>? <deftype>)
+deftype       ::= <valtype>
+                | <functype>
+                | <componenttype>
+                | <instancetype>
+functype      ::= (func <id>? (param <name>? <valtype>)* (result <valtype>))
+componenttype ::= (component <id>? <componentdecl>*)
+instancetype  ::= (instance <id>? <instancedecl>*)
+componentdecl ::= <importdecl>
+                | <instancedecl>
+instancedecl  ::= <type>
+                | <alias>
+                | <exportdecl>
+importdecl    ::= (import <name> <externdesc>)
+exportdecl    ::= (export <name> <externdesc>)
+externdesc    ::= core-prefix(<core:moduletype>)
+                | <functype>
+                | <componenttype>
+                | <instancetype>
+                | (value <id>? <valtype>)
+                | (type <id>? <typebound>)
+typebound     ::= (eq <deftype>)
+valtype       ::= unit
+                | bool
+                | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64
+                | float32 | float64
+                | char | string
+                | (record (field <name> <valtype>)*)
+                | (variant (case <name> <valtype> (refines <name>)?)+)
+                | (list <valtype>)
+                | (tuple <valtype>*)
+                | (flags <name>*)
+                | (enum <name>+)
+                | (union <valtype>+)
+                | (option <valtype>)
+                | (expected <valtype> <valtype>)
+```
+This type grammar uses productions like `<valtype>` and `<deftype>` recursively
+to allow it to more-precisely indicate what's allowed. The formal AST and
+[binary format](Binary.md#type-definitions) instead use a `<typeidx>` with
+validation rules to restrict the target type while the formal text format would
+use something like [`core:typeuse`], allowing any of: (1) a `typeidx`, (2) an
+identifier `$T` resolving to a type definition (using `(type $T)` in cases
+where there is a grammatical ambiguity), or (3) an inline type definition that
+is desugared into a deduplicated out-of-line type definition.
+
+The optional `id` after all the type constructors (e.g., `(module <id>? ...)`)
+is only allowed to be present in the context of `import` since this is the only
+context in which binding an identifier makes sense.
+
+The value types in `valtype` can be broken into two categories: *fundamental*
+value types and *specialized* value types, where the latter are defined by
+expansion into the former. The *fundamental value types* have the following
+sets of abstract values:
 | Type                      | Values |
 | ------------------------- | ------ |
 | `bool`                    | `true` and `false` |
@@ -364,11 +464,12 @@ interface types is given by the following table:
 | `u8`, `u16`, `u32`, `u64` | integers in the range [0, 2<sup>N</sup>-1] |
 | `float32`, `float64`      | [IEEE754] floating-pointer numbers with a single, canonical "Not a Number" ([NaN]) value |
 | `char`                    | [Unicode Scalar Values] |
-| `record`                  | heterogeneous [tuples] of named `intertype` values |
-| `variant`                 | heterogeneous [tagged unions] of named `intertype` values |
-| `list`                    | homogeneous, variable-length [sequences] of `intertype` values |
+| `record`                  | heterogeneous [tuples] of named values |
+| `variant`                 | heterogeneous [tagged unions] of named values |
+| `list`                    | homogeneous, variable-length [sequences] of values |
 
-NaN values are canonicalized to a single value so that:
+The `float32` and `float64` values have their NaNs canonicalized to a single
+value so that:
 1. consumers of NaN values are free to use the rest of the NaN payload for
    optimization purposes (like [NaN boxing]) without needing to worry about
    whether the NaN payload bits were significant; and
@@ -383,73 +484,64 @@ subtyping. In particular, a `variant` subtype can contain a `case` not present
 in the supertype if the subtype's `case` `refines` (directly or transitively)
 some `case` in the supertype.
 
-The sets of values allowed for the remaining *specialized* interface types are
+The sets of values allowed for the remaining *specialized value types* are
 defined by the following mapping:
 ```
-              (tuple <intertype>*) ↦ (record (field "𝒊" <intertype>)*) for 𝒊=0,1,...
-                   (flags <name>*) ↦ (record (field <name> bool)*)
-                              unit ↦ (record)
-                    (enum <name>+) ↦ (variant (case <name> unit)+)
-              (option <intertype>) ↦ (variant (case "none") (case "some" <intertype>))
-              (union <intertype>+) ↦ (variant (case "𝒊" <intertype>)+) for 𝒊=0,1,...
-(expected <intertype> <intertype>) ↦ (variant (case "ok" <intertype>) (case "error" <intertype>))
-                            string ↦ (list char)
+            (tuple <valtype>*) ↦ (record (field "𝒊" <valtype>)*) for 𝒊=0,1,...
+               (flags <name>*) ↦ (record (field <name> bool)*)
+                          unit ↦ (record)
+                (enum <name>+) ↦ (variant (case <name> unit)+)
+            (option <valtype>) ↦ (variant (case "none") (case "some" <valtype>))
+            (union <valtype>+) ↦ (variant (case "𝒊" <valtype>)+) for 𝒊=0,1,...
+(expected <valtype> <valtype>) ↦ (variant (case "ok" <valtype>) (case "error" <valtype>))
+                        string ↦ (list char)
 ```
 Note that, at least initially, variants are required to have a non-empty list of
 cases. This could be relaxed in the future to allow an empty list of cases, with
 the empty `(variant)` effectively serving as a [bottom type] and indicating
 unreachability.
 
-Building on these interface types, there are four kinds of types describing the
-four kinds of importable/exportable component definitions. (In the future, a
-fifth type will be added for [resource types][Resource and Handle Types].)
+The remaining 5 type constructors use `valtype` to complete the description
+of a shared-nothing component interface:
 
-A `functype` describes a component function whose parameters and results are
-`intertype` values. Thus `functype` is completely disjoint from
-[`core:functype`] in the WebAssembly Core spec, whose parameters and results
-are [`core:valtype`] values. As a low-level compiler target, `core:functype`
-returns zero or more results. In contrast, as a high-level interface type
-designed to be maximally bound to a variety of source languages, `functype`
-always returns a single type, with `unit` being used for functions that don't
-return an interesting value (analogous to "void" in some languages). As
-syntactic sugar, the text format of `functype` additionally allows `result` to
-be absent, interpreting this as `(result unit)`. Since `core:functype` can only
-appear syntactically within a `(module ...)` S-expression, there is never a
-need to syntactically distinguish `functype` from `core:functype` in the text
-format: the context dictates which one a `(func ...)` S-expression parses into.
+The `func` type constructor describes a component-level function definition
+that takes and returns component-level value types. In contrast to
+[`core:functype`] which, as a low-level compiler target for a stack machine,
+returns zero or more results, `functype` always returns a single type, with
+`unit` being used for functions that don't return an interesting value
+(analogous to "void" in some languages). Having a single return type simplifies
+the binding of `functype` into a wide variety of source languages. As syntactic
+sugar, the text format of `functype` additionally allows `result` to be absent,
+interpreting this as `(result unit)`.
 
-A `valuetype` describes a single `intertype` value that is to be consumed
-exactly once during component instantiation. How this happens is described
+The `component` type constructor is symmetric to the core `module` type
+constructor, although its grammar is factored to share declarators with the
+`instance` type constructor. The `import` and `export` declarator names
+must be distinct within a single type.
+
+The `externdesc` production (used to declare the types of imported/exported
+values) includes two additional type constructors that are not currently
+present in `deftype` (since there is currently no reason for allowing them to
+be shared or named as type definitions):
+
+The `value` case describes an imported or exported `valtype` value that is to
+be consumed exactly once during instantiation. How this happens is described
 below along with [`start` definitions](#start-definitions).
 
-As described above, components and modules are immutable values representing
-code that cannot be run until instantiated via `instance` definition. Thus,
-`moduletype` and `componenttype` describe *uninstantiated code*. `moduletype`
-and `componenttype` contain not just import and export definitions, but also
-type and alias definitions, allowing them to capture type sharing relationships
-between imports and exports. This type sharing becomes necessary (not just a
-size optimization) with the upcoming addition of [type imports and exports] to
-Core WebAssembly and, symmetrically, [resource and handle types] to the
-Component Model.
+The `type` case describes an imported or exported type along with its bounds,
+which currently only has an `eq` option that says that the imported/exported
+type must be exactly equal to the given immediate type. There are two main use
+cases for this in the short-term:
+* Type exports allow a component or interface to associate a name with a
+  structural type (e.g., `(export "nanos" (type (eq u64)))`) which bindings
+  generators can use to generate type aliases (e.g., `typedef uint64_t nanos;`).
+* Type imports and exports allow a component to explicitly specify the
+  type parameters used to monomorphize a generic interface being imported
+  or exported.
 
-The `instancetype` type constructor describes component instances, which are
-named tuples of other definitions. Although `instance` definitions can produce
-both module *and* component instances, only *component* instances can be
-imported or exported (due to the overall [shared-nothing design](../high-level/Choices.md)
-of the Component Model) and thus only *component* instances need explicit type
-definitions. Consequently, the text format of `instancetype` does not include
-a syntax for defining *module* instance types. As with `componenttype` and
-`moduletype`, `instancetype` allows nested type and alias definitions to allow
-type sharing.
-
-Lastly, to ensure cross-language interoperability, `moduletype`,
-`componenttype` and `instancetype` all require import and export names to be
-unique (within a particular module, component, instance or type thereof). In
-the case of `moduletype` and two-level imports, this translates to requiring
-that import name *pairs* must be *pair*-wise unique. Since the current Core
-WebAssembly validation rules allow duplicate imports, this means that some
-valid modules will not be typeable and will fail validation if used with the
-Component Model.
+When [resource and handle types] are added to the explainer, `typebound` will
+be extended with a `sub` option (symmetric to the [type-imports] proposal) that
+allows importing and exporting *abstract* types.
 
 With what's defined so far, we can define component types using a mix of inline
 and out-of-line type definitions:
@@ -462,52 +554,50 @@ and out-of-line type definitions:
     (alias outer $C $T (type $C_T))
     (type $L (list $C_T))
     (import "f" (func (param $L) (result (list u8))))
-    (import "g" $G)
-    (export "g" $G)
+    (import "g" (func (type $G)))
+    (export "g" (func (type $G)))
     (export "h" (func (result $U)))
   ))
 )
 ```
-Note that the inline use of `$G` and `$U` are inline `outer` aliases.
+Note that the inline use of `$G` and `$U` are syntactic sugar for `outer`
+aliases.
 
 
-### Function Definitions
+### Canonical Definitions
 
-To implement or call interface-typed functions, we need to be able to cross a
+To implement or call a component-level function, we need to cross a
 shared-nothing boundary. Traditionally, this problem is solved by defining a
-serialization format for copying data across the boundary. The Component Model
-MVP takes roughly this same approach, defining a linear-memory-based [ABI]
-called the "Canonical ABI" which specifies, for any interface function type, a
-[corresponding](CanonicalABI.md#flattening) core function type and
-[rules](CanonicalABI.md#lifting-and-lowering) for copying values into or out of
-linear memory. The Component Model differs from traditional approaches, though,
-in that the ABI is configurable, allowing different memory representations for
-the same abstract value. In the MVP, this configurability is limited to the
-small set of `canonopt` shown below. However, Post-MVP, [adapter functions]
-could be added to allow far more programmatic control.
+serialization format. The Component Model MVP uses roughly this same approach,
+defining a linear-memory-based [ABI] called the "Canonical ABI" which
+specifies, for any `functype`, a [corresponding](CanonicalABI.md#flattening)
+`core:functype` and [rules](CanonicalABI.md#lifting-and-lowering) for copying
+values into and out of linear memory. The Component Model differs from
+traditional approaches, though, in that the ABI is configurable, allowing
+multiple different memory representations of the same abstract value. In the
+MVP, this configurability is limited to the small set of `canonopt` shown
+below. However, Post-MVP, [adapter functions] could be added to allow far more
+programmatic control.
 
 The Canonical ABI is explicitly applied to "wrap" existing functions in one of
 two directions:
-* `canon.lift` wraps a core function (of type `core:functype`) inside the
-  current component to produce a component function (of type `functype`)
-  that can be exported to other components.
-* `canon.lower` wraps a component function (of type `functype`) that can
-  have been imported from another component to produce a core function (of type
-  `core:functype`) that can be imported and called from Core WebAssembly code
-  within the current component.
+* `lift` wraps a core function (of type `core:functype`) to produce a component
+  function (of type `functype`) that can be passed to other components.
+* `lower` wraps a component function (of type `functype`) to produce a core
+  function (of type `core:functype`) that can be imported and called from Core
+  WebAssembly code inside the current component.
 
-Function definitions specify one of these two wrapping directions along with a
-set of Canonical ABI configuration options.
+Canonical definitions specify one of these two wrapping directions, the function
+to wrap and a list of configuration options:
 ```
-func     ::= (func <id>? <funcbody>)
-funcbody ::= (canon.lift <functype> <canonopt>* <funcidx>)
-           | (canon.lower <canonopt>* <funcidx>)
-canonopt ::= string-encoding=utf8
-           | string-encoding=utf16
-           | string-encoding=latin1+utf16
-           | (memory <memidx>)
-           | (realloc <funcidx>)
-           | (post-return <funcidx>)
+canon     ::= (canon lift core-prefix(<core:funcidx>) <functype> <canonopt>* (func <id>?))
+            | (canon lower <funcidx> <canonopt>* (core func <id>?))
+canonopt  ::= string-encoding=utf8
+            | string-encoding=utf16
+            | string-encoding=latin1+utf16
+            | (memory core-prefix(<core:memidx>))
+            | (realloc core-prefix(<core:funcidx>))
+            | (post-return core-prefix(<core:funcidx>))
 ```
 The `string-encoding` option specifies the encoding the Canonical ABI will use
 for the `string` type. The `latin1+utf16` encoding captures a common string
@@ -518,12 +608,12 @@ Point range) or UTF-16 (which can express all Code Points, but uses either
 default is UTF-8. It is a validation error to include more than one
 `string-encoding` option.
 
-The `(memory <memidx>)` option specifies the memory that the Canonical ABI will
+The `(memory ...)` option specifies the memory that the Canonical ABI will
 use to load and store values. If the Canonical ABI needs to load or store,
 validation requires this option to be present (there is no default).
 
-The `(realloc <funcidx>)` option specifies a core function that is validated to
-have the following signature:
+The `(realloc ...)` option specifies a core function that is validated to
+have the following core function type:
 ```wasm
 (func (param $originalPtr i32)
       (param $originalSize i32)
@@ -535,22 +625,22 @@ The Canonical ABI will use `realloc` both to allocate (passing `0` for the
 first two parameters) and reallocate. If the Canonical ABI needs `realloc`,
 validation requires this option to be present (there is no default).
 
-The `(post-return <funcidx>)` option may only be present in `canon.lift` and
-specifies a core function to be called with the original return values after
-they have finished being read, allowing memory to be deallocated and
+The `(post-return ...)` option may only be present in `canon lift`
+and specifies a core function to be called with the original return values
+after they have finished being read, allowing memory to be deallocated and
 destructors called. This immediate is always optional but, if present, is
 validated to have parameters matching the callee's return type and empty
 results.
 
-Based on this description of the AST, the [Canonical ABI explainer][Canonical ABI]
-gives a detailed walkthrough of the static and dynamic semantics of
-`canon.lift` and `canon.lower`.
+Based on this description of the AST, the [Canonical ABI explainer][Canonical
+ABI] gives a detailed walkthrough of the static and dynamic semantics of `lift`
+and `lower`.
 
-One high-level consequence of the dynamic semantics of `canon.lift` given in
+One high-level consequence of the dynamic semantics of `canon lift` given in
 the Canonical ABI explainer is that component functions are different from core
 functions in that all control flow transfer is explicitly reflected in their
-type. For example, with Core WebAssembly [exception handling] and
-[stack switching], a core function with type `(func (result i32))` can return
+type. For example, with Core WebAssembly [exception-handling] and
+[stack-switching], a core function with type `(func (result i32))` can return
 an `i32`, throw, suspend or trap. In contrast, a component function with type
 `(func (result string))` may only return a `string` or trap. To express
 failure, component functions can return `expected` and languages with exception
@@ -558,23 +648,33 @@ handling can bind exceptions to the `error` case. Similarly, the forthcoming
 addition of [future and stream types] would explicitly declare patterns of
 stack-switching in component function signatures.
 
-Using function definitions, we can finally write a non-trivial component that
+Similar to the `import` and `alias` abbreviations shown above, `canon`
+definitions can also be written in an inverted form that puts the sort first:
+```wasm
+      (func $f (import "i" "f")) ≡ (import "i" "f" (func $f))        (WebAssembly 1.0)
+      (func $h (canon lift ...)) ≡ (canon lift ... (func $h))
+(core func $h (canon lower ...)) ≡ (canon lower ... (core func $h))
+```
+Note: in the future, `canon` may be generalized to define other sorts than
+functions (such as types), hence the explicit `sort`.
+
+Using canonical definitions, we can finally write a non-trivial component that
 takes a string, does some logging, then returns a string.
 ```wasm
 (component
   (import "wasi:logging" (instance $logging
     (export "log" (func (param string)))
   ))
-  (import "libc" (module $Libc
+  (import "libc" (core module $Libc
     (export "mem" (memory 1))
     (export "realloc" (func (param i32 i32) (result i32)))
   ))
-  (instance $libc (instantiate (module $Libc)))
-  (func $log (canon.lower
-    (memory (memory $libc "mem")) (realloc (func $libc "realloc"))
+  (core instance $libc (instantiate $Libc))
+  (core func $log (canon lower
     (func $logging "log")
+    (memory (core memory $libc "mem")) (realloc (core func $libc "realloc"))
   ))
-  (module $Main
+  (core module $Main
     (import "libc" "memory" (memory 1))
     (import "libc" "realloc" (func (param i32 i32) (result i32)))
     (import "wasi:logging" "log" (func $log (param i32 i32)))
@@ -582,14 +682,14 @@ takes a string, does some logging, then returns a string.
       ... (call $log) ...
     )
   )
-  (instance $main (instantiate (module $Main)
+  (core instance $main (instantiate $Main
     (with "libc" (instance $libc))
     (with "wasi:logging" (instance (export "log" (func $log))))
   ))
-  (func (export "run") (canon.lift
+  (func (export "run") (canon lift
+    (core func $main "run")
     (func (param string) (result string))
-    (memory (memory $libc "mem")) (realloc (func $libc "realloc"))
-    (func $main "run")
+    (memory (core memory $libc "mem")) (realloc (core func $libc "realloc"))
   ))
 )
 ```
@@ -597,81 +697,76 @@ This example shows the pattern of splitting out a reusable language runtime
 module (`$Libc`) from a component-specific, non-reusable module (`$Main`). In
 addition to reducing code size and increasing code-sharing in multi-component
 scenarios, this separation allows `$libc` to be created first, so that its
-exports are available for reference by `canon.lower`. Without this separation
+exports are available for reference by `canon lower`. Without this separation
 (if `$Main` contained the `memory` and allocation functions), there would be a
-cyclic dependency between `canon.lower` and `$Main` that would have to be
-broken by the toolchain emitting an auxiliary module that broke the cycle using
-a shared `funcref` table and `call_indirect`.
+cyclic dependency between `canon lower` and `$Main` that would have to be
+broken using an auxiliary module performing `call_indirect`.
 
 
 ### Start Definitions
 
 Like modules, components can have start functions that are called during
 instantiation. Unlike modules, components can call start functions at multiple
-points during instantiation with each such call having interface-typed
-parameters and results. Thus, `start` definitions in components look like
-function calls:
+points during instantiation with each such call having parameters and results.
+Thus, `start` definitions in components look like function calls:
 ```
 start ::= (start <funcidx> (value <valueidx>)* (result (value <id>))?)
 ```
 The `(value <valueidx>)*` list specifies the arguments passed to `funcidx` by
 indexing into the *value index space*. Value definitions (in the value index
-space) are like immutable `global` definitions in Core WebAssembly except they
-must be consumed exactly once at instantiation-time.
+space) are like immutable `global` definitions in Core WebAssembly except that
+validation requires them to be consumed exactly once at instantiation-time
+(i.e., they are [linear]).
 
-As with any other definition kind, value definitions may be supplied to
-components through `import` definitions. Using the grammar of `import` already
-defined [above](#type-definitions), an example *value import* can be written:
+As with all definition sorts, values may be imported and exported by
+components. As an example value import:
 ```
 (import "env" (value $env (record (field "locale" (option string)))))
 ```
 As this example suggests, value imports can serve as generalized [environment
-variables], allowing not just `string`, but the full range of interface types
-to describe the imported configuration schema.
+variables], allowing not just `string`, but the full range of `valtype`.
 
 With this, we can define a component that imports a string and computes a new
-exported string, all at instantiation time:
+exported string at instantiation time:
 ```wasm
 (component
   (import "name" (value $name string))
-  (import "libc" (module $Libc
+  (import "libc" (core module $Libc
     (export "memory" (memory 1))
     (export "realloc" (func (param i32 i32 i32 i32) (result i32)))
   ))
-  (instance $libc (instantiate (module $Libc)))
-  (module $Main
+  (core instance $libc (instantiate $Libc))
+  (core module $Main
     (import "libc" ...)
     (func (export "start") (param i32 i32) (result i32 i32)
       ... general-purpose compute
     )
   )
-  (instance $main (instantiate (module $Main) (with "libc" (instance $libc))))
-  (func $start (canon.lift
+  (core instance $main (instantiate $Main (with "libc" (instance $libc))))
+  (func $start (canon lift
+    (core func $main "start")
     (func (param string) (result string))
-    (memory (memory $libc "mem")) (realloc (func $libc "realloc"))
-    (func $main "start")
+    (memory (core memory $libc "mem")) (realloc (core func $libc "realloc"))
   ))
   (start $start (value $name) (result (value $greeting)))
   (export "greeting" (value $greeting))
 )
 ```
 As this example shows, start functions reuse the same Canonical ABI machinery
-as normal imports and exports for getting interface typed values into and out
-of linear memory.
+as normal imports and exports for getting component-level values into and out
+of core linear memory.
 
 
 ### Import and Export Definitions
 
-The rules for [`import`](#type-definitions) and [`export`](#instance-definitions)
-definitions have actually already been defined above (with the caveat that the
-real text format for `import` definitions would additionally allow binding an
-identifier (e.g., adding the `$foo` in `(import "foo" (func $foo))`):
+Lastly, imports and exports are defined in terms of the above as:
 ```
-import ::= already defined above as part of <type>
-export ::= already defined above as part of <instance>
+import ::= (import <name> <externdesc>)
+export ::= (export <name> <sortidx>)
 ```
+All import and export names within a component must be unique, respectively.
 
-With what's defined so far, we can define a component that imports, links and
+With what's defined so far, we can write a component that imports, links and
 exports other components:
 ```wasm
 (component
@@ -684,10 +779,10 @@ exports other components:
     ))
     (export "g" (func (result string)))
   ))
-  (instance $d1 (instantiate (component $D)
+  (instance $d1 (instantiate $D
     (with "c" (instance $c))
   ))
-  (instance $d2 (instantiate (component $D)
+  (instance $d2 (instantiate $D
     (with "c" (instance
       (export "f" (func $d1 "g"))
     ))
@@ -706,11 +801,11 @@ note that all definitions are acyclic as is the resulting instance graph.
 As a consequence of the shared-nothing design described above, all calls into
 or out of a component instance necessarily transit through a component function
 definition. Thus, component functions form a "membrane" around the collection
-of module instances contained by a component instance, allowing the Component
-Model to establish invariants that increase optimizability and composability in
-ways not otherwise possible in the shared-everything setting of Core
-WebAssembly. The Component Model proposes establishing the following three
-runtime invariants:
+of core module instances contained by a component instance, allowing the
+Component Model to establish invariants that increase optimizability and
+composability in ways not otherwise possible in the shared-everything setting
+of Core WebAssembly. The Component Model proposes establishing the following
+three runtime invariants:
 1. Components define a "lockdown" state that prevents continued execution
    after a trap. This both prevents continued execution with corrupt state and
    also allows more-aggressive compiler optimizations (e.g., store reordering).
@@ -754,8 +849,8 @@ these same JS API functions to accept component binaries and produce new
 `WebAssembly.Component` objects that represent decoded and validated
 components. The [binary format of components](Binary.md) is designed to allow
 modules and components to be distinguished by the first 8 bytes of the binary
-(splitting the 32-bit [`version`] field into a 16-bit `version` field and a
-16-bit `kind` field with `0` for modules and `1` for components).
+(splitting the 32-bit [`core:version`] field into a 16-bit `version` field and
+a 16-bit `layer` field with `0` for modules and `1` for components).
 
 Once compiled, a `WebAssemby.Component` could be instantiated using the
 existing JS API `WebAssembly.instantiate(Streaming)`. Since components have the
@@ -768,7 +863,7 @@ instantiated module, `WebAssembly.instantiate` would always produce a
 
 Lastly, when given a component binary, the compile-then-instantiate overloads
 of `WebAssembly.instantiate(Streaming)` would inherit the compound behavior of
-the abovementioned functions (again, using the `version` field to eagerly
+the abovementioned functions (again, using the `layer` field to eagerly
 distinguish between modules and components).
 
 For example, the following component:
@@ -779,7 +874,7 @@ For example, the following component:
   (import "two" (value string))
   (import "three" (instance
     (export "four" (instance
-      (export "five" (module
+      (export "five" (core module
         (import "six" "a" (func))
         (import "six" "b" (func))
       ))
@@ -812,11 +907,11 @@ WebAssembly.instantiateStreaming(fetch('./a.wasm'), {
 
 The other significant addition to the JS API would be the expansion of the set
 of WebAssembly types coerced to and from JavaScript values (by [`ToJSValue`]
-and [`ToWebAssemblyValue`]) to include all of [`intertype`](#type-definitions).
+and [`ToWebAssemblyValue`]) to include all of [`valtype`](#type-definitions).
 At a high level, the additional coercions would be:
 
-| Interface Type | `ToJSValue` | `ToWebAssemblyValue` |
-| -------------- | ----------- | -------------------- |
+| Type | `ToJSValue` | `ToWebAssemblyValue` |
+| ---- | ----------- | -------------------- |
 | `unit` | `null` | accept everything |
 | `bool` | `true` or `false` | `ToBoolean` |
 | `s8`, `s16`, `s32` | as a Number value | `ToInt32` |
@@ -852,8 +947,8 @@ Notes:
 
 ### ESM-integration
 
-Like the JS API, [ESM-integration] can be extended to load components in all
-the same places where modules can be loaded today, branching on the `kind`
+Like the JS API, [esm-integration] can be extended to load components in all
+the same places where modules can be loaded today, branching on the `layer`
 field in the binary format to determine whether to decode as a module or a
 component. The main question is how to deal with component imports having a
 single string as well as the new importable component, module and instance
@@ -927,20 +1022,21 @@ and will be added over the coming months to complete the MVP proposal:
 
 
 [Structure Section]: https://webassembly.github.io/spec/core/syntax/index.html
-[`core:module`]: https://webassembly.github.io/spec/core/syntax/modules.html#syntax-module
-[`core:export`]: https://webassembly.github.io/spec/core/syntax/modules.html#syntax-export
-[`core:import`]: https://webassembly.github.io/spec/core/syntax/modules.html#syntax-import
-[`core:importdesc`]: https://webassembly.github.io/spec/core/syntax/modules.html#syntax-importdesc
-[`core:functype`]: https://webassembly.github.io/spec/core/syntax/types.html#syntax-functype
-[`core:valtype`]: https://webassembly.github.io/spec/core/syntax/types.html#value-types
-
 [Text Format Section]: https://webassembly.github.io/spec/core/text/index.html
-[Abbreviations]: https://webassembly.github.io/spec/core/text/conventions.html#abbreviations
-[`core:typeuse`]: https://webassembly.github.io/spec/core/text/modules.html#type-uses
-[func-import-abbrev]: https://webassembly.github.io/spec/core/text/modules.html#text-func-abbrev
-
 [Binary Format Section]: https://webassembly.github.io/spec/core/binary/index.html
-[`version`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-version
+
+[Index Space]: https://webassembly.github.io/spec/core/syntax/modules.html#indices
+[Abbreviations]: https://webassembly.github.io/spec/core/text/conventions.html#abbreviations
+
+[`core:module`]: https://webassembly.github.io/spec/core/text/modules.html#text-module
+[`core:type`]: https://webassembly.github.io/spec/core/text/modules.html#types
+[`core:importdesc`]: https://webassembly.github.io/spec/core/text/modules.html#text-importdesc
+[`core:externtype`]: https://webassembly.github.io/spec/core/syntax/types.html#external-types
+[`core:valtype`]: https://webassembly.github.io/spec/core/text/types.html#value-types
+[`core:typeuse`]: https://webassembly.github.io/spec/core/text/modules.html#type-uses
+[`core:functype`]: https://webassembly.github.io/spec/core/text/types.html#function-types
+[func-import-abbrev]: https://webassembly.github.io/spec/core/text/modules.html#text-func-abbrev
+[`core:version`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-version
 
 [JS API]: https://webassembly.github.io/spec/js-api/index.html
 [*read the imports*]: https://webassembly.github.io/spec/js-api/index.html#read-the-imports
@@ -958,7 +1054,6 @@ and will be added over the coming months to complete the MVP proposal:
 [Module Specifier]: https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ModuleSpecifier
 [Named Imports]: https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-NamedImports
 [Imported Default Binding]: https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ImportedDefaultBinding
-
 [JS Tuple]: https://github.com/tc39/proposal-record-tuple
 [JS Record]: https://github.com/tc39/proposal-record-tuple
 
@@ -974,16 +1069,19 @@ and will be added over the coming months to complete the MVP proposal:
 [Sequences]: https://en.wikipedia.org/wiki/Sequence
 [ABI]: https://en.wikipedia.org/wiki/Application_binary_interface
 [Environment Variables]: https://en.wikipedia.org/wiki/Environment_variable
+[Linear]: https://en.wikipedia.org/wiki/Substructural_type_system#Linear_type_systems
 
-[Module Linking]: https://github.com/WebAssembly/module-linking/blob/main/design/proposals/module-linking/Explainer.md
-[Interface Types]: https://github.com/WebAssembly/interface-types/blob/main/proposals/interface-types/Explainer.md
-[Type Imports and Exports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
-[Exception Handling]: https://github.com/WebAssembly/exception-handling/blob/main/proposals/exception-handling/Exceptions.md
-[Stack Switching]: https://github.com/WebAssembly/stack-switching/blob/main/proposals/stack-switching/Overview.md
-[ESM-integration]: https://github.com/WebAssembly/esm-integration/tree/main/proposals/esm-integration
+[module-linking]: https://github.com/WebAssembly/module-linking/blob/main/design/proposals/module-linking/Explainer.md
+[interface-types]: https://github.com/WebAssembly/interface-types/blob/main/proposals/interface-types/Explainer.md
+[type-imports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
+[exception-handling]: https://github.com/WebAssembly/exception-handling/blob/main/proposals/exception-handling/Exceptions.md
+[stack-switching]: https://github.com/WebAssembly/stack-switching/blob/main/proposals/stack-switching/Overview.md
+[esm-integration]: https://github.com/WebAssembly/esm-integration/tree/main/proposals/esm-integration
+[gc]: https://github.com/WebAssembly/gc/blob/main/proposals/gc/MVP.md
 
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Canonical ABI]: CanonicalABI.md
+[Shared-Nothing]: ../high-level/Choices.md
 
 [`wizer`]: https://github.com/bytecodealliance/wizer
 

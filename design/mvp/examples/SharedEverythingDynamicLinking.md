@@ -157,10 +157,10 @@ would look like:
     (with "libc" (instance $libc))
     (with "libzip" (instance $libzip))
   ))
-  (func (export "zip") (canon.lift
+  (func (export "zip") (canon lift
+    (func $main "zip")
     (func (param (list u8)) (result (list u8)))
     (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
-    (func $main "zip")
   ))
 )
 ```
@@ -236,10 +236,10 @@ component-aware `clang`, the resulting component would look like:
     (with "libc" (instance $libc))
     (with "libimg" (instance $libimg))
   ))
-  (func (export "transform") (canon.lift
+  (func (export "transform") (canon lift
+    (func $main "transform")
     (func (param (list u8)) (result (list u8)))
     (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
-    (func $main "transform")
   ))
 )
 ```
@@ -283,23 +283,23 @@ components. The resulting component could look like:
   ))
 
   (instance $libc (instantiate (module $Libc)))
-  (func $zip (canon.lower
-    (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
+  (func $zip (canon lower
     (func $zipper "zip")
-  ))
-  (func $transform (canon.lower
     (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
+  ))
+  (func $transform (canon lower
     (func $imgmgk "transform")
+    (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
   ))
   (instance $main (instantiate (module $Main)
     (with "libc" (instance $libc))
     (with "zipper" (instance (export "zip" (func $zipper "zip"))))
     (with "imgmgk" (instance (export "transform" (func $imgmgk "transform"))))
   ))
-  (func (export "run") (canon.lift
+  (func (export "run") (canon lift
+    (func $main "run")
     (func (param string) (result string))
     (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
-    (func $main "run")
   ))
 )
 ```

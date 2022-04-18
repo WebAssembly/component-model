@@ -15,23 +15,22 @@ serialization format, as this often incurs extra copying when the source or
 destination language-runtime data structures don't precisely match the fixed
 serialization format. A significant amount of work was spent designing a
 language of [adapter functions] that provided fairly general programmatic
-control over the process of serializing and deserializing interface-typed values.
+control over the process of serializing and deserializing high-level values.
 (The Interface Types Explainer currently contains a snapshot of this design.)
 However, a significant amount of additional design work remained, including
 (likely) changing the underlying semantic foundations from lazy evaluation to
 algebraic effects.
 
-In pursuit of a timely MVP and as part of the overall [scoping and layering proposal],
-the goal of avoiding a fixed serialization format was dropped from the MVP, by
-instead defining a [Canonical ABI](CanonicalABI.md) in the MVP. However, the
-current design of [function definitions](Explainer.md#function-definitions)
-anticipates a future extension whereby function bodies can contain not just the
-fixed Canonical ABI-following `canon.lift` and `canon.lower` but,
-alternatively, general adapter function code.
+In pursuit of a timely MVP and as part of the overall [scoping and layering
+proposal], the goal of avoiding a fixed serialization format was dropped from
+the MVP by instead defining a [Canonical ABI](CanonicalABI.md) in the MVP.
+However, the current design anticipates a future extension whereby lifting and
+lowering functions can be generated not just from `canon lift` and `canon
+lower`, but, alternatively, general-purpose serialization/deserialization code.
 
-In this future state, `canon.lift` and `canon.lower` could be specified by
-simple expansion into the adapter code, making these instructions effectively
-macros. However, even in this future state, there is still concrete value in
+In this future state, `canon lift` and `canon lower` could be specified by
+simple expansion into the general-purpose code, making these instructions
+effectively macros. However, even in this future state, there is still value in
 having a fixedly-defined Canonical ABI as it allows more-aggressive
 optimization of calls between components (which both use the Canonical ABI) and
 between a component and the host (which often must use a fixed ABI for calling
@@ -53,8 +52,8 @@ Additionally, having two similar-but-different, partially-overlapping concepts
 makes the whole proposal harder to explain. Thus, the MVP drops the concept of
 "adapter modules", including only shared-nothing "components". However, if
 concrete future use cases emerged for creating modules that partially used
-interface types and partially shared linear memory, "adapter modules" could be
-added as a future feature.
+shared-nothing component values and partially shared linear memory, "adapter
+modules" could be added as a future feature.
 
 
 ## Shared-everything Module Linking in Core WebAssembly
