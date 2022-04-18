@@ -145,7 +145,7 @@ def test_pairs(t, pairs):
   for arg,expect in pairs:
     test(t, [arg], expect)
 
-test_pairs(Bool(), [(0,False),(1,True),(2,True),(4294967295,True)])
+test_pairs(Bool(), [(0,False),(1,True),(2,None),(4294967295,None)])
 test_pairs(U8(), [(127,127),(128,128),(255,255),(256,None),
                   (4294967295,None),(4294967168,None),(4294967167,None)])
 test_pairs(S8(), [(127,127),(128,None),(255,None),(256,None),
@@ -209,6 +209,7 @@ def test_heap(t, expect, args, byte_array):
 
 test_heap(List(Unit()), [{},{},{}], [0,3], [])
 test_heap(List(Bool()), [True,False,True], [0,3], [1,0,1])
+test_heap(List(Bool()), None, [0,3], [1,0,2])
 test_heap(List(Bool()), [True,False,True], [3,3], [0xff,0xff,0xff, 1,0,1])
 test_heap(List(U8()), [1,2,3], [0,3], [1,2,3])
 test_heap(List(U16()), [1,2,3], [0,3], [1,0, 2,0, 3,0 ])

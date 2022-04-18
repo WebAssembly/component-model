@@ -201,7 +201,7 @@ class Opts:
 def load(opts, ptr, t):
   assert(ptr == align_to(ptr, alignment(t)))
   match despecialize(t):
-    case Bool()         : return bool(load_int(opts, ptr, 1))
+    case Bool()         : return narrow_uint_to_bool(load_int(opts, ptr, 1))
     case U8()           : return load_int(opts, ptr, 1)
     case U16()          : return load_int(opts, ptr, 2)
     case U32()          : return load_int(opts, ptr, 4)
@@ -224,6 +224,13 @@ def load(opts, ptr, t):
 def load_int(opts, ptr, nbytes, signed = False):
   trap_if(ptr + nbytes > len(opts.memory))
   return int.from_bytes(opts.memory[ptr : ptr+nbytes], 'little', signed=signed)
+
+#
+
+def narrow_uint_to_bool(i):
+  assert(i >= 0)
+  trap_if(i > 1)
+  return bool(i)
 
 #
 
@@ -656,7 +663,7 @@ class ValueIter:
 
 def lift_flat(opts, vi, t):
   match despecialize(t):
-    case Bool()         : return bool(vi.next('i32'))
+    case Bool()         : return narrow_uint_to_bool(vi.next('i32'))
     case U8()           : return lift_flat_unsigned(vi, 32, 8)
     case U16()          : return lift_flat_unsigned(vi, 32, 16)
     case U32()          : return lift_flat_unsigned(vi, 32, 32)
@@ -736,6 +743,7 @@ def lift_flat_variant(opts, vi, cases):
   return { case_label_with_defaults(case, cases): v }
 
 def narrow_i64_to_i32(i):
+  assert(0 <= i < (1 << 64))
   trap_if(i >= (1 << 32))
   return i
 
