@@ -536,10 +536,11 @@ first two parameters) and reallocate. If the Canonical ABI needs `realloc`,
 validation requires this option to be present (there is no default).
 
 The `(post-return <funcidx>)` option may only be present in `canon.lift` and
-specifies a core function to be called after the return value has been fully
-read, giving a chance for the runtime to deallocate memory and/or call
-destructors. This option is always optional but, if present, is validated to
-have the empty function signature `(func)`.
+specifies a core function to be called with the original return values after
+they have finished being read, allowing memory to be deallocated and
+destructors called. This immediate is always optional but, if present, is
+validated to have parameters matching the callee's return type and empty
+results.
 
 Based on this description of the AST, the [Canonical ABI explainer][Canonical ABI]
 gives a detailed walkthrough of the static and dynamic semantics of

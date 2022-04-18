@@ -890,7 +890,8 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args):
   [result] = lift(callee_opts, MAX_FLAT_RESULTS, ValueIter(flat_results), [functype.result])
   def post_return():
     callee_instance.may_enter = True
-    callee_opts.post_return()
+    if callee_opts.post_return is not None:
+      callee_opts.post_return(flat_results)
 
   return (result, post_return)
 

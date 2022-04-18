@@ -1102,6 +1102,9 @@ For a function:
 validation specifies:
  * `$callee` must have type `flatten($ft, 'canon.lift')`
  * `$f` is given type `$ft`
+ * a `memory` is present if required by lifting and is a subtype of `(memory 1)`
+ * a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
+ * if a `post-return` is present, it has type `(func (param flatten($ft)['results']))`
 
 When instantiating component instance `$inst`:
 * Define `$f` to be the closure `lambda args: canon_lift($opts, $inst, $callee, $ft, args)`
@@ -1151,7 +1154,8 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args):
   [result] = lift(callee_opts, MAX_FLAT_RESULTS, ValueIter(flat_results), [functype.result])
   def post_return():
     callee_instance.may_enter = True
-    callee_opts.post_return()
+    if callee_opts.post_return is not None:
+      callee_opts.post_return(flat_results)
 
   return (result, post_return)
 ```
@@ -1197,6 +1201,9 @@ For a function:
 ```
 where `$callee` has type `$ft`, validation specifies:
 * `$f` is given type `flatten($ft, 'canon.lower')`
+ * a `memory` is present if required by lifting and is a subtype of `(memory 1)`
+ * a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
+ * there is no `post-return` in `$opts`
 
 When instantiating component instance `$inst`:
 * Define `$f` to be the closure: `lambda args: canon_lower($opts, $inst, $callee, $ft, args)`
