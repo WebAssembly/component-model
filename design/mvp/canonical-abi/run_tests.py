@@ -164,6 +164,39 @@ test_pairs(Char(), [(0,'\x00'), (65,'A'), (0xD7FF,'\uD7FF'), (0xD800,None), (0xD
 test_pairs(Char(), [(0xE000,'\uE000'), (0x10FFFF,'\U0010FFFF'), (0x110000,None), (0xFFFFFFFF,None)])
 test_pairs(Enum(['a','b']), [(0,{'a':{}}), (1,{'b':{}}), (2,None)])
 
+def test_nan32(inbits, outbits):
+  f = lift_flat(Opts(), ValueIter([Value('f32', reinterpret_i32_as_float(inbits))]), Float32())
+  assert(reinterpret_float_as_i32(f) == outbits)
+  load_opts = Opts()
+  load_opts.memory = bytearray(4)
+  load_opts.memory = int.to_bytes(inbits, 4, 'little')
+  f = load(load_opts, 0, Float32())
+  assert(reinterpret_float_as_i32(f) == outbits)
+
+def test_nan64(inbits, outbits):
+  f = lift_flat(Opts(), ValueIter([Value('f64', reinterpret_i64_as_float(inbits))]), Float64())
+  assert(reinterpret_float_as_i64(f) == outbits)
+  load_opts = Opts()
+  load_opts.memory = bytearray(8)
+  load_opts.memory = int.to_bytes(inbits, 8, 'little')
+  f = load(load_opts, 0, Float64())
+  assert(reinterpret_float_as_i64(f) == outbits)
+
+test_nan32(0x7fc00000, CANONICAL_FLOAT32_NAN)
+test_nan32(0x7fc00001, CANONICAL_FLOAT32_NAN)
+test_nan32(0x7fe00000, CANONICAL_FLOAT32_NAN)
+test_nan32(0x7fffffff, CANONICAL_FLOAT32_NAN)
+test_nan32(0xffffffff, CANONICAL_FLOAT32_NAN)
+test_nan32(0x7f800000, 0x7f800000)
+test_nan32(0x3fc00000, 0x3fc00000)
+test_nan64(0x7ff8000000000000, CANONICAL_FLOAT64_NAN)
+test_nan64(0x7ff8000000000001, CANONICAL_FLOAT64_NAN)
+test_nan64(0x7ffc000000000000, CANONICAL_FLOAT64_NAN)
+test_nan64(0x7fffffffffffffff, CANONICAL_FLOAT64_NAN)
+test_nan64(0xffffffffffffffff, CANONICAL_FLOAT64_NAN)
+test_nan64(0x7ff0000000000000, 0x7ff0000000000000)
+test_nan64(0x3ff0000000000000, 0x3ff0000000000000)
+
 def test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units):
   heap = Heap(len(encoded))
   heap.memory[:] = encoded[:]

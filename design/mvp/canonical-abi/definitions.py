@@ -240,14 +240,17 @@ def reinterpret_i32_as_float(i):
 def reinterpret_i64_as_float(i):
   return struct.unpack('!d', struct.pack('!Q', i))[0] # f64.reinterpret_i64
 
+CANONICAL_FLOAT32_NAN = 0x7fc00000
+CANONICAL_FLOAT64_NAN = 0x7ff8000000000000
+
 def canonicalize32(f):
   if math.isnan(f):
-    return reinterpret_i32_as_float(0x7fc00000)
+    return reinterpret_i32_as_float(CANONICAL_FLOAT32_NAN)
   return f
 
 def canonicalize64(f):
   if math.isnan(f):
-    return reinterpret_i64_as_float(0x7ff8000000000000)
+    return reinterpret_i64_as_float(CANONICAL_FLOAT64_NAN)
   return f
 
 #
