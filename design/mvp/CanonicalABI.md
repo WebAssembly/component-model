@@ -665,7 +665,7 @@ def store_record(opts, v, ptr, fields):
 Variants are stored using the `|`-separated list of `defaults-to` cases built
 by `case_label_with_default` (above) to iteratively find a matching case (which
 validation guarantees will succeed). While this code appears to do O(n) string
-matching, a normal implemention can statically fuse `store_variant` with its
+matching, a normal implementation can statically fuse `store_variant` with its
 matching `load_variant` to ultimately build a dense array that maps producer's
 case indices to the consumer's case indices.
 ```python
@@ -1162,7 +1162,7 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args):
 There are a number of things to note about this definition:
 
 Uncaught Core WebAssembly [exceptions] result in a trap at component
-boundaries. Thus, if a component wishes to signal signal an error, it must
+boundaries. Thus, if a component wishes to signal an error, it must
 use some sort of explicit interface type such as `expected` (whose `error` case
 particular language bindings may choose to map to and from exceptions).
 
@@ -1242,7 +1242,7 @@ lifting and lowering), with a few exceptions:
   caller simply regains control when `canon_lower` returns, allowing it to free
   (or not) any memory passed as `flat_args`.
 * When handling the too-many-flat-values case, instead of relying on `realloc`,
-  the caller passs in a pointer to caller-allocated memory as a final
+  the caller pass in a pointer to caller-allocated memory as a final
   `i32` parameter.
 
 A useful consequence of the above rules for `may_enter` and `may_leave` is that

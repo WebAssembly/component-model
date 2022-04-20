@@ -519,7 +519,7 @@ default is UTF-8. It is a validation error to include more than one
 `string-encoding` option.
 
 The `(memory <memidx>)` option specifies the memory that the Canonical ABI will
-use to load and store values. If the Canoical ABI needs to load or store,
+use to load and store values. If the Canonical ABI needs to load or store,
 validation requires this option to be present (there is no default).
 
 The `(realloc <funcidx>)` option specifies a core function that is validated to
