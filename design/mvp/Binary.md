@@ -188,23 +188,26 @@ Notes:
 func     ::= body:<funcbody>                                    => (func body)
 funcbody ::= 0x00 ft:<typeidx> opt*:vec(<canonopt>) f:<funcidx> => (canon.lift ft opt* f)
            | 0x01 opt*:<canonopt>* f:<funcidx>                  => (canon.lower opt* f)
-canonopt ::= 0x00                                               => string=utf8
-           | 0x01                                               => string=utf16
-           | 0x02                                               => string=latin1+utf16
-           | 0x03 i:<instanceidx>                               => (into i)
+canonopt ::= 0x00                                               => string-encoding=utf8
+           | 0x01                                               => string-encoding=utf16
+           | 0x02                                               => string-encoding=latin1+utf16
+           | 0x03 m:<memidx>                                    => (memory m)
+           | 0x04 f:<funcidx>                                   => (realloc f)
+           | 0x05 f:<funcidx>                                   => (post-return f)
 ```
 Notes:
 * Validation prevents duplicate or conflicting options.
-* Validation of `canon.lift` requires `f` to have a `core:functype` that matches
-  the canonical-ABI-defined lowering of `ft`. The function defined by
-  `canon.lift` has type `ft`.
-* Validation of `canon.lower` requires `f` to have a `functype`. The function
-  defined by `canon.lower` has a `core:functype` defined by the canonical ABI
-  lowering of `f`'s type.
+* Validation of `canon.lift` requires `f` to have type `flatten(ft)` (defined
+  by the [Canonical ABI](CanonicalABI.md#flattening)). The function being
+  defined is given type `ft`.
+* Validation of `canon.lower` requires `f` to be a component function. The
+  function being defined is given core function type `flatten(ft)` where `ft`
+  is the `functype` of `f`.
 * If the lifting/lowering operations implied by `canon.lift` or `canon.lower`
-  require access to `memory`, `realloc` or `free`, then validation will require
-  the `(into i)` `canonopt` be present and the corresponding export be present
-  in `i`'s `instancetype`.
+  require access to `memory` or `realloc`, then validation requires these
+  options to be present. If present, `realloc` must have type
+  `(func (param i32 i32 i32 i32) (result i32))`.
+* `post-return` is always optional, but, if present, must have type `(func)`.
 
 
 ## Start Definitions

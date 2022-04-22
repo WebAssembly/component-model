@@ -332,12 +332,12 @@ intertype         ::= unit | bool
                     | float32 | float64
                     | char | string
                     | (record (field <name> <intertype>)*)
-                    | (variant (case <name> <intertype> (defaults-to <name>)?)*)
+                    | (variant (case <name> <intertype> (defaults-to <name>)?)+)
                     | (list <intertype>)
                     | (tuple <intertype>*)
                     | (flags <name>*)
-                    | (enum <name>*)
-                    | (union <intertype>*)
+                    | (enum <name>+)
+                    | (union <intertype>+)
                     | (option <intertype>)
                     | (expected <intertype> <intertype>)
 ```
@@ -359,7 +359,6 @@ Starting with interface types, the set of values allowed for the *fundamental*
 interface types is given by the following table:
 | Type                      | Values |
 | ------------------------- | ------ |
-| `unit`                    | just one [uninteresting value] |
 | `bool`                    | `true` and `false` |
 | `s8`, `s16`, `s32`, `s64` | integers in the range [-2<sup>N-1</sup>, 2<sup>N-1</sup>-1] |
 | `u8`, `u16`, `u32`, `u64` | integers in the range [0, 2<sup>N</sup>-1] |
@@ -369,17 +368,38 @@ interface types is given by the following table:
 | `variant`                 | heterogeneous [tagged unions] of named `intertype` values |
 | `list`                    | homogeneous, variable-length [sequences] of `intertype` values |
 
+NaN values are canonicalized to a single value so that:
+1. consumers of NaN values are free to use the rest of the NaN payload for
+   optimization purposes (like [NaN boxing]) without needing to worry about
+   whether the NaN payload bits were significant; and
+2. producers of NaN values across component boundaries do not develop brittle
+   assumptions that NaN payload bits are preserved by the other side (since
+   they often aren't).
+
+The subtyping between all these types is described in a separate
+[subtyping explainer](Subtyping.md). Of note here, though: the optional
+`defaults-to` field in the `case`s of `variant`s is exclusively concerned with
+subtyping. In particular, a `variant` subtype can contain a `case` not present
+in the supertype if the subtype's `case` `defaults-to` (directly or transitively)
+some `case` in the supertype.
+
 The sets of values allowed for the remaining *specialized* interface types are
 defined by the following mapping:
 ```
-                            string ↦ (list char)
               (tuple <intertype>*) ↦ (record (field "𝒊" <intertype>)*) for 𝒊=0,1,...
                    (flags <name>*) ↦ (record (field <name> bool)*)
-                    (enum <name>*) ↦ (variant (case <name> unit)*)
+                              unit ↦ (record)
+                    (enum <name>+) ↦ (variant (case <name> unit)+)
               (option <intertype>) ↦ (variant (case "none") (case "some" <intertype>))
-              (union <intertype>*) ↦ (variant (case "𝒊" <intertype>)*) for 𝒊=0,1,...
+              (union <intertype>+) ↦ (variant (case "𝒊" <intertype>)+) for 𝒊=0,1,...
 (expected <intertype> <intertype>) ↦ (variant (case "ok" <intertype>) (case "error" <intertype>))
+                            string ↦ (list char)
 ```
+Note that, at least initially, variants are required to have a non-empty list of
+cases. This could be relaxed in the future to allow an empty list of cases, with
+the empty `(variant)` effectively serving as a [bottom type] and indicating
+unreachability.
+
 Building on these interface types, there are four kinds of types describing the
 four kinds of importable/exportable component definitions. (In the future, a
 fifth type will be added for [resource types][Resource and Handle Types].)
@@ -431,9 +451,6 @@ WebAssembly validation rules allow duplicate imports, this means that some
 valid modules will not be typeable and will fail validation if used with the
 Component Model.
 
-The subtyping between all these types is described in a separate
-[subtyping explainer](Subtyping.md).
-
 With what's defined so far, we can define component types using a mix of inline
 and out-of-line type definitions:
 ```wasm
@@ -456,78 +473,110 @@ Note that the inline use of `$G` and `$U` are inline `outer` aliases.
 
 ### Function Definitions
 
-To implement or call functions of type [`functype`](#type-definitions), we need
-to be able to call across a shared-nothing boundary. Traditionally, this
-problem is solved by defining a serialization format for copying data across
-the boundary. The Component Model MVP takes roughly this same approach,
-defining a linear-memory-based [ABI] called the *Canonical ABI* which
-specifies, for any imported or exported `functype`, a corresponding
-`core:functype` and rules for copying values into or out of linear memory. The
-Component Model differs from traditional approaches, though, in that the ABI is
-configurable, allowing different memory representations for the same abstract
-value. In the MVP, this configurability is limited to the small set of
-`canonopt` shown below. However, Post-MVP, [adapter functions] could be added
-to allow far more programmatic control.
+To implement or call interface-typed functions, we need to be able to cross a
+shared-nothing boundary. Traditionally, this problem is solved by defining a
+serialization format for copying data across the boundary. The Component Model
+MVP takes roughly this same approach, defining a linear-memory-based [ABI]
+called the "Canonical ABI" which specifies, for any interface function type, a
+[corresponding](CanonicalABI.md#flattening) core function type and
+[rules](CanonicalABI.md#lifting-and-lowering) for copying values into or out of
+linear memory. The Component Model differs from traditional approaches, though,
+in that the ABI is configurable, allowing different memory representations for
+the same abstract value. In the MVP, this configurability is limited to the
+small set of `canonopt` shown below. However, Post-MVP, [adapter functions]
+could be added to allow far more programmatic control.
 
-The Canonical ABI, which is described in a separate [explainer](CanonicalABI.md),
-is explicitly applied to "wrap" existing functions in one of two directions:
-* `canon.lift` wraps a Core WebAssembly function (of type `core:functype`)
-  inside the current component to produce a Component Model function (of type
-  `functype`) that can be exported to other components.
-* `canon.lower` wraps a Component Model function (of type `functype`) that can
-  have been imported from another component to produce a Core WebAssembly
-  function (of type `core:functype`) that can be imported and called from Core
-  WebAssembly code within the current component.
+The Canonical ABI is explicitly applied to "wrap" existing functions in one of
+two directions:
+* `canon.lift` wraps a core function (of type `core:functype`) inside the
+  current component to produce a component function (of type `functype`)
+  that can be exported to other components.
+* `canon.lower` wraps a component function (of type `functype`) that can
+  have been imported from another component to produce a core function (of type
+  `core:functype`) that can be imported and called from Core WebAssembly code
+  within the current component.
 
-Based on this, MVP function definitions simply specify one of these two
-wrapping directions along with a set of Canonical ABI configurations.
+Function definitions specify one of these two wrapping directions along with a
+set of Canonical ABI configuration options.
 ```
 func     ::= (func <id>? <funcbody>)
 funcbody ::= (canon.lift <functype> <canonopt>* <funcidx>)
            | (canon.lower <canonopt>* <funcidx>)
-canonopt ::= string=utf8
-           | string=utf16
-           | string=latin1+utf16
-           | (into <instanceidx>)
+canonopt ::= string-encoding=utf8
+           | string-encoding=utf16
+           | string-encoding=latin1+utf16
+           | (memory <memidx>)
+           | (realloc <funcidx>)
+           | (post-return <funcidx>)
 ```
-Validation fails if multiple conflicting options, such as two `string`
-encodings, are given. The `latin1+utf16` encoding is [defined](CanonicalABI.md#latin1-utf16)
-in the Canonical ABI explainer. If no string-encoding option is specified, the
-default is `string=utf8`.
+The `string-encoding` option specifies the encoding the Canonical ABI will use
+for the `string` type. The `latin1+utf16` encoding captures a common string
+encoding across Java, JavaScript and .NET VMs and allows a dynamic choice
+between either Latin-1 (which has a fixed 1-byte encoding, but limited Code
+Point range) or UTF-16 (which can express all Code Points, but uses either
+2 or 4 bytes per Code Point). If no `string-encoding` option is specified, the
+default is UTF-8. It is a validation error to include more than one
+`string-encoding` option.
 
-The `into` option specifies a target instance which supplies the memory that
-the canonical ABI should operate on as well as functions that the canonical ABI
-can call to allocate, reallocate and free linear memory. Validation requires that
-the given `instanceidx` is a module instance exporting the following fields:
-```
-(export "memory" (memory 1))
-(export "realloc" (func (param i32 i32 i32 i32) (result i32)))
-(export "free" (func (param i32 i32 i32)))
-```
-The 4 parameters of `realloc` are: original allocation (or `0` for none), original
-size (or `0` if none), alignment and new desired size. The 3 parameters of `free`
-are the pointer, size and alignment.
+The `(memory <memidx>)` option specifies the memory that the Canonical ABI will
+use to load and store values. If the Canonical ABI needs to load or store,
+validation requires this option to be present (there is no default).
 
-With this, we can finally write a non-trivial component that takes a string,
-does some logging, then returns a string.
+The `(realloc <funcidx>)` option specifies a core function that is validated to
+have the following signature:
+```wasm
+(func (param $originalPtr i32)
+      (param $originalSize i32)
+      (param $alignment i32)
+      (param $newSize i32)
+      (result i32))
+```
+The Canonical ABI will use `realloc` both to allocate (passing `0` for the
+first two parameters) and reallocate. If the Canonical ABI needs `realloc`,
+validation requires this option to be present (there is no default).
+
+The `(post-return <funcidx>)` option may only be present in `canon.lift` and
+specifies a core function to be called with the original return values after
+they have finished being read, allowing memory to be deallocated and
+destructors called. This immediate is always optional but, if present, is
+validated to have parameters matching the callee's return type and empty
+results.
+
+Based on this description of the AST, the [Canonical ABI explainer][Canonical ABI]
+gives a detailed walkthrough of the static and dynamic semantics of
+`canon.lift` and `canon.lower`.
+
+One high-level consequence of the dynamic semantics of `canon.lift` given in
+the Canonical ABI explainer is that component functions are different from core
+functions in that all control flow transfer is explicitly reflected in their
+type. For example, with Core WebAssembly [exception handling] and
+[stack switching], a core function with type `(func (result i32))` can return
+an `i32`, throw, suspend or trap. In contrast, a component function with type
+`(func (result string))` may only return a `string` or trap. To express
+failure, component functions can return `expected` and languages with exception
+handling can bind exceptions to the `error` case. Similarly, the forthcoming
+addition of [future and stream types] would explicitly declare patterns of
+stack-switching in component function signatures.
+
+Using function definitions, we can finally write a non-trivial component that
+takes a string, does some logging, then returns a string.
 ```wasm
 (component
   (import "wasi:logging" (instance $logging
     (export "log" (func (param string)))
   ))
   (import "libc" (module $Libc
-    (export "memory" (memory 1))
+    (export "mem" (memory 1))
     (export "realloc" (func (param i32 i32) (result i32)))
-    (export "free" (func (param i32)))
   ))
   (instance $libc (instantiate (module $Libc)))
-  (func $log
-    (canon.lower (into $libc) (func $logging "log"))
-  )
+  (func $log (canon.lower
+    (memory (memory $libc "mem")) (realloc (func $libc "realloc"))
+    (func $logging "log")
+  ))
   (module $Main
     (import "libc" "memory" (memory 1))
     (import "libc" "realloc" (func (param i32 i32) (result i32)))
-    (import "libc" "free" (func (param i32)))
     (import "wasi:logging" "log" (func $log (param i32 i32)))
     (func (export "run") (param i32 i32) (result i32 i32)
       ... (call $log) ...
@@ -537,9 +586,11 @@ does some logging, then returns a string.
     (with "libc" (instance $libc))
     (with "wasi:logging" (instance (export "log" (func $log))))
   ))
-  (func (export "run")
-    (canon.lift (func (param string) (result string)) (into $libc) (func $main "run"))
-  )
+  (func (export "run") (canon.lift
+    (func (param string) (result string))
+    (memory (memory $libc "mem")) (realloc (func $libc "realloc"))
+    (func $main "run")
+  ))
 )
 ```
 This example shows the pattern of splitting out a reusable language runtime
@@ -551,17 +602,6 @@ exports are available for reference by `canon.lower`. Without this separation
 cyclic dependency between `canon.lower` and `$Main` that would have to be
 broken by the toolchain emitting an auxiliary module that broke the cycle using
 a shared `funcref` table and `call_indirect`.
-
-Component Model functions are different from Core WebAssembly functions in that
-all control flow transfer is explicitly reflected in their type (`functype`).
-For example, with Core WebAssembly [exception handling] and [stack switching],
-a `(func (result i32))` can return an `i32`, throw, suspend or trap. In
-contrast, a Component Model `(func (result string))` may only return a `string`
-or trap. To express failure, Component Model functions should return an
-[`expected`](#type-definitions) type and languages with exception handling will
-bind exceptions to the `error` case. Similarly, the future addition of
-[future and stream types] would explicitly declare patterns of stack-switching
-in Component Model function signatures.
 
 
 ### Start Definitions
@@ -597,7 +637,6 @@ exported string, all at instantiation time:
   (import "libc" (module $Libc
     (export "memory" (memory 1))
     (export "realloc" (func (param i32 i32 i32 i32) (result i32)))
-    (export "free" (func (param i32 i32 i32)))
   ))
   (instance $libc (instantiate (module $Libc)))
   (module $Main
@@ -607,9 +646,11 @@ exported string, all at instantiation time:
     )
   )
   (instance $main (instantiate (module $Main) (with "libc" (instance $libc))))
-  (func $start
-    (canon.lift (func (param string) (result string)) (into $libc) (func $main "start"))
-  )
+  (func $start (canon.lift
+    (func (param string) (result string))
+    (memory (memory $libc "mem")) (realloc (func $libc "realloc"))
+    (func $main "start")
+  ))
   (start $start (value $name) (result (value $greeting)))
   (export "greeting" (value $greeting))
 )
@@ -923,9 +964,10 @@ and will be added over the coming months to complete the MVP proposal:
 
 [De Bruijn Index]: https://en.wikipedia.org/wiki/De_Bruijn_index
 [Closure]: https://en.wikipedia.org/wiki/Closure_(computer_programming)
-[Uninteresting Value]: https://en.wikipedia.org/wiki/Unit_type#In_programming_languages
+[Bottom Type]: https://en.wikipedia.org/wiki/Bottom_type
 [IEEE754]: https://en.wikipedia.org/wiki/IEEE_754
 [NaN]: https://en.wikipedia.org/wiki/NaN
+[NaN Boxing]: https://wingolog.org/archives/2011/05/18/value-representation-in-javascript-implementations
 [Unicode Scalar Values]: https://unicode.org/glossary/#unicode_scalar_value
 [Tuples]: https://en.wikipedia.org/wiki/Tuple
 [Tagged Unions]: https://en.wikipedia.org/wiki/Tagged_union
@@ -933,12 +975,12 @@ and will be added over the coming months to complete the MVP proposal:
 [ABI]: https://en.wikipedia.org/wiki/Application_binary_interface
 [Environment Variables]: https://en.wikipedia.org/wiki/Environment_variable
 
-[Module Linking]: https://github.com/webassembly/module-linking/
-[Interface Types]: https://github.com/webassembly/interface-types/
-[Type Imports and Exports]: https://github.com/WebAssembly/proposal-type-imports
-[Exception Handling]: https://github.com/webAssembly/exception-handling
-[Stack Switching]: https://github.com/WebAssembly/stack-switching
-[ESM-integration]: https://github.com/WebAssembly/esm-integration
+[Module Linking]: https://github.com/WebAssembly/module-linking/blob/main/design/proposals/module-linking/Explainer.md
+[Interface Types]: https://github.com/WebAssembly/interface-types/blob/main/proposals/interface-types/Explainer.md
+[Type Imports and Exports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
+[Exception Handling]: https://github.com/WebAssembly/exception-handling/blob/main/proposals/exception-handling/Exceptions.md
+[Stack Switching]: https://github.com/WebAssembly/stack-switching/blob/main/proposals/stack-switching/Overview.md
+[ESM-integration]: https://github.com/WebAssembly/esm-integration/tree/main/proposals/esm-integration
 
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Canonical ABI]: CanonicalABI.md
