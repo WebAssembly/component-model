@@ -12,7 +12,7 @@ But roughly speaking:
 | `float32`, `float64`      | `float32 <: float64` |
 | `char`                    | |
 | `record`                  | fields can be reordered; covariant field payload subtyping; superfluous fields can be ignored in the subtype; `option` fields can be ignored in the supertype |
-| `variant`                 | cases can be reordered; covariant case payload subtyping; superfluous cases can be ignored in the supertype; `defaults-to` cases can be ignored in the subtype |
+| `variant`                 | cases can be reordered; covariant case payload subtyping; superfluous cases can be ignored in the supertype; `subtype-of` cases can be ignored in the subtype |
 | `list`                    | covariant element subtyping |
 | `tuple`                   | `(tuple T ...) <: T` |
 | `option`                  | `T <: (option T)` |
