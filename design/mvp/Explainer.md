@@ -225,7 +225,6 @@ component):
 ```
 core:alias       ::= (alias <core:aliastarget> (<core:sort> <id>?))
 core:aliastarget ::= export <core:instanceidx> <name>
-                   | outer <varu32> <varu32>
 
 alias            ::= (alias <aliastarget> (<sort> <id>?))
 aliastarget      ::= export <instanceidx> <name>
@@ -247,6 +246,11 @@ space. In particular, the first `varu32` can be `0`, in which case the outer
 alias refers to the current component. To maintain the acyclicity of module
 instantiation, outer aliases are only allowed to refer to *preceding* outer
 definitions.
+
+There is no `outer` option in `core:aliastarget` because it would only be able
+to refer to enclosing *core* modules and module types and, until
+module-linking, modules and module types can't nest. In a module-linking
+future, outer aliases would be added, making `core:alias` symmetric to `alias`.
 
 Components containing outer aliases effectively produce a [closure] at
 instantiation time, including a copy of the outer-aliased definitions. Because
@@ -350,7 +354,6 @@ core:deftype    ::= <core:functype>                           (WebAssembly 1.0)
 core:moduletype ::= (module <id>? <core:moduledecl>*)
 core:moduledecl ::= <core:importdecl>
                   | <core:type>
-                  | <core:alias>
                   | <core:exportdecl>
 core:importdecl ::= (import <name> <name> <core:externdesc>)
 core:exportdecl ::= (export <name> <core:externdesc>)
@@ -374,31 +377,7 @@ In preparation for the forthcoming addition of [type-imports] to Core
 WebAssembly, module types start with an empty type index space so that the type
 index space can be populated with fresh type definitions constructed from type
 imports. Thus, `core:moduledecl` also includes a `type` declarator for defining
-the types used by the `import` and `export` declarators. An `alias` declarator
-is also necessary in the future for defining type-sharing constraints between
-type imports. In the short-term, `alias` declarators are restricted to only
-allowing `outer` `type` aliases, thereby enabling a module type to reuse a
-parent's type definition instead of re-defining it locally.
-
-As an example, the following component defines two equivalent module types,
-where the former defines the function via `type` declarator and the latter via
-`alias` declarator. In both cases, the type is given index `0` since the module
-type starts with an empty type index space.
-```wasm
-(component $C
-  (core type $M1 (module
-    (type (func (param i32) (result i32)))
-    (import "a" "b" (func (type 0)))
-    (export "c" (func (type 0)))
-  ))
-  (core type $F (func (param i32) (result i32)))
-  (core type $M2 (module
-    (alias outer $C $F (type))
-    (import "a" "b" (func (type 0)))
-    (export "c" (func (type 0)))
-  ))
-)
-```
+the types used by the `import` and `export` declarators.
 
 Component-level type definitions are symmetric to core-level type definitions,
 but use a completely different set of value types. Unlike [`core:valtype`]
@@ -538,6 +517,28 @@ constructor, although its grammar is factored to share declarators with the
 must be distinct within a single type. The `externtype` production shared by
 the `import` and `export` declarators is symmetric to [`core:externtype`] and
 includes all importable/exportable types.
+
+Component and instance types also include an `alias` declarator for projecting
+the exports out of imported instances and sharing types with outer components.
+As an example, the following component defines two equivalent component types,
+where the former defines the function type via `type` declarator and the latter
+via `alias` declarator. In both cases, the type is given index `0` since
+component types start with an empty type index space.
+```wasm
+(component $C
+  (type $C1 (component
+    (type (func (param string) (result string)))
+    (import "a" "b" (func (type 0)))
+    (export "c" (func (type 0)))
+  ))
+  (type $F (func (param string) (result string)))
+  (type $C2 (component
+    (alias outer $C $F (type))
+    (import "a" "b" (func (type 0)))
+    (export "c" (func (type 0)))
+  ))
+)
+```
 
 The family of value types, `valtype`, is unified by a *single* type
 constructor, `value`, that corresponds 1:1 with the `value` sort (described in

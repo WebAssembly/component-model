@@ -102,7 +102,6 @@ Notes:
 ```
 core:alias       ::= sort:<core:sort> target:<core:aliastarget> => (core alias target (sort))
 core:aliastarget ::= 0x00 i:<core:instanceidx> n:<name>         => export i n
-                   | 0x01 ct:<varu32> idx:<varu32>              => outer ct idx
 
 alias            ::= sort:<sort> target:<aliastarget>           => (alias target (sort))
 aliastarget      ::= 0x00 i:<instanceidx> n:<name>              => export i n
@@ -131,7 +130,6 @@ core:deftype    ::= ft:<core:functype>                     => ft               (
 core:moduletype ::= 0x50 md*:vec(<core:moduledecl>)        => (module md*)
 core:moduledecl ::= 0x00 i:<core:import>                   => i
                   | 0x01 t:<core:type>                     => t
-                  | 0x02 a:<core:alias>                    => a
                   | 0x03 e:<core:exportdecl>               => e
 core:import     ::= m:<name> f:<name> ed:<core:externdesc> => (import m f ed)  (WebAssembly 1.0)
 core:externdesc ::= id:<core:importdesc>                   => id               (WebAssembly 1.0)
@@ -142,8 +140,6 @@ Notes:
 * `core:import` as written above is binary-compatible with [`core:import`].
 * Validation of `core:moduledecl` (currently) rejects `core:moduletype` definitions
   inside `type` declarators (i.e., nested core module types).
-* Validation of `core:moduledecl` (currently) only allows `outer` `type`
-  `alias` declarators.
 * As described in the explainer, each module type is validated with an
   initially-empty type index space. Outer aliases can be used to pull
   in type definitions from containing components.
