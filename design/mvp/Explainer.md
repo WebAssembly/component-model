@@ -190,7 +190,7 @@ instanceexpr   ::= (instantiate <componentidx> <instantiatearg>*)
 instantiatearg ::= (with <name> <sortidx>)
                  | (with <name> (instance <export>*))
 sortidx        ::= (<sort> <varu32>)
-sort           ::= core-prefix(<core:sortidx>)
+sort           ::= core module
                  | func
                  | value
                  | type
@@ -201,11 +201,14 @@ export         ::= (export <name> <sortidx>)
 Because component-level function, type and instance definitions are different
 than core-level function, type and instance definitions, they are put into
 disjoint index spaces which are indexed separately by `sortidx` and
-`core:sortidx`, respectively. Components may import or export core modules
-(since core modules are immutable values and thus do not break the
-[shared-nothing] model) and so `sortidx` includes `core:sortidx` (which
-validation then restricts to core modules; in the future, other immutable core
-definitions could be allowed, such as `data` segments).
+`core:sortidx`, respectively. Components may also import or export core modules
+since core modules are immutable values and thus do not break the
+[shared-nothing] model. In the future, other immutable core sorts could be
+added to this list such as, if it was made importable/exportable, `data`.
+
+The `value` sort refers to a value that is provided and consumed during
+instantiation. How this works is described in the
+[start definitions](#start-definitions) section.
 
 To see a non-trivial example of component instantiation, we'll first need to
 introduce a few other definitions below that allow components to import, define
@@ -405,26 +408,11 @@ therefore be high-level, describing entire compound values.
 ```
 type          ::= (type <id>? <deftype>)
 deftype       ::= <valtype>
-                | <functype>
+                | <nonvaltype>
+nonvaltype    ::= <functype>
+                | <typetype>
                 | <componenttype>
                 | <instancetype>
-functype      ::= (func <id>? (param <name>? <valtype>)* (result <valtype>))
-componenttype ::= (component <id>? <componentdecl>*)
-instancetype  ::= (instance <id>? <instancedecl>*)
-componentdecl ::= <importdecl>
-                | <instancedecl>
-instancedecl  ::= <type>
-                | <alias>
-                | <exportdecl>
-importdecl    ::= (import <name> <externdesc>)
-exportdecl    ::= (export <name> <externdesc>)
-externdesc    ::= core-prefix(<core:moduletype>)
-                | <functype>
-                | <componenttype>
-                | <instancetype>
-                | (value <id>? <valtype>)
-                | (type <id>? <typebound>)
-typebound     ::= (eq <deftype>)
 valtype       ::= unit
                 | bool
                 | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64
@@ -439,10 +427,25 @@ valtype       ::= unit
                 | (union <valtype>+)
                 | (option <valtype>)
                 | (expected <valtype> <valtype>)
+functype      ::= (func <id>? (param <name>? <valtype>)* (result <valtype>))
+typetype      ::= (type <id>? <typebound>)
+typebound     ::= (eq <deftype>)
+componenttype ::= (component <id>? <componentdecl>*)
+instancetype  ::= (instance <id>? <instancedecl>*)
+componentdecl ::= <importdecl>
+                | <instancedecl>
+instancedecl  ::= <type>
+                | <alias>
+                | <exportdecl>
+importdecl    ::= (import <name> <externtype>)
+exportdecl    ::= (export <name> <externtype>)
+externtype    ::= core-prefix(<core:moduletype>)
+                | (value <id>? <valtype>)
+                | <nonvaltype>
 ```
-This type grammar uses productions like `<valtype>` and `<deftype>` recursively
-to allow it to more-precisely indicate what's allowed. The formal AST and
-[binary format](Binary.md#type-definitions) instead use a `<typeidx>` with
+This grammar defines `type` recursively to allow it to more-precisely indicate
+what's allowed at each point in the recursion. The formal AST and
+[binary format](Binary.md#type-definitions) would instead use a `typeidx` with
 validation rules to restrict the target type while the formal text format would
 use something like [`core:typeuse`], allowing any of: (1) a `typeidx`, (2) an
 identifier `$T` resolving to a type definition (using `(type $T)` in cases
@@ -504,6 +507,21 @@ unreachability.
 The remaining 5 type constructors use `valtype` to complete the description
 of a shared-nothing component interface:
 
+The `type` type-constructor describes an imported or exported type along with
+its bounds, which currently only has an `eq` option that says that the
+imported/exported type must be exactly equal to the given immediate type. There
+are two main use cases for this in the short-term:
+* Type exports allow a component or interface to associate a name with a
+  structural type (e.g., `(export "nanos" (type (eq u64)))`) which bindings
+  generators can use to generate type aliases (e.g., `typedef uint64_t nanos;`).
+* Type imports and exports allow a component to explicitly specify the
+  type parameters used to monomorphize a generic interface being imported
+  or exported.
+
+When [resource and handle types] are added to the explainer, `typebound` will
+be extended with a `sub` option (symmetric to the [type-imports] proposal) that
+allows importing and exporting *abstract* types.
+
 The `func` type constructor describes a component-level function definition
 that takes and returns component-level value types. In contrast to
 [`core:functype`] which, as a low-level compiler target for a stack machine,
@@ -517,31 +535,15 @@ interpreting this as `(result unit)`.
 The `component` type constructor is symmetric to the core `module` type
 constructor, although its grammar is factored to share declarators with the
 `instance` type constructor. The `import` and `export` declarator names
-must be distinct within a single type.
+must be distinct within a single type. The `externtype` production shared by
+the `import` and `export` declarators is symmetric to [`core:externtype`] and
+includes all importable/exportable types.
 
-The `externdesc` production (used to declare the types of imported/exported
-values) includes two additional type constructors that are not currently
-present in `deftype` (since there is currently no reason for allowing them to
-be shared or named as type definitions):
-
-The `value` case describes an imported or exported `valtype` value that is to
-be consumed exactly once during instantiation. How this happens is described
-below along with [`start` definitions](#start-definitions).
-
-The `type` case describes an imported or exported type along with its bounds,
-which currently only has an `eq` option that says that the imported/exported
-type must be exactly equal to the given immediate type. There are two main use
-cases for this in the short-term:
-* Type exports allow a component or interface to associate a name with a
-  structural type (e.g., `(export "nanos" (type (eq u64)))`) which bindings
-  generators can use to generate type aliases (e.g., `typedef uint64_t nanos;`).
-* Type imports and exports allow a component to explicitly specify the
-  type parameters used to monomorphize a generic interface being imported
-  or exported.
-
-When [resource and handle types] are added to the explainer, `typebound` will
-be extended with a `sub` option (symmetric to the [type-imports] proposal) that
-allows importing and exporting *abstract* types.
+The family of value types, `valtype`, is unified by a *single* type
+constructor, `value`, that corresponds 1:1 with the `value` sort (described in
+the [start definitions](#start-definitions) section below). As a type
+constructor, `value` is symmetric to `global` in Core WebAssembly, but without
+a mutability option.
 
 With what's defined so far, we can define component types using a mix of inline
 and out-of-line type definitions:
@@ -761,7 +763,7 @@ of core linear memory.
 
 Lastly, imports and exports are defined in terms of the above as:
 ```
-import ::= (import <name> <externdesc>)
+import ::= (import <name> <externtype>)
 export ::= (export <name> <sortidx>)
 ```
 All import and export names within a component must be unique, respectively.

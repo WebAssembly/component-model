@@ -73,7 +73,7 @@ instanceexpr        ::= 0x00 c:<componentidx> arg*:vec(<instantiatearg>)   => (i
                       | 0x01 e*:vec(<export>)                              => e*
 instantiatearg      ::= n:<name> si:<sortidx>                              => (with n si)
 sortidx             ::= sort:<sort> idx:<varu32>                           => (sort idx)
-sort                ::= 0x00 si:<core:sortidx>                             => si
+sort                ::= 0x00                                               => core module
                       | 0x01                                               => func
                       | 0x02                                               => value
                       | 0x03                                               => type
@@ -150,30 +150,12 @@ Notes:
 
 ```
 type          ::= dt:<deftype>                         => (type dt)
-deftype       ::= vt:<valtype>                         => vt
+deftype       ::= dvt:<defvaltype>                     => dvt
                 | ft:<functype>                        => ft
+                | tt:<typetype>                        => tt
                 | ct:<componenttype>                   => ct
                 | it:<instancetype>                    => it
-functype      ::= 0x40 param*:vec(<param>) t:<valtype> => (func param* (result t))
-param         ::= 0x00 t:<valtype>                     => (param t)
-                | 0x01 n:<name> t:<valtype>            => (param n t)
-componenttype ::= 0x41 cd*:vec(<componentdecl>)        => (component cd*)
-instancetype  ::= 0x42 id*:vec(<instancedecl>)         => (instance id*)
-componentdecl ::= 0x00 id:<importdecl>                 => id
-                | id:<instancedecl>                    => id
-instancedecl  ::= 0x01 t:<type>                        => t
-                | 0x02 a:<alias>                       => a
-                | 0x03 ed:<exportdecl>                 => ed
-importdecl    ::= n:<name> ed:<externdesc>             => (import n ed)
-exportdecl    ::= n:<name> ed:<externdesc>             => (export n ed)
-externdesc    ::= 0x00 i:<core:typeidx>                => core-type-index-space[i]  (must be moduletype)
-                | 0x01 i:<typeidx>                     => type-index-space[i]  (must be func|instance|componenttype)
-                | 0x02 t:<valtype>                     => (value t)
-                | 0x03 tb:<typebound>                  => (type tb)
-typebound     ::= 0x00 i:<typeidx>                     => (eq type-index-space[i])  (any deftype)
-                | 0x00 t:<valtype>                     => (eq t)
-valtype       ::= i:<typeidx>                          => type-index-space[i]  (must be valtype)
-                | 0x7f                                 => unit
+primvaltype   ::= 0x7f                                 => unit
                 | 0x7e                                 => bool
                 | 0x7d                                 => s8
                 | 0x7c                                 => u8
@@ -187,6 +169,7 @@ valtype       ::= i:<typeidx>                          => type-index-space[i]  (
                 | 0x74                                 => float64
                 | 0x73                                 => char
                 | 0x72                                 => string
+defvaltype    ::= pvt:<primvaltype>                    => pvt
                 | 0x71 field*:vec(<field>)             => (record field*)
                 | 0x70 case*:vec(<case>)               => (variant case*)
                 | 0x6f t:<valtype>                     => (list t)
@@ -196,9 +179,27 @@ valtype       ::= i:<typeidx>                          => type-index-space[i]  (
                 | 0x6b t*:vec(<valtype>)               => (union t*)
                 | 0x6a t:<valtype>                     => (option t)
                 | 0x69 t:<valtype> u:<valtype>         => (expected t u)
+valtype       ::= i:<typeidx>                          => type-index-space[i]  (must be defvaltype)
+                | pit:<primvaltype>                    => pit
 field         ::= n:<name> t:<valtype>                 => (field n t)
 case          ::= n:<name> t:<valtype> 0x0             => (case n t)
                 | n:<name> t:<valtype> 0x1 i:<varu32>  => (case n t (refines case-label[i]))
+typetype      ::= tb:<typebound                        => (type tb)
+typebound     ::= 0x00 i:<typeidx>                     => (eq type-index-space[i])
+functype      ::= 0x40 param*:vec(<param>) t:<valtype> => (func param* (result t))
+param         ::= 0x00 t:<valtype>                     => (param t)
+                | 0x01 n:<name> t:<valtype>            => (param n t)
+componenttype ::= 0x41 cd*:vec(<componentdecl>)        => (component cd*)
+instancetype  ::= 0x42 id*:vec(<instancedecl>)         => (instance id*)
+componentdecl ::= 0x00 id:<importdecl>                 => id
+                | id:<instancedecl>                    => id
+instancedecl  ::= 0x01 t:<type>                        => t
+                | 0x02 a:<alias>                       => a
+                | 0x03 ed:<exportdecl>                 => ed
+importdecl    ::= n:<name> et:<externtype>             => (import n et)
+exportdecl    ::= n:<name> et:<externtype>             => (export n et)
+externtype    ::= 0x00 i:<core:typeidx>                => (core module core-type-index-space[i])
+                | sort:<sort> i:<typeidx>              => (sort type-index-space[i])  (sort must match type)
 ```
 Notes:
 * The type opcodes follow the same negative-SLEB128 scheme as Core WebAssembly,
@@ -209,10 +210,6 @@ Notes:
 * As described in the explainer, each component and instance type is validated
   with an initially-empty type index space. Outer aliases can be used to pull
   in type definitions from containing components.
-* The rule for `typebound` contains both an unrestricted `<typeidx>` case and,
-  within `valtype`, a `valtype`-restricted `<typeidx>` case. Since the former
-  is a strict generalization of the latter, there is no ambiguity. The net
-  effect is that `eq` accepts all types.
 
 
 ## Canonical Definitions
@@ -273,7 +270,7 @@ flags are set.
 (See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
 in the explainer.)
 ```
-import ::= n:<name> ed:<externdesc> => (import n ed)
+import ::= n:<name> et:<externtype> => (import n et)
 export ::= n:<name> si:<sortidx>    => (export n si)
 ```
 Notes:
