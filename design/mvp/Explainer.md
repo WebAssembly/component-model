@@ -594,14 +594,14 @@ two directions:
 Canonical definitions specify one of these two wrapping directions, the function
 to wrap and a list of configuration options:
 ```
-canon     ::= (canon lift core-prefix(<core:funcidx>) <functype> <canonopt>* (func <id>?))
-            | (canon lower <funcidx> <canonopt>* (core func <id>?))
-canonopt  ::= string-encoding=utf8
-            | string-encoding=utf16
-            | string-encoding=latin1+utf16
-            | (memory core-prefix(<core:memidx>))
-            | (realloc core-prefix(<core:funcidx>))
-            | (post-return core-prefix(<core:funcidx>))
+canon    ::= (canon lift core-prefix(<core:funcidx>) <functype> <canonopt>* (func <id>?))
+           | (canon lower <funcidx> <canonopt>* (core func <id>?))
+canonopt ::= string-encoding=utf8
+           | string-encoding=utf16
+           | string-encoding=latin1+utf16
+           | (memory core-prefix(<core:memidx>))
+           | (realloc core-prefix(<core:funcidx>))
+           | (post-return core-prefix(<core:funcidx>))
 ```
 The `string-encoding` option specifies the encoding the Canonical ABI will use
 for the `string` type. The `latin1+utf16` encoding captures a common string
