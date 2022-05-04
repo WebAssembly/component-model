@@ -182,7 +182,7 @@ example of these, we'll also need the `alias` definitions introduced in the
 next section.
 
 The syntax for defining component instances is symmetric to core module
-instances, but with a distinct component-level definition of `sort`:
+instances, but with an expanded component-level definition of `sort`:
 ```
 instance       ::= (instance <id>? <instanceexpr>)
 instanceexpr   ::= (instantiate <componentidx> <instantiatearg>*)
@@ -190,7 +190,7 @@ instanceexpr   ::= (instantiate <componentidx> <instantiatearg>*)
 instantiatearg ::= (with <name> <sortidx>)
                  | (with <name> (instance <export>*))
 sortidx        ::= (<sort> <varu32>)
-sort           ::= core module
+sort           ::= core-prefix(<core:sortidx>)
                  | func
                  | value
                  | type
@@ -200,11 +200,12 @@ export         ::= (export <name> <sortidx>)
 ```
 Because component-level function, type and instance definitions are different
 than core-level function, type and instance definitions, they are put into
-disjoint index spaces which are indexed separately by `sortidx` and
-`core:sortidx`, respectively. Components may also import or export core modules
-since core modules are immutable values and thus do not break the
-[shared-nothing] model. In the future, other immutable core sorts could be
-added to this list such as, if it was made importable/exportable, `data`.
+disjoint index spaces which are indexed separately. Components may import
+and export various core definitions (when they are compatible with the
+[shared-nothing] model, which currently means only `module`, but may in the
+future include `data`). Thus, component-level `sort` injects the full set
+of `core:sort`, so that they may be referenced (leaving it up to validation
+rules to throw out the core sorts that aren't allowed in various contexts).
 
 The `value` sort refers to a value that is provided and consumed during
 instantiation. How this works is described in the

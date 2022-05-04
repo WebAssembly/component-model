@@ -73,7 +73,7 @@ instanceexpr        ::= 0x00 c:<componentidx> arg*:vec(<instantiatearg>)   => (i
                       | 0x01 e*:vec(<export>)                              => e*
 instantiatearg      ::= n:<name> si:<sortidx>                              => (with n si)
 sortidx             ::= sort:<sort> idx:<varu32>                           => (sort idx)
-sort                ::= 0x00                                               => core module
+sort                ::= 0x00 csi:<core:sortidx>                            => core csi
                       | 0x01                                               => func
                       | 0x02                                               => value
                       | 0x03                                               => type
@@ -194,7 +194,7 @@ instancedecl  ::= 0x01 t:<type>                        => t
                 | 0x03 ed:<exportdecl>                 => ed
 importdecl    ::= n:<name> et:<externtype>             => (import n et)
 exportdecl    ::= n:<name> et:<externtype>             => (export n et)
-externtype    ::= 0x00 i:<core:typeidx>                => (core module core-type-index-space[i])
+externtype    ::= 0x00 0x10 i:<core:typeidx>           => (core module core-type-index-space[i])  (must be moduletype)
                 | sort:<sort> i:<typeidx>              => (sort type-index-space[i])  (sort must match type)
 ```
 Notes:
