@@ -296,7 +296,7 @@ is desugared into:
 (component $C
   (core module $M ...)
   (component
-    (core alias outer $C $M (module $C_M))
+    (alias outer $C $M (core module $C_M))
     (core instance (instantiate $C_M))
   )
 )
