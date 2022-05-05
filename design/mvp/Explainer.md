@@ -285,19 +285,19 @@ definition, resolved using normal lexical scoping rules. For example, the
 following component:
 ```wasm
 (component
-  (core module $M ...)
+  (component $C ...)
   (component
-    (core instance (instantiate $M))
+    (instance (instantiate $C))
   )
 )
 ```
 is desugared into:
 ```wasm
-(component $C
-  (core module $M ...)
+(component $Parent
+  (component $C ...)
   (component
-    (alias outer $C $M (core module $C_M))
-    (core instance (instantiate $C_M))
+    (alias outer $Parent $C (component $Parent_C))
+    (instance (instantiate $Parent_C))
   )
 )
 ```
