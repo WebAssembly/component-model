@@ -73,7 +73,7 @@ instanceexpr        ::= 0x00 c:<componentidx> arg*:vec(<instantiatearg>)   => (i
                       | 0x01 e*:vec(<export>)                              => e*
 instantiatearg      ::= n:<name> si:<sortidx>                              => (with n si)
 sortidx             ::= sort:<sort> idx:<varu32>                           => (sort idx)
-sort                ::= 0x00 csi:<core:sortidx>                            => core csi
+sort                ::= 0x00 cs:<core:sort>                                => core cs
                       | 0x01                                               => func
                       | 0x02                                               => value
                       | 0x03                                               => type
