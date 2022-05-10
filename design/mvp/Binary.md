@@ -84,17 +84,17 @@ export              ::= n:<name> si:<sortidx>                              => (e
 Notes:
 * Reused Core binary rules: [`core:name`]
 * The `core:sort` values are chosen to match the discriminant opcodes of
-  [`core:importdesc`] so that `core:exportdesc` (below) is identical.
+  [`core:importdesc`].
 * `type` is added to `core:sort` in anticipation of the [type-imports] proposal. Until that
   proposal, core modules won't be able to actually import or export types, however, the
   `type` sort is allowed as part of outer aliases (below).
 * `module` and `instance` are added to `core:sort` in anticipation of the [module-linking]
-  proposal, which would add these types to Core WebAssembly. Again, core modules won't be
-  able to actually import or export modules/instances, but they are used for aliases.
+  proposal, which would add these types to Core WebAssembly. Until then, they are useful
+  for aliases (below).
+* Validation of `core:instantiatearg` would initially only allow the `instance`
+  sort, but would be extended to accept other sorts as core wasm is extended.
 * The indices in `sortidx` are validated according to their `sort`'s index
   spaces, which are built incrementally as each definition is validated.
-* The types of arguments supplied by `instantiate` are validated against the
-  types of the matching import according to the [subtyping](Subtyping.md) rules.
 
 ## Alias Definitions
 
@@ -269,12 +269,13 @@ flags are set.
 (See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
 in the explainer.)
 ```
-import ::= n:<name> et:<externtype> => (import n et)
+import ::= n:<name> ed:<externdesc> => (import n ed)
 export ::= n:<name> si:<sortidx>    => (export n si)
 ```
 Notes:
 * Validation requires all import and export `name`s are unique.
-
+* Validation requires any exported `sortidx` to have a valid `externdesc`
+  (which disallows core sorts other than `core module`).
 
 
 [`core:section`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-section

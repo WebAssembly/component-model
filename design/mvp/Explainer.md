@@ -355,7 +355,7 @@ core:moduletype ::= (module <id>? <core:moduledecl>*)
 core:moduledecl ::= <core:importdecl>
                   | <core:type>
                   | <core:exportdecl>
-core:importdecl ::= (import <name> <name> <core:importdesc>)  (WebAssembly 1.0)
+core:importdecl ::= (import <name> <name> <core:importdesc>)
 core:exportdecl ::= (export <name> <core:exportdesc>)
 core:exportdesc ::= strip-id(<importdesc>)
 
@@ -418,9 +418,9 @@ instancedecl  ::= <type>
                 | <alias>
                 | <exportdecl>
 importdecl    ::= (import <name> <importdesc>)
-exportdecl    ::= (export <name> <exportdesc>)
-importdesc    ::= bind-id(<exportdesc>)
-exportdesc    ::= (<sort> (type <varu32>) )
+exportdecl    ::= (export <name> <externdesc>)
+importdesc    ::= bind-id(<externdesc>)
+externdesc    ::= (<sort> (type <varu32>) )
                 | core-prefix(<core:moduletype>)
                 | <functype>
                 | <componenttype>
