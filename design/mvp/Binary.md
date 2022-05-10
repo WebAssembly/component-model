@@ -131,13 +131,11 @@ core:moduletype ::= 0x50 md*:vec(<core:moduledecl>)        => (module md*)
 core:moduledecl ::= 0x00 i:<core:import>                   => i
                   | 0x01 t:<core:type>                     => t
                   | 0x03 e:<core:exportdecl>               => e
-core:import     ::= m:<name> f:<name> ed:<core:externdesc> => (import m f ed)  (WebAssembly 1.0)
-core:externdesc ::= id:<core:importdesc>                   => id               (WebAssembly 1.0)
-core:exportdecl ::= n:<name> ed:<core:externdesc>          => (export n ed)
+core:importdecl ::= i:<core:import>                        => i
+core:exportdecl ::= n:<name> d:<core:importdesc>           => (export n d)
 ```
 Notes:
-* Reused Core binary rules: [`core:importdesc`], [`core:functype`]
-* `core:import` as written above is binary-compatible with [`core:import`].
+* Reused Core binary rules: [`core:import`], [`core:importdesc`], [`core:functype`]
 * Validation of `core:moduledecl` (currently) rejects `core:moduletype` definitions
   inside `type` declarators (i.e., nested core module types).
 * As described in the explainer, each module type is validated with an
@@ -148,7 +146,6 @@ Notes:
 type          ::= dt:<deftype>                         => (type dt)
 deftype       ::= dvt:<defvaltype>                     => dvt
                 | ft:<functype>                        => ft
-                | tt:<typetype>                        => tt
                 | ct:<componenttype>                   => ct
                 | it:<instancetype>                    => it
 primvaltype   ::= 0x7f                                 => unit
@@ -175,13 +172,11 @@ defvaltype    ::= pvt:<primvaltype>                    => pvt
                 | 0x6b t*:vec(<valtype>)               => (union t*)
                 | 0x6a t:<valtype>                     => (option t)
                 | 0x69 t:<valtype> u:<valtype>         => (expected t u)
-valtype       ::= i:<typeidx>                          => type-index-space[i]  (must be defvaltype)
-                | pit:<primvaltype>                    => pit
 field         ::= n:<name> t:<valtype>                 => (field n t)
 case          ::= n:<name> t:<valtype> 0x0             => (case n t)
                 | n:<name> t:<valtype> 0x1 i:<varu32>  => (case n t (refines case-label[i]))
-typetype      ::= tb:<typebound                        => (type tb)
-typebound     ::= 0x00 i:<typeidx>                     => (eq type-index-space[i])
+valtype       ::= i:<typeidx>                          => i
+                | pvt:<primvaltype>                    => pvt
 functype      ::= 0x40 param*:vec(<param>) t:<valtype> => (func param* (result t))
 param         ::= 0x00 t:<valtype>                     => (param t)
                 | 0x01 n:<name> t:<valtype>            => (param n t)
@@ -192,20 +187,28 @@ componentdecl ::= 0x00 id:<importdecl>                 => id
 instancedecl  ::= 0x01 t:<type>                        => t
                 | 0x02 a:<alias>                       => a
                 | 0x03 ed:<exportdecl>                 => ed
-importdecl    ::= n:<name> et:<externtype>             => (import n et)
-exportdecl    ::= n:<name> et:<externtype>             => (export n et)
-externtype    ::= 0x00 0x10 i:<core:typeidx>           => (core module core-type-index-space[i])  (must be moduletype)
-                | sort:<sort> i:<typeidx>              => (sort type-index-space[i])  (sort must match type)
+importdecl    ::= n:<name> ed:<externdesc>             => (import n ed)
+exportdecl    ::= n:<name> ed:<externdesc>             => (export n ed)
+externdesc    ::= 0x00 0x10 i:<core:typeidx>           => (core module (type i))
+                | 0x01 i:<typeidx>                     => (func (type i))
+                | 0x02 t:<valtype>                     => (value t)
+                | 0x03 b:<typebound>                   => (type b)
+                | 0x04 i:<typeidx>                     => (instance (type i))
+                | 0x05 i:<typeidx>                     => (component (type i))
+typebound     ::= 0x00 i:<typeidx>                     => (eq i)
 ```
 Notes:
 * The type opcodes follow the same negative-SLEB128 scheme as Core WebAssembly,
   with type opcodes starting at SLEB128(-1) (`0x7f`) and going down,
   reserving the nonnegative SLEB128s for type indices.
+* Validation of `valtype` requires the `typeidx` to refer to a `defvaltype`.
 * Validation of `moduledecl` (currently) only allows `outer` `type` `alias`
   declarators.
 * As described in the explainer, each component and instance type is validated
   with an initially-empty type index space. Outer aliases can be used to pull
   in type definitions from containing components.
+* Validation of `externdesc` requires the various `typeidx` type constructors
+  to match the preceding `sort`.
 
 
 ## Canonical Definitions

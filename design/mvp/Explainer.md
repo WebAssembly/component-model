@@ -63,6 +63,8 @@ definition ::= core-prefix(<core:module>)
              | <start>
              | <import>
              | <export>
+
+where core-prefix(X) parses '(' 'core' Y ')' when X parses '(' Y ')'
 ```
 Components are like Core WebAssembly modules in that their contained
 definitions are acyclic: definitions can only refer to preceding definitions
@@ -71,10 +73,7 @@ components can arbitrarily interleave different kinds of definitions.
 
 The `core-prefix` meta-function transforms a grammatical rule for parsing a
 Core WebAssembly definition into a grammatical rule for parsing the same
-definition, but with a `core` token added right after the leftmost paren:
-```
-core-prefix(X) ::= '(' 'core' Y ')' where X = '(' Y ')'
-```
+definition, but with a `core` token added right after the leftmost paren.
 For example, `core:module` accepts `(module (func))` so
 `core-prefix(<core:module>)` accepts `(core module (func))`. Note that the
 inner `func` doesn't need a `core` prefix; the `core` token is used to mark the
@@ -356,10 +355,13 @@ core:moduletype ::= (module <id>? <core:moduledecl>*)
 core:moduledecl ::= <core:importdecl>
                   | <core:type>
                   | <core:exportdecl>
-core:importdecl ::= (import <name> <name> <core:externdesc>)
-core:exportdecl ::= (export <name> <core:externdesc>)
-core:externdesc ::= <core:importdesc>                         (WebAssembly 1.0)
+core:importdecl ::= (import <name> <name> <core:importdesc>)  (WebAssembly 1.0)
+core:exportdecl ::= (export <name> <core:exportdesc>)
+core:exportdesc ::= strip-id(<importdesc>)
+
+where strip-id(X) parses '(' sort Y ')' when X parses '(' sort <id>? Y ')'
 ```
+
 Here, `core:deftype` (short for "defined type") is inherited from the [gc]
 proposal and extended with a `module` type constructor. If module-linking is
 added to Core WebAssembly, an `instance` type constructor would be added as
@@ -370,9 +372,9 @@ core modules cannot themselves import or export other core modules.
 The body of a module type contains an ordered list of "module declarators"
 which describe, at a type level, the imports and exports of the module. In a
 module-type context, import and export declarators can both reuse the existing
-[`core:importdesc`] production defined in WebAssembly 1.0. To avoid confusion,
-`core:importdesc` is renamed to `core:externdesc` (for symmetry with
-[`core:externtype`]).
+[`core:importdesc`] production defined in WebAssembly 1.0, with the only
+difference being that, in the text format, `core:importdesc` can bind an
+identifier for later reuse while `core:exportdesc` cannot.
 
 In preparation for the forthcoming addition of [type-imports] to Core
 WebAssembly, module types start with an empty type index space so that the type
@@ -387,13 +389,11 @@ compound values, component-level value types assume no shared memory and must
 therefore be high-level, describing entire compound values.
 ```
 type          ::= (type <id>? <deftype>)
-deftype       ::= <valtype>
-                | <nonvaltype>
-nonvaltype    ::= <functype>
-                | <typetype>
+deftype       ::= <defvaltype>
+                | <functype>
                 | <componenttype>
                 | <instancetype>
-valtype       ::= unit
+defvaltype    ::= unit
                 | bool
                 | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64
                 | float32 | float64
@@ -407,35 +407,30 @@ valtype       ::= unit
                 | (union <valtype>+)
                 | (option <valtype>)
                 | (expected <valtype> <valtype>)
-functype      ::= (func <id>? (param <name>? <valtype>)* (result <valtype>))
-typetype      ::= (type <id>? <typebound>)
-typebound     ::= (eq <deftype>)
-componenttype ::= (component <id>? <componentdecl>*)
-instancetype  ::= (instance <id>? <instancedecl>*)
+valtype       ::= <typeidx>
+                | <defvaltype>
+functype      ::= (func (param <name>? <valtype>)* (result <valtype>))
+componenttype ::= (component <componentdecl>*)
+instancetype  ::= (instance <instancedecl>*)
 componentdecl ::= <importdecl>
                 | <instancedecl>
 instancedecl  ::= <type>
                 | <alias>
                 | <exportdecl>
-importdecl    ::= (import <name> <externtype>)
-exportdecl    ::= (export <name> <externtype>)
-externtype    ::= core-prefix(<core:moduletype>)
-                | (value <id>? <valtype>)
-                | <nonvaltype>
+importdecl    ::= (import <name> <importdesc>)
+exportdecl    ::= (export <name> <exportdesc>)
+importdesc    ::= bind-id(<exportdesc>)
+exportdesc    ::= (<sort> (type <varu32>) )
+                | core-prefix(<core:moduletype>)
+                | <functype>
+                | <componenttype>
+                | <instancetype>
+                | (value <valtype>)
+                | (type <typebound>)
+typebound     ::= (eq <typeidx>)
+
+where bind-id(X) parses '(' sort <id>? Y ')' when X parses '(' sort Y ')'
 ```
-This grammar defines `type` recursively to allow it to more-precisely indicate
-what's allowed at each point in the recursion. The formal AST and
-[binary format](Binary.md#type-definitions) would instead use a `typeidx` with
-validation rules to restrict the target type while the formal text format would
-use something like [`core:typeuse`], allowing any of: (1) a `typeidx`, (2) an
-identifier `$T` resolving to a type definition (using `(type $T)` in cases
-where there is a grammatical ambiguity), or (3) an inline type definition that
-is desugared into a deduplicated out-of-line type definition.
-
-The optional `id` after all the type constructors (e.g., `(module <id>? ...)`)
-is only allowed to be present in the context of `import` since this is the only
-context in which binding an identifier makes sense.
-
 The value types in `valtype` can be broken into two categories: *fundamental*
 value types and *specialized* value types, where the latter are defined by
 expansion into the former. The *fundamental value types* have the following
@@ -484,13 +479,43 @@ cases. This could be relaxed in the future to allow an empty list of cases, with
 the empty `(variant)` effectively serving as a [bottom type] and indicating
 unreachability.
 
-The remaining 5 type constructors use `valtype` to complete the description
-of a shared-nothing component interface:
+The remaining 3 type constructors in `deftype` use `valtype` to describe
+shared-nothing functions, components and component instances:
 
-The `type` type-constructor describes an imported or exported type along with
-its bounds, which currently only has an `eq` option that says that the
-imported/exported type must be exactly equal to the given immediate type. There
-are two main use cases for this in the short-term:
+The `func` type constructor describes a component-level function definition
+that takes and returns `valtype`. In contrast to [`core:functype`] which, as a
+low-level compiler target for a stack machine, returns zero or more results,
+`functype` always returns a single type, with `unit` being used for functions
+that don't return an interesting value (analogous to "void" in some languages).
+Having a single return type simplifies the binding of `functype` into a wide
+variety of source languages. As syntactic sugar, the text format of `functype`
+additionally allows `result` to be absent, interpreting this as `(result
+unit)`.
+
+The `instance` type constructor represents the result of instantiating a
+component and thus is the same as a `component` type minus the description
+of imports.
+
+The `component` type constructor is symmetric to the core `module` type
+constructor and is built from a sequence of "declarators" which are used to
+describe the imports and exports of the component. There are four kinds of
+declarators:
+
+As with core modules, `importdecl` and `exportdecl` classify component `import`
+and `export` definitions, with `importdecl` allowing an identifier to be
+bound for use within the type. Following the precedent of [`core:typeuse`], the
+text format allows both references to out-of-line type definitions (via
+`(type <typeidx>)`) and inline type expressions that the text format desugars
+into out-of-line type definitions.
+
+The `value` case of `importdesc`/`exportdesc` describes a runtime value
+that is imported or exported at instantiation time as described in the [start
+definitions](#start-definitions) section below.
+
+The `type` case of `importdesc`/`exportdesc` describes an imported or exported
+type along with its bounds. The bounds currently only have an `eq` option that
+says that the imported/exported type must be exactly equal to the referenced
+type. There are two main use cases for this in the short-term:
 * Type exports allow a component or interface to associate a name with a
   structural type (e.g., `(export "nanos" (type (eq u64)))`) which bindings
   generators can use to generate type aliases (e.g., `typedef uint64_t nanos;`).
@@ -502,29 +527,12 @@ When [resource and handle types] are added to the explainer, `typebound` will
 be extended with a `sub` option (symmetric to the [type-imports] proposal) that
 allows importing and exporting *abstract* types.
 
-The `func` type constructor describes a component-level function definition
-that takes and returns component-level value types. In contrast to
-[`core:functype`] which, as a low-level compiler target for a stack machine,
-returns zero or more results, `functype` always returns a single type, with
-`unit` being used for functions that don't return an interesting value
-(analogous to "void" in some languages). Having a single return type simplifies
-the binding of `functype` into a wide variety of source languages. As syntactic
-sugar, the text format of `functype` additionally allows `result` to be absent,
-interpreting this as `(result unit)`.
-
-The `component` type constructor is symmetric to the core `module` type
-constructor, although its grammar is factored to share declarators with the
-`instance` type constructor. The `import` and `export` declarator names
-must be distinct within a single type. The `externtype` production shared by
-the `import` and `export` declarators is symmetric to [`core:externtype`] and
-includes all importable/exportable types.
-
-Component and instance types also include an `alias` declarator for projecting
-the exports out of imported instances and sharing types with outer components.
-As an example, the following component defines two equivalent component types,
-where the former defines the function type via `type` declarator and the latter
-via `alias` declarator. In both cases, the type is given index `0` since
-component types start with an empty type index space.
+Lastly, component and instance types also include an `alias` declarator for
+projecting the exports out of imported instances and sharing types with outer
+components. As an example, the following component defines two equivalent
+component types, where the former defines the function type via `type`
+declarator and the latter via `alias` declarator. In both cases, the type is
+given index `0` since component types start with an empty type index space.
 ```wasm
 (component $C
   (type $C1 (component
@@ -540,12 +548,6 @@ component types start with an empty type index space.
   ))
 )
 ```
-
-The family of value types, `valtype`, is unified by a *single* type
-constructor, `value`, that corresponds 1:1 with the `value` sort (described in
-the [start definitions](#start-definitions) section below). As a type
-constructor, `value` is symmetric to `global` in Core WebAssembly, but without
-a mutability option.
 
 With what's defined so far, we can define component types using a mix of inline
 and out-of-line type definitions:
@@ -765,7 +767,7 @@ of core linear memory.
 
 Lastly, imports and exports are defined in terms of the above as:
 ```
-import ::= (import <name> <externtype>)
+import ::= (import <name> <importdesc>)
 export ::= (export <name> <sortidx>)
 ```
 All import and export names within a component must be unique, respectively.
