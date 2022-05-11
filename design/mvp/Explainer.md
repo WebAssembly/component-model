@@ -133,7 +133,7 @@ core:instanceexpr   ::= (instantiate <core:moduleidx> <core:instantiatearg>*)
                       | <core:export>*
 core:instantiatearg ::= (with <name> <core:sortidx>)
                       | (with <name> (instance <core:export>*))
-core:sortidx        ::= (<core:sort> <varu32>)
+core:sortidx        ::= (<core:sort> <u32>)
 core:sort           ::= func
                       | table
                       | memory
@@ -152,7 +152,7 @@ core modules are resolved as follows:
    core definition.
 
 Each `core:sort` corresponds 1:1 with a distinct [index space] that contains
-only core definitions of that *sort*. The `varu32` field of `core:sortidx`
+only core definitions of that *sort*. The `u32` field of `core:sortidx`
 indexes into the sort's associated index space to select a definition.
 
 Based on this, we can link two core modules `$A` and `$B` together with the
@@ -188,7 +188,7 @@ instanceexpr   ::= (instantiate <componentidx> <instantiatearg>*)
                  | <export>*
 instantiatearg ::= (with <name> <sortidx>)
                  | (with <name> (instance <export>*))
-sortidx        ::= (<sort> <varu32>)
+sortidx        ::= (<sort> <u32>)
 sort           ::= core-prefix(<core:sort>)
                  | func
                  | value
@@ -228,7 +228,7 @@ core:aliastarget ::= export <core:instanceidx> <name>
 
 alias            ::= (alias <aliastarget> (<sort> <id>?))
 aliastarget      ::= export <instanceidx> <name>
-                   | outer <varu32> <varu32>
+                   | outer <u32> <u32>
 ```
 The `core:sort`/`sort` immediate of the alias specifies which index space in
 the target component is being read from and which index space of the containing
@@ -239,10 +239,10 @@ used.
 In the case of `export` aliases, validation ensures `name` is an export in the
 target instance and has a matching sort.
 
-In the case of `outer` aliases, the `varu32` pair serves as a [de Bruijn
-index], with first `varu32` being the number of enclosing components to skip
-and the second `varu32` being an index into the target component's sort's index
-space. In particular, the first `varu32` can be `0`, in which case the outer
+In the case of `outer` aliases, the `u32` pair serves as a [de Bruijn
+index], with first `u32` being the number of enclosing components to skip
+and the second `u32` being an index into the target component's sort's index
+space. In particular, the first `u32` can be `0`, in which case the outer
 alias refers to the current component. To maintain the acyclicity of module
 instantiation, outer aliases are only allowed to refer to *preceding* outer
 definitions.
@@ -420,7 +420,7 @@ instancedecl  ::= <type>
 importdecl    ::= (import <name> <importdesc>)
 exportdecl    ::= (export <name> <externdesc>)
 importdesc    ::= bind-id(<externdesc>)
-externdesc    ::= (<sort> (type <varu32>) )
+externdesc    ::= (<sort> (type <u32>) )
                 | core-prefix(<core:moduletype>)
                 | <functype>
                 | <componenttype>

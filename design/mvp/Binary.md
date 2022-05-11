@@ -58,7 +58,7 @@ core:instance       ::= ie:<instance-expr>                                 => (i
 core:instanceexpr   ::= 0x00 m:<moduleidx> arg*:vec(<core:instantiatearg>) => (instantiate m arg*)
                       | 0x01 e*:vec(<core:export>)                         => e*
 core:instantiatearg ::= n:<name> si:<core:sortidx>                         => (with n si)
-core:sortidx        ::= sort:<core:sort> idx:<varu32>                      => (sort idx)
+core:sortidx        ::= sort:<core:sort> idx:<u32>                         => (sort idx)
 core:sort           ::= 0x00                                               => func
                       | 0x01                                               => table
                       | 0x02                                               => memory
@@ -72,7 +72,7 @@ instance            ::= ie:<instance-expr>                                 => (i
 instanceexpr        ::= 0x00 c:<componentidx> arg*:vec(<instantiatearg>)   => (instantiate c arg*)
                       | 0x01 e*:vec(<export>)                              => e*
 instantiatearg      ::= n:<name> si:<sortidx>                              => (with n si)
-sortidx             ::= sort:<sort> idx:<varu32>                           => (sort idx)
+sortidx             ::= sort:<sort> idx:<u32>                              => (sort idx)
 sort                ::= 0x00 cs:<core:sort>                                => core cs
                       | 0x01                                               => func
                       | 0x02                                               => value
@@ -82,7 +82,7 @@ sort                ::= 0x00 cs:<core:sort>                                => co
 export              ::= n:<name> si:<sortidx>                              => (export n si)
 ```
 Notes:
-* Reused Core binary rules: [`core:name`]
+* Reused Core binary rules: [`core:name`], (variable-length encoded) [`core:u32`]
 * The `core:sort` values are chosen to match the discriminant opcodes of
   [`core:importdesc`].
 * `type` is added to `core:sort` in anticipation of the [type-imports] proposal. Until that
@@ -105,9 +105,10 @@ core:aliastarget ::= 0x00 i:<core:instanceidx> n:<name>         => export i n
 
 alias            ::= sort:<sort> target:<aliastarget>           => (alias target (sort))
 aliastarget      ::= 0x00 i:<instanceidx> n:<name>              => export i n
-                   | 0x01 ct:<varu32> idx:<varu32>              => outer ct idx
+                   | 0x01 ct:<u32> idx:<u32>                    => outer ct idx
 ```
 Notes:
+* Reused Core binary rules: (variable-length encoded) [`core:u32`]
 * For `export` aliases, `i` is validated to refer to an instance in the
   instance index space that exports `n` with the specified `sort`.
 * For `outer` aliases, `ct` is validated to be *less or equal than* the number
@@ -174,7 +175,7 @@ defvaltype    ::= pvt:<primvaltype>                    => pvt
                 | 0x69 t:<valtype> u:<valtype>         => (expected t u)
 field         ::= n:<name> t:<valtype>                 => (field n t)
 case          ::= n:<name> t:<valtype> 0x0             => (case n t)
-                | n:<name> t:<valtype> 0x1 i:<varu32>  => (case n t (refines case-label[i]))
+                | n:<name> t:<valtype> 0x1 i:<u32>     => (case n t (refines case-label[i]))
 valtype       ::= i:<typeidx>                          => i
                 | pvt:<primvaltype>                    => pvt
 functype      ::= 0x40 param*:vec(<param>) t:<valtype> => (func param* (result t))
@@ -227,7 +228,7 @@ canonopt ::= 0x00                                                => string-encod
 ```
 Notes:
 * The second `0x00` byte in `canon` stands for the `func` sort and thus the
-  `0x00 <varu32>` pair standards for a `func` `sortidx` or `core:sortidx`.
+  `0x00 <u32>` pair standards for a `func` `sortidx` or `core:sortidx`.
 * Validation prevents duplicate or conflicting `canonopt`.
 * Validation of `canon lift` requires `f` to have type `flatten(ft)` (defined
   by the [Canonical ABI](CanonicalABI.md#flattening)). The function being
@@ -278,6 +279,7 @@ Notes:
   (which disallows core sorts other than `core module`).
 
 
+[`core:u32`]: https://webassembly.github.io/spec/core/binary/values.html#integers
 [`core:section`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-section
 [`core:custom`]: https://webassembly.github.io/spec/core/binary/modules.html#custom-section
 [`core:module`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-module
