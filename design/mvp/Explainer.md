@@ -191,7 +191,7 @@ instanceexpr   ::= (instantiate <componentidx> <instantiatearg>*)
 instantiatearg ::= (with <name> <sortidx>)
                  | (with <name> (instance <export>*))
 sortidx        ::= (<sort> <u32>)
-sort           ::= core-prefix(<core:sort>)
+sort           ::= core <core:sort>
                  | func
                  | value
                  | type
