@@ -534,9 +534,8 @@ type. There are two main use cases for this in the short-term:
 * Type exports allow a component or interface to associate a name with a
   structural type (e.g., `(export "nanos" (type (eq u64)))`) which bindings
   generators can use to generate type aliases (e.g., `typedef uint64_t nanos;`).
-* Type imports and exports allow a component to explicitly specify the
-  type parameters used to monomorphize a generic interface being imported
-  or exported.
+* Type imports and exports can provide additional information to toolchains and
+  runtimes for defining the behavior of host APIs.
 
 When [resource and handle types] are added to the explainer, `typebound` will
 be extended with a `sub` option (symmetric to the [type-imports] proposal) that
