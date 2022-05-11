@@ -804,7 +804,7 @@ exports other components:
   ))
   (instance $d2 (instantiate $D
     (with "c" (instance
-      (export "f" (func $d1 "g"))
+      (export "f" (func (func $d1 "g")))
     ))
   ))
   (export "d2" (instance $d2))
