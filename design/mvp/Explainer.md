@@ -359,7 +359,7 @@ core:moduledecl ::= <core:importdecl>
                   | <core:exportdecl>
 core:importdecl ::= (import <name> <name> <core:importdesc>)
 core:exportdecl ::= (export <name> <core:exportdesc>)
-core:exportdesc ::= strip-id(<importdesc>)
+core:exportdesc ::= strip-id(<core:importdesc>)
 
 where strip-id(X) parses '(' sort Y ')' when X parses '(' sort <id>? Y ')'
 ```
