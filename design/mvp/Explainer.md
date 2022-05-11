@@ -491,7 +491,7 @@ defined by the following mapping:
 ```
 Note that, at least initially, variants are required to have a non-empty list of
 cases. This could be relaxed in the future to allow an empty list of cases, with
-the empty `(variant)` effectively serving as a [bottom type] and indicating
+the empty `(variant)` effectively serving as a [empty type] and indicating
 unreachability.
 
 The remaining 3 type constructors in `deftype` use `valtype` to describe
@@ -1080,7 +1080,7 @@ and will be added over the coming months to complete the MVP proposal:
 
 [De Bruijn Index]: https://en.wikipedia.org/wiki/De_Bruijn_index
 [Closure]: https://en.wikipedia.org/wiki/Closure_(computer_programming)
-[Bottom Type]: https://en.wikipedia.org/wiki/Bottom_type
+[Empty Type]: https://en.wikipedia.org/w/index.php?title=Empty_type
 [IEEE754]: https://en.wikipedia.org/wiki/IEEE_754
 [NaN]: https://en.wikipedia.org/wiki/NaN
 [NaN Boxing]: https://wingolog.org/archives/2011/05/18/value-representation-in-javascript-implementations
