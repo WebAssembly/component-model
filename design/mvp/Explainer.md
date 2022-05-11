@@ -353,7 +353,7 @@ core:deftype    ::= <core:functype>                           (WebAssembly 1.0)
                   | <core:structtype>                         (GC proposal)
                   | <core:arraytype>                          (GC proposal)
                   | <core:moduletype>
-core:moduletype ::= (module <id>? <core:moduledecl>*)
+core:moduletype ::= (module <core:moduledecl>*)
 core:moduledecl ::= <core:importdecl>
                   | <core:type>
                   | <core:exportdecl>
