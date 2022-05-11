@@ -57,7 +57,7 @@ Notes:
 core:instance       ::= ie:<instance-expr>                                 => (instance ie)
 core:instanceexpr   ::= 0x00 m:<moduleidx> arg*:vec(<core:instantiatearg>) => (instantiate m arg*)
                       | 0x01 e*:vec(<core:export>)                         => e*
-core:instantiatearg ::= n:<name> si:<core:sortidx>                         => (with n si)
+core:instantiatearg ::= n:<name> 0x11 i:<instanceidx>                      => (with n (instance i))
 core:sortidx        ::= sort:<core:sort> idx:<u32>                         => (sort idx)
 core:sort           ::= 0x00                                               => func
                       | 0x01                                               => table
@@ -91,7 +91,7 @@ Notes:
 * `module` and `instance` are added to `core:sort` in anticipation of the [module-linking]
   proposal, which would add these types to Core WebAssembly. Until then, they are useful
   for aliases (below).
-* Validation of `core:instantiatearg` would initially only allow the `instance`
+* Validation of `core:instantiatearg` initially only allows the `instance`
   sort, but would be extended to accept other sorts as core wasm is extended.
 * The indices in `sortidx` are validated according to their `sort`'s index
   spaces, which are built incrementally as each definition is validated.

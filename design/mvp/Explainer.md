@@ -131,7 +131,7 @@ The syntax for defining a core module instance is:
 core:instance       ::= (instance <id>? <core:instancexpr>)
 core:instanceexpr   ::= (instantiate <core:moduleidx> <core:instantiatearg>*)
                       | <core:export>*
-core:instantiatearg ::= (with <name> <core:sortidx>)
+core:instantiatearg ::= (with <name> (instance <core:instanceidx>))
                       | (with <name> (instance <core:export>*))
 core:sortidx        ::= (<core:sort> <u32>)
 core:sort           ::= func
@@ -146,7 +146,9 @@ core:export         ::= (export <name> <core:sortidx>)
 When instantiating a module via `instantiate`, the two-level imports of the
 core modules are resolved as follows:
 1. The first `name` of the import is looked up in the named list of
-   `core:instantiatearg` to select a core module instance.
+   `core:instantiatearg` to select a core module instance. (In the future,
+   other `core:sort`s could be allowed if core wasm adds single-level
+   imports.)
 2. The second `name` of the import is looked up in the named list of exports of
    the core module instance found by the first step to select the imported
    core definition.
