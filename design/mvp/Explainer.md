@@ -378,11 +378,24 @@ module-type context, import and export declarators can both reuse the existing
 difference being that, in the text format, `core:importdesc` can bind an
 identifier for later reuse while `core:exportdesc` cannot.
 
-In preparation for the forthcoming addition of [type-imports] to Core
-WebAssembly, module types start with an empty type index space so that the type
-index space can be populated with fresh type definitions constructed from type
-imports. Thus, `core:moduledecl` also includes a `type` declarator for defining
-the types used by the `import` and `export` declarators.
+With the Core WebAssembly [type-imports], module types will need the ability to
+define the types of exports based on the types of imports. In preparation for
+this, module types start with an empty type index space that is populated by
+`type` declarators, so that, in the future, these `type` declarators can refer to
+type imports local to the module type itself. For example, in the future, the
+following module type would be expressible:
+```
+(component $C
+  (type $M (module
+    (import "" "T" (type $T))
+    (type $PairT (struct (field (ref $T)) (field (ref $T))))
+    (export "make_pair" (func (param (ref $T)) (result (ref $PairT))))
+  ))
+)
+```
+In this example, `$M` has a distinct type index space from `$C`, where element
+0 is the imported type, element 1 is the `struct` type, and element 2 is an
+implicitly-created `func` type referring to both.
 
 Component-level type definitions are symmetric to core-level type definitions,
 but use a completely different set of value types. Unlike [`core:valtype`]
