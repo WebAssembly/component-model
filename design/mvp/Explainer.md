@@ -551,14 +551,14 @@ given index `0` since component types start with an empty type index space.
 (component $C
   (type $C1 (component
     (type (func (param string) (result string)))
-    (import "a" "b" (func (type 0)))
-    (export "c" (func (type 0)))
+    (import "a" (func (type 0)))
+    (export "b" (func (type 0)))
   ))
   (type $F (func (param string) (result string)))
   (type $C2 (component
     (alias outer $C $F (type))
-    (import "a" "b" (func (type 0)))
-    (export "c" (func (type 0)))
+    (import "a" (func (type 0)))
+    (export "b" (func (type 0)))
   ))
 )
 ```
