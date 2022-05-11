@@ -266,13 +266,14 @@ Both kinds of aliases come with syntactic sugar for implicitly declaring them
 inline:
 
 For `export` aliases, the inline sugar has the form `(sort <instanceidx> <name>+)`
-and can be used anywhere a `sort` index appears in the AST. For example, the
-following snippet uses an inline function alias:
+and can be used in place of a `sortidx` or any sort-specific index (such as a
+`typeidx` or `funcidx`). For example, the following snippet uses two inline
+function aliases:
 ```wasm
 (instance $j (instantiate $J (with "f" (func $i "f"))))
-(export "x" (func (func $j "g" "h")))
+(export "x" (func $j "g" "h"))
 ```
-which is desugared into:
+which are desugared into:
 ```wasm
 (alias export $i "f" (func $f_alias))
 (instance $j (instantiate $J (with "f" (func $f_alias))))
@@ -804,7 +805,7 @@ exports other components:
   ))
   (instance $d2 (instantiate $D
     (with "c" (instance
-      (export "f" (func (func $d1 "g")))
+      (export "f" (func $d1 "g"))
     ))
   ))
   (export "d2" (instance $d2))
