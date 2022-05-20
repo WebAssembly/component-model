@@ -63,9 +63,9 @@ core:sort           ::= 0x00                                               => fu
                       | 0x01                                               => table
                       | 0x02                                               => memory
                       | 0x03                                               => global
-                      | 0x04                                               => type
-                      | 0x10                                               => module
-                      | 0x11                                               => instance
+                      | 0x10                                               => type
+                      | 0x11                                               => module
+                      | 0x12                                               => instance
 core:export         ::= n:<name> si:<core:sortidx>                         => (export n si)
 
 instance            ::= ie:<instance-expr>                                 => (instance ie)
