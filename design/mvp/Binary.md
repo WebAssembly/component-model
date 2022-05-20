@@ -203,7 +203,7 @@ Notes:
   with type opcodes starting at SLEB128(-1) (`0x7f`) and going down,
   reserving the nonnegative SLEB128s for type indices.
 * Validation of `valtype` requires the `typeidx` to refer to a `defvaltype`.
-* Validation of `moduledecl` (currently) only allows `outer` `type` `alias`
+* Validation of `instancedecl` (currently) only allows `outer` `type` `alias`
   declarators.
 * As described in the explainer, each component and instance type is validated
   with an initially-empty type index space. Outer aliases can be used to pull
