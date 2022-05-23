@@ -162,7 +162,7 @@ intertype         ::= pit:<primintertype>                       => pit
                     | 0x69 t:<intertypeuse> u:<intertypeuse>    => (expected t u)
 field             ::= n:<name> t:<intertypeuse>                 => (field n t)
 case              ::= n:<name> t:<intertypeuse> 0x0             => (case n t)
-                    | n:<name> t:<intertypeuse> 0x1 i:<varu32>  => (case n t (subtype-of case-label[i]))
+                    | n:<name> t:<intertypeuse> 0x1 i:<varu32>  => (case n t (refines case-label[i]))
 ```
 Notes:
 * Reused Core binary rules: [`core:import`], [`core:importdesc`], [`core:functype`]
