@@ -190,7 +190,7 @@ instancedecl  ::= 0x01 t:<type>                        => t
                 | 0x03 ed:<exportdecl>                 => ed
 importdecl    ::= n:<name> ed:<externdesc>             => (import n ed)
 exportdecl    ::= n:<name> ed:<externdesc>             => (export n ed)
-externdesc    ::= 0x00 0x10 i:<core:typeidx>           => (core module (type i))
+externdesc    ::= 0x00 0x11 i:<core:typeidx>           => (core module (type i))
                 | 0x01 i:<typeidx>                     => (func (type i))
                 | 0x02 t:<valtype>                     => (value t)
                 | 0x03 b:<typebound>                   => (type b)
