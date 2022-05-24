@@ -433,9 +433,8 @@ componentdecl ::= <importdecl>
 instancedecl  ::= <type>
                 | <alias>
                 | <exportdecl>
-importdecl    ::= (import <name> <importdesc>)
+importdecl    ::= (import <name> bind-id(<externdesc>))
 exportdecl    ::= (export <name> <externdesc>)
-importdesc    ::= bind-id(<externdesc>)
 externdesc    ::= (<sort> (type <u32>) )
                 | core-prefix(<core:moduletype>)
                 | <functype>
@@ -524,14 +523,14 @@ text format allows both references to out-of-line type definitions (via
 `(type <typeidx>)`) and inline type expressions that the text format desugars
 into out-of-line type definitions.
 
-The `value` case of `importdesc`/`exportdesc` describes a runtime value
-that is imported or exported at instantiation time as described in the [start
-definitions](#start-definitions) section below.
+The `value` case of `externdesc` describes a runtime value that is imported or
+exported at instantiation time as described in the
+[start definitions](#start-definitions) section below.
 
-The `type` case of `importdesc`/`exportdesc` describes an imported or exported
-type along with its bounds. The bounds currently only have an `eq` option that
-says that the imported/exported type must be exactly equal to the referenced
-type. There are two main use cases for this in the short-term:
+The `type` case of `externdesc` describes an imported or exported type along
+with its bounds. The bounds currently only have an `eq` option that says that
+the imported/exported type must be exactly equal to the referenced type. There
+are two main use cases for this in the short-term:
 * Type exports allow a component or interface to associate a name with a
   structural type (e.g., `(export "nanos" (type (eq u64)))`) which bindings
   generators can use to generate type aliases (e.g., `typedef uint64_t nanos;`).
@@ -611,7 +610,7 @@ two directions:
 Canonical definitions specify one of these two wrapping directions, the function
 to wrap and a list of configuration options:
 ```
-canon    ::= (canon lift core-prefix(<core:funcidx>) <functype> <canonopt>* (func <id>?))
+canon    ::= (canon lift core-prefix(<core:funcidx>) <canonopt>* bind-id(<externdesc>))
            | (canon lower <funcidx> <canonopt>* (core func <id>?))
 canonopt ::= string-encoding=utf8
            | string-encoding=utf16
@@ -620,6 +619,10 @@ canonopt ::= string-encoding=utf8
            | (realloc core-prefix(<core:funcidx>))
            | (post-return core-prefix(<core:funcidx>))
 ```
+While the production `externdesc` accepts any `sort`, the validation rules
+for `canon lift` would only allow the `func` sort. In the future, other sorts
+may be added (viz., types), hence the explicit sort.
+
 The `string-encoding` option specifies the encoding the Canonical ABI will use
 for the `string` type. The `latin1+utf16` encoding captures a common string
 encoding across Java, JavaScript and .NET VMs and allows a dynamic choice
@@ -672,9 +675,9 @@ stack-switching in component function signatures.
 Similar to the `import` and `alias` abbreviations shown above, `canon`
 definitions can also be written in an inverted form that puts the sort first:
 ```wasm
-      (func $f (import "i" "f")) ≡ (import "i" "f" (func $f))        (WebAssembly 1.0)
-      (func $h (canon lift ...)) ≡ (canon lift ... (func $h))
-(core func $h (canon lower ...)) ≡ (canon lower ... (core func $h))
+      (func $f ...type... (import "i" "f")) ≡ (import "i" "f" (func $f ...type...))       (WebAssembly 1.0)
+      (func $h ...type... (canon lift ...)) ≡ (canon lift ... (func $h ...type...))
+(core func $h ...type... (canon lower ...)) ≡ (canon lower ... (core func $h ...type...))
 ```
 Note: in the future, `canon` may be generalized to define other sorts than
 functions (such as types), hence the explicit `sort`.
@@ -707,11 +710,11 @@ takes a string, does some logging, then returns a string.
     (with "libc" (instance $libc))
     (with "wasi:logging" (instance (export "log" (func $log))))
   ))
-  (func (export "run") (canon lift
+  (func $run (param string) (result string) (canon lift
     (core func $main "run")
-    (func (param string) (result string))
     (memory (core memory $libc "mem")) (realloc (core func $libc "realloc"))
   ))
+  (export "run" (func $run))
 )
 ```
 This example shows the pattern of splitting out a reusable language runtime
@@ -764,9 +767,8 @@ exported string at instantiation time:
     )
   )
   (core instance $main (instantiate $Main (with "libc" (instance $libc))))
-  (func $start (canon lift
+  (func $start (param string) (result string) (canon lift
     (core func $main "start")
-    (func (param string) (result string))
     (memory (core memory $libc "mem")) (realloc (core func $libc "realloc"))
   ))
   (start $start (value $name) (result (value $greeting)))
@@ -782,7 +784,7 @@ of core linear memory.
 
 Lastly, imports and exports are defined in terms of the above as:
 ```
-import ::= (import <name> <importdesc>)
+import ::= <importdecl>
 export ::= (export <name> <sortidx>)
 ```
 All import and export names within a component must be unique, respectively.

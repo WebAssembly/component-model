@@ -216,7 +216,7 @@ Notes:
 
 (See [Canonical Definitions](Explainer.md#canonical-definitions) in the explainer.)
 ```
-canon    ::= 0x00 0x00 f:<core:funcidx> ft:<typeidx> opts:<opts> => (canon lift f type-index-space[ft] opts (func))
+canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift f opts type-index-space[ft])
            | 0x01 0x00 f:<funcidx> opts:<opts>                   => (canon lower f opts (core func))
 opts     ::= opt*:vec(<canonopt>)                                => opt*
 canonopt ::= 0x00                                                => string-encoding=utf8
