@@ -57,7 +57,7 @@ Notes:
 core:instance       ::= ie:<instance-expr>                                 => (instance ie)
 core:instanceexpr   ::= 0x00 m:<moduleidx> arg*:vec(<core:instantiatearg>) => (instantiate m arg*)
                       | 0x01 e*:vec(<core:export>)                         => e*
-core:instantiatearg ::= n:<name> 0x11 i:<instanceidx>                      => (with n (instance i))
+core:instantiatearg ::= n:<name> 0x12 i:<instanceidx>                      => (with n (instance i))
 core:sortidx        ::= sort:<core:sort> idx:<u32>                         => (sort idx)
 core:sort           ::= 0x00                                               => func
                       | 0x01                                               => table
