@@ -60,7 +60,7 @@ class Flags(InterfaceType):
 class Case:
   label: str
   t: InterfaceType
-  defaults_to: str = None
+  refines: str = None
 
 @dataclass
 class Variant(InterfaceType):
@@ -325,12 +325,12 @@ def load_variant(opts, ptr, cases):
   trap_if(disc >= len(cases))
   case = cases[disc]
   ptr = align_to(ptr, max_alignment(types_of(cases)))
-  return { case_label_with_defaults(case, cases): load(opts, ptr, case.t) }
+  return { case_label_with_refinements(case, cases): load(opts, ptr, case.t) }
 
-def case_label_with_defaults(case, cases):
+def case_label_with_refinements(case, cases):
   label = case.label
-  while case.defaults_to is not None:
-    case = cases[find_case(case.defaults_to, cases)]
+  while case.refines is not None:
+    case = cases[find_case(case.refines, cases)]
     label += '|' + case.label
   return label
 
@@ -743,7 +743,7 @@ def lift_flat_variant(opts, vi, cases):
   v = lift_flat(opts, CoerceValueIter(), case.t)
   for have in flat_types:
     _ = vi.next(have)
-  return { case_label_with_defaults(case, cases): v }
+  return { case_label_with_refinements(case, cases): v }
 
 def narrow_i64_to_i32(i):
   assert(0 <= i < (1 << 64))

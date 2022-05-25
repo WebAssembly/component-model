@@ -332,7 +332,7 @@ intertype         ::= unit | bool
                     | float32 | float64
                     | char | string
                     | (record (field <name> <intertype>)*)
-                    | (variant (case <name> <intertype> (defaults-to <name>)?)+)
+                    | (variant (case <name> <intertype> (refines <name>)?)+)
                     | (list <intertype>)
                     | (tuple <intertype>*)
                     | (flags <name>*)
@@ -378,9 +378,9 @@ NaN values are canonicalized to a single value so that:
 
 The subtyping between all these types is described in a separate
 [subtyping explainer](Subtyping.md). Of note here, though: the optional
-`defaults-to` field in the `case`s of `variant`s is exclusively concerned with
+`refines` field in the `case`s of `variant`s is exclusively concerned with
 subtyping. In particular, a `variant` subtype can contain a `case` not present
-in the supertype if the subtype's `case` `defaults-to` (directly or transitively)
+in the supertype if the subtype's `case` `refines` (directly or transitively)
 some `case` in the supertype.
 
 The sets of values allowed for the remaining *specialized* interface types are

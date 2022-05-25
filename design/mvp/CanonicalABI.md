@@ -347,8 +347,8 @@ guaranteed to be a no-op on the first iteration because the record as
 a whole starts out aligned (as asserted at the top of `load`).
 
 Variants are loaded using the order of the cases in the type to determine the
-case index. To support the subtyping allowed by `defaults-to`, a lifted variant
-value semantically includes a full ordered list of its `defaults-to` case
+case index. To support the subtyping allowed by `refines`, a lifted variant
+value semantically includes a full ordered list of its `refines` case
 labels so that the lowering code (defined below) can search this list to find a
 case label it knows about. While the code below appears to perform case-label
 lookup at runtime, a normal implementation can build the appropriate index
@@ -362,12 +362,12 @@ def load_variant(opts, ptr, cases):
   trap_if(disc >= len(cases))
   case = cases[disc]
   ptr = align_to(ptr, max_alignment(types_of(cases)))
-  return { case_label_with_defaults(case, cases): load(opts, ptr, case.t) }
+  return { case_label_with_refinements(case, cases): load(opts, ptr, case.t) }
 
-def case_label_with_defaults(case, cases):
+def case_label_with_refinements(case, cases):
   label = case.label
-  while case.defaults_to is not None:
-    case = cases[find_case(case.defaults_to, cases)]
+  while case.refines is not None:
+    case = cases[find_case(case.refines, cases)]
     label += '|' + case.label
   return label
 
@@ -665,8 +665,8 @@ def store_record(opts, v, ptr, fields):
     ptr += size(f.t)
 ```
 
-Variants are stored using the `|`-separated list of `defaults-to` cases built
-by `case_label_with_default` (above) to iteratively find a matching case (which
+Variants are stored using the `|`-separated list of `refines` cases built
+by `case_label_with_refinements` (above) to iteratively find a matching case (which
 validation guarantees will succeed). While this code appears to do O(n) string
 matching, a normal implementation can statically fuse `store_variant` with its
 matching `load_variant` to ultimately build a dense array that maps producer's
@@ -924,7 +924,7 @@ def lift_flat_variant(opts, vi, cases):
   v = lift_flat(opts, CoerceValueIter(), case.t)
   for have in flat_types:
     _ = vi.next(have)
-  return { case_label_with_defaults(case, cases): v }
+  return { case_label_with_refinements(case, cases): v }
 
 def narrow_i64_to_i32(i):
   assert(0 <= i < (1 << 64))
