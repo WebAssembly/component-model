@@ -1,7 +1,7 @@
 # Canonical ABI Explainer
 
-This explainer walks through the Canonical ABI used by [function definitions]
-to convert between high-level interface-typed values and low-level Core
+This explainer walks through the Canonical ABI used by [canonical definitions]
+to convert between high-level Component Model values and low-level Core
 WebAssembly values.
 
 * [Supporting definitions](#supporting-definitions)
@@ -14,16 +14,16 @@ WebAssembly values.
   * [Flat Lifting](#flat-lifting)
   * [Flat Lowering](#flat-lowering)
   * [Lifting and Lowering](#lifting-and-lowering)
-* [Canonical ABI built-ins](#canonical-abi-built-ins)
-  * [`canon.lift`](#canonlift)
-  * [`canon.lower`](#canonlower)
+* [Canonical definitions](#canonical-definitions)
+  * [`lift`](#lift)
+  * [`lower`](#lower)
 
 
 ## Supporting definitions
 
-The Canonical ABI specifies, for each interface-typed function signature, a
+The Canonical ABI specifies, for each component function signature, a
 corresponding core function signature and the process for reading
-interface-typed values into and out of linear memory. While a full formal
+component-level values into and out of linear memory. While a full formal
 specification would specify the Canonical ABI in terms of macro-expansion into
 Core WebAssembly instructions augmented with a new set of (spec-internal)
 [administrative instructions], the informal presentation here instead specifies
@@ -52,19 +52,19 @@ necessary to support recovery in the middle of nested allocations. In the MVP,
 for large allocations that can OOM, [streams](Explainer.md#TODO) would usually
 be the appropriate type to use and streams will be able to explicitly express
 failure in their type. Post-MVP, [adapter functions] would allow fully custom
-OOM handling for all interface types, allowing a toolchain to intentionally
-propagate OOM into the appropriate explicit return value of the function's
-declared return type.
+OOM handling for all component-level types, allowing a toolchain to
+intentionally propagate OOM into the appropriate explicit return value of the
+function's declared return type.
 
 
 ### Despecialization
 
-[In the explainer][Type Definitions], interface types are classified as either *fundamental* or
-*specialized*, where the specialized interface types are defined by expansion
-into fundamental interface types. In most cases, the canonical ABI of a
-specialized interface type is the same as its expansion so, to avoid
+[In the explainer][Type Definitions], component value types are classified as
+either *fundamental* or *specialized*, where the specialized value types are
+defined by expansion into fundamental value types. In most cases, the canonical
+ABI of a specialized value type is the same as its expansion so, to avoid
 repetition, the other definitions below use the following `despecialize`
-function to replace specialized interface types with their expansion:
+function to replace specialized value types with their expansion:
 ```python
 def despecialize(t):
   match t:
@@ -76,14 +76,14 @@ def despecialize(t):
     case Expected(ok, error) : return Variant([ Case("ok", ok), Case("error", error) ])
     case _                   : return t
 ```
-The specialized interface types `string` and `flags` are missing from this list
+The specialized value types `string` and `flags` are missing from this list
 because they are given specialized canonical ABI representations distinct from
 their respective expansions.
 
 
 ### Alignment
 
-Each interface type is assigned an [alignment] which is used by subsequent
+Each value type is assigned an [alignment] which is used by subsequent
 Canonical ABI definitions. Presenting the definition of `alignment` piecewise,
 we start with the top-level case analysis:
 ```python
@@ -141,8 +141,8 @@ def alignment_flags(labels):
 
 ### Size
 
-Each interface type is also assigned a `size`, measured in bytes, which
-corresponds the `sizeof` operator in C:
+Each value type is also assigned a `size`, measured in bytes, which corresponds
+the `sizeof` operator in C:
 ```python
 def size(t):
   match despecialize(t):
@@ -191,10 +191,10 @@ def num_i32_flags(labels):
 
 ### Loading
 
-The `load` function defines how to read a value of a given interface type `t`
-out of linear memory starting at offset `ptr`, returning a interface-typed
-value (here, as a Python value). The `Opts`/`opts` class/parameter contains the
-[`canonopt`] immediates supplied as part of `canon.lift`/`canon.lower`.
+The `load` function defines how to read a value of a given value type `t`
+out of linear memory starting at offset `ptr`, returning the value represented
+as a Python value. The `Opts`/`opts` class/parameter contains the
+[`canonopt`] immediates supplied as part of `canon lift`/`canon lower`.
 Presenting the definition of `load` piecewise, we start with the top-level case
 analysis:
 ```python
@@ -280,10 +280,10 @@ def i32_to_char(opts, i):
 Strings are loaded from two `i32` values: a pointer (offset in linear memory)
 and a number of bytes. There are three supported string encodings in [`canonopt`]:
 [UTF-8], [UTF-16] and `latin1+utf16`. This last options allows a *dynamic*
-choice between [Latin-1] and UTF-16, indicated by the high bit of the second `i32`.
-String interface values include their original encoding and byte length as a
+choice between [Latin-1] and UTF-16, indicated by the high bit of the second
+`i32`. String values include their original encoding and byte length as a
 "hint" that enables `store_string` (defined below) to make better up-front
-allocation size choices in many cases. Thus, the interface value produced by
+allocation size choices in many cases. Thus, the value produced by
 `load_string` isn't simply a Python `str`, but a *tuple* containing a `str`,
 the original encoding and the original byte length.
 ```python
@@ -398,7 +398,7 @@ def unpack_flags_from_int(i, labels):
 
 ### Storing
 
-The `store` function defines how to write a value `v` of a given interface type
+The `store` function defines how to write a value `v` of a given value type
 `t` into linear memory starting at offset `ptr`. Presenting the definition of
 `store` piecewise, we start with the top-level case analysis:
 ```python
@@ -465,9 +465,9 @@ not to do. To avoid multiple passes, the canonical ABI instead uses a `realloc`
 approach to update the allocation size during the single copy. A blind
 `realloc` approach would normally suffer from multiple reallocations per string
 (e.g., using the standard doubling-growth strategy). However, as already shown
-in `load_string` above, interface-typed strings come with two useful hints:
-their original encoding and byte length. From this hint data, `store_string` can
-do a much better job minimizing the number of reallocations.
+in `load_string` above, string values come with two useful hints: their
+original encoding and byte length. From this hint data, `store_string` can do a
+much better job minimizing the number of reallocations.
 
 We start with a case analysis to enumerate all the meaningful encoding
 combinations, subdividing the `latin1+utf16` encoding into either `latin1` or
@@ -716,9 +716,9 @@ With only the definitions above, the Canonical ABI would be forced to place all
 parameters and results in linear memory. While this is necessary in the general
 case, in many cases performance can be improved by passing small-enough values
 in registers by using core function parameters and results. To support this
-optimization, the Canonical ABI defines `flatten` to map interface function
+optimization, the Canonical ABI defines `flatten` to map component function
 types to core function types by attempting to decompose all the
-non-dynamically-sized interface types into core parameters and results.
+non-dynamically-sized component value types into core value types.
 
 For a variety of [practical][Implementation Limits] reasons, we need to limit
 the total number of flattened parameters and results, falling back to storing
@@ -731,8 +731,8 @@ When there are too many flat values, in general, a single `i32` pointer can be
 passed instead (pointing to a tuple in linear memory). When lowering *into*
 linear memory, this requires the Canonical ABI to call `realloc` (in `lower`
 below) to allocate space to put the tuple. As an optimization, when lowering
-the return value of an imported function (lowered by `canon.lower`), the caller
-can have already allocated space for the return value (e.g., efficiently on the
+the return value of an imported function (via `canon lower`), the caller can
+have already allocated space for the return value (e.g., efficiently on the
 stack), passing in an `i32` pointer as an parameter instead of returning an
 `i32` as a return value.
 
@@ -749,9 +749,9 @@ def flatten(functype, context):
   flat_results = flatten_type(functype.result)
   if len(flat_results) > MAX_FLAT_RESULTS:
     match context:
-      case 'canon.lift':
+      case 'lift':
         flat_results = ['i32']
-      case 'canon.lower':
+      case 'lower':
         flat_params += ['i32']
         flat_results = []
 
@@ -807,10 +807,10 @@ def join(a, b):
 ### Flat Lifting
 
 The `lift_flat` function defines how to convert zero or more core values into a
-single high-level value of interface type `t`. The values are given by a value
-iterator that iterates over a complete parameter or result list and asserts
-that the expected and actual types line up. Presenting the definition of
-`lift_flat` piecewise, we start with the top-level case analysis:
+single high-level value of type `t`. The values are given by a value iterator
+that iterates over a complete parameter or result list and asserts that the
+expected and actual types line up. Presenting the definition of `lift_flat`
+piecewise, we start with the top-level case analysis:
 ```python
 @dataclass
 class Value:
@@ -849,10 +849,10 @@ def lift_flat(opts, vi, t):
 ```
 
 Integers are lifted from core `i32` or `i64` values using the signedness of the
-interface type to interpret the high-order bit. When the interface type is
-narrower than an `i32`, the Canonical ABI specifies a dynamic range check in
-order to catch bugs. The conversion logic here assumes that `i32` values are
-always represented as unsigned Python `int`s and thus lifting to a signed type
+target type to interpret the high-order bit. When the target type is narrower
+than an `i32`, the Canonical ABI specifies a dynamic range check in order to
+catch bugs. The conversion logic here assumes that `i32` values are always
+represented as unsigned Python `int`s and thus lifting to a signed type
 performs a manual 2s complement conversion in the Python (which would be a
 no-op in hardware).
 ```python
@@ -948,9 +948,9 @@ def lift_flat_flags(vi, labels):
 
 ### Flat Lowering
 
-The `lower_flat` function defines how to convert a value `v` of a given
-interface type `t` into zero or more core values. Presenting the definition of
-`lower_flat` piecewise, we start with the top-level case analysis:
+The `lower_flat` function defines how to convert a value `v` of a given type
+`t` into zero or more core values. Presenting the definition of `lower_flat`
+piecewise, we start with the top-level case analysis:
 ```python
 def lower_flat(opts, v, t):
   match despecialize(t):
@@ -973,9 +973,9 @@ def lower_flat(opts, v, t):
     case Flags(labels)  : return lower_flat_flags(v, labels)
 ```
 
-Since interface-typed values are assumed to in-range and, as previously stated,
+Since component-level values are assumed in-range and, as previously stated,
 core `i32` values are always internally represented as unsigned `int`s,
-unsigned interface values need no extra conversion. Signed interface values are
+unsigned integer values need no extra conversion. Signed integer values are
 converted to unsigned core `i32`s by 2s complement arithmetic (which again
 would be a no-op in hardware):
 ```python
@@ -1044,8 +1044,8 @@ def lower_flat_flags(v, labels):
 ### Lifting and Lowering
 
 The `lift` function defines how to lift a list of at most `max_flat` core
-parameters or results given by the `ValueIter` `vi` into a tuple of interface
-values with types `ts`:
+parameters or results given by the `ValueIter` `vi` into a tuple of values with
+types `ts`:
 ```python
 def lift(opts, max_flat, vi, ts):
   flat_types = flatten_types(ts)
@@ -1058,9 +1058,9 @@ def lift(opts, max_flat, vi, ts):
     return [ lift_flat(opts, vi, t) for t in ts ]
 ```
 
-The `lower` function defines how to lower a list of interface values `vs` of
-types `ts` into a list of at most `max_flat` core values. As already described
-for [`flatten`](#flattening) above, lowering handles the
+The `lower` function defines how to lower a list of component-level values `vs`
+of types `ts` into a list of at most `max_flat` core values. As already
+described for [`flatten`](#flattening) above, lowering handles the
 greater-than-`max_flat` case by either allocating storage with `realloc` or
 accepting a caller-allocated buffer as an out-param:
 ```python
@@ -1086,24 +1086,23 @@ def lower(opts, max_flat, vs, ts, out_param = None):
 ## Canonical ABI built-ins
 
 Using the above supporting definitions, we can describe the static and dynamic
-semantics of [`func`], whose AST is defined in the main explainer as:
+semantics of [`canon`], whose AST is defined in the main explainer as:
 ```
-func     ::= (func <id>? <funcbody>)
-funcbody ::= (canon.lift <functype> <canonopt>* <funcidx>)
-           | (canon.lower <canonopt>* <funcidx>)
+canon     ::= (canon lift <functype> <canonopt>* <core:funcidx> (func <id>?))
+            | (canon lower <canonopt>* <funcidx> (core func <id>?))
 ```
 The following subsections define the static and dynamic semantics of each
 case of `funcbody`.
 
 
-### `canon.lift`
+### `lift`
 
 For a function:
 ```
-(func $f (canon.lift $ft:<functype> $opts:<canonopt>* $callee:<funcidx>))
+(canon lift $ft:<functype> $opts:<canonopt>* $callee:<funcidx> (func $f))
 ```
 validation specifies:
- * `$callee` must have type `flatten($ft, 'canon.lift')`
+ * `$callee` must have type `flatten($ft, 'lift')`
  * `$f` is given type `$ft`
  * a `memory` is present if required by lifting and is a subtype of `(memory 1)`
  * a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
@@ -1112,19 +1111,19 @@ validation specifies:
 When instantiating component instance `$inst`:
 * Define `$f` to be the closure `lambda args: canon_lift($opts, $inst, $callee, $ft, args)`
 
-Thus, `$f` captures `$opts`, `$inst`, `$callee` and `$ft` in a closure which can be
-subsequently exported or passed into a child instance (via `with`). If `$f`
-ends up being called by the host, the host is responsible for, in a
-host-defined manner, conjuring up interface values suitable for passing into
-`lower` and, conversely, consuming the interface values produced by `lift`. For
+Thus, `$f` captures `$opts`, `$inst`, `$callee` and `$ft` in a closure which
+can be subsequently exported or passed into a child instance (via `with`). If
+`$f` ends up being called by the host, the host is responsible for, in a
+host-defined manner, conjuring up component values suitable for passing into
+`lower` and, conversely, consuming the component values produced by `lift`. For
 example, if the host is a native JS runtime, the [JavaScript embedding] would
-specify how native JavaScript values are converted to and from interface
+specify how native JavaScript values are converted to and from component
 values. Alternatively, if the host is a Unix CLI that invokes component exports
 directly from the command line, the CLI could choose to automatically parse
-`argv` into interface values according to the declared interface types of the
-export. In any case, `canon.lift` specifies how these variously-produced
-interface values are consumed as parameters (and produced as results) by a
-*single host-agnostic component*.
+`argv` into component-level values according to the declared types of the
+export. In any case, `canon lift` specifies how these variously-produced values
+are consumed as parameters (and produced as results) by a *single host-agnostic
+component*.
 
 The `$inst` captured above is assumed to have at least the following two fields,
 which are used to implement the [component invariants]:
@@ -1165,9 +1164,9 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args):
 There are a number of things to note about this definition:
 
 Uncaught Core WebAssembly [exceptions] result in a trap at component
-boundaries. Thus, if a component wishes to signal an error, it must
-use some sort of explicit interface type such as `expected` (whose `error` case
-particular language bindings may choose to map to and from exceptions).
+boundaries. Thus, if a component wishes to signal an error, it must use some
+sort of explicit type such as `expected` (whose `error` case particular
+language bindings may choose to map to and from exceptions).
 
 The contract assumed by `canon_lift` (and ensured by `canon_lower` below) is
 that the caller of `canon_lift` *must* call `post_return` right after lowering
@@ -1196,14 +1195,14 @@ component linking configurations, hence the eager error helps ensure
 compositionality.
 
 
-### `canon.lower`
+### `lower`
 
 For a function:
 ```
-(func $f (canon.lower $opts:<canonopt>* $callee:<funcidx>))
+(canon lower $opts:<canonopt>* $callee:<funcidx> (core func $f))
 ```
 where `$callee` has type `$ft`, validation specifies:
-* `$f` is given type `flatten($ft, 'canon.lower')`
+* `$f` is given type `flatten($ft, 'lower')`
  * a `memory` is present if required by lifting and is a subtype of `(memory 1)`
  * a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
  * there is no `post-return` in `$opts`
@@ -1249,7 +1248,7 @@ lifting and lowering), with a few exceptions:
   `i32` parameter.
 
 A useful consequence of the above rules for `may_enter` and `may_leave` is that
-attempting to `canon.lower` to a `callee` in the same instance is a guaranteed,
+attempting to `canon lower` to a `callee` in the same instance is a guaranteed,
 immediate trap which a link-time compiler can eagerly compile to an
 `unreachable`. This avoids what would otherwise be a surprising form of memory
 aliasing that could introduce obscure bugs.
@@ -1263,9 +1262,9 @@ the elimination of string operations on the labels of records and variants) as
 well as post-MVP [adapter functions].
 
 
-[Function Definitions]: Explainer.md#function-definitions
-[`canonopt`]: Explainer.md#function-definitions
-[`func`]: Explainer.md#function-definitions
+[Canonical Definitions]: Explainer.md#canonical-definitions
+[`canonopt`]: Explainer.md#canonical-definitions
+[`canon`]: Explainer.md#canonical-definitions
 [Type Definitions]: Explainer.md#type-definitions
 [Component Invariants]: Explainer.md#component-invariants
 [JavaScript Embedding]: Explainer.md#JavaScript-embedding

@@ -312,13 +312,13 @@ def test_flatten(t, params, results):
 
   if len(results) > definitions.MAX_FLAT_RESULTS:
     expect['results'] = ['i32']
-  got = flatten(t, 'canon.lift')
+  got = flatten(t, 'lift')
   assert(got == expect)
 
   if len(results) > definitions.MAX_FLAT_RESULTS:
     expect['params'] += ['i32']
     expect['results'] = []
-  got = flatten(t, 'canon.lower')
+  got = flatten(t, 'lower')
   assert(got == expect)
   
 test_flatten(Func([U8(),Float32(),Float64()],Unit()), ['i32','f32','f64'], [])

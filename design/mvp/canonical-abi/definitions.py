@@ -19,74 +19,74 @@ def trap_if(cond):
   if cond:
     raise Trap()
 
-class InterfaceType: pass
-class Unit(InterfaceType): pass
-class Bool(InterfaceType): pass
-class S8(InterfaceType): pass
-class U8(InterfaceType): pass
-class S16(InterfaceType): pass
-class U16(InterfaceType): pass
-class S32(InterfaceType): pass
-class U32(InterfaceType): pass
-class S64(InterfaceType): pass
-class U64(InterfaceType): pass
-class Float32(InterfaceType): pass
-class Float64(InterfaceType): pass
-class Char(InterfaceType): pass
-class String(InterfaceType): pass
+class ValType: pass
+class Unit(ValType): pass
+class Bool(ValType): pass
+class S8(ValType): pass
+class U8(ValType): pass
+class S16(ValType): pass
+class U16(ValType): pass
+class S32(ValType): pass
+class U32(ValType): pass
+class S64(ValType): pass
+class U64(ValType): pass
+class Float32(ValType): pass
+class Float64(ValType): pass
+class Char(ValType): pass
+class String(ValType): pass
 
 @dataclass
-class List(InterfaceType):
-  t: InterfaceType
+class List(ValType):
+  t: ValType
 
 @dataclass
 class Field:
   label: str
-  t: InterfaceType
+  t: ValType
 
 @dataclass
-class Record(InterfaceType):
+class Record(ValType):
   fields: [Field]
 
 @dataclass
-class Tuple(InterfaceType):
-  ts: [InterfaceType]
+class Tuple(ValType):
+  ts: [ValType]
 
 @dataclass
-class Flags(InterfaceType):
+class Flags(ValType):
   labels: [str]
 
 @dataclass
 class Case:
   label: str
-  t: InterfaceType
+  t: ValType
   refines: str = None
 
 @dataclass
-class Variant(InterfaceType):
+class Variant(ValType):
   cases: [Case]
 
 @dataclass
-class Enum(InterfaceType):
+class Enum(ValType):
   labels: [str]
 
 @dataclass
-class Union(InterfaceType):
-  ts: [InterfaceType]
+class Union(ValType):
+  ts: [ValType]
 
 @dataclass
-class Option(InterfaceType):
-  t: InterfaceType
+class Option(ValType):
+  t: ValType
 
 @dataclass
-class Expected(InterfaceType):
-  ok: InterfaceType
-  error: InterfaceType
+class Expected(ValType):
+  ok: ValType
+  error: ValType
 
 @dataclass
 class Func:
-  params: [InterfaceType]
-  result: InterfaceType
+  params: [ValType]
+  result: ValType
 
 ### Despecialization
 
@@ -603,9 +603,9 @@ def flatten(functype, context):
   flat_results = flatten_type(functype.result)
   if len(flat_results) > MAX_FLAT_RESULTS:
     match context:
-      case 'canon.lift':
+      case 'lift':
         flat_results = ['i32']
-      case 'canon.lower':
+      case 'lower':
         flat_params += ['i32']
         flat_results = []
 
@@ -869,7 +869,7 @@ def lower(opts, max_flat, vs, ts, out_param = None):
       flat_vals += lower_flat(opts, vs[i], ts[i])
     return flat_vals
 
-### `canon.lift`
+### `lift`
 
 class Instance:
   may_leave = True
@@ -898,7 +898,7 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args):
 
   return (result, post_return)
 
-### `canon.lower`
+### `lower`
 
 def canon_lower(caller_opts, caller_instance, callee, functype, flat_args):
   trap_if(not caller_instance.may_leave)

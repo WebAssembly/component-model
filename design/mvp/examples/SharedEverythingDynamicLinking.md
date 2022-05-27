@@ -157,11 +157,11 @@ would look like:
     (with "libc" (instance $libc))
     (with "libzip" (instance $libzip))
   ))
-  (func (export "zip") (canon.lift
-    (func (param (list u8)) (result (list u8)))
-    (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
+  (func $zip (param (list u8)) (result (list u8)) (canon lift
     (func $main "zip")
+    (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
   ))
+  (export "zip" (func $zip))
 )
 ```
 Here, `zipper` links its own private module code (`$Main`) with the shareable
@@ -236,11 +236,11 @@ component-aware `clang`, the resulting component would look like:
     (with "libc" (instance $libc))
     (with "libimg" (instance $libimg))
   ))
-  (func (export "transform") (canon.lift
-    (func (param (list u8)) (result (list u8)))
-    (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
+  (func $transform (param (list u8)) (result (list u8)) (canon lift
     (func $main "transform")
+    (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
   ))
+  (export "transform" (func $transform))
 )
 ```
 Here, we see the general pattern emerging of the dependency DAG between
@@ -283,24 +283,24 @@ components. The resulting component could look like:
   ))
 
   (instance $libc (instantiate (module $Libc)))
-  (func $zip (canon.lower
-    (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
+  (func $zip (canon lower
     (func $zipper "zip")
-  ))
-  (func $transform (canon.lower
     (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
+  ))
+  (func $transform (canon lower
     (func $imgmgk "transform")
+    (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
   ))
   (instance $main (instantiate (module $Main)
     (with "libc" (instance $libc))
     (with "zipper" (instance (export "zip" (func $zipper "zip"))))
     (with "imgmgk" (instance (export "transform" (func $imgmgk "transform"))))
   ))
-  (func (export "run") (canon.lift
-    (func (param string) (result string))
-    (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
+  (func $run (param string) (result string) (canon lift
     (func $main "run")
+    (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
   ))
+  (export "run" (func $run))
 )
 ```
 Note here that `$Libc` is passed to the nested `zipper` and `imgmgk` instances
