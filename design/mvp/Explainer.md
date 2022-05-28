@@ -307,7 +307,7 @@ is desugared into:
 Lastly, for symmetry with [imports][func-import-abbrev], aliases can be written
 in an inverted form that puts the sort first:
 ```wasm
-(func $f (import "i" "f"))            ≡ (import "i" "f" (func $f))             (WebAssembly 1.0)
+(func $f (import "i" "f") ...type...) ≡ (import "i" "f" (func $f ...type...))       (WebAssembly 1.0)
 (func $g (alias export $i "g1"))      ≡ (alias export $i "g1" (func $g))
 (core func $g (alias export $i "g1")) ≡ (core alias export $i "g1" (func $g))
 ```
@@ -675,9 +675,9 @@ stack-switching in component function signatures.
 Similar to the `import` and `alias` abbreviations shown above, `canon`
 definitions can also be written in an inverted form that puts the sort first:
 ```wasm
-      (func $f ...type... (import "i" "f")) ≡ (import "i" "f" (func $f ...type...))       (WebAssembly 1.0)
-      (func $h ...type... (canon lift ...)) ≡ (canon lift ... (func $h ...type...))
-(core func $h ...type... (canon lower ...)) ≡ (canon lower ... (core func $h ...type...))
+(func $f (import "i" "f") ...type...) ≡ (import "i" "f" (func $f ...type...))       (WebAssembly 1.0)
+(func $g ...type... (canon lift ...)) ≡ (canon lift ... (func $g ...type...))
+(core func $h (canon lower ...))      ≡ (canon lower ... (core func $h))
 ```
 Note: in the future, `canon` may be generalized to define other sorts than
 functions (such as types), hence the explicit `sort`.
