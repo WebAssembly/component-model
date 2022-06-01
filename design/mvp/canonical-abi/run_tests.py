@@ -99,20 +99,20 @@ t = Flags(['a','b'])
 test(t, [0], {'a':False,'b':False})
 test(t, [2], {'a':False,'b':True})
 test(t, [3], {'a':True,'b':True})
-test(t, [4], None)
+test(t, [4], {'a':False,'b':False})
 test(Flags([str(i) for i in range(33)]), [0xffffffff,0x1], { str(i):True for i in range(33) })
 t = Variant([Case('x',U8()),Case('y',Float32()),Case('z',Unit())])
 test(t, [0,42], {'x': 42})
-test(t, [0,256], None)
+test(t, [0,256], {'x': 0})
 test(t, [1,0x4048f5c3], {'y': 3.140000104904175})
 test(t, [2,0xffffffff], {'z': {}})
 t = Union([U32(),U64()])
 test(t, [0,42], {'0':42})
-test(t, [0,(1<<35)], None)
+test(t, [0,(1<<35)], {'0':0})
 test(t, [1,(1<<35)], {'1':(1<<35)})
 t = Union([Float32(), U64()])
 test(t, [0,0x4048f5c3], {'0': 3.140000104904175})
-test(t, [0,(1<<35)], None)
+test(t, [0,(1<<35)], {'0': 0})
 test(t, [1,(1<<35)], {'1': (1<<35)})
 t = Union([Float64(), U64()])
 test(t, [0,0x40091EB851EB851F], {'0': 3.14})
@@ -121,7 +121,7 @@ test(t, [1,(1<<35)], {'1': (1<<35)})
 t = Union([U8()])
 test(t, [0,42], {'0':42})
 test(t, [1,256], None)
-test(t, [0,256], None)
+test(t, [0,256], {'0':0})
 t = Union([Tuple([U8(),Float32()]), U64()])
 test(t, [0,42,3.14], {'0': {'0':42, '1':3.14}})
 test(t, [1,(1<<35),0], {'1': (1<<35)})
@@ -145,15 +145,15 @@ def test_pairs(t, pairs):
   for arg,expect in pairs:
     test(t, [arg], expect)
 
-test_pairs(Bool(), [(0,False),(1,True),(2,None),(4294967295,None)])
-test_pairs(U8(), [(127,127),(128,128),(255,255),(256,None),
-                  (4294967295,None),(4294967168,None),(4294967167,None)])
-test_pairs(S8(), [(127,127),(128,None),(255,None),(256,None),
-                  (4294967295,-1),(4294967168,-128),(4294967167,None)])
-test_pairs(U16(), [(32767,32767),(32768,32768),(65535,65535),(65536,None),
-                   ((1<<32)-1,None),((1<<32)-32768,None),((1<<32)-32769,None)])
-test_pairs(S16(), [(32767,32767),(32768,None),(65535,None),(65536,None),
-                   ((1<<32)-1,-1),((1<<32)-32768,-32768),((1<<32)-32769,None)])
+test_pairs(Bool(), [(0,False),(1,True),(2,True),(4294967295,True)])
+test_pairs(U8(), [(127,127),(128,128),(255,255),(256,0),
+                  (4294967295,255),(4294967168,128),(4294967167,127)])
+test_pairs(S8(), [(127,127),(128,-128),(255,-1),(256,0),
+                  (4294967295,-1),(4294967168,-128),(4294967167,127)])
+test_pairs(U16(), [(32767,32767),(32768,32768),(65535,65535),(65536,0),
+                   ((1<<32)-1,65535),((1<<32)-32768,32768),((1<<32)-32769,32767)])
+test_pairs(S16(), [(32767,32767),(32768,-32768),(65535,-1),(65536,0),
+                   ((1<<32)-1,-1),((1<<32)-32768,-32768),((1<<32)-32769,32767)])
 test_pairs(U32(), [((1<<31)-1,(1<<31)-1),(1<<31,1<<31),(((1<<32)-1),(1<<32)-1)])
 test_pairs(S32(), [((1<<31)-1,(1<<31)-1),(1<<31,-(1<<31)),((1<<32)-1,-1)])
 test_pairs(U64(), [((1<<63)-1,(1<<63)-1), (1<<63,1<<63), ((1<<64)-1,(1<<64)-1)])
@@ -242,7 +242,7 @@ def test_heap(t, expect, args, byte_array):
 
 test_heap(List(Unit()), [{},{},{}], [0,3], [])
 test_heap(List(Bool()), [True,False,True], [0,3], [1,0,1])
-test_heap(List(Bool()), None, [0,3], [1,0,2])
+test_heap(List(Bool()), [True,False,True], [0,3], [1,0,2])
 test_heap(List(Bool()), [True,False,True], [3,3], [0xff,0xff,0xff, 1,0,1])
 test_heap(List(U8()), [1,2,3], [0,3], [1,2,3])
 test_heap(List(U16()), [1,2,3], [0,3], [1,0, 2,0, 3,0 ])
@@ -286,22 +286,25 @@ test_heap(List(Union([U8()])), [{'0':6},{'0':7},{'0':8}], [0,3],
 t = List(Flags(['a','b']))
 test_heap(t, [{'a':False,'b':False},{'a':False,'b':True},{'a':True,'b':True}], [0,3],
           [0,2,3])
-test_heap(t, None, [0,3],
+test_heap(t, [{'a':False,'b':False},{'a':False,'b':True},{'a':False,'b':False}], [0,3],
           [0,2,4])
 t = List(Flags([str(i) for i in range(9)]))
-test_heap(t, [{ str(i):b for i in range(9) } for b in [True,False]], [0,2],
+v = [{ str(i):b for i in range(9) } for b in [True,False]]
+test_heap(t, v, [0,2],
           [0xff,0x1, 0,0])
-test_heap(t, None, [0,2],
+test_heap(t, v, [0,2],
           [0xff,0x3, 0,0])
 t = List(Flags([str(i) for i in range(17)]))
-test_heap(t, [{ str(i):b for i in range(17) } for b in [True,False]], [0,2],
+v = [{ str(i):b for i in range(17) } for b in [True,False]]
+test_heap(t, v, [0,2],
           [0xff,0xff,0x1,0, 0,0,0,0])
-test_heap(t, None, [0,2],
+test_heap(t, v, [0,2],
           [0xff,0xff,0x3,0, 0,0,0,0])
 t = List(Flags([str(i) for i in range(33)]))
-test_heap(t, [{ str(i):b for i in range(33) } for b in [True,False]], [0,2],
+v = [{ str(i):b for i in range(33) } for b in [True,False]]
+test_heap(t, v, [0,2],
           [0xff,0xff,0xff,0xff,0x1,0,0,0, 0,0,0,0,0,0,0,0])
-test_heap(t, None, [0,2],
+test_heap(t, v, [0,2],
           [0xff,0xff,0xff,0xff,0x3,0,0,0, 0,0,0,0,0,0,0,0])
 
 def test_flatten(t, params, results):
