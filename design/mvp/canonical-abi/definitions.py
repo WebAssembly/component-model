@@ -201,7 +201,7 @@ class Opts:
 def load(opts, ptr, t):
   assert(ptr == align_to(ptr, alignment(t)))
   match despecialize(t):
-    case Bool()         : return narrow_uint_to_bool(load_int(opts, ptr, 1))
+    case Bool()         : return convert_int_to_bool(load_int(opts, ptr, 1))
     case U8()           : return load_int(opts, ptr, 1)
     case U16()          : return load_int(opts, ptr, 2)
     case U32()          : return load_int(opts, ptr, 4)
@@ -227,9 +227,8 @@ def load_int(opts, ptr, nbytes, signed = False):
 
 #
 
-def narrow_uint_to_bool(i):
+def convert_int_to_bool(i):
   assert(i >= 0)
-  trap_if(i > 1)
   return bool(i)
 
 #
@@ -352,7 +351,6 @@ def unpack_flags_from_int(i, labels):
   for l in labels:
     record[l] = bool(i & 1)
     i >>= 1
-  trap_if(i)
   return record
 
 ### Storing
@@ -666,7 +664,7 @@ class ValueIter:
 
 def lift_flat(opts, vi, t):
   match despecialize(t):
-    case Bool()         : return narrow_uint_to_bool(vi.next('i32'))
+    case Bool()         : return convert_int_to_bool(vi.next('i32'))
     case U8()           : return lift_flat_unsigned(vi, 32, 8)
     case U16()          : return lift_flat_unsigned(vi, 32, 16)
     case U32()          : return lift_flat_unsigned(vi, 32, 32)
@@ -689,17 +687,14 @@ def lift_flat(opts, vi, t):
 def lift_flat_unsigned(vi, core_width, t_width):
   i = vi.next('i' + str(core_width))
   assert(0 <= i < (1 << core_width))
-  trap_if(i >= (1 << t_width))
-  return i
+  return i % (1 << t_width)
 
 def lift_flat_signed(vi, core_width, t_width):
   i = vi.next('i' + str(core_width))
   assert(0 <= i < (1 << core_width))
+  i %= (1 << t_width)
   if i >= (1 << (t_width - 1)):
-    i -= (1 << core_width)
-    trap_if(i < -(1 << (t_width - 1)))
-    return i
-  trap_if(i >= (1 << (t_width - 1)))
+    return i - (1 << t_width)
   return i
 
 #
@@ -736,8 +731,8 @@ def lift_flat_variant(opts, vi, cases):
       x = vi.next(have)
       match (have, want):
         case ('i32', 'f32') : return reinterpret_i32_as_float(x)
-        case ('i64', 'i32') : return narrow_i64_to_i32(x)
-        case ('i64', 'f32') : return reinterpret_i32_as_float(narrow_i64_to_i32(x))
+        case ('i64', 'i32') : return wrap_i64_to_i32(x)
+        case ('i64', 'f32') : return reinterpret_i32_as_float(wrap_i64_to_i32(x))
         case ('i64', 'f64') : return reinterpret_i64_as_float(x)
         case _              : return x
   v = lift_flat(opts, CoerceValueIter(), case.t)
@@ -745,10 +740,9 @@ def lift_flat_variant(opts, vi, cases):
     _ = vi.next(have)
   return { case_label_with_refinements(case, cases): v }
 
-def narrow_i64_to_i32(i):
+def wrap_i64_to_i32(i):
   assert(0 <= i < (1 << 64))
-  trap_if(i >= (1 << 32))
-  return i
+  return i % (1 << 32)
 
 #
 

@@ -207,7 +207,7 @@ class Opts:
 def load(opts, ptr, t):
   assert(ptr == align_to(ptr, alignment(t)))
   match despecialize(t):
-    case Bool()         : return narrow_uint_to_bool(load_int(opts, ptr, 1))
+    case Bool()         : return convert_int_to_bool(load_int(opts, ptr, 1))
     case U8()           : return load_int(opts, ptr, 1)
     case U16()          : return load_int(opts, ptr, 2)
     case U32()          : return load_int(opts, ptr, 4)
@@ -234,12 +234,11 @@ def load_int(opts, ptr, nbytes, signed = False):
   return int.from_bytes(opts.memory[ptr : ptr+nbytes], 'little', signed=signed)
 ```
 
-As a general rule, the Canonical ABI traps when given extraneous bits, so the
-narrowing conversion from a byte to a `bool` traps if the high 7 bits are set.
+Integer-to-boolean conversions treats `0` as `false` and all other bit-patterns
+as `true`:
 ```python
-def narrow_uint_to_bool(i):
+def convert_int_to_bool(i):
   assert(i >= 0)
-  trap_if(i > 1)
   return bool(i)
 ```
 
@@ -392,7 +391,6 @@ def unpack_flags_from_int(i, labels):
   for l in labels:
     record[l] = bool(i & 1)
     i >>= 1
-  trap_if(i)
   return record
 ```
 
@@ -829,7 +827,7 @@ class ValueIter:
 
 def lift_flat(opts, vi, t):
   match despecialize(t):
-    case Bool()         : return narrow_uint_to_bool(vi.next('i32'))
+    case Bool()         : return convert_int_to_bool(vi.next('i32'))
     case U8()           : return lift_flat_unsigned(vi, 32, 8)
     case U16()          : return lift_flat_unsigned(vi, 32, 16)
     case U32()          : return lift_flat_unsigned(vi, 32, 32)
@@ -850,26 +848,22 @@ def lift_flat(opts, vi, t):
 
 Integers are lifted from core `i32` or `i64` values using the signedness of the
 target type to interpret the high-order bit. When the target type is narrower
-than an `i32`, the Canonical ABI specifies a dynamic range check in order to
-catch bugs. The conversion logic here assumes that `i32` values are always
-represented as unsigned Python `int`s and thus lifting to a signed type
-performs a manual 2s complement conversion in the Python (which would be a
-no-op in hardware).
+than an `i32`, the Canonical ABI ignores the unused high bits (like `load_int`).
+The conversion logic here assumes that `i32` values are always represented as
+unsigned Python `int`s and thus lifting to a signed type performs a manual 2s
+complement conversion in the Python (which would be a no-op in hardware).
 ```python
 def lift_flat_unsigned(vi, core_width, t_width):
   i = vi.next('i' + str(core_width))
   assert(0 <= i < (1 << core_width))
-  trap_if(i >= (1 << t_width))
-  return i
+  return i % (1 << t_width)
 
 def lift_flat_signed(vi, core_width, t_width):
   i = vi.next('i' + str(core_width))
   assert(0 <= i < (1 << core_width))
+  i %= (1 << t_width)
   if i >= (1 << (t_width - 1)):
-    i -= (1 << core_width)
-    trap_if(i < -(1 << (t_width - 1)))
-    return i
-  trap_if(i >= (1 << (t_width - 1)))
+    return i - (1 << (t_width - 1))
   return i
 ```
 
@@ -917,8 +911,8 @@ def lift_flat_variant(opts, vi, cases):
       x = vi.next(have)
       match (have, want):
         case ('i32', 'f32') : return reinterpret_i32_as_float(x)
-        case ('i64', 'i32') : return narrow_i64_to_i32(x)
-        case ('i64', 'f32') : return reinterpret_i32_as_float(narrow_i64_to_i32(x))
+        case ('i64', 'i32') : return wrap_i64_to_i32(x)
+        case ('i64', 'f32') : return reinterpret_i32_as_float(wrap_i64_to_i32(x))
         case ('i64', 'f64') : return reinterpret_i64_as_float(x)
         case _              : return x
   v = lift_flat(opts, CoerceValueIter(), case.t)
@@ -926,10 +920,9 @@ def lift_flat_variant(opts, vi, cases):
     _ = vi.next(have)
   return { case_label_with_refinements(case, cases): v }
 
-def narrow_i64_to_i32(i):
+def wrap_i64_to_i32(i):
   assert(0 <= i < (1 << 64))
-  trap_if(i >= (1 << 32))
-  return i
+  return i % (1 << 32)
 ```
 
 Finally, flags are lifted by OR-ing together all the flattened `i32` values
