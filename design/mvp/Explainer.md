@@ -1110,4 +1110,4 @@ and will be added over the coming months to complete the MVP proposal:
 
 [Scoping and Layering]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8
 [Resource and Handle Types]: https://docs.google.com/presentation/d/1ikwS2Ps-KLXFofuS5VAs6Bn14q4LBEaxMjPfLj61UZE
-[Future and Stream Types]: https://docs.google.com/presentation/d/1WtnO_WlaoZu1wp4gI93yc7T_fWTuq3RZp8XUHlrQHl4
+[Future and Stream Types]: https://docs.google.com/presentation/d/1MNVOZ8hdofO3tI0szg_i-Yoy0N2QPU2C--LzVuoGSlE
