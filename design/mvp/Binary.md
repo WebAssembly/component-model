@@ -240,8 +240,10 @@ Notes:
   access to `memory` or `realloc`, then validation requires these options to be
   present. If present, `realloc` must have core type
   `(func (param i32 i32 i32 i32) (result i32))`.
-* `post-return` is always optional, but, if present, must have core type
-  `(func)`.
+* The `post-return` option is only valid for `canon lift` and it is always
+  optional; if present, it must have core type `(func (param ...))` where the
+  number and types of the parameters must match the results of the core function
+  being lifted and itself have no result values.
 
 
 ## Start Definitions
