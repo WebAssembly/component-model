@@ -211,6 +211,11 @@ Notes:
   in type definitions from containing components.
 * Validation of `externdesc` requires the various `typeidx` type constructors
   to match the preceding `sort`.
+* Validation of record field names, variant case names, flag names, and enum case
+  names requires that the name be unique for the record, variant, flags, or enum
+  type definition.
+* Validation of the optional `refines` clause of a variant case requires that
+  the case index is within bounds for the variant type's cases.
 
 
 ## Canonical Definitions
