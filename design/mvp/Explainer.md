@@ -430,7 +430,8 @@ componenttype ::= (component <componentdecl>*)
 instancetype  ::= (instance <instancedecl>*)
 componentdecl ::= <importdecl>
                 | <instancedecl>
-instancedecl  ::= <type>
+instancedecl  ::= core-prefix(<core:type>)
+                | <type>
                 | <alias>
                 | <exportdecl>
 importdecl    ::= (import <name> bind-id(<externdesc>))

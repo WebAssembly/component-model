@@ -183,11 +183,12 @@ param         ::= 0x00 t:<valtype>                     => (param t)
                 | 0x01 n:<name> t:<valtype>            => (param n t)
 componenttype ::= 0x41 cd*:vec(<componentdecl>)        => (component cd*)
 instancetype  ::= 0x42 id*:vec(<instancedecl>)         => (instance id*)
-componentdecl ::= 0x00 id:<importdecl>                 => id
+componentdecl ::= 0x03 id:<importdecl>                 => id
                 | id:<instancedecl>                    => id
-instancedecl  ::= 0x01 t:<type>                        => t
+instancedecl  ::= 0x00 t:<core:type>                   => t
+                | 0x01 t:<type>                        => t
                 | 0x02 a:<alias>                       => a
-                | 0x03 ed:<exportdecl>                 => ed
+                | 0x04 ed:<exportdecl>                 => ed
 importdecl    ::= n:<name> ed:<externdesc>             => (import n ed)
 exportdecl    ::= n:<name> ed:<externdesc>             => (export n ed)
 externdesc    ::= 0x00 0x11 i:<core:typeidx>           => (core module (type i))
