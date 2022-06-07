@@ -215,7 +215,8 @@ Notes:
   names requires that the name be unique for the record, variant, flags, or enum
   type definition.
 * Validation of the optional `refines` clause of a variant case requires that
-  the case index is within bounds for the variant type's cases.
+  the case index is less than the current case's index (and therefore
+  cases are acyclic).
 
 
 ## Canonical Definitions

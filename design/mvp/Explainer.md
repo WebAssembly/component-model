@@ -415,7 +415,7 @@ defvaltype    ::= unit
                 | float32 | float64
                 | char | string
                 | (record (field <name> <valtype>)*)
-                | (variant (case <name> <valtype> (refines <name>)?)+)
+                | (variant (case <id>? <name> <valtype> (refines <id>)?)+)
                 | (list <valtype>)
                 | (tuple <valtype>*)
                 | (flags <name>*)
