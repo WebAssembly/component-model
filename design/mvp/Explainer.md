@@ -616,9 +616,9 @@ canon    ::= (canon lift core-prefix(<core:funcidx>) <canonopt>* bind-id(<extern
 canonopt ::= string-encoding=utf8
            | string-encoding=utf16
            | string-encoding=latin1+utf16
-           | (memory core-prefix(<core:memidx>))
-           | (realloc core-prefix(<core:funcidx>))
-           | (post-return core-prefix(<core:funcidx>))
+           | (memory <core:memidx>)
+           | (realloc <core:funcidx>)
+           | (post-return <core:funcidx>)
 ```
 While the production `externdesc` accepts any `sort`, the validation rules
 for `canon lift` would only allow the `func` sort. In the future, other sorts
@@ -697,7 +697,7 @@ takes a string, does some logging, then returns a string.
   (core instance $libc (instantiate $Libc))
   (core func $log (canon lower
     (func $logging "log")
-    (memory (core memory $libc "mem")) (realloc (core func $libc "realloc"))
+    (memory (core memory $libc "mem")) (realloc (func $libc "realloc"))
   ))
   (core module $Main
     (import "libc" "memory" (memory 1))
@@ -713,7 +713,7 @@ takes a string, does some logging, then returns a string.
   ))
   (func $run (param string) (result string) (canon lift
     (core func $main "run")
-    (memory (core memory $libc "mem")) (realloc (core func $libc "realloc"))
+    (memory $libc "mem") (realloc (func $libc "realloc"))
   ))
   (export "run" (func $run))
 )
@@ -770,7 +770,7 @@ exported string at instantiation time:
   (core instance $main (instantiate $Main (with "libc" (instance $libc))))
   (func $start (param string) (result string) (canon lift
     (core func $main "start")
-    (memory (core memory $libc "mem")) (realloc (core func $libc "realloc"))
+    (memory $libc "mem") (realloc (func $libc "realloc"))
   ))
   (start $start (value $name) (result (value $greeting)))
   (export "greeting" (value $greeting))
