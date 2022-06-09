@@ -159,7 +159,7 @@ would look like:
   ))
   (func $zip (param (list u8)) (result (list u8)) (canon lift
     (func $main "zip")
-    (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
+    (memory $libc "memory") (realloc (func $libc "realloc"))
   ))
   (export "zip" (func $zip))
 )
@@ -238,7 +238,7 @@ component-aware `clang`, the resulting component would look like:
   ))
   (func $transform (param (list u8)) (result (list u8)) (canon lift
     (func $main "transform")
-    (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
+    (memory $libc "memory") (realloc (func $libc "realloc"))
   ))
   (export "transform" (func $transform))
 )
@@ -285,11 +285,11 @@ components. The resulting component could look like:
   (instance $libc (instantiate (module $Libc)))
   (func $zip (canon lower
     (func $zipper "zip")
-    (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
+    (memory $libc "memory") (realloc (func $libc "realloc"))
   ))
   (func $transform (canon lower
     (func $imgmgk "transform")
-    (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
+    (memory $libc "memory") (realloc (func $libc "realloc"))
   ))
   (instance $main (instantiate (module $Main)
     (with "libc" (instance $libc))
@@ -298,7 +298,7 @@ components. The resulting component could look like:
   ))
   (func $run (param string) (result string) (canon lift
     (func $main "run")
-    (memory (memory $libc "memory")) (realloc (func $libc "realloc"))
+    (memory $libc "memory") (realloc (func $libc "realloc"))
   ))
   (export "run" (func $run))
 )
