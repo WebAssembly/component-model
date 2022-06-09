@@ -357,6 +357,7 @@ core:deftype    ::= <core:functype>                           (WebAssembly 1.0)
 core:moduletype ::= (module <core:moduledecl>*)
 core:moduledecl ::= <core:importdecl>
                   | <core:type>
+                  | <core:alias>
                   | <core:exportdecl>
 core:importdecl ::= (import <name> <name> <core:importdesc>)
 core:exportdecl ::= (export <name> <core:exportdesc>)
@@ -387,7 +388,7 @@ type imports local to the module type itself. For example, in the future, the
 following module type would be expressible:
 ```
 (component $C
-  (type $M (module
+  (core type $M (module
     (import "" "T" (type $T))
     (type $PairT (struct (field (ref $T)) (field (ref $T))))
     (export "make_pair" (func (param (ref $T)) (result (ref $PairT))))
@@ -397,6 +398,36 @@ following module type would be expressible:
 In this example, `$M` has a distinct type index space from `$C`, where element
 0 is the imported type, element 1 is the `struct` type, and element 2 is an
 implicitly-created `func` type referring to both.
+
+Lastly, the `core:alias` module declarator allows a module type definition to
+reuse (rather than redefine) type definitions in the enclosing component's core
+type index space via `outer` `type` alias. In the MVP, validation restricts
+`core:alias` module declarators to *only* allow `outer` `type` aliases but,
+in the future, more kinds of aliases would be meaningful and allowed.
+
+As an example, the following component defines two semantically-equivalent
+module types, where the former defines the function type via `type` declarator
+and the latter refers via `alias` declarator. Note that, since core type
+definitions are validated in a Core WebAssembly context that doesn't "know"
+anything about components, the module type `$C2` can't name `$C` directly in
+the text format but must instead use the appropriate [de Bruijn] index (`1`).
+In both cases, the defined/aliased function type is given index `0` since
+module types always start with an empty type index space.
+```wasm
+(component $C
+  (core type $C1 (module
+    (type (func (param i32) (result i32)))
+    (import "a" (func (type 0)))
+    (export "b" (func (type 0)))
+  ))
+  (core type $F (func (param i32) (result i32)))
+  (core type $C2 (module
+    (alias outer 1 $F (type))
+    (import "a" (func (type 0)))
+    (export "b" (func (type 0)))
+  ))
+)
+```
 
 Component-level type definitions are symmetric to core-level type definitions,
 but use a completely different set of value types. Unlike [`core:valtype`]
@@ -541,28 +572,6 @@ are two main use cases for this in the short-term:
 When [resource and handle types] are added to the explainer, `typebound` will
 be extended with a `sub` option (symmetric to the [type-imports] proposal) that
 allows importing and exporting *abstract* types.
-
-Lastly, component and instance types also include an `alias` declarator for
-projecting the exports out of imported instances and sharing types with outer
-components. As an example, the following component defines two equivalent
-component types, where the former defines the function type via `type`
-declarator and the latter via `alias` declarator. In both cases, the type is
-given index `0` since component types start with an empty type index space.
-```wasm
-(component $C
-  (type $C1 (component
-    (type (func (param string) (result string)))
-    (import "a" (func (type 0)))
-    (export "b" (func (type 0)))
-  ))
-  (type $F (func (param string) (result string)))
-  (type $C2 (component
-    (alias outer $C $F (type))
-    (import "a" (func (type 0)))
-    (export "b" (func (type 0)))
-  ))
-)
-```
 
 With what's defined so far, we can define component types using a mix of inline
 and out-of-line type definitions:

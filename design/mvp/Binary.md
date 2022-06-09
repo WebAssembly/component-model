@@ -131,6 +131,7 @@ core:deftype    ::= ft:<core:functype>                     => ft               (
 core:moduletype ::= 0x50 md*:vec(<core:moduledecl>)        => (module md*)
 core:moduledecl ::= 0x00 i:<core:import>                   => i
                   | 0x01 t:<core:type>                     => t
+                  | 0x02 a:<core:alias>                    => a
                   | 0x03 e:<core:exportdecl>               => e
 core:importdecl ::= i:<core:import>                        => i
 core:exportdecl ::= n:<name> d:<core:importdesc>           => (export n d)
@@ -140,8 +141,11 @@ Notes:
 * Validation of `core:moduledecl` (currently) rejects `core:moduletype` definitions
   inside `type` declarators (i.e., nested core module types).
 * As described in the explainer, each module type is validated with an
-  initially-empty type index space. Outer aliases can be used to pull
-  in type definitions from containing components.
+  initially-empty type index space.
+* Validation of `alias` declarators only allows `outer` `type` aliases.
+  Validation of these aliases cannot see beyond the enclosing core type index
+  space. Since core modules and core module types cannot nest in the MVP, this
+  means that the maximum `ct` in an MVP `alias` declarator is `1`.
 
 ```
 type          ::= dt:<deftype>                         => (type dt)
