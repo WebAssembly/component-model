@@ -102,6 +102,7 @@ Notes:
 ```
 core:alias       ::= sort:<core:sort> target:<core:aliastarget> => (core alias target (sort))
 core:aliastarget ::= 0x00 i:<core:instanceidx> n:<name>         => export i n
+                   | 0x01 ct:<u32> idx:<u32>                    => outer ct idx
 
 alias            ::= sort:<sort> target:<aliastarget>           => (alias target (sort))
 aliastarget      ::= 0x00 i:<instanceidx> n:<name>              => export i n
@@ -115,8 +116,10 @@ Notes:
   of enclosing components and `i` is validated to be a valid
   index in the `sort` index space of the `i`th enclosing component (counting
   outward, starting with `0` referring to the current component).
-* For `outer` aliases, validation restricts the `sort` of the `aliastarget`
-  to one of `type`, `module` or `component`.
+* For `outer` aliases of `core:aliastarget`, validation restricts the `sort` to
+  `type`.
+* For `outer` aliases of `aliastarget`, validation restricts the `sort` to one
+  of `type`, `module` or `component`.
 
 
 ## Type Definitions
