@@ -958,7 +958,7 @@ At a high level, the additional coercions would be:
 | `list` | same as [`sequence`] | same as [`sequence`] |
 | `string` | same as [`USVString`]  | same as [`USVString`] |
 | `tuple` | TBD: maybe a [JS Tuple]? | TBD |
-| `flags` | TBD: maybe a [JS Record]? | same as [`dictionary`] of `boolean` fields |
+| `flags` | TBD: maybe a [JS Record]? | same as [`dictionary`] of optional `boolean` fields with default values of `false` |
 | `enum` | same as [`enum`] | same as [`enum`] |
 | `option` | same as [`T?`] | same as [`T?`] |
 | `union` | same as [`union`] | same as [`union`] |
