@@ -325,7 +325,7 @@ to call imports, which could break other components' single-threaded assumptions
   the imported function to have been explicitly `shared` and thus callable from
   any `fork`ed thread.
 
-[RLBox]: https://plsyssec.github.io/rlbox_sandboxing_api/sphinx/
+[RLBox]: https://docs.rlbox.dev/
 [Principle of Least Authority]: https://en.wikipedia.org/wiki/Principle_of_least_privilege
 [Modular Programming]: https://en.wikipedia.org/wiki/Modular_programming
 [start function]: https://webassembly.github.io/spec/core/intro/overview.html#semantic-phases
