@@ -947,8 +947,8 @@ At a high level, the additional coercions would be:
 | ---- | ----------- | -------------------- |
 | `unit` | `null` | accept everything |
 | `bool` | `true` or `false` | `ToBoolean` |
-| `s8`, `s16`, `s32` | as a Number value | `ToInt32` |
-| `u8`, `u16`, `u32` | as a Number value | `ToUint32` |
+| `s8`, `s16`, `s32` | as a Number value | `ToInt8`, `ToInt16`, `ToInt32` |
+| `u8`, `u16`, `u32` | as a Number value | `ToUint8`, `ToUint16`, `ToUint32` |
 | `s64` | as a BigInt value | `ToBigInt64` |
 | `u64` | as a BigInt value | `ToBigUint64` |
 | `float32`, `float64` | as a Number, mapping the canonical NaN to [JS NaN] | `ToNumber` mapping [JS NaN] to the canonical NaN |
