@@ -80,7 +80,7 @@ inner `func` doesn't need a `core` prefix; the `core` token is used to mark the
 *transition* from parsing component definitions into core definitions.
 
 The [`core:module`] production is unmodified by the Component Model and thus
-components embed Core WebAssemby (text and binary format) modules as currently
+components embed Core WebAssembly (text and binary format) modules as currently
 standardized, allowing reuse of an unmodified Core WebAssembly implementation.
 The next two productions, `core:instance` and `core:alias`, are not currently
 included in Core WebAssembly, but would be if Core WebAssembly adopted the
@@ -265,7 +265,7 @@ via some kind of "`stateful`" type attribute.)
 Both kinds of aliases come with syntactic sugar for implicitly declaring them
 inline:
 
-For `export` aliases, the inline sugar has the form `(sort <instanceidx> <name>+)`
+For `export` aliases, the inline sugar has the form `(<sort> <instanceidx> <name>+)`
 and can be used in place of a `sortidx` or any sort-specific index (such as a
 `typeidx` or `funcidx`). For example, the following snippet uses two inline
 function aliases:
@@ -885,7 +885,7 @@ modules and components to be distinguished by the first 8 bytes of the binary
 (splitting the 32-bit [`core:version`] field into a 16-bit `version` field and
 a 16-bit `layer` field with `0` for modules and `1` for components).
 
-Once compiled, a `WebAssemby.Component` could be instantiated using the
+Once compiled, a `WebAssembly.Component` could be instantiated using the
 existing JS API `WebAssembly.instantiate(Streaming)`. Since components have the
 same basic import/export structure as modules, this mostly just means extending
 the [*read the imports*] logic to support single-level imports as well as
