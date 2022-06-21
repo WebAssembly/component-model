@@ -585,7 +585,7 @@ bytes):
 ```python
 def store_string_to_latin1_or_utf16(opts, src, src_code_units):
   assert(src_code_units <= MAX_STRING_BYTE_LENGTH)
-  ptr = opts.realloc(0, 0, 1, src_code_units)
+  ptr = opts.realloc(0, 0, 2, src_code_units)
   dst_byte_length = 0
   for usv in src:
     if ord(usv) < (1 << 8):
@@ -605,7 +605,7 @@ def store_string_to_latin1_or_utf16(opts, src, src_code_units):
       tagged_code_units = int(len(encoded) / 2) | UTF16_TAG
       return (ptr, tagged_code_units)
   if dst_byte_length < src_code_units:
-    ptr = opts.realloc(ptr, src_code_units, 1, dst_byte_length)
+    ptr = opts.realloc(ptr, src_code_units, 2, dst_byte_length)
   return (ptr, dst_byte_length)
 ```
 
