@@ -1134,6 +1134,7 @@ Given the above closure arguments, `canon_lift` is defined:
 ```python
 def canon_lift(callee_opts, callee_instance, callee, functype, args):
   trap_if(not callee_instance.may_enter)
+  callee_instance.may_enter = False
 
   assert(callee_instance.may_leave)
   callee_instance.may_leave = False
@@ -1145,12 +1146,11 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args):
   except CoreWebAssemblyException:
     trap()
 
-  callee_instance.may_enter = False
   [result] = lift(callee_opts, MAX_FLAT_RESULTS, ValueIter(flat_results), [functype.result])
   def post_return():
-    callee_instance.may_enter = True
     if callee_opts.post_return is not None:
       callee_opts.post_return(flat_results)
+    callee_instance.may_enter = True
 
   return (result, post_return)
 ```
@@ -1161,6 +1161,14 @@ boundaries. Thus, if a component wishes to signal an error, it must use some
 sort of explicit type such as `expected` (whose `error` case particular
 language bindings may choose to map to and from exceptions).
 
+The clearing of `may_enter` for the entire duration of `canon_lift` and the
+fact that `canon_lift` brackets all calls into a component ensure that
+components cannot be reentered, which is a [component invariant]. Furthermore,
+because `may_enter` is not cleared on the exceptional exit path taken by
+`trap()`, if there is a trap during Core WebAssembly execution or
+lifting/lowering, the component is left permanently un-enterable, ensuring the
+lockdown-after-trap [component invariant].
+
 The contract assumed by `canon_lift` (and ensured by `canon_lower` below) is
 that the caller of `canon_lift` *must* call `post_return` right after lowering
 `result`. This ordering ensures that the engine can reliably copy directly from
@@ -1170,22 +1178,12 @@ the callee's linear memory (read by `lift`) into the caller's linear memory
 freed and so the engine would need to eagerly make an intermediate copy in
 `lift`.
 
-Even assuming this `post_return` contract, if the callee could be re-entered
-by the caller in the middle of the caller's `lower` (e.g., via `realloc`), then
-either the engine has to make an eager intermediate copy in `lift` *or* the
-Canonical ABI would have to specify a precise interleaving of side effects
-which is more complicated and would inhibit some optimizations. Instead, the
-`may_enter` guard set before `lift` and cleared in `post_return` prevents this
-re-entrance. Thus, it is the combination of `post_return` and the re-entrance
-guard that ensures `lift` does not need to make an eager copy.
-
 The `may_leave` guard wrapping the lowering of parameters conservatively
-ensures that `realloc` calls during lowering do not accidentally call imports
-that accidentally re-enter the instance that lifted the same parameters.
-While the `may_enter` guards of *those* component instances would also prevent
-this re-entrance, it would be an error that only manifested in certain
-component linking configurations, hence the eager error helps ensure
-compositionality.
+ensures that `realloc` calls during lowering do not call imports that
+indirectly re-enter the instance that lifted the same parameters. While the
+`may_enter` guards of *those* component instances would also prevent this
+re-entrance, it would be an error that only manifested in certain component
+linking configurations, hence the eager error helps ensure compositionality.
 
 
 ### `lower`
@@ -1210,9 +1208,6 @@ and, when called from Core WebAssembly code, calls `canon_lower`, which is defin
 def canon_lower(caller_opts, caller_instance, callee, functype, flat_args):
   trap_if(not caller_instance.may_leave)
 
-  assert(caller_instance.may_enter)
-  caller_instance.may_enter = False
-
   flat_args = ValueIter(flat_args)
   args = lift(caller_opts, MAX_FLAT_PARAMS, flat_args, functype.params)
 
@@ -1224,15 +1219,10 @@ def canon_lower(caller_opts, caller_instance, callee, functype, flat_args):
 
   post_return()
 
-  caller_instance.may_enter = True
   return flat_results
 ```
 The definitions of `canon_lift` and `canon_lower` are mostly symmetric (swapping
 lifting and lowering), with a few exceptions:
-* The calling instance cannot be re-entered over the course of the entire call,
-  not just while lifting the parameters. This ensures not just the needs of the
-  Canonical ABI, but the general non-re-entrance expectations outlined in the
-  [component invariants].
 * The caller does not need a `post-return` function since the Core WebAssembly
   caller simply regains control when `canon_lower` returns, allowing it to free
   (or not) any memory passed as `flat_args`.
