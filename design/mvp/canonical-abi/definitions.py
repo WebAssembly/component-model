@@ -872,6 +872,7 @@ class Instance:
 
 def canon_lift(callee_opts, callee_instance, callee, functype, args):
   trap_if(not callee_instance.may_enter)
+  callee_instance.may_enter = False
 
   assert(callee_instance.may_leave)
   callee_instance.may_leave = False
@@ -883,12 +884,11 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args):
   except CoreWebAssemblyException:
     trap()
 
-  callee_instance.may_enter = False
   [result] = lift(callee_opts, MAX_FLAT_RESULTS, ValueIter(flat_results), [functype.result])
   def post_return():
-    callee_instance.may_enter = True
     if callee_opts.post_return is not None:
       callee_opts.post_return(flat_results)
+    callee_instance.may_enter = True
 
   return (result, post_return)
 
@@ -896,9 +896,6 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args):
 
 def canon_lower(caller_opts, caller_instance, callee, functype, flat_args):
   trap_if(not caller_instance.may_leave)
-
-  assert(caller_instance.may_enter)
-  caller_instance.may_enter = False
 
   flat_args = ValueIter(flat_args)
   args = lift(caller_opts, MAX_FLAT_PARAMS, flat_args, functype.params)
@@ -911,5 +908,4 @@ def canon_lower(caller_opts, caller_instance, callee, functype, flat_args):
 
   post_return()
 
-  caller_instance.may_enter = True
   return flat_results
