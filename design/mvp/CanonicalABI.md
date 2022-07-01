@@ -493,21 +493,21 @@ def store_string_into_range(opts, v):
   match opts.string_encoding:
     case 'utf8':
       match src_simple_encoding:
-        case 'utf8'         : return store_string_copy(opts, src, src_code_units, 1, 'utf-8')
+        case 'utf8'         : return store_string_copy(opts, src, src_code_units, 1, 1, 'utf-8')
         case 'utf16'        : return store_utf16_to_utf8(opts, src, src_code_units)
         case 'latin1'       : return store_latin1_to_utf8(opts, src, src_code_units)
     case 'utf16':
       match src_simple_encoding:
         case 'utf8'         : return store_utf8_to_utf16(opts, src, src_code_units)
-        case 'utf16'        : return store_string_copy(opts, src, src_code_units, 2, 'utf-16-le')
-        case 'latin1'       : return store_string_copy(opts, src, src_code_units, 2, 'utf-16-le')
+        case 'utf16'        : return store_string_copy(opts, src, src_code_units, 2, 2, 'utf-16-le')
+        case 'latin1'       : return store_string_copy(opts, src, src_code_units, 2, 2, 'utf-16-le')
     case 'latin1+utf16':
       match src_encoding:
         case 'utf8'         : return store_string_to_latin1_or_utf16(opts, src, src_code_units)
         case 'utf16'        : return store_string_to_latin1_or_utf16(opts, src, src_code_units)
         case 'latin1+utf16' :
           match src_simple_encoding:
-            case 'latin1'   : return store_string_copy(opts, src, src_code_units, 1, 'latin-1')
+            case 'latin1'   : return store_string_copy(opts, src, src_code_units, 1, 2, 'latin-1')
             case 'utf16'    : return store_probably_utf16_to_latin1_or_utf16(opts, src, src_code_units)
 ```
 
@@ -517,10 +517,10 @@ byte after every Latin-1 byte).
 ```python
 MAX_STRING_BYTE_LENGTH = (1 << 31) - 1
 
-def store_string_copy(opts, src, src_code_units, dst_code_unit_size, dst_encoding):
+def store_string_copy(opts, src, src_code_units, dst_code_unit_size, dst_alignment, dst_encoding):
   dst_byte_length = dst_code_unit_size * src_code_units
   trap_if(dst_byte_length > MAX_STRING_BYTE_LENGTH)
-  ptr = opts.realloc(0, 0, dst_code_unit_size, dst_byte_length)
+  ptr = opts.realloc(0, 0, dst_alignment, dst_byte_length)
   encoded = src.encode(dst_encoding)
   assert(dst_byte_length == len(encoded))
   opts.memory[ptr : ptr+len(encoded)] = encoded
@@ -863,7 +863,7 @@ def lift_flat_signed(vi, core_width, t_width):
   assert(0 <= i < (1 << core_width))
   i %= (1 << t_width)
   if i >= (1 << (t_width - 1)):
-    return i - (1 << (t_width - 1))
+    return i - (1 << t_width)
   return i
 ```
 
