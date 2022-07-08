@@ -1132,9 +1132,12 @@ the outside world through an export.
 
 Given the above closure arguments, `canon_lift` is defined:
 ```python
-def canon_lift(callee_opts, callee_instance, callee, functype, args):
-  trap_if(not callee_instance.may_enter)
-  callee_instance.may_enter = False
+def canon_lift(callee_opts, callee_instance, callee, functype, args, called_as_export):
+  if called_as_export:
+    trap_if(not callee_instance.may_enter)
+    callee_instance.may_enter = False
+  else:
+    assert(not callee_instance.may_enter)
 
   assert(callee_instance.may_leave)
   callee_instance.may_leave = False
@@ -1150,7 +1153,8 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args):
   def post_return():
     if callee_opts.post_return is not None:
       callee_opts.post_return(flat_results)
-    callee_instance.may_enter = True
+    if called_as_export:
+      callee_instance.may_enter = True
 
   return (result, post_return)
 ```
@@ -1161,29 +1165,20 @@ boundaries. Thus, if a component wishes to signal an error, it must use some
 sort of explicit type such as `expected` (whose `error` case particular
 language bindings may choose to map to and from exceptions).
 
-The clearing of `may_enter` for the entire duration of `canon_lift` and the
-fact that `canon_lift` brackets all calls into a component ensure that
-components cannot be reentered, which is a [component invariant]. Furthermore,
-because `may_enter` is not cleared on the exceptional exit path taken by
-`trap()`, if there is a trap during Core WebAssembly execution or
-lifting/lowering, the component is left permanently un-enterable, ensuring the
-lockdown-after-trap [component invariant].
+The `called_as_export` parameter indicates whether `canon_lift` is being called
+as part of a component export or whether this `canon_lift` is being called
+internally (for example, by a child component instance). By clearing
+`may_enter` for the duration of `canon_lift` when called as an export, the
+dynamic traps ensure that components cannot be reentered, which is a [component
+invariant]. Furthermore, because `may_enter` is not cleared on the exceptional
+exit path taken by `trap()`, if there is a trap during Core WebAssembly
+execution or lifting/lowering, the component is left permanently un-enterable,
+ensuring the lockdown-after-trap [component invariant].
 
 The contract assumed by `canon_lift` (and ensured by `canon_lower` below) is
 that the caller of `canon_lift` *must* call `post_return` right after lowering
-`result`. This ordering ensures that the engine can reliably copy directly from
-the callee's linear memory (read by `lift`) into the caller's linear memory
-(written by `lower`). If `post_return` were called earlier (e.g., before
-`canon_lift` returned), the callee's linear memory would have already been
-freed and so the engine would need to eagerly make an intermediate copy in
-`lift`.
-
-The `may_leave` guard wrapping the lowering of parameters conservatively
-ensures that `realloc` calls during lowering do not call imports that
-indirectly re-enter the instance that lifted the same parameters. While the
-`may_enter` guards of *those* component instances would also prevent this
-re-entrance, it would be an error that only manifested in certain component
-linking configurations, hence the eager error helps ensure compositionality.
+`result`. This ensures that `post_return` can be used to perform cleanup
+actions after the lowering is complete.
 
 
 ### `lower`
@@ -1230,19 +1225,26 @@ lifting and lowering), with a few exceptions:
   the caller pass in a pointer to caller-allocated memory as a final
   `i32` parameter.
 
-A useful consequence of the above rules for `may_enter` and `may_leave` is that
-attempting to `canon lower` to a `callee` in the same instance is a guaranteed,
-immediate trap which a link-time compiler can eagerly compile to an
-`unreachable`. This avoids what would otherwise be a surprising form of memory
-aliasing that could introduce obscure bugs.
+Since any cross-component call necessarily transits through a statically-known
+`canon_lower`+`canon_lift` call pair, an AOT compiler can fuse `canon_lift` and
+`canon_lower` into a single, efficient trampoline. This allows efficient
+compilation of the permissive [subtyping](Subtyping.md) allowed between
+components (including the elimination of string operations on the labels of
+records and variants) as well as post-MVP [adapter functions].
 
-The net effect here is that any cross-component call necessarily
-transits through a composed `canon_lower`/`canon_lift` pair, allowing a link-time
-compiler to fuse the lifting/lowering steps of these two definitions into a
-single, efficient trampoline. This fusion model allows efficient compilation of
-the permissive [subtyping](Subtyping.md) allowed between components (including
-the elimination of string operations on the labels of records and variants) as
-well as post-MVP [adapter functions].
+The `may_leave` flag set during lowering in `canon_lift` and `canon_lower`
+ensures that the relative ordering of the side effects of `lift` and `lower`
+cannot be observed via import calls and thus an implementation may reliably
+interleave `lift` and `lower` whenever making a cross-component call to avoid
+the intermediate copy performed by `lift`. This unobservability of interleaving
+depends on the shared-nothing property of components which guarantees that all
+the low-level state touched by `lift` and `lower` are disjoint. Though it
+should be rare, same-component-instance `canon_lift`+`canon_lower` call pairs
+are technically allowed by the above rules (and may arise unintentionally in
+component reexport scenarios). Such cases can be statically distinguished by
+the AOT compiler as requiring an intermediate copy to implement the above
+`lift`-then-`lower` semantics.
+
 
 
 [Canonical Definitions]: Explainer.md#canonical-definitions

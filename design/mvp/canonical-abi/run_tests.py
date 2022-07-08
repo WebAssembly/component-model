@@ -342,7 +342,7 @@ def test_roundtrip(t, v):
 
   callee_heap = Heap(1000)
   callee_opts = mk_opts(callee_heap.memory, 'utf8', callee_heap.realloc, lambda x: () )
-  lifted_callee = lambda args: canon_lift(callee_opts, callee_instance, callee, ft, args)
+  lifted_callee = lambda args: canon_lift(callee_opts, callee_instance, callee, ft, args, True)
 
   caller_heap = Heap(1000)
   caller_instance = Instance()

@@ -870,9 +870,12 @@ class Instance:
   may_enter = True
   # ...
 
-def canon_lift(callee_opts, callee_instance, callee, functype, args):
-  trap_if(not callee_instance.may_enter)
-  callee_instance.may_enter = False
+def canon_lift(callee_opts, callee_instance, callee, functype, args, called_as_export):
+  if called_as_export:
+    trap_if(not callee_instance.may_enter)
+    callee_instance.may_enter = False
+  else:
+    assert(not callee_instance.may_enter)
 
   assert(callee_instance.may_leave)
   callee_instance.may_leave = False
@@ -888,7 +891,8 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args):
   def post_return():
     if callee_opts.post_return is not None:
       callee_opts.post_return(flat_results)
-    callee_instance.may_enter = True
+    if called_as_export:
+      callee_instance.may_enter = True
 
   return (result, post_return)
 
