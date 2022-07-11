@@ -927,8 +927,7 @@ def wrap_i64_to_i32(i):
 
 Finally, flags are lifted by OR-ing together all the flattened `i32` values
 and then lifting to a record the same way as when loading flags from linear
-memory. The dynamic checks in `unpack_flags_from_int` will trap if any
-bits are set in an `i32` that don't correspond to a flag.
+memory.
 ```python
 def lift_flat_flags(vi, labels):
   i = 0
