@@ -955,7 +955,7 @@ At a high level, the additional coercions would be:
 | `char` | same as [`USVString`] | same as [`USVString`], throw if the USV length is not 1 |
 | `record` | TBD: maybe a [JS Record]? | same as [`dictionary`] |
 | `variant` | TBD | TBD |
-| `list` | same as [`sequence`] | same as [`sequence`] |
+| `list` | create a typed array copy for number types; otherwise produce a JS array (like [`sequence`]) | same as [`sequence`] |
 | `string` | same as [`USVString`]  | same as [`USVString`] |
 | `tuple` | TBD: maybe a [JS Tuple]? | TBD |
 | `flags` | TBD: maybe a [JS Record]? | same as [`dictionary`] of optional `boolean` fields with default values of `false` |
