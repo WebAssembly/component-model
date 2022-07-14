@@ -452,7 +452,7 @@ defvaltype    ::= bool
                 | (enum <name>+)
                 | (union <valtype>+)
                 | (option <valtype>)
-                | (result <valtype> (error <valtype>*)?)
+                | (result <valtype>* (error <valtype>*)?)
 valtype       ::= <typeidx>
                 | <defvaltype>
 functype      ::= (func <paramlist> <resultlist>)
