@@ -20,7 +20,6 @@ def trap_if(cond):
     raise Trap()
 
 class ValType: pass
-class Unit(ValType): pass
 class Bool(ValType): pass
 class S8(ValType): pass
 class U8(ValType): pass
@@ -59,7 +58,7 @@ class Flags(ValType):
 @dataclass
 class Case:
   label: str
-  t: ValType
+  ts: [ValType]
   refines: str = None
 
 @dataclass
@@ -79,26 +78,25 @@ class Option(ValType):
   t: ValType
 
 @dataclass
-class Expected(ValType):
-  ok: ValType
-  error: ValType
+class Result(ValType):
+  ok: [ValType]
+  error: [ValType]
 
 @dataclass
 class Func:
   params: [ValType]
-  result: ValType
+  results: [ValType]
 
 ### Despecialization
 
 def despecialize(t):
   match t:
-    case Tuple(ts)           : return Record([ Field(str(i), t) for i,t in enumerate(ts) ])
-    case Unit()              : return Record([])
-    case Union(ts)           : return Variant([ Case(str(i), t) for i,t in enumerate(ts) ])
-    case Enum(labels)        : return Variant([ Case(l, Unit()) for l in labels ])
-    case Option(t)           : return Variant([ Case("none", Unit()), Case("some", t) ])
-    case Expected(ok, error) : return Variant([ Case("ok", ok), Case("error", error) ])
-    case _                   : return t
+    case Tuple(ts)         : return Record([ Field(str(i), t) for i,t in enumerate(ts) ])
+    case Union(ts)         : return Variant([ Case(str(i), [t]) for i,t in enumerate(ts) ])
+    case Enum(labels)      : return Variant([ Case(l, []) for l in labels ])
+    case Option(t)         : return Variant([ Case("none", []), Case("some", [t]) ])
+    case Result(ok, error) : return Variant([ Case("ok", ok), Case("error", error) ])
+    case _                 : return t
 
 ### Alignment
 
@@ -113,20 +111,25 @@ def alignment(t):
     case Float64()          : return 8
     case Char()             : return 4
     case String() | List(_) : return 4
-    case Record(fields)     : return max_alignment(types_of(fields))
-    case Variant(cases)     : return max_alignment(types_of(cases) + [discriminant_type(cases)])
+    case Record(fields)     : return alignment_tuple(field_types(fields))
+    case Variant(cases)     : return alignment_variant(cases)
     case Flags(labels)      : return alignment_flags(labels)
 
-def types_of(fields_or_cases):
-  return [x.t for x in fields_or_cases]
+#
 
-def max_alignment(ts):
+def field_types(fields):
+  return [f.t for f in fields]
+
+def alignment_tuple(ts):
   a = 1
   for t in ts:
     a = max(a, alignment(t))
   return a
 
 #
+
+def alignment_variant(cases):
+  return max(alignment(discriminant_type(cases)), max_case_alignment(cases))
 
 def discriminant_type(cases):
   n = len(cases)
@@ -136,6 +139,12 @@ def discriminant_type(cases):
     case 1: return U8()
     case 2: return U16()
     case 3: return U32()
+
+def max_case_alignment(cases):
+  a = 1
+  for c in cases:
+    a = max(a, alignment_tuple(c.ts))
+  return a
 
 #
 
@@ -158,28 +167,28 @@ def size(t):
     case Float64()          : return 8
     case Char()             : return 4
     case String() | List(_) : return 8
-    case Record(fields)     : return size_record(fields)
+    case Record(fields)     : return size_tuple(field_types(fields))
     case Variant(cases)     : return size_variant(cases)
     case Flags(labels)      : return size_flags(labels)
 
-def size_record(fields):
+def size_tuple(ts):
   s = 0
-  for f in fields:
-    s = align_to(s, alignment(f.t))
-    s += size(f.t)
-  return align_to(s, alignment(Record(fields)))
+  for t in ts:
+    s = align_to(s, alignment(t))
+    s += size(t)
+  return align_to(s, alignment_tuple(ts))
 
 def align_to(ptr, alignment):
   return math.ceil(ptr / alignment) * alignment
 
 def size_variant(cases):
   s = size(discriminant_type(cases))
-  s = align_to(s, max_alignment(types_of(cases)))
+  s = align_to(s, max_case_alignment(cases))
   cs = 0
   for c in cases:
-    cs = max(cs, size(c.t))
+    cs = max(cs, size_tuple(c.ts))
   s += cs
-  return align_to(s, alignment(Variant(cases)))
+  return align_to(s, alignment_variant(cases))
 
 def size_flags(labels):
   n = len(labels)
@@ -323,8 +332,8 @@ def load_variant(opts, ptr, cases):
   ptr += disc_size
   trap_if(disc >= len(cases))
   case = cases[disc]
-  ptr = align_to(ptr, max_alignment(types_of(cases)))
-  return { case_label_with_refinements(case, cases): load(opts, ptr, case.t) }
+  ptr = align_to(ptr, max_case_alignment(cases))
+  return { case_label_with_refinements(case, cases): load_tuple(opts, ptr, case.ts) }
 
 def case_label_with_refinements(case, cases):
   label = case.label
@@ -339,6 +348,14 @@ def find_case(label, cases):
   if len(matches) == 1:
     return matches[0]
   return -1
+
+def load_tuple(opts, ptr, ts):
+  a = []
+  for t in ts:
+    ptr = align_to(ptr, alignment(t))
+    a.append(load(opts, ptr, t))
+    ptr += size(t)
+  return a
 
 #
 
@@ -562,8 +579,8 @@ def store_variant(opts, v, ptr, cases):
   disc_size = size(discriminant_type(cases))
   store_int(opts, case_index, ptr, disc_size)
   ptr += disc_size
-  ptr = align_to(ptr, max_alignment(types_of(cases)))
-  store(opts, case_value, cases[case_index].t, ptr)
+  ptr = align_to(ptr, max_case_alignment(cases))
+  store_tuple(opts, case_value, ptr, cases[case_index].ts)
 
 def match_case(v, cases):
   assert(len(v.keys()) == 1)
@@ -573,6 +590,12 @@ def match_case(v, cases):
     case_index = find_case(label, cases)
     if case_index != -1:
       return (case_index, value)
+
+def store_tuple(opts, v, ptr, ts):
+  for i,t in enumerate(ts):
+    ptr = align_to(ptr, alignment(t))
+    store(opts, v[i], t, ptr)
+    ptr += size(t)
 
 #
 
@@ -594,11 +617,11 @@ MAX_FLAT_PARAMS = 16
 MAX_FLAT_RESULTS = 1
 
 def flatten(functype, context):
-  flat_params = flatten_types(functype.params)
+  flat_params = flatten_tuple(functype.params)
   if len(flat_params) > MAX_FLAT_PARAMS:
     flat_params = ['i32']
 
-  flat_results = flatten_type(functype.result)
+  flat_results = flatten_tuple(functype.results)
   if len(flat_results) > MAX_FLAT_RESULTS:
     match context:
       case 'lift':
@@ -609,7 +632,7 @@ def flatten(functype, context):
 
   return { 'params': flat_params, 'results': flat_results }
 
-def flatten_types(ts):
+def flatten_tuple(ts):
   return [ft for t in ts for ft in flatten_type(t)]
 
 #
@@ -624,7 +647,7 @@ def flatten_type(t):
     case Float64()            : return ['f64']
     case Char()               : return ['i32']
     case String() | List(_)   : return ['i32', 'i32']
-    case Record(fields)       : return flatten_types(types_of(fields))
+    case Record(fields)       : return flatten_tuple(field_types(fields))
     case Variant(cases)       : return flatten_variant(cases)
     case Flags(labels)        : return ['i32'] * num_i32_flags(labels)
 
@@ -633,7 +656,7 @@ def flatten_type(t):
 def flatten_variant(cases):
   flat = []
   for c in cases:
-    for i,ft in enumerate(flatten_type(c.t)):
+    for i,ft in enumerate(flatten_tuple(c.ts)):
       if i < len(flat):
         flat[i] = join(flat[i], ft)
       else:
@@ -735,7 +758,7 @@ def lift_flat_variant(opts, vi, cases):
         case ('i64', 'f32') : return reinterpret_i32_as_float(wrap_i64_to_i32(x))
         case ('i64', 'f64') : return reinterpret_i64_as_float(x)
         case _              : return x
-  v = lift_flat(opts, CoerceValueIter(), case.t)
+  v = lift_flat_tuple(opts, CoerceValueIter(), case.ts)
   for have in flat_types:
     _ = vi.next(have)
   return { case_label_with_refinements(case, cases): v }
@@ -743,6 +766,12 @@ def lift_flat_variant(opts, vi, cases):
 def wrap_i64_to_i32(i):
   assert(0 <= i < (1 << 64))
   return i % (1 << 32)
+
+def lift_flat_tuple(opts, vi, ts):
+  a = []
+  for t in ts:
+    a.append(lift_flat(opts, vi, t))
+  return a
 
 #
 
@@ -807,7 +836,7 @@ def lower_flat_variant(opts, v, cases):
   case_index, case_value = match_case(v, cases)
   flat_types = flatten_variant(cases)
   assert(flat_types.pop(0) == 'i32')
-  payload = lower_flat(opts, case_value, cases[case_index].t)
+  payload = lower_flat_tuple(opts, case_value, cases[case_index].ts)
   for i,have in enumerate(payload):
     want = flat_types.pop(0)
     match (have.t, want):
@@ -819,6 +848,12 @@ def lower_flat_variant(opts, v, cases):
   for want in flat_types:
     payload.append(Value(want, 0))
   return [Value('i32', case_index)] + payload
+
+def lower_flat_tuple(opts, v, ts):
+  flat = []
+  for i,t in enumerate(ts):
+    flat += lower_flat(opts, v[i], t)
+  return flat
 
 #
 
@@ -834,7 +869,7 @@ def lower_flat_flags(v, labels):
 ### Lifting and Lowering
 
 def lift(opts, max_flat, vi, ts):
-  flat_types = flatten_types(ts)
+  flat_types = flatten_tuple(ts)
   if len(flat_types) > max_flat:
     ptr = vi.next('i32')
     tuple_type = Tuple(ts)
@@ -846,7 +881,7 @@ def lift(opts, max_flat, vi, ts):
 #
 
 def lower(opts, max_flat, vs, ts, out_param = None):
-  flat_types = flatten_types(ts)
+  flat_types = flatten_tuple(ts)
   if len(flat_types) > max_flat:
     tuple_type = Tuple(functype.params)
     tuple_value = {str(i): v for i,v in enumerate(vs)}
@@ -887,14 +922,14 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args, called_as_e
   except CoreWebAssemblyException:
     trap()
 
-  [result] = lift(callee_opts, MAX_FLAT_RESULTS, ValueIter(flat_results), [functype.result])
+  results = lift(callee_opts, MAX_FLAT_RESULTS, ValueIter(flat_results), functype.results)
   def post_return():
     if callee_opts.post_return is not None:
       callee_opts.post_return(flat_results)
     if called_as_export:
       callee_instance.may_enter = True
 
-  return (result, post_return)
+  return (results, post_return)
 
 ### `lower`
 
@@ -904,10 +939,10 @@ def canon_lower(caller_opts, caller_instance, callee, functype, flat_args):
   flat_args = ValueIter(flat_args)
   args = lift(caller_opts, MAX_FLAT_PARAMS, flat_args, functype.params)
 
-  result, post_return = callee(args)
+  results, post_return = callee(args)
 
   caller_instance.may_leave = False
-  flat_results = lower(caller_opts, MAX_FLAT_RESULTS, [result], [functype.result], flat_args)
+  flat_results = lower(caller_opts, MAX_FLAT_RESULTS, results, functype.results, flat_args)
   caller_instance.may_leave = True
 
   post_return()

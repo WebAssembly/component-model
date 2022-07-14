@@ -151,60 +151,59 @@ Notes:
   means that the maximum `ct` in an MVP `alias` declarator is `1`.
 
 ```
-type          ::= dt:<deftype>                         => (type dt)
-deftype       ::= dvt:<defvaltype>                     => dvt
-                | ft:<functype>                        => ft
-                | ct:<componenttype>                   => ct
-                | it:<instancetype>                    => it
-primvaltype   ::= 0x7f                                 => unit
-                | 0x7e                                 => bool
-                | 0x7d                                 => s8
-                | 0x7c                                 => u8
-                | 0x7b                                 => s16
-                | 0x7a                                 => u16
-                | 0x79                                 => s32
-                | 0x78                                 => u32
-                | 0x77                                 => s64
-                | 0x76                                 => u64
-                | 0x75                                 => float32
-                | 0x74                                 => float64
-                | 0x73                                 => char
-                | 0x72                                 => string
-defvaltype    ::= pvt:<primvaltype>                    => pvt
-                | 0x71 field*:vec(<field>)             => (record field*)
-                | 0x70 case*:vec(<case>)               => (variant case*)
-                | 0x6f t:<valtype>                     => (list t)
-                | 0x6e t*:vec(<valtype>)               => (tuple t*)
-                | 0x6d n*:vec(<name>)                  => (flags n*)
-                | 0x6c n*:vec(<name>)                  => (enum n*)
-                | 0x6b t*:vec(<valtype>)               => (union t*)
-                | 0x6a t:<valtype>                     => (option t)
-                | 0x69 t:<valtype> u:<valtype>         => (expected t u)
-field         ::= n:<name> t:<valtype>                 => (field n t)
-case          ::= n:<name> t:<valtype> 0x0             => (case n t)
-                | n:<name> t:<valtype> 0x1 i:<u32>     => (case n t (refines case-label[i]))
-valtype       ::= i:<typeidx>                          => i
-                | pvt:<primvaltype>                    => pvt
-functype      ::= 0x40 param*:vec(<param>) t:<valtype> => (func param* (result t))
-param         ::= 0x00 t:<valtype>                     => (param t)
-                | 0x01 n:<name> t:<valtype>            => (param n t)
-componenttype ::= 0x41 cd*:vec(<componentdecl>)        => (component cd*)
-instancetype  ::= 0x42 id*:vec(<instancedecl>)         => (instance id*)
-componentdecl ::= 0x03 id:<importdecl>                 => id
-                | id:<instancedecl>                    => id
-instancedecl  ::= 0x00 t:<core:type>                   => t
-                | 0x01 t:<type>                        => t
-                | 0x02 a:<alias>                       => a
-                | 0x04 ed:<exportdecl>                 => ed
-importdecl    ::= n:<name> ed:<externdesc>             => (import n ed)
-exportdecl    ::= n:<name> ed:<externdesc>             => (export n ed)
-externdesc    ::= 0x00 0x11 i:<core:typeidx>           => (core module (type i))
-                | 0x01 i:<typeidx>                     => (func (type i))
-                | 0x02 t:<valtype>                     => (value t)
-                | 0x03 b:<typebound>                   => (type b)
-                | 0x04 i:<typeidx>                     => (instance (type i))
-                | 0x05 i:<typeidx>                     => (component (type i))
-typebound     ::= 0x00 i:<typeidx>                     => (eq i)
+type          ::= dt:<deftype>                             => (type dt)
+deftype       ::= dvt:<defvaltype>                         => dvt
+                | ft:<functype>                            => ft
+                | ct:<componenttype>                       => ct
+                | it:<instancetype>                        => it
+primvaltype   ::= 0x7f                                     => bool
+                | 0x7e                                     => s8
+                | 0x7d                                     => u8
+                | 0x7c                                     => s16
+                | 0x7b                                     => u16
+                | 0x7a                                     => s32
+                | 0x79                                     => u32
+                | 0x78                                     => s64
+                | 0x77                                     => u64
+                | 0x76                                     => float32
+                | 0x75                                     => float64
+                | 0x74                                     => char
+                | 0x73                                     => string
+defvaltype    ::= pvt:<primvaltype>                        => pvt
+                | 0x72 nt*:vec(<namedtype>)                => (record (field nt)*)
+                | 0x71 case*:vec(<case>)                   => (variant case*)
+                | 0x70 t:<valtype>                         => (list t)
+                | 0x6f t*:vec(<valtype>)                   => (tuple t*)
+                | 0x6e n*:vec(<name>)                      => (flags n*)
+                | 0x6d n*:vec(<name>)                      => (enum n*)
+                | 0x6c t*:vec(<valtype>)                   => (union t*)
+                | 0x6b t:<valtype>                         => (option t)
+                | 0x6a t*:vec(<valtype>) u*:vec(<valtype>) => (result t* (error u*))
+namedtype     ::= n:<name> t:<valtype>                     => (field n t)
+case          ::= nt*:vec(<namedtype>) 0x0                 => (case nt*)
+                | nt*:vec(<namedtype>) 0x1 i:<u32>         => (case nt* (refines case-label[i]))
+valtype       ::= i:<typeidx>                              => i
+                | pvt:<primvaltype>                        => pvt
+functype      ::= 0x40 p*:<prlist> r*:<prlist>             => (func (param p)* (result r)*)
+prlist        ::= 0x00 t:<valtype>                         => [t]
+                | 0x01 nt*:vec(<namedtype>)                => nt*
+componenttype ::= 0x41 cd*:vec(<componentdecl>)            => (component cd*)
+instancetype  ::= 0x42 id*:vec(<instancedecl>)             => (instance id*)
+componentdecl ::= 0x03 id:<importdecl>                     => id
+                | id:<instancedecl>                        => id
+instancedecl  ::= 0x00 t:<core:type>                       => t
+                | 0x01 t:<type>                            => t
+                | 0x02 a:<alias>                           => a
+                | 0x04 ed:<exportdecl>                     => ed
+importdecl    ::= n:<name> ed:<externdesc>                 => (import n ed)
+exportdecl    ::= n:<name> ed:<externdesc>                 => (export n ed)
+externdesc    ::= 0x00 0x11 i:<core:typeidx>               => (core module (type i))
+                | 0x01 i:<typeidx>                         => (func (type i))
+                | 0x02 t:<valtype>                         => (value t)
+                | 0x03 b:<typebound>                       => (type b)
+                | 0x04 i:<typeidx>                         => (instance (type i))
+                | 0x05 i:<typeidx>                         => (component (type i))
+typebound     ::= 0x00 i:<typeidx>                         => (eq i)
 ```
 Notes:
 * The type opcodes follow the same negative-SLEB128 scheme as Core WebAssembly,
@@ -218,9 +217,9 @@ Notes:
   in type definitions from containing components.
 * Validation of `externdesc` requires the various `typeidx` type constructors
   to match the preceding `sort`.
-* Validation of record field names, variant case names, flag names, and enum case
-  names requires that the name be unique for the record, variant, flags, or enum
-  type definition.
+* Validation of function parameter and result names, record field names,
+  variant case names, flag names, and enum case names requires that the name be
+  unique for the func, record, variant, flags, or enum type definition.
 * Validation of the optional `refines` clause of a variant case requires that
   the case index is less than the current case's index (and therefore
   cases are acyclic).

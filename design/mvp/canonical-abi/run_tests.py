@@ -92,7 +92,7 @@ def test(t, vals_to_lift, v,
   if not equal_modulo_string_encoding(got, lower_v):
     fail("{} re-lift expected {} but got {}".format(test_name(), lower_v, got))
 
-test(Unit(), [], {})
+test(Record([]), [], {})
 test(Record([Field('x',U8()), Field('y',U16()), Field('z',U32())]), [1,2,3], {'x':1,'y':2,'z':3})
 test(Tuple([Tuple([U8(),U8()]),U8()]), [1,2,3], {'0':{'0':1,'1':2},'1':3})
 t = Flags(['a','b'])
@@ -101,45 +101,45 @@ test(t, [2], {'a':False,'b':True})
 test(t, [3], {'a':True,'b':True})
 test(t, [4], {'a':False,'b':False})
 test(Flags([str(i) for i in range(33)]), [0xffffffff,0x1], { str(i):True for i in range(33) })
-t = Variant([Case('x',U8()),Case('y',Float32()),Case('z',Unit())])
-test(t, [0,42], {'x': 42})
-test(t, [0,256], {'x': 0})
-test(t, [1,0x4048f5c3], {'y': 3.140000104904175})
-test(t, [2,0xffffffff], {'z': {}})
+t = Variant([Case('x',[U8()]),Case('y',[Float32()]),Case('z',[])])
+test(t, [0,42], {'x': [42]})
+test(t, [0,256], {'x': [0]})
+test(t, [1,0x4048f5c3], {'y':[3.140000104904175]})
+test(t, [2,0xffffffff], {'z':[]})
 t = Union([U32(),U64()])
-test(t, [0,42], {'0':42})
-test(t, [0,(1<<35)], {'0':0})
-test(t, [1,(1<<35)], {'1':(1<<35)})
+test(t, [0,42], {'0':[42]})
+test(t, [0,(1<<35)], {'0':[0]})
+test(t, [1,(1<<35)], {'1':[1<<35]})
 t = Union([Float32(), U64()])
-test(t, [0,0x4048f5c3], {'0': 3.140000104904175})
-test(t, [0,(1<<35)], {'0': 0})
-test(t, [1,(1<<35)], {'1': (1<<35)})
+test(t, [0,0x4048f5c3], {'0':[3.140000104904175]})
+test(t, [0,(1<<35)], {'0':[0]})
+test(t, [1,(1<<35)], {'1':[1<<35]})
 t = Union([Float64(), U64()])
-test(t, [0,0x40091EB851EB851F], {'0': 3.14})
-test(t, [0,(1<<35)], {'0': 1.69759663277e-313})
-test(t, [1,(1<<35)], {'1': (1<<35)})
+test(t, [0,0x40091EB851EB851F], {'0':[3.14]})
+test(t, [0,(1<<35)], {'0':[1.69759663277e-313]})
+test(t, [1,(1<<35)], {'1':[1<<35]})
 t = Union([U8()])
-test(t, [0,42], {'0':42})
+test(t, [0,42], {'0':[42]})
 test(t, [1,256], None)
-test(t, [0,256], {'0':0})
+test(t, [0,256], {'0':[0]})
 t = Union([Tuple([U8(),Float32()]), U64()])
-test(t, [0,42,3.14], {'0': {'0':42, '1':3.14}})
-test(t, [1,(1<<35),0], {'1': (1<<35)})
+test(t, [0,42,3.14], {'0':[{'0':42, '1':3.14}]})
+test(t, [1,(1<<35),0], {'1':[1<<35]})
 t = Option(Float32())
-test(t, [0,3.14], {'none':{}})
-test(t, [1,3.14], {'some':3.14})
-t = Expected(U8(),U32())
-test(t, [0, 42], {'ok':42})
-test(t, [1, 1000], {'error':1000})
-t = Variant([Case('w',U8()), Case('x',U8(),'w'), Case('y',U8()), Case('z',U8(),'x')])
-test(t, [0, 42], {'w':42})
-test(t, [1, 42], {'x|w':42})
-test(t, [2, 42], {'y':42})
-test(t, [3, 42], {'z|x|w':42})
-t2 = Variant([Case('w',U8())])
-test(t, [0, 42], {'w':42}, lower_t=t2, lower_v={'w':42})
-test(t, [1, 42], {'x|w':42}, lower_t=t2, lower_v={'w':42})
-test(t, [3, 42], {'z|x|w':42}, lower_t=t2, lower_v={'w':42})
+test(t, [0,3.14], {'none':[]})
+test(t, [1,3.14], {'some':[3.14]})
+t = Result([U8()],[U32()])
+test(t, [0, 42], {'ok':[42]})
+test(t, [1, 1000], {'error':[1000]})
+t = Variant([Case('w',[U8()]), Case('x',[U8()],'w'), Case('y',[U8()]), Case('z',[U8()],'x')])
+test(t, [0, 42], {'w':[42]})
+test(t, [1, 42], {'x|w':[42]})
+test(t, [2, 42], {'y':[42]})
+test(t, [3, 42], {'z|x|w':[42]})
+t2 = Variant([Case('w',[U8()])])
+test(t, [0, 42], {'w':[42]}, lower_t=t2, lower_v={'w':[42]})
+test(t, [1, 42], {'x|w':[42]}, lower_t=t2, lower_v={'w':[42]})
+test(t, [3, 42], {'z|x|w':[42]}, lower_t=t2, lower_v={'w':[42]})
 
 def test_pairs(t, pairs):
   for arg,expect in pairs:
@@ -162,7 +162,7 @@ test_pairs(Float32(), [(3.14,3.14)])
 test_pairs(Float64(), [(3.14,3.14)])
 test_pairs(Char(), [(0,'\x00'), (65,'A'), (0xD7FF,'\uD7FF'), (0xD800,None), (0xDFFF,None)])
 test_pairs(Char(), [(0xE000,'\uE000'), (0x10FFFF,'\U0010FFFF'), (0x110000,None), (0xFFFFFFFF,None)])
-test_pairs(Enum(['a','b']), [(0,{'a':{}}), (1,{'b':{}}), (2,None)])
+test_pairs(Enum(['a','b']), [(0,{'a':[]}), (1,{'b':[]}), (2,None)])
 
 def test_nan32(inbits, outbits):
   f = lift_flat(Opts(), ValueIter([Value('f32', reinterpret_i32_as_float(inbits))]), Float32())
@@ -240,7 +240,7 @@ def test_heap(t, expect, args, byte_array):
   opts = mk_opts(heap.memory, 'utf8', None, None)
   test(t, args, expect, opts)
 
-test_heap(List(Unit()), [{},{},{}], [0,3], [])
+test_heap(List(Record([])), [{},{},{}], [0,3], [])
 test_heap(List(Bool()), [True,False,True], [0,3], [1,0,1])
 test_heap(List(Bool()), [True,False,True], [0,3], [1,0,2])
 test_heap(List(Bool()), [True,False,True], [3,3], [0xff,0xff,0xff, 1,0,1])
@@ -274,14 +274,14 @@ test_heap(List(Tuple([U16(),U8()])), [mk_tup(6,7),mk_tup(8,9)], [0,2],
           [6,0, 7, 0x0ff, 8,0, 9, 0xff])
 test_heap(List(Tuple([Tuple([U16(),U8()]),U8()])), [mk_tup([4,5],6),mk_tup([7,8],9)], [0,2],
           [4,0, 5,0xff, 6,0xff,  7,0, 8,0xff, 9,0xff])
-test_heap(List(Union([Unit(),U8(),Tuple([U8(),U16()])])), [{'0':{}}, {'1':42}, {'2':mk_tup(6,7)}], [0,3],
+test_heap(List(Union([Tuple([]),U8(),Tuple([U8(),U16()])])), [{'0':[{}]}, {'1':[42]}, {'2':[mk_tup(6,7)]}], [0,3],
           [0,0xff,0xff,0xff,0xff,0xff,  1,0xff,42,0xff,0xff,0xff,  2,0xff,6,0xff,7,0])
-test_heap(List(Union([U32(),U8()])), [{'0':256}, {'1':42}], [0,2],
+test_heap(List(Union([U32(),U8()])), [{'0':[256]}, {'1':[42]}], [0,2],
           [0,0xff,0xff,0xff,0,1,0,0,  1,0xff,0xff,0xff,42,0xff,0xff,0xff])
 test_heap(List(Tuple([Union([U8(),Tuple([U16(),U8()])]),U8()])),
-          [mk_tup({'1':mk_tup(5,6)},7),mk_tup({'0':8},9)], [0,2],
+          [mk_tup({'1':[mk_tup(5,6)]},7),mk_tup({'0':[8]},9)], [0,2],
           [1,0xff,5,0,6,0xff,7,0xff,  0,0xff,8,0xff,0xff,0xff,9,0xff])
-test_heap(List(Union([U8()])), [{'0':6},{'0':7},{'0':8}], [0,3],
+test_heap(List(Union([U8()])), [{'0':[6]},{'0':[7]},{'0':[8]}], [0,3],
           [0,6, 0,7, 0,8])
 t = List(Flags(['a','b']))
 test_heap(t, [{'a':False,'b':False},{'a':False,'b':True},{'a':True,'b':True}], [0,3],
@@ -324,19 +324,20 @@ def test_flatten(t, params, results):
   got = flatten(t, 'lower')
   assert(got == expect)
   
-test_flatten(Func([U8(),Float32(),Float64()],Unit()), ['i32','f32','f64'], [])
-test_flatten(Func([U8(),Float32(),Float64()],Float32()), ['i32','f32','f64'], ['f32'])
-test_flatten(Func([U8(),Float32(),Float64()],U8()), ['i32','f32','f64'], ['i32'])
-test_flatten(Func([U8(),Float32(),Float64()],Tuple([Float32()])), ['i32','f32','f64'], ['f32'])
-test_flatten(Func([U8(),Float32(),Float64()],Tuple([Float32(),Float32()])), ['i32','f32','f64'], ['f32','f32'])
-test_flatten(Func([U8() for _ in range(17)],Unit()), ['i32' for _ in range(17)], [])
-test_flatten(Func([U8() for _ in range(17)],Tuple([U8(),U8()])), ['i32' for _ in range(17)], ['i32','i32'])
+test_flatten(Func([U8(),Float32(),Float64()],[]), ['i32','f32','f64'], [])
+test_flatten(Func([U8(),Float32(),Float64()],[Float32()]), ['i32','f32','f64'], ['f32'])
+test_flatten(Func([U8(),Float32(),Float64()],[U8()]), ['i32','f32','f64'], ['i32'])
+test_flatten(Func([U8(),Float32(),Float64()],[Tuple([Float32()])]), ['i32','f32','f64'], ['f32'])
+test_flatten(Func([U8(),Float32(),Float64()],[Tuple([Float32(),Float32()])]), ['i32','f32','f64'], ['f32','f32'])
+test_flatten(Func([U8(),Float32(),Float64()],[Float32(),Float32()]), ['i32','f32','f64'], ['f32','f32'])
+test_flatten(Func([U8() for _ in range(17)],[]), ['i32' for _ in range(17)], [])
+test_flatten(Func([U8() for _ in range(17)],[Tuple([U8(),U8()])]), ['i32' for _ in range(17)], ['i32','i32'])
 
 def test_roundtrip(t, v):
   before = definitions.MAX_FLAT_RESULTS
   definitions.MAX_FLAT_RESULTS = 16
 
-  ft = Func([t],t)
+  ft = Func([t],[t])
   callee_instance = Instance()
   callee = lambda x: x
 
@@ -363,6 +364,6 @@ test_roundtrip(S8(), -1)
 test_roundtrip(Tuple([U16(),U16()]), mk_tup(3,4))
 test_roundtrip(List(String()), [mk_str("hello there")])
 test_roundtrip(List(List(String())), [[mk_str("one"),mk_str("two")],[mk_str("three")]])
-test_roundtrip(List(Option(Tuple([String(),U16()]))), [{'some':mk_tup(mk_str("answer"),42)}])
+test_roundtrip(List(Option(Tuple([String(),U16()]))), [{'some':[mk_tup(mk_str("answer"),42)]}])
 
 print("All tests passed")
