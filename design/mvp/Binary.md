@@ -181,7 +181,7 @@ defvaltype    ::= pvt:<primvaltype>                        => pvt
                 | 0x6a t*:vec(<valtype>) u*:vec(<valtype>) => (result t* (error u*))
 namedtype     ::= n:<name> t:<valtype>                     => (field n t)
 case          ::= nt*:vec(<namedtype>) 0x0                 => (case nt*)
-                | nt*:vec(<namedtype>) 0x1 i:<u32>         => (case nt* (refines case-label[i]))
+                | n:<name> t*:vec(<valtype>) 0x1 i:<u32>   => (case n t* (refines case-label[i]))
 valtype       ::= i:<typeidx>                              => i
                 | pvt:<primvaltype>                        => pvt
 functype      ::= 0x40 p*:<prlist> r*:<prlist>             => (func (param p)* (result r)*)
