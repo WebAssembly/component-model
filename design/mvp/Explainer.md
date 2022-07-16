@@ -459,7 +459,7 @@ functype      ::= (func <paramlist> <resultlist>)
 paramlist     ::= (param <name> <valtype>)*
                 | (param <valtype>)
 resultlist    ::= (result <name> <valtype>)*
-                | (result <valtype)
+                | (result <valtype>)
 componenttype ::= (component <componentdecl>*)
 instancetype  ::= (instance <instancedecl>*)
 componentdecl ::= <importdecl>
