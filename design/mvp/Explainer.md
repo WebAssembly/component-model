@@ -445,14 +445,14 @@ defvaltype    ::= bool
                 | float32 | float64
                 | char | string
                 | (record (field <name> <valtype>)*)
-                | (variant (case <id>? <name> <valtype>* (refines <id>)?)+)
+                | (variant (case <id>? <name> <valtype>? (refines <id>)?)+)
                 | (list <valtype>)
                 | (tuple <valtype>*)
                 | (flags <name>*)
                 | (enum <name>+)
                 | (union <valtype>+)
                 | (option <valtype>)
-                | (result <valtype>* (error <valtype>*)?)
+                | (result <valtype>? (error <valtype>)?)
 valtype       ::= <typeidx>
                 | <defvaltype>
 functype      ::= (func <paramlist> <resultlist>)
@@ -515,13 +515,13 @@ some `case` in the supertype.
 The sets of values allowed for the remaining *specialized value types* are
 defined by the following mapping:
 ```
-                     (tuple <valtype>*) ↦ (record (field "𝒊" <valtype>)*) for 𝒊=0,1,...
-                        (flags <name>*) ↦ (record (field <name> bool)*)
-                         (enum <name>+) ↦ (variant (case <name>)+)
-                     (option <valtype>) ↦ (variant (case "none") (case "some" <valtype>))
-                     (union <valtype>+) ↦ (variant (case "𝒊" <valtype>)+) for 𝒊=0,1,...
-(result <valtype>* (error <valtype>*)?) ↦ (variant (case "ok" <valtype>*) (case "error" <valtype>*))
-                                 string ↦ (list char)
+                    (tuple <valtype>*) ↦ (record (field "𝒊" <valtype>)*) for 𝒊=0,1,...
+                       (flags <name>*) ↦ (record (field <name> bool)*)
+                        (enum <name>+) ↦ (variant (case <name>)+)
+                    (option <valtype>) ↦ (variant (case "none") (case "some" <valtype>))
+                    (union <valtype>+) ↦ (variant (case "𝒊" <valtype>)+) for 𝒊=0,1,...
+(result <valtype>? (error <valtype>)?) ↦ (variant (case "ok" <valtype>?) (case "error" <valtype>?))
+                                string ↦ (list char)
 ```
 Note that, at least initially, variants are required to have a non-empty list of
 cases. This could be relaxed in the future to allow an empty list of cases, with

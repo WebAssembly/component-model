@@ -69,9 +69,9 @@ function to replace specialized value types with their expansion:
 def despecialize(t):
   match t:
     case Tuple(ts)         : return Record([ Field(str(i), t) for i,t in enumerate(ts) ])
-    case Union(ts)         : return Variant([ Case(str(i), [t]) for i,t in enumerate(ts) ])
-    case Enum(labels)      : return Variant([ Case(l, []) for l in labels ])
-    case Option(t)         : return Variant([ Case("none", []), Case("some", [t]) ])
+    case Union(ts)         : return Variant([ Case(str(i), t) for i,t in enumerate(ts) ])
+    case Enum(labels)      : return Variant([ Case(l, None) for l in labels ])
+    case Option(t)         : return Variant([ Case("none", None), Case("some", t) ])
     case Result(ok, error) : return Variant([ Case("ok", ok), Case("error", error) ])
     case _                 : return t
 ```
@@ -97,20 +97,17 @@ def alignment(t):
     case Float64()          : return 8
     case Char()             : return 4
     case String() | List(_) : return 4
-    case Record(fields)     : return alignment_tuple(field_types(fields))
+    case Record(fields)     : return alignment_record(fields)
     case Variant(cases)     : return alignment_variant(cases)
     case Flags(labels)      : return alignment_flags(labels)
 ```
 
 Record alignment is tuple alignment, with the definitions split for reuse below:
 ```python
-def field_types(fields):
-  return [f.t for f in fields]
-
-def alignment_tuple(ts):
+def alignment_record(fields):
   a = 1
-  for t in ts:
-    a = max(a, alignment(t))
+  for f in fields:
+    a = max(a, alignment(f.t))
   return a
 ```
 
@@ -134,7 +131,8 @@ def discriminant_type(cases):
 def max_case_alignment(cases):
   a = 1
   for c in cases:
-    a = max(a, alignment_tuple(c.ts))
+    if c.t is not None:
+      a = max(a, alignment(c.t))
   return a
 ```
 
@@ -166,16 +164,16 @@ def size(t):
     case Float64()          : return 8
     case Char()             : return 4
     case String() | List(_) : return 8
-    case Record(fields)     : return size_tuple(field_types(fields))
+    case Record(fields)     : return size_record(fields)
     case Variant(cases)     : return size_variant(cases)
     case Flags(labels)      : return size_flags(labels)
 
-def size_tuple(ts):
+def size_record(fields):
   s = 0
-  for t in ts:
-    s = align_to(s, alignment(t))
-    s += size(t)
-  return align_to(s, alignment_tuple(ts))
+  for f in fields:
+    s = align_to(s, alignment(f.t))
+    s += size(f.t)
+  return align_to(s, alignment_record(fields))
 
 def align_to(ptr, alignment):
   return math.ceil(ptr / alignment) * alignment
@@ -185,7 +183,8 @@ def size_variant(cases):
   s = align_to(s, max_case_alignment(cases))
   cs = 0
   for c in cases:
-    cs = max(cs, size_tuple(c.ts))
+    if c.t is not None:
+      cs = max(cs, size(c.t))
   s += cs
   return align_to(s, alignment_variant(cases))
 
@@ -367,18 +366,21 @@ string operations.
 ```python
 def load_variant(opts, ptr, cases):
   disc_size = size(discriminant_type(cases))
-  disc = load_int(opts, ptr, disc_size)
+  case_index = load_int(opts, ptr, disc_size)
   ptr += disc_size
-  trap_if(disc >= len(cases))
-  case = cases[disc]
+  trap_if(case_index >= len(cases))
+  c = cases[case_index]
   ptr = align_to(ptr, max_case_alignment(cases))
-  return { case_label_with_refinements(case, cases): load_tuple(opts, ptr, case.ts) }
+  case_label = case_label_with_refinements(c, cases)
+  if c.t is None:
+    return { case_label: None }
+  return { case_label: load(opts, ptr, c.t) }
 
-def case_label_with_refinements(case, cases):
-  label = case.label
-  while case.refines is not None:
-    case = cases[find_case(case.refines, cases)]
-    label += '|' + case.label
+def case_label_with_refinements(c, cases):
+  label = c.label
+  while c.refines is not None:
+    c = cases[find_case(c.refines, cases)]
+    label += '|' + c.label
   return label
 
 def find_case(label, cases):
@@ -387,14 +389,6 @@ def find_case(label, cases):
   if len(matches) == 1:
     return matches[0]
   return -1
-
-def load_tuple(opts, ptr, ts):
-  a = []
-  for t in ts:
-    ptr = align_to(ptr, alignment(t))
-    a.append(load(opts, ptr, t))
-    ptr += size(t)
-  return a
 ```
 
 Finally, flags are converted from a bit-vector to a dictionary whose keys are
@@ -695,7 +689,9 @@ def store_variant(opts, v, ptr, cases):
   store_int(opts, case_index, ptr, disc_size)
   ptr += disc_size
   ptr = align_to(ptr, max_case_alignment(cases))
-  store_tuple(opts, case_value, ptr, cases[case_index].ts)
+  c = cases[case_index]
+  if c.t is not None:
+    store(opts, case_value, c.t, ptr)
 
 def match_case(v, cases):
   assert(len(v.keys()) == 1)
@@ -705,12 +701,6 @@ def match_case(v, cases):
     case_index = find_case(label, cases)
     if case_index != -1:
       return (case_index, value)
-
-def store_tuple(opts, v, ptr, ts):
-  for i,t in enumerate(ts):
-    ptr = align_to(ptr, alignment(t))
-    store(opts, v[i], t, ptr)
-    ptr += size(t)
 ```
 
 Finally, flags are converted from a dictionary to a bit-vector by iterating
@@ -765,11 +755,11 @@ MAX_FLAT_PARAMS = 16
 MAX_FLAT_RESULTS = 1
 
 def flatten(functype, context):
-  flat_params = flatten_tuple(functype.params)
+  flat_params = flatten_types(functype.params)
   if len(flat_params) > MAX_FLAT_PARAMS:
     flat_params = ['i32']
 
-  flat_results = flatten_tuple(functype.results)
+  flat_results = flatten_types(functype.results)
   if len(flat_results) > MAX_FLAT_RESULTS:
     match context:
       case 'lift':
@@ -780,7 +770,7 @@ def flatten(functype, context):
 
   return { 'params': flat_params, 'results': flat_results }
 
-def flatten_tuple(ts):
+def flatten_types(ts):
   return [ft for t in ts for ft in flatten_type(t)]
 ```
 
@@ -797,9 +787,18 @@ def flatten_type(t):
     case Float64()            : return ['f64']
     case Char()               : return ['i32']
     case String() | List(_)   : return ['i32', 'i32']
-    case Record(fields)       : return flatten_tuple(field_types(fields))
+    case Record(fields)       : return flatten_record(fields)
     case Variant(cases)       : return flatten_variant(cases)
     case Flags(labels)        : return ['i32'] * num_i32_flags(labels)
+```
+
+Record flattening simply flattens each field in sequence.
+```python
+def flatten_record(fields):
+  flat = []
+  for f in fields:
+    flat += flatten_type(f.t)
+  return flat
 ```
 
 Variant flattening is more involved due to the fact that each case payload can
@@ -814,11 +813,12 @@ an `i32` into an `i64`.
 def flatten_variant(cases):
   flat = []
   for c in cases:
-    for i,ft in enumerate(flatten_tuple(c.ts)):
-      if i < len(flat):
-        flat[i] = join(flat[i], ft)
-      else:
-        flat.append(ft)
+    if c.t is not None:
+      for i,ft in enumerate(flatten_type(c.t)):
+        if i < len(flat):
+          flat[i] = join(flat[i], ft)
+        else:
+          flat.append(ft)
   return flatten_type(discriminant_type(cases)) + flat
 
 def join(a, b):
@@ -927,9 +927,8 @@ high bits of an `i64` are set for a 32-bit type:
 def lift_flat_variant(opts, vi, cases):
   flat_types = flatten_variant(cases)
   assert(flat_types.pop(0) == 'i32')
-  disc = vi.next('i32')
-  trap_if(disc >= len(cases))
-  case = cases[disc]
+  case_index = vi.next('i32')
+  trap_if(case_index >= len(cases))
   class CoerceValueIter:
     def next(self, want):
       have = flat_types.pop(0)
@@ -940,20 +939,18 @@ def lift_flat_variant(opts, vi, cases):
         case ('i64', 'f32') : return reinterpret_i32_as_float(wrap_i64_to_i32(x))
         case ('i64', 'f64') : return reinterpret_i64_as_float(x)
         case _              : return x
-  v = lift_flat_tuple(opts, CoerceValueIter(), case.ts)
+  c = cases[case_index]
+  if c.t is None:
+    v = None
+  else:
+    v = lift_flat(opts, CoerceValueIter(), c.t)
   for have in flat_types:
     _ = vi.next(have)
-  return { case_label_with_refinements(case, cases): v }
+  return { case_label_with_refinements(c, cases): v }
 
 def wrap_i64_to_i32(i):
   assert(0 <= i < (1 << 64))
   return i % (1 << 32)
-
-def lift_flat_tuple(opts, vi, ts):
-  a = []
-  for t in ts:
-    a.append(lift_flat(opts, vi, t))
-  return a
 ```
 
 Finally, flags are lifted by OR-ing together all the flattened `i32` values
@@ -1038,7 +1035,11 @@ def lower_flat_variant(opts, v, cases):
   case_index, case_value = match_case(v, cases)
   flat_types = flatten_variant(cases)
   assert(flat_types.pop(0) == 'i32')
-  payload = lower_flat_tuple(opts, case_value, cases[case_index].ts)
+  c = cases[case_index]
+  if c.t is None:
+    payload = []
+  else:
+    payload = lower_flat(opts, case_value, c.t)
   for i,have in enumerate(payload):
     want = flat_types.pop(0)
     match (have.t, want):
@@ -1050,12 +1051,6 @@ def lower_flat_variant(opts, v, cases):
   for want in flat_types:
     payload.append(Value(want, 0))
   return [Value('i32', case_index)] + payload
-
-def lower_flat_tuple(opts, v, ts):
-  flat = []
-  for i,t in enumerate(ts):
-    flat += lower_flat(opts, v[i], t)
-  return flat
 ```
 
 Finally, flags are lowered by slicing the bit vector into `i32` chunks:
@@ -1077,7 +1072,7 @@ parameters or results given by the `ValueIter` `vi` into a tuple of values with
 types `ts`:
 ```python
 def lift(opts, max_flat, vi, ts):
-  flat_types = flatten_tuple(ts)
+  flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
     ptr = vi.next('i32')
     tuple_type = Tuple(ts)
@@ -1094,7 +1089,7 @@ greater-than-`max_flat` case by either allocating storage with `realloc` or
 accepting a caller-allocated buffer as an out-param:
 ```python
 def lower(opts, max_flat, vs, ts, out_param = None):
-  flat_types = flatten_tuple(ts)
+  flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
     tuple_type = Tuple(functype.params)
     tuple_value = {str(i): v for i,v in enumerate(vs)}
