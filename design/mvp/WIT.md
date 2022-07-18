@@ -348,7 +348,7 @@ sleep: async func(ms: u64)
 Specifically functions have the structure:
 
 ```wit
-func-item ::= id ':' 'async'? 'func' func-tuple '->' func-tuple
+func-item ::= id ':' 'async'? 'func' func-tuple ( '->' func-tuple )?
 
 func-tuple ::= ty
              | '(' func-named-type-list ')'
