@@ -1,7 +1,7 @@
 # Component Model design and specification
 
 This repository describes the high-level [goals], [use cases], [design choices]
-and [FAQ] of the component model as well as a more-detailed [explainer],
+and [FAQ] of the component model as well as a more-detailed [explainer], [IDL],
 [binary format] and [ABI] covering the initial Minimum Viable Product (MVP)
 release.
 
@@ -20,6 +20,7 @@ To contribute to any of these repositories, see the Community Group's
 [design choices]: design/high-level/Choices.md
 [FAQ]: design/high-level/FAQ.md
 [explainer]: design/mvp/Explainer.md
+[IDL]: design/mvp/WIT.md
 [binary format]: design/mvp/Binary.md
 [ABI]: design/mvp/CanonicalABI.md
 [formal spec]: spec/

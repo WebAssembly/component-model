@@ -539,14 +539,24 @@ variety of source languages. As syntactic sugar, the text format of `functype`
 additionally allows `result` to be absent, interpreting this as `(result
 unit)`.
 
-The `instance` type constructor represents the result of instantiating a
-component and thus is the same as a `component` type minus the description
-of imports.
+The `instance` type constructor describes a list of named, typed definitions
+that can be imported or exported by a component. Informally, instance types
+correspond to the usual concept of an "interface" and instance types thus serve
+as static interface descriptions. In addition to the S-Expression text format
+defined here, which is meant to go inside component definitions, interfaces can
+also be defined as standalone, human-friendly text files in the [`wit`](WIT.md)
+[Interface Definition Language].
 
 The `component` type constructor is symmetric to the core `module` type
-constructor and is built from a sequence of "declarators" which are used to
-describe the imports and exports of the component. There are four kinds of
-declarators:
+constructor and contains *two* lists of named definitions for the imports
+and exports of a component, respectively. As suggested above, instance types
+can show up in *both* the import and export types of a component type.
+
+Both `instance` and `component` type constructors are built from a sequence of
+"declarators", of which there are four kinds&mdash;`type`, `alias`, `import` and
+`export`&mdash;where only `component` type constructors can contain `import`
+declarators. The meanings of these declarators is basically the same as the
+core module declarators introduced above.
 
 As with core modules, `importdecl` and `exportdecl` classify component `import`
 and `export` definitions, with `importdecl` allowing an identifier to be
@@ -1103,6 +1113,7 @@ and will be added over the coming months to complete the MVP proposal:
 [ABI]: https://en.wikipedia.org/wiki/Application_binary_interface
 [Environment Variables]: https://en.wikipedia.org/wiki/Environment_variable
 [Linear]: https://en.wikipedia.org/wiki/Substructural_type_system#Linear_type_systems
+[Interface Definition Language]: https://en.wikipedia.org/wiki/Interface_description_language
 
 [module-linking]: https://github.com/WebAssembly/module-linking/blob/main/design/proposals/module-linking/Explainer.md
 [interface-types]: https://github.com/WebAssembly/interface-types/blob/main/proposals/interface-types/Explainer.md
