@@ -340,15 +340,15 @@ parameters, and results. Functions can optionally also be declared as `async`
 functions.
 
 ```wit
-thunk: func()
+thunk: func() -> ()
 fibonacci: func(n: u32) -> u32
-sleep: async func(ms: u64)
+sleep: async func(ms: u64) -> ()
 ```
 
 Specifically functions have the structure:
 
 ```wit
-func-item ::= id ':' 'async'? 'func' func-tuple ( '->' func-tuple )?
+func-item ::= id ':' 'async'? 'func' func-tuple '->' func-tuple
 
 func-tuple ::= ty
              | '(' func-named-type-list ')'
@@ -481,9 +481,9 @@ by '-'s starts with a `XID_Start` scalar value with a zero Canonical Combining
 Class:
 
 ```wit
-foo: func(bar: u32)
+foo: func(bar: u32) -> ()
 
-red-green-blue: func(r: u32, g: u32, b: u32)
+red-green-blue: func(r: u32, g: u32, b: u32) -> ()
 ```
 
 This form can't name identifiers which have the same name as wit keywords, so
@@ -491,12 +491,12 @@ the second form is the same syntax with the same restrictions as the first, but
 prefixed with '%':
 
 ```wit
-%foo: func(%bar: u32)
+%foo: func(%bar: u32) -> ()
 
-%red-green-blue: func(%r: u32, %g: u32, %b: u32)
+%red-green-blue: func(%r: u32, %g: u32, %b: u32) -> ()
 
 // This form also supports identifiers that would otherwise be keywords.
-%variant: func(%enum: s32)
+%variant: func(%enum: s32) -> ()
 ```
 
 [kebab-case]: https://en.wikipedia.org/wiki/Letter_case#Kebab_case
