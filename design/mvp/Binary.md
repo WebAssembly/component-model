@@ -186,8 +186,8 @@ casetype      ::= 0x00                                 =>
                 | 0x01 t:<valtype>                     => t
 valtype       ::= i:<typeidx>                          => i
                 | pvt:<primvaltype>                    => pvt
-functype      ::= 0x40 p*:<prlist> r*:<prlist>         => (func (param p)* (result r)*)
-prlist        ::= 0x00 t:<valtype>                     => [t]
+functype      ::= 0x40 p*:<funcvec> r*:<funcvec>       => (func (param p)* (result r)*)
+funcvec       ::= 0x00 t:<valtype>                     => [t]
                 | 0x01 nt*:vec(<namedvaltype>)         => nt*
 componenttype ::= 0x41 cd*:vec(<componentdecl>)        => (component cd*)
 instancetype  ::= 0x42 id*:vec(<instancedecl>)         => (instance id*)
