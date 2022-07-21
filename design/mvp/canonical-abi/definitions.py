@@ -6,9 +6,10 @@
 
 import math
 import struct
-import types
 from dataclasses import dataclass
+import typing
 from typing import Optional
+from typing import Callable
 
 class Trap(BaseException): pass
 class CoreWebAssemblyException(BaseException): pass
@@ -20,7 +21,80 @@ def trap_if(cond):
   if cond:
     raise Trap()
 
-class ValType: pass
+class Type: pass
+class ValType(Type): pass
+class ExternType(Type): pass
+class CoreExternType(Type): pass
+
+@dataclass
+class CoreImportDecl:
+  module: str
+  field: str
+  t: CoreExternType
+
+@dataclass
+class CoreExportDecl:
+  name: str
+  t: CoreExternType
+
+@dataclass
+class ModuleType(ExternType):
+  imports: [CoreImportDecl]
+  exports: [CoreExportDecl]
+
+@dataclass
+class CoreFuncType(CoreExternType):
+  params: [str]
+  results: [str]
+
+@dataclass
+class CoreMemoryType(CoreExternType):
+  initial: [int]
+  maximum: Optional[int]
+
+@dataclass
+class ExternDecl:
+  name: str
+  t: ExternType
+
+@dataclass
+class ComponentType(ExternType):
+  imports: [ExternDecl]
+  exports: [ExternDecl]
+
+@dataclass
+class InstanceType(ExternType):
+  exports: [ExternDecl]
+
+@dataclass
+class FuncType(ExternType):
+  params: [ValType|typing.Tuple[str,ValType]]
+  results: [ValType|typing.Tuple[str,ValType]]
+  def param_types(self):
+    return self.extract_types(self.params)
+  def result_types(self):
+    return self.extract_types(self.results)
+  def extract_types(self, vec):
+    if len(vec) == 0:
+      return []
+    if isinstance(vec[0], ValType):
+      return vec
+    return [t for name,t in vec]
+
+@dataclass
+class ValueType(ExternType):
+  t: ValType
+
+class Bounds: pass
+
+@dataclass
+class Eq(Bounds):
+  t: Type
+
+@dataclass
+class TypeType(ExternType):
+  bounds: Bounds
+
 class Bool(ValType): pass
 class S8(ValType): pass
 class U8(ValType): pass
@@ -82,11 +156,6 @@ class Option(ValType):
 class Result(ValType):
   ok: Optional[ValType]
   error: Optional[ValType]
-
-@dataclass
-class Func:
-  params: [ValType]
-  results: [ValType]
 
 ### Despecialization
 
@@ -204,8 +273,8 @@ def num_i32_flags(labels):
 class Opts:
   string_encoding: str
   memory: bytearray
-  realloc: types.FunctionType
-  post_return: types.FunctionType
+  realloc: Callable[[int,int,int,int],int]
+  post_return: Callable[[],None]
 
 def load(opts, ptr, t):
   assert(ptr == align_to(ptr, alignment(t)))
@@ -607,12 +676,12 @@ def pack_flags_into_int(v, labels):
 MAX_FLAT_PARAMS = 16
 MAX_FLAT_RESULTS = 1
 
-def flatten(functype, context):
-  flat_params = flatten_types(functype.params)
+def flatten_functype(ft, context):
+  flat_params = flatten_types(ft.param_types())
   if len(flat_params) > MAX_FLAT_PARAMS:
     flat_params = ['i32']
 
-  flat_results = flatten_types(functype.results)
+  flat_results = flatten_types(ft.result_types())
   if len(flat_results) > MAX_FLAT_RESULTS:
     match context:
       case 'lift':
@@ -621,7 +690,7 @@ def flatten(functype, context):
         flat_params += ['i32']
         flat_results = []
 
-  return { 'params': flat_params, 'results': flat_results }
+  return CoreFuncType(flat_params, flat_results)
 
 def flatten_types(ts):
   return [ft for t in ts for ft in flatten_type(t)]
@@ -861,9 +930,9 @@ def lower_flat_flags(v, labels):
   assert(i == 0)
   return flat
 
-### Lifting and Lowering
+### Lifting and Lowering Values
 
-def lift(opts, max_flat, vi, ts):
+def lift_values(opts, max_flat, vi, ts):
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
     ptr = vi.next('i32')
@@ -875,10 +944,10 @@ def lift(opts, max_flat, vi, ts):
 
 #
 
-def lower(opts, max_flat, vs, ts, out_param = None):
+def lower_values(opts, max_flat, vs, ts, out_param = None):
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
-    tuple_type = Tuple(functype.params)
+    tuple_type = Tuple(ts)
     tuple_value = {str(i): v for i,v in enumerate(vs)}
     if out_param is None:
       ptr = opts.realloc(0, 0, alignment(tuple_type), size(tuple_type))
@@ -900,7 +969,7 @@ class Instance:
   may_enter = True
   # ...
 
-def canon_lift(callee_opts, callee_instance, callee, functype, args, called_as_export):
+def canon_lift(callee_opts, callee_instance, callee, ft, args, called_as_export):
   if called_as_export:
     trap_if(not callee_instance.may_enter)
     callee_instance.may_enter = False
@@ -909,7 +978,7 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args, called_as_e
 
   assert(callee_instance.may_leave)
   callee_instance.may_leave = False
-  flat_args = lower(callee_opts, MAX_FLAT_PARAMS, args, functype.params)
+  flat_args = lower_values(callee_opts, MAX_FLAT_PARAMS, args, ft.param_types())
   callee_instance.may_leave = True
 
   try:
@@ -917,7 +986,7 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args, called_as_e
   except CoreWebAssemblyException:
     trap()
 
-  results = lift(callee_opts, MAX_FLAT_RESULTS, ValueIter(flat_results), functype.results)
+  results = lift_values(callee_opts, MAX_FLAT_RESULTS, ValueIter(flat_results), ft.result_types())
   def post_return():
     if callee_opts.post_return is not None:
       callee_opts.post_return(flat_results)
@@ -928,18 +997,167 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args, called_as_e
 
 ### `lower`
 
-def canon_lower(caller_opts, caller_instance, callee, functype, flat_args):
+def canon_lower(caller_opts, caller_instance, callee, ft, flat_args):
   trap_if(not caller_instance.may_leave)
 
   flat_args = ValueIter(flat_args)
-  args = lift(caller_opts, MAX_FLAT_PARAMS, flat_args, functype.params)
+  args = lift_values(caller_opts, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
   results, post_return = callee(args)
 
   caller_instance.may_leave = False
-  flat_results = lower(caller_opts, MAX_FLAT_RESULTS, results, functype.results, flat_args)
+  flat_results = lower_values(caller_opts, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
   caller_instance.may_leave = True
 
   post_return()
 
   return flat_results
+
+### Canonical Module Type
+
+CABI_VERSION = '0.1'
+
+#
+
+def canonical_module_type(ct: ComponentType) -> ModuleType:
+  start_params, import_funcs = mangle_instances(ct.imports)
+  start_results, export_funcs = mangle_instances(ct.exports)
+
+  imports = []
+  for name,ft in import_funcs:
+    flat_ft = flatten_functype(ft, 'lower')
+    imports.append(CoreImportDecl('', mangle_funcname(name, ft), flat_ft))
+
+  exports = []
+  exports.append(CoreExportDecl('_memory', CoreMemoryType(initial=0, maximum=None)))
+  exports.append(CoreExportDecl('_realloc', CoreFuncType(['i32','i32','i32','i32'], ['i32'])))
+
+  start_ft = FuncType(start_params, start_results)
+  start_name = mangle_funcname('_start{cabi=' + CABI_VERSION + '}', start_ft)
+  exports.append(CoreExportDecl(start_name, flatten_functype(start_ft, 'lift')))
+
+  for name,ft in export_funcs:
+    flat_ft = flatten_functype(ft, 'lift')
+    exports.append(CoreExportDecl(mangle_funcname(name, ft), flat_ft))
+    if any(contains_dynamic_allocation(t) for t in ft.results):
+      exports.append(CoreExportDecl('_post-' + name, CoreFuncType(flat_ft.results, [])))
+
+  return ModuleType(imports, exports)
+
+def contains_dynamic_allocation(t):
+  match despecialize(t):
+    case String()       : return True
+    case List(t)        : return True
+    case Record(fields) : return any(contains_dynamic_allocation(f.t) for f in fields)
+    case Variant(cases) : return any(contains_dynamic_allocation(c.t) for c in cases)
+    case _              : return False
+
+#
+
+def mangle_instances(xs, path = ''):
+  values = []
+  funcs = []
+  for x in xs:
+    name = path + x.name
+    match x.t:
+      case ValueType(t):
+        values.append( (name, t) )
+      case FuncType(params,results):
+        funcs.append( (name, x.t) )
+      case InstanceType(exports):
+        vs,fs = mangle_instances(exports, name + '.')
+        values += vs
+        funcs += fs
+      case TypeType(bounds):
+        assert(False) # TODO: resource types
+      case ComponentType(imports, exports):
+        assert(False) # TODO: `canon instantiate`
+      case ModuleType(imports, exports):
+        assert(False) # TODO: canonical shared-everything linking
+  return (values, funcs)
+
+#
+
+def mangle_funcname(name, ft):
+  return '{name}: func {params} -> {results}'.format(
+           name = name,
+           params = mangle_funcvec(ft.params),
+           results = mangle_funcvec(ft.results))
+
+def mangle_funcvec(es):
+  if len(es) == 1 and isinstance(es[0], ValType):
+    return mangle_valtype(es[0])
+  assert(all(type(e) == tuple and len(e) == 2 for e in es))
+  mangled_elems = (e[0] + ':' + mangle_valtype(e[1]) for e in es)
+  return '(' + ','.join(mangled_elems) + ')'
+
+#
+
+def mangle_valtype(t):
+  match t:
+    case Bool()           : return 'bool'
+    case S8()             : return 's8'
+    case U8()             : return 'u8'
+    case S16()            : return 's16'
+    case U16()            : return 'u16'
+    case S32()            : return 's32'
+    case U32()            : return 'u32'
+    case S64()            : return 's64'
+    case U64()            : return 'u64'
+    case Float32()        : return 'float32'
+    case Float64()        : return 'float64'
+    case Char()           : return 'char'
+    case String()         : return 'string'
+    case List(t)          : return 'list<' + mangle_valtype(t) + '>'
+    case Record(fields)   : return mangle_recordtype(fields)
+    case Tuple(ts)        : return mangle_tupletype(ts)
+    case Flags(labels)    : return mangle_flags(labels)
+    case Variant(cases)   : return mangle_varianttype(cases)
+    case Enum(labels)     : return mangle_enumtype(labels)
+    case Union(ts)        : return mangle_uniontype(ts)
+    case Option(t)        : return mangle_optiontype(t)
+    case Result(ok,error) : return mangle_resulttype(ok,error)
+
+def mangle_recordtype(fields):
+  mangled_fields = (f.label + ':' + mangle_valtype(f.t) for f in fields)
+  return 'record{' + ','.join(mangled_fields) + '}'
+
+def mangle_tupletype(ts):
+  return 'tuple<' + ','.join(mangle_valtype(t) for t in ts) + '>'
+
+def mangle_flags(labels):
+  return 'flags{' + ','.join(labels) + '}'
+
+def mangle_varianttype(cases):
+  mangled_cases = (c.label + '(' + mangle_maybevaltype(c.t) + ')' for c in cases)
+  return 'variant{' + ','.join(mangled_cases) + '}'
+
+def mangle_enumtype(labels):
+  return 'enum{' + ','.join(labels) + '}'
+
+def mangle_uniontype(ts):
+  return 'union{' + ','.join(mangle_valtype(t) for t in ts) + '}'
+
+def mangle_optiontype(t):
+  return 'option<' + mangle_valtype(t) + '>'
+
+def mangle_resulttype(ok, error):
+  return 'result<' + mangle_maybevaltype(ok) + ',' + mangle_maybevaltype(error) + '>'
+
+def mangle_maybevaltype(t):
+  if t is None:
+    return '_'
+  return mangle_valtype(t)
+
+## Lifting Canonical Modules
+
+class Module:
+  t: ModuleType
+  instantiate: Callable[typing.List[typing.Tuple[str,str,Value]], typing.List[typing.Tuple[str,Value]]]
+
+class Component:
+  t: ComponentType
+  instantiate: Callable[typing.List[typing.Tuple[str,any]], typing.List[typing.Tuple[str,any]]]
+
+def lift_canonical_module(module: Module) -> Component:
+  pass # TODO
