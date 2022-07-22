@@ -104,8 +104,7 @@ keyword ::= 'use'
           | 'string'
           | 'option'
           | 'list'
-          | 'expected'
-          | 'unit'
+          | 'result'
           | 'as'
           | 'from'
           | 'static'
@@ -341,23 +340,23 @@ parameters, and results. Functions can optionally also be declared as `async`
 functions.
 
 ```wit
-thunk: func()
+thunk: func() -> ()
 fibonacci: func(n: u32) -> u32
-sleep: async func(ms: u64)
+sleep: async func(ms: u64) -> ()
 ```
 
 Specifically functions have the structure:
 
 ```wit
-func-item ::= id ':' 'async'? 'func' '(' func-args ')' func-ret
+func-item ::= id ':' 'async'? 'func' func-vec '->' func-vec
 
-func-args ::= func-arg
-            | func-arg ',' func-args?
+func-vec ::= ty
+           | '(' func-named-type-list ')'
 
-func-arg ::= id ':' ty
+func-named-type-list ::= nil
+                       | func-named-type ( ',' func-named-type )*
 
-func-ret ::= nil
-           | '->' ty
+func-named-type ::= id ':' ty
 ```
 
 ## Item: `resource`
@@ -405,7 +404,7 @@ such as built-ins. For example:
 
 ```wit
 type number = u32
-type fallible-function-result = expected<u32, string>
+type fallible-function-result = result<u32, string>
 type headers = list<string>
 ```
 
@@ -418,11 +417,10 @@ ty ::= 'u8' | 'u16' | 'u32' | 'u64'
      | 'char'
      | 'bool'
      | 'string'
-     | 'unit'
      | tuple
      | list
      | option
-     | expected
+     | result
      | future
      | stream
      | id
@@ -435,18 +433,25 @@ list ::= 'list' '<' ty '>'
 
 option ::= 'option' '<' ty '>'
 
-expected ::= 'expected' '<' ty ',' ty '>'
+result ::= 'result' '<' ty ',' ty '>'
+         | 'result' '<' '_' ',' ty '>'
+         | 'result' '<' ty '>'
+         | 'result'
 
 future ::= 'future' '<' ty '>'
+         | 'future'
 
 stream ::= 'stream' '<' ty ',' ty '>'
+         | 'stream' '<' '_' ',' ty '>'
+         | 'stream' '<' ty '>'
+         | 'stream'
 ```
 
 The `tuple` type is semantically equivalent to a `record` with numerical fields,
 but it frequently can have language-specific meaning so it's provided as a
 first-class type.
 
-Similarly the `option` and `expected` types are semantically equivalent to the
+Similarly the `option` and `result` types are semantically equivalent to the
 variants:
 
 ```wit
@@ -455,7 +460,7 @@ variant option {
     some(ty),
 }
 
-variant expected {
+variant result {
     ok(ok-ty)
     err(err-ty),
 }
@@ -476,9 +481,9 @@ by '-'s starts with a `XID_Start` scalar value with a zero Canonical Combining
 Class:
 
 ```wit
-foo: func(bar: u32)
+foo: func(bar: u32) -> ()
 
-red-green-blue: func(r: u32, g: u32, b: u32)
+red-green-blue: func(r: u32, g: u32, b: u32) -> ()
 ```
 
 This form can't name identifiers which have the same name as wit keywords, so
@@ -486,12 +491,12 @@ the second form is the same syntax with the same restrictions as the first, but
 prefixed with '%':
 
 ```wit
-%foo: func(%bar: u32)
+%foo: func(%bar: u32) -> ()
 
-%red-green-blue: func(%r: u32, %g: u32, %b: u32)
+%red-green-blue: func(%r: u32, %g: u32, %b: u32) -> ()
 
 // This form also supports identifiers that would otherwise be keywords.
-%variant: func(%enum: s32)
+%variant: func(%enum: s32) -> ()
 ```
 
 [kebab-case]: https://en.wikipedia.org/wiki/Letter_case#Kebab_case
