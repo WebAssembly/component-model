@@ -1318,9 +1318,10 @@ for all m : core:module and ct : componenttype:
 One consequence of this is that the canonical `core:moduletype` must encode
 enough high-level type information for `lift-canonical-module` to be able to
 reconstruct a working component. This is achieved using [name mangling]. Unlike
-traditional C-family name mangling, which uses unreadable, space-efficient
-mangling schemes to support millions of *internal* names, the Canonical ABI
-only needs to mangle *external* names, of which there will only be a handful.
+traditional C-family name mangling, which have a limited character set imposed
+by linkers and aim to be space-efficient enough to support millions of
+*internal* names, the Canonical ABI can use any valid UTF-8 string and only
+needs to mangle *external* names, of which there will only be a handful.
 Therefore, squeezing out every byte is a lower concern and so, for simplicity
 and readability, type information is mangled using a subset of the
 [`wit`](WIT.md) syntax.
