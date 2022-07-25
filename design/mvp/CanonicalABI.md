@@ -1312,8 +1312,8 @@ definitions.
 
 Together, these definitions are intended to satisfy the invariant:
 ```
-for all m : core:module, mt : core:moduletype, ct : componenttype:
-  m : mt and mt = canonical-module-type(ct) implies lift-canonical-module(m) : ct
+for all m : core:module and ct : componenttype:
+  module-type(m) = canonical-module-type(ct) implies ct = type-of(lift-canonical-module(m))
 ```
 One consequence of this is that the canonical `core:moduletype` must encode
 enough high-level type information for `lift-canonical-module` to be able to
