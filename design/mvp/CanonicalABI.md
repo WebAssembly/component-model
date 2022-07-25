@@ -1,6 +1,6 @@
 # Canonical ABI Explainer
 
-This document walks defines the Canonical ABI used to convert between
+This document defines the Canonical ABI used to convert between
 high-level Component Model values and low-level Core WebAssembly values.
 
 * [Supporting definitions](#supporting-definitions)
