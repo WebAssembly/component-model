@@ -379,21 +379,21 @@ test_mangle_functype([], [U8()], 'func () -> u8')
 test_mangle_functype([('x',U8())], [('y',U8())], 'func (x:u8) -> (y:u8)')
 test_mangle_functype([('a',Bool()),('b',U8()),('c',S16()),('d',U32()),('e',S64())],
                      [('a',S8()),('b',U16()),('c',S32()),('d',U64())],
-                     'func (a:bool,b:u8,c:s16,d:u32,e:s64) -> (a:s8,b:u16,c:s32,d:u64)')
+                     'func (a:bool, b:u8, c:s16, d:u32, e:s64) -> (a:s8, b:u16, c:s32, d:u64)')
 test_mangle_functype([List(List(String()))], [],
                      'func list<list<string>> -> ()')
 test_mangle_functype([Record([Field('x',Record([Field('y',String())])),Field('z',U32())])], [],
-                     'func record{x:record{y:string},z:u32} -> ()')
+                     'func record{x:record{y:string}, z:u32} -> ()')
 test_mangle_functype([Tuple([U8()])], [Tuple([U8(),U8()])],
-                     'func tuple<u8> -> tuple<u8,u8>')
+                     'func tuple<u8> -> tuple<u8, u8>')
 test_mangle_functype([Flags(['a','b'])], [Enum(['a','b'])],
-                     'func flags{a,b} -> enum{a,b}')
+                     'func flags{a, b} -> enum{a, b}')
 test_mangle_functype([Variant([Case('a',None),Case('b',U8())])], [Union([U8(),List(String())])],
-                     'func variant{a(_),b(u8)} -> union{u8,list<string>}')
+                     'func variant{a(_), b(u8)} -> union{u8, list<string>}')
 test_mangle_functype([Option(Bool())],[Option(List(U8()))],
                      'func option<bool> -> option<list<u8>>')
 test_mangle_functype([], [('a',Result(None,None)),('b',Result(U8(),None)),('c',Result(None,U8()))],
-                     'func () -> (a:result<_,_>,b:result<u8,_>,c:result<_,u8>)')
+                     'func () -> (a:result<_, _>, b:result<u8, _>, c:result<_, u8>)')
 
 def test_cabi(ct, expect):
   got = canonical_module_type(ct)
@@ -449,7 +449,7 @@ test_cabi( # from CanonicalABI.md
   ),
   ModuleType(
     [CoreImportDecl('','foo: func () -> ()', CoreFuncType([],[])),
-     CoreImportDecl('','a.bar: func (x:u32,y:u32) -> u32', CoreFuncType(['i32','i32'],['i32']))],
+     CoreImportDecl('','a.bar: func (x:u32, y:u32) -> u32', CoreFuncType(['i32','i32'],['i32']))],
     [CoreExportDecl('_memory', CoreMemoryType(0, None)),
      CoreExportDecl('_realloc', CoreFuncType(['i32','i32','i32','i32'],['i32'])),
      CoreExportDecl('_start{cabi=0.1}: func (v1:string) -> (v2:list<list<string>>)',
