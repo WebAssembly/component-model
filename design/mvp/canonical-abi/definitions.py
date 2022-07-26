@@ -1029,18 +1029,18 @@ def canonical_module_type(ct: ComponentType) -> ModuleType:
     imports.append(CoreImportDecl('', mangle_funcname(name, ft), flat_ft))
 
   exports = []
-  exports.append(CoreExportDecl('_memory', CoreMemoryType(initial=0, maximum=None)))
-  exports.append(CoreExportDecl('_realloc', CoreFuncType(['i32','i32','i32','i32'], ['i32'])))
+  exports.append(CoreExportDecl('cabi_memory', CoreMemoryType(initial=0, maximum=None)))
+  exports.append(CoreExportDecl('cabi_realloc', CoreFuncType(['i32','i32','i32','i32'], ['i32'])))
 
   start_ft = FuncType(start_params, start_results)
-  start_name = mangle_funcname('_start{cabi=' + CABI_VERSION + '}', start_ft)
+  start_name = mangle_funcname('cabi_start{cabi=' + CABI_VERSION + '}', start_ft)
   exports.append(CoreExportDecl(start_name, flatten_functype(start_ft, 'lift')))
 
   for name,ft in export_funcs:
     flat_ft = flatten_functype(ft, 'lift')
     exports.append(CoreExportDecl(mangle_funcname(name, ft), flat_ft))
     if any(contains_dynamic_allocation(t) for t in ft.results):
-      exports.append(CoreExportDecl('_post-' + name, CoreFuncType(flat_ft.results, [])))
+      exports.append(CoreExportDecl('cabi_post_' + name, CoreFuncType(flat_ft.results, [])))
 
   return ModuleType(imports, exports)
 

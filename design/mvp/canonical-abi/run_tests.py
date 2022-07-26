@@ -409,9 +409,9 @@ test_cabi(
   ),
   ModuleType(
     [CoreImportDecl('','a: func u8 -> u8', CoreFuncType(['i32'],['i32']))],
-    [CoreExportDecl('_memory', CoreMemoryType(0, None)),
-     CoreExportDecl('_realloc', CoreFuncType(['i32','i32','i32','i32'],['i32'])),
-     CoreExportDecl('_start{cabi=0.1}: func (b:string) -> (d:list<u8>)',
+    [CoreExportDecl('cabi_memory', CoreMemoryType(0, None)),
+     CoreExportDecl('cabi_realloc', CoreFuncType(['i32','i32','i32','i32'],['i32'])),
+     CoreExportDecl('cabi_start{cabi=0.1}: func (b:string) -> (d:list<u8>)',
                     CoreFuncType(['i32','i32'],['i32'])),
      CoreExportDecl('c: func s8 -> s8', CoreFuncType(['i32'],['i32']))]
   )
@@ -429,12 +429,12 @@ test_cabi(
   ),
   ModuleType(
     [CoreImportDecl('','a.b: func u8 -> u8', CoreFuncType(['i32'],['i32']))],
-    [CoreExportDecl('_memory', CoreMemoryType(0, None)),
-     CoreExportDecl('_realloc', CoreFuncType(['i32','i32','i32','i32'],['i32'])),
-     CoreExportDecl('_start{cabi=0.1}: func (a.c:float32) -> (d.f:float64)',
+    [CoreExportDecl('cabi_memory', CoreMemoryType(0, None)),
+     CoreExportDecl('cabi_realloc', CoreFuncType(['i32','i32','i32','i32'],['i32'])),
+     CoreExportDecl('cabi_start{cabi=0.1}: func (a.c:float32) -> (d.f:float64)',
                     CoreFuncType(['f32'],['f64'])),
      CoreExportDecl('d.e: func () -> list<string>', CoreFuncType([],['i32'])),
-     CoreExportDecl('_post-d.e', CoreFuncType(['i32'],[]))]
+     CoreExportDecl('cabi_post_d.e', CoreFuncType(['i32'],[]))]
   )
 )
 test_cabi( # from CanonicalABI.md
@@ -450,12 +450,12 @@ test_cabi( # from CanonicalABI.md
   ModuleType(
     [CoreImportDecl('','foo: func () -> ()', CoreFuncType([],[])),
      CoreImportDecl('','a.bar: func (x:u32, y:u32) -> u32', CoreFuncType(['i32','i32'],['i32']))],
-    [CoreExportDecl('_memory', CoreMemoryType(0, None)),
-     CoreExportDecl('_realloc', CoreFuncType(['i32','i32','i32','i32'],['i32'])),
-     CoreExportDecl('_start{cabi=0.1}: func (v1:string) -> (v2:list<list<string>>)',
+    [CoreExportDecl('cabi_memory', CoreMemoryType(0, None)),
+     CoreExportDecl('cabi_realloc', CoreFuncType(['i32','i32','i32','i32'],['i32'])),
+     CoreExportDecl('cabi_start{cabi=0.1}: func (v1:string) -> (v2:list<list<string>>)',
                     CoreFuncType(['i32','i32'],['i32'])),
      CoreExportDecl('baz: func () -> string', CoreFuncType([],['i32'])),
-     CoreExportDecl('_post-baz', CoreFuncType(['i32'],[]))]
+     CoreExportDecl('cabi_post_baz', CoreFuncType(['i32'],[]))]
   )
 )
 

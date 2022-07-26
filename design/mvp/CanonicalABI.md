@@ -1359,18 +1359,18 @@ def canonical_module_type(ct: ComponentType) -> ModuleType:
     imports.append(CoreImportDecl('', mangle_funcname(name, ft), flat_ft))
 
   exports = []
-  exports.append(CoreExportDecl('_memory', CoreMemoryType(initial=0, maximum=None)))
-  exports.append(CoreExportDecl('_realloc', CoreFuncType(['i32','i32','i32','i32'], ['i32'])))
+  exports.append(CoreExportDecl('cabi_memory', CoreMemoryType(initial=0, maximum=None)))
+  exports.append(CoreExportDecl('cabi_realloc', CoreFuncType(['i32','i32','i32','i32'], ['i32'])))
 
   start_ft = FuncType(start_params, start_results)
-  start_name = mangle_funcname('_start{cabi=' + CABI_VERSION + '}', start_ft)
+  start_name = mangle_funcname('cabi_start{cabi=' + CABI_VERSION + '}', start_ft)
   exports.append(CoreExportDecl(start_name, flatten_functype(start_ft, 'lift')))
 
   for name,ft in export_funcs:
     flat_ft = flatten_functype(ft, 'lift')
     exports.append(CoreExportDecl(mangle_funcname(name, ft), flat_ft))
     if any(contains_dynamic_allocation(t) for t in ft.results):
-      exports.append(CoreExportDecl('_post-' + name, CoreFuncType(flat_ft.results, [])))
+      exports.append(CoreExportDecl('cabi_post_' + name, CoreFuncType(flat_ft.results, [])))
 
   return ModuleType(imports, exports)
 
@@ -1389,15 +1389,15 @@ import/export with the function type mangled into the name. Additionally, each
 export whose return type implies possible dynamic allocation is given a
 `post-return` function so that it can deallocate after the caller reads the
 return value. Lastly, all value imports and exports are concatenated into a
-synthetic `_start` function that is called immediately after instantiation.
+synthetic `cabi_start` function that is called immediately after instantiation.
 
 For imports (which in Core WebAssembly are [two-level]), the first-level name
 is set to be a zero-length string so that the entire rest of the first-level
 string space is available for [shared-everything linking].
 
 For imports and exports, the Canonical ABI assumes that `_` is not a valid
-first character in a component-level import/export (as is currently the case in
-`wit` [identifiers](WIT.md#identifiers)) and thus can safely be used to prefix 
+character in a component-level import/export (as is currently the case in `wit`
+[identifiers](WIT.md#identifiers)) and thus can safely be used to prefix
 auxiliary Canonical ABI-induced imports/exports.
 
 Instance-mangling recursively builds a dotted path string (of instance names)
