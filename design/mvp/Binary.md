@@ -117,7 +117,8 @@ Notes:
   index in the `sort` index space of the `i`th enclosing component (counting
   outward, starting with `0` referring to the current component).
 * For `outer` aliases of `core:aliastarget`, validation restricts the `sort` to
-  `type`.
+  `type` and `ct` must be `0` (for a component-level definition; see also the
+  `core:alias` case of `core:moduledecl` below).
 * For `outer` aliases of `aliastarget`, validation restricts the `sort` to one
   of `type`, `module` or `component`.
 

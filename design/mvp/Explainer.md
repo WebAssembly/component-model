@@ -227,6 +227,7 @@ component):
 ```
 core:alias       ::= (alias <core:aliastarget> (<core:sort> <id>?))
 core:aliastarget ::= export <core:instanceidx> <name>
+                   | outer <u32> <u32>
 
 alias            ::= (alias <aliastarget> (<sort> <id>?))
 aliastarget      ::= export <instanceidx> <name>
@@ -242,17 +243,19 @@ In the case of `export` aliases, validation ensures `name` is an export in the
 target instance and has a matching sort.
 
 In the case of `outer` aliases, the `u32` pair serves as a [de Bruijn
-index], with first `u32` being the number of enclosing components to skip
-and the second `u32` being an index into the target component's sort's index
-space. In particular, the first `u32` can be `0`, in which case the outer
-alias refers to the current component. To maintain the acyclicity of module
-instantiation, outer aliases are only allowed to refer to *preceding* outer
-definitions.
+index], with first `u32` being the number of enclosing components/modules to
+skip and the second `u32` being an index into the target's sort's index space.
+In particular, the first `u32` can be `0`, in which case the outer alias refers
+to the current component. To maintain the acyclicity of module instantiation,
+outer aliases are only allowed to refer to *preceding* outer definitions.
 
-There is no `outer` option in `core:aliastarget` because it would only be able
-to refer to enclosing *core* modules and module types and, until
-module-linking, modules and module types can't nest. In a module-linking
-future, outer aliases would be added, making `core:alias` symmetric to `alias`.
+As with other core definitions, core aliases are only supposed to "see" other
+core definitions (as-if they were defined by Core WebAssembly extended with
+[module-linking]). Thus, core `outer` aliases must have a skip-count of `0`
+when defined within a component, only allowing them to duplicate core
+definitions in core index spaces. (Core `outer` aliases have a second use
+described in the next section, which is why they are included in the grammar
+at all.)
 
 Components containing outer aliases effectively produce a [closure] at
 instantiation time, including a copy of the outer-aliased definitions. Because
