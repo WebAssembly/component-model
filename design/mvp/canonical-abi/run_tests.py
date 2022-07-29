@@ -243,6 +243,7 @@ def test_heap(t, expect, args, byte_array):
   test(t, args, expect, opts)
 
 test_heap(List(Unit()), [{},{},{}], [0,3], [])
+test_heap(List(Unit()), [{},{},{}], [100,3], [])
 test_heap(List(Bool()), [True,False,True], [0,3], [1,0,1])
 test_heap(List(Bool()), [True,False,True], [0,3], [1,0,2])
 test_heap(List(Bool()), [True,False,True], [3,3], [0xff,0xff,0xff, 1,0,1])

@@ -327,8 +327,9 @@ def load_list(opts, ptr, elem_type):
   return load_list_from_range(opts, begin, length, elem_type)
 
 def load_list_from_range(opts, ptr, length, elem_type):
-  trap_if(ptr != align_to(ptr, alignment(elem_type)))
-  trap_if(ptr + length * size(elem_type) > len(opts.memory))
+  if size(elem_type) > 0:
+    trap_if(ptr != align_to(ptr, alignment(elem_type)))
+    trap_if(ptr + length * size(elem_type) > len(opts.memory))
   a = []
   for i in range(length):
     a.append(load(opts, ptr + i * size(elem_type), elem_type))
@@ -651,8 +652,9 @@ def store_list_into_range(opts, v, elem_type):
   byte_length = len(v) * size(elem_type)
   trap_if(byte_length >= (1 << 32))
   ptr = opts.realloc(0, 0, alignment(elem_type), byte_length)
-  trap_if(ptr != align_to(ptr, alignment(elem_type)))
-  trap_if(ptr + byte_length > len(opts.memory))
+  if size(elem_type) > 0:
+    trap_if(ptr != align_to(ptr, alignment(elem_type)))
+    trap_if(ptr + byte_length > len(opts.memory))
   for i,e in enumerate(v):
     store(opts, e, elem_type, ptr + i * size(elem_type))
   return (ptr, len(v))
