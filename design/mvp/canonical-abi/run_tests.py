@@ -95,6 +95,8 @@ def test(t, vals_to_lift, v,
 test(Unit(), [], {})
 test(Record([Field('x',U8()), Field('y',U16()), Field('z',U32())]), [1,2,3], {'x':1,'y':2,'z':3})
 test(Tuple([Tuple([U8(),U8()]),U8()]), [1,2,3], {'0':{'0':1,'1':2},'1':3})
+t = Flags([])
+test(t, [], {})
 t = Flags(['a','b'])
 test(t, [0], {'a':False,'b':False})
 test(t, [2], {'a':False,'b':True})
@@ -283,6 +285,12 @@ test_heap(List(Tuple([Union([U8(),Tuple([U16(),U8()])]),U8()])),
           [1,0xff,5,0,6,0xff,7,0xff,  0,0xff,8,0xff,0xff,0xff,9,0xff])
 test_heap(List(Union([U8()])), [{'0':6},{'0':7},{'0':8}], [0,3],
           [0,6, 0,7, 0,8])
+t = List(Flags([]))
+test_heap(t, [{},{},{}], [0,3],
+          [])
+t = List(Tuple([Flags([]), U8()]))
+test_heap(t, [mk_tup({}, 42), mk_tup({}, 43), mk_tup({}, 44)], [0,3],
+          [42,43,44])
 t = List(Flags(['a','b']))
 test_heap(t, [{'a':False,'b':False},{'a':False,'b':True},{'a':True,'b':True}], [0,3],
           [0,2,3])
