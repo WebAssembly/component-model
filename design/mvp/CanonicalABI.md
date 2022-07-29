@@ -180,6 +180,7 @@ def size_variant(cases):
 
 def size_flags(labels):
   n = len(labels)
+  if n == 0: return 0
   if n <= 8: return 1
   if n <= 16: return 2
   return 4 * num_i32_flags(labels)
