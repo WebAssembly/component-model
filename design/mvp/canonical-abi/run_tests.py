@@ -375,11 +375,11 @@ def test_mangle_functype(params, results, expect):
 
 test_mangle_functype([U8()], [U8()], 'func u8 -> u8')
 test_mangle_functype([U8()], [], 'func u8 -> ()')
-test_mangle_functype([], [U8()], 'func () -> u8')
-test_mangle_functype([('x',U8())], [('y',U8())], 'func (x: u8) -> (y: u8)')
+test_mangle_functype([], [U8()], 'func() -> u8')
+test_mangle_functype([('x',U8())], [('y',U8())], 'func(x: u8) -> (y: u8)')
 test_mangle_functype([('a',Bool()),('b',U8()),('c',S16()),('d',U32()),('e',S64())],
                      [('a',S8()),('b',U16()),('c',S32()),('d',U64())],
-                     'func (a: bool, b: u8, c: s16, d: u32, e: s64) -> (a: s8, b: u16, c: s32, d: u64)')
+                     'func(a: bool, b: u8, c: s16, d: u32, e: s64) -> (a: s8, b: u16, c: s32, d: u64)')
 test_mangle_functype([List(List(String()))], [],
                      'func list<list<string>> -> ()')
 test_mangle_functype([Record([Field('x',Record([Field('y',String())])),Field('z',U32())])], [],
@@ -393,7 +393,7 @@ test_mangle_functype([Variant([Case('a',None),Case('b',U8())])], [Union([U8(),Li
 test_mangle_functype([Option(Bool())],[Option(List(U8()))],
                      'func option<bool> -> option<list<u8>>')
 test_mangle_functype([], [('a',Result(None,None)),('b',Result(U8(),None)),('c',Result(None,U8()))],
-                     'func () -> (a: result<_, _>, b: result<u8, _>, c: result<_, u8>)')
+                     'func() -> (a: result<_, _>, b: result<u8, _>, c: result<_, u8>)')
 
 def test_cabi(ct, expect):
   got = canonical_module_type(ct)
@@ -411,7 +411,7 @@ test_cabi(
     [CoreImportDecl('','a: func u8 -> u8', CoreFuncType(['i32'],['i32']))],
     [CoreExportDecl('cabi_memory', CoreMemoryType(0, None)),
      CoreExportDecl('cabi_realloc', CoreFuncType(['i32','i32','i32','i32'],['i32'])),
-     CoreExportDecl('cabi_start{cabi=0.1}: func (b: string) -> (d: list<u8>)',
+     CoreExportDecl('cabi_start{cabi=0.1}: func(b: string) -> (d: list<u8>)',
                     CoreFuncType(['i32','i32'],['i32'])),
      CoreExportDecl('c: func s8 -> s8', CoreFuncType(['i32'],['i32']))]
   )
@@ -431,9 +431,9 @@ test_cabi(
     [CoreImportDecl('','a.b: func u8 -> u8', CoreFuncType(['i32'],['i32']))],
     [CoreExportDecl('cabi_memory', CoreMemoryType(0, None)),
      CoreExportDecl('cabi_realloc', CoreFuncType(['i32','i32','i32','i32'],['i32'])),
-     CoreExportDecl('cabi_start{cabi=0.1}: func (a.c: float32) -> (d.f: float64)',
+     CoreExportDecl('cabi_start{cabi=0.1}: func(a.c: float32) -> (d.f: float64)',
                     CoreFuncType(['f32'],['f64'])),
-     CoreExportDecl('d.e: func () -> list<string>', CoreFuncType([],['i32'])),
+     CoreExportDecl('d.e: func() -> list<string>', CoreFuncType([],['i32'])),
      CoreExportDecl('cabi_post_d.e', CoreFuncType(['i32'],[]))]
   )
 )
@@ -444,17 +444,17 @@ test_cabi( # from CanonicalABI.md
        ExternDecl('bar', FuncType([('x', U32()),('y', U32())],[U32()]))
      ])),
      ExternDecl('v1', ValueType(String()))],
-    [ExternDecl('baz', FuncType([], [String()])),
+    [ExternDecl('baz', FuncType([String()], [String()])),
      ExternDecl('v2', ValueType(List(List(String()))))]
   ),
   ModuleType(
-    [CoreImportDecl('','foo: func () -> ()', CoreFuncType([],[])),
-     CoreImportDecl('','a.bar: func (x: u32, y: u32) -> u32', CoreFuncType(['i32','i32'],['i32']))],
+    [CoreImportDecl('','foo: func() -> ()', CoreFuncType([],[])),
+     CoreImportDecl('','a.bar: func(x: u32, y: u32) -> u32', CoreFuncType(['i32','i32'],['i32']))],
     [CoreExportDecl('cabi_memory', CoreMemoryType(0, None)),
      CoreExportDecl('cabi_realloc', CoreFuncType(['i32','i32','i32','i32'],['i32'])),
-     CoreExportDecl('cabi_start{cabi=0.1}: func (v1: string) -> (v2: list<list<string>>)',
+     CoreExportDecl('cabi_start{cabi=0.1}: func(v1: string) -> (v2: list<list<string>>)',
                     CoreFuncType(['i32','i32'],['i32'])),
-     CoreExportDecl('baz: func () -> string', CoreFuncType([],['i32'])),
+     CoreExportDecl('baz: func string -> string', CoreFuncType(['i32','i32'],['i32'])),
      CoreExportDecl('cabi_post_baz', CoreFuncType(['i32'],[]))]
   )
 )

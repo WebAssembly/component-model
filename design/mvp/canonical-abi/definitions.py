@@ -1079,14 +1079,14 @@ def mangle_instances(xs, path = ''):
 #
 
 def mangle_funcname(name, ft):
-  return '{name}: func {params} -> {results}'.format(
+  return '{name}: func{params} -> {results}'.format(
            name = name,
-           params = mangle_funcvec(ft.params),
-           results = mangle_funcvec(ft.results))
+           params = mangle_funcvec(ft.params, pre_space = False),
+           results = mangle_funcvec(ft.results, pre_space = True))
 
-def mangle_funcvec(es):
+def mangle_funcvec(es, pre_space):
   if len(es) == 1 and isinstance(es[0], ValType):
-    return mangle_valtype(es[0])
+    return (' ' if not pre_space else '') + mangle_valtype(es[0])
   assert(all(type(e) == tuple and len(e) == 2 for e in es))
   mangled_elems = (e[0] + ': ' + mangle_valtype(e[1]) for e in es)
   return '(' + ', '.join(mangled_elems) + ')'
