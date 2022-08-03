@@ -1,10 +1,10 @@
 # Typed Main
 
-Previous WASI Command APIs were not able to strongly type the resource and data inputs to commands and instead relied on functions for reading command line arguments and environment variables.
+A high-level goal of the component model is the ability to run a single component portably on various hosts. One such embedding is a classic Unix-style Command-Line Interface (CLI) accepting positional/named arguments.
 
-Typed Main enables components to define value imports for their arguments (including file resources) and environment variables allowing the host to parse and validate them for the component.
+This document describes how a component can be generically interpreted by a component-enabled CLI to allow components to be directly instantiated and invoked from the command line in an idiomatic manner, corresponding to use case #2 of [invoking component exports](https://github.com/WebAssembly/component-model/blob/main/design/high-level/UseCases.md#invoking-component-exports-from-the-host). It also defines annotations which can be used to extend the default interpretation of a component to specify CLI-specific features (e.g. short flag names).
 
-This proposal defines a way to infer the command line arguments names, ordering, etc. from the component type (represented here in [WIT](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md)) and optionally augmenting this with annotated info (represented here as [Structured Annotations](https://github.com/WebAssembly/component-model/issues/58)). The anotation information will be encoded in a custom section in a not-yet-specified way.
+The component type is specified here in terms of a [`*.wit`](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md) interface and annotations as [Structured Annotations](https://github.com/WebAssembly/component-model/issues/58).
 
 ## Arguments
 * Value imports are can be supplied as positional arguments in the order they are defined
