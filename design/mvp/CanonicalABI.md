@@ -1,8 +1,8 @@
 # Canonical ABI Explainer
 
-This explainer walks through the Canonical ABI used by [canonical definitions]
-to convert between high-level Component Model values and low-level Core
-WebAssembly values.
+This document defines the Canonical ABI used to convert between the values and
+functions of components in the Component Model and the values and functions
+of modules in Core WebAssembly.
 
 * [Supporting definitions](#supporting-definitions)
   * [Despecialization](#Despecialization)
@@ -13,10 +13,14 @@ WebAssembly values.
   * [Flattening](#flattening)
   * [Flat Lifting](#flat-lifting)
   * [Flat Lowering](#flat-lowering)
-  * [Lifting and Lowering](#lifting-and-lowering)
+  * [Lifting and Lowering Values](#lifting-and-lowering-values)
+  * [Lifting and Lowering Functions](#lifting-and-lowering-functions)
 * [Canonical definitions](#canonical-definitions)
-  * [`lift`](#lift)
-  * [`lower`](#lower)
+  * [`canon lift`](#canon-lift)
+  * [`canon lower`](#canon-lower)
+* [Canonical ABI](#canonical-abi)
+  * [Canonical Module Type](#canonical-module-type)
+  * [Lifting Canonical Modules](#lifting-canonical-modules)
 
 
 ## Supporting definitions
@@ -212,8 +216,8 @@ analysis:
 class Opts:
   string_encoding: str
   memory: bytearray
-  realloc: types.FunctionType
-  post_return: types.FunctionType
+  realloc: Callable[[int,int,int,int],int]
+  post_return: Callable[[],None]
 
 def load(opts, ptr, t):
   assert(ptr == align_to(ptr, alignment(t)))
@@ -781,12 +785,12 @@ Given all this, the top-level definition of `flatten` is:
 MAX_FLAT_PARAMS = 16
 MAX_FLAT_RESULTS = 1
 
-def flatten(functype, context):
-  flat_params = flatten_types(functype.params)
+def flatten_functype(ft, context):
+  flat_params = flatten_types(ft.param_types())
   if len(flat_params) > MAX_FLAT_PARAMS:
     flat_params = ['i32']
 
-  flat_results = flatten_types(functype.results)
+  flat_results = flatten_types(ft.result_types())
   if len(flat_results) > MAX_FLAT_RESULTS:
     match context:
       case 'lift':
@@ -795,7 +799,7 @@ def flatten(functype, context):
         flat_params += ['i32']
         flat_results = []
 
-  return { 'params': flat_params, 'results': flat_results }
+  return CoreFuncType(flat_params, flat_results)
 
 def flatten_types(ts):
   return [ft for t in ts for ft in flatten_type(t)]
@@ -1092,13 +1096,13 @@ def lower_flat_flags(v, labels):
   return flat
 ```
 
-### Lifting and Lowering
+### Lifting and Lowering Values
 
-The `lift` function defines how to lift a list of at most `max_flat` core
-parameters or results given by the `ValueIter` `vi` into a tuple of values with
-types `ts`:
+The `lift_values` function defines how to lift a list of at most `max_flat`
+core parameters or results given by the `ValueIter` `vi` into a tuple of values
+with types `ts`:
 ```python
-def lift(opts, max_flat, vi, ts):
+def lift_values(opts, max_flat, vi, ts):
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
     ptr = vi.next('i32')
@@ -1110,16 +1114,16 @@ def lift(opts, max_flat, vi, ts):
     return [ lift_flat(opts, vi, t) for t in ts ]
 ```
 
-The `lower` function defines how to lower a list of component-level values `vs`
-of types `ts` into a list of at most `max_flat` core values. As already
-described for [`flatten`](#flattening) above, lowering handles the
+The `lower_values` function defines how to lower a list of component-level
+values `vs` of types `ts` into a list of at most `max_flat` core values. As
+already described for [`flatten`](#flattening) above, lowering handles the
 greater-than-`max_flat` case by either allocating storage with `realloc` or
 accepting a caller-allocated buffer as an out-param:
 ```python
-def lower(opts, max_flat, vs, ts, out_param = None):
+def lower_values(opts, max_flat, vs, ts, out_param = None):
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
-    tuple_type = Tuple(functype.params)
+    tuple_type = Tuple(ts)
     tuple_value = {str(i): v for i,v in enumerate(vs)}
     if out_param is None:
       ptr = opts.realloc(0, 0, alignment(tuple_type), size(tuple_type))
@@ -1136,19 +1140,22 @@ def lower(opts, max_flat, vs, ts, out_param = None):
     return flat_vals
 ```
 
-## Canonical ABI built-ins
+## Canonical Definitions
 
 Using the above supporting definitions, we can describe the static and dynamic
-semantics of [`canon`], whose AST is defined in the main explainer as:
+semantics of component-level [`canon`] definitions, which have the following
+AST (copied from the [explainer][Canonical Definitions]):
 ```
 canon     ::= (canon lift <functype> <canonopt>* <core:funcidx> (func <id>?))
             | (canon lower <canonopt>* <funcidx> (core func <id>?))
 ```
-The following subsections define the static and dynamic semantics of each
-case of `funcbody`.
+The following subsections cover each of these cases (which will soon be
+extended to include [async](https://docs.google.com/presentation/d/1MNVOZ8hdofO3tI0szg_i-Yoy0N2QPU2C--LzVuoGSlE/edit#slide=id.g13600a23b7f_16_0)
+and [resource/handle](https://github.com/alexcrichton/interface-types/blob/40f157ad429772c2b6a8b66ce7b4df01e83ae76d/proposals/interface-types/CanonicalABI.md#handle-intrinsics)
+built-ins).
 
 
-### `lift`
+### `canon lift`
 
 For a function:
 ```
@@ -1192,7 +1199,7 @@ the outside world through an export.
 
 Given the above closure arguments, `canon_lift` is defined:
 ```python
-def canon_lift(callee_opts, callee_instance, callee, functype, args, called_as_export):
+def canon_lift(callee_opts, callee_instance, callee, ft, args, called_as_export):
   if called_as_export:
     trap_if(not callee_instance.may_enter)
     callee_instance.may_enter = False
@@ -1201,7 +1208,7 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args, called_as_e
 
   assert(callee_instance.may_leave)
   callee_instance.may_leave = False
-  flat_args = lower(callee_opts, MAX_FLAT_PARAMS, args, functype.params)
+  flat_args = lower_values(callee_opts, MAX_FLAT_PARAMS, args, ft.param_types())
   callee_instance.may_leave = True
 
   try:
@@ -1209,7 +1216,7 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args, called_as_e
   except CoreWebAssemblyException:
     trap()
 
-  results = lift(callee_opts, MAX_FLAT_RESULTS, ValueIter(flat_results), functype.results)
+  results = lift_values(callee_opts, MAX_FLAT_RESULTS, ValueIter(flat_results), ft.result_types())
   def post_return():
     if callee_opts.post_return is not None:
       callee_opts.post_return(flat_results)
@@ -1241,7 +1248,7 @@ that the caller of `canon_lift` *must* call `post_return` right after lowering
 actions after the lowering is complete.
 
 
-### `lower`
+### `canon lower`
 
 For a function:
 ```
@@ -1260,16 +1267,16 @@ Thus, from the perspective of Core WebAssembly, `$f` is a [function instance]
 containing a `hostfunc` that closes over `$opts`, `$inst`, `$callee` and `$ft`
 and, when called from Core WebAssembly code, calls `canon_lower`, which is defined as:
 ```python
-def canon_lower(caller_opts, caller_instance, callee, functype, flat_args):
+def canon_lower(caller_opts, caller_instance, callee, ft, flat_args):
   trap_if(not caller_instance.may_leave)
 
   flat_args = ValueIter(flat_args)
-  args = lift(caller_opts, MAX_FLAT_PARAMS, flat_args, functype.params)
+  args = lift_values(caller_opts, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
   results, post_return = callee(args)
 
   caller_instance.may_leave = False
-  flat_results = lower(caller_opts, MAX_FLAT_RESULTS, results, functype.results, flat_args)
+  flat_results = lower_values(caller_opts, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
   caller_instance.may_leave = True
 
   post_return()
@@ -1306,6 +1313,269 @@ the AOT compiler as requiring an intermediate copy to implement the above
 `lift`-then-`lower` semantics.
 
 
+## Canonical ABI
+
+The above `canon` definitions are parameterized, giving each component a small
+space of ABI options for interfacing with its contained core modules. Moreover,
+each component can choose its ABI options independently of each other component,
+with compiled adapter trampolines handling any conversions at cross-component
+call boundaries. However, in some contexts, it is useful to fix a **single**,
+"**canonical**" ABI that is fully determined by a given component type (which
+itself is fully determined by a set of [`wit`](WIT.md) files). For example,
+this allows existing Core WebAssembly toolchains to continue targeting [WASI]
+by importing and exporting fixed Core Module functions signatures, without
+having to add any new component-model concepts.
+
+To support these use cases, the following section defines two new mappings:
+1. `canonical-module-type : componenttype -> core:moduletype`
+2. `lift-canonical-module : core:module -> component`
+
+The `canonical-module-type` mapping defines the collection of core function
+signatures that a core module must import and export to implement the given
+component type via the Canonical ABI.
+
+The `lift-canonical-module` mapping defines the runtime behavior of a core
+module that has successfully implemented `canonical-module-type` by fixing
+a canonical set of ABI options that are passed to the above-defined `canon`
+definitions.
+
+Together, these definitions are intended to satisfy the invariant:
+```
+for all m : core:module and ct : componenttype:
+  module-type(m) = canonical-module-type(ct) implies ct = type-of(lift-canonical-module(m))
+```
+One consequence of this is that the canonical `core:moduletype` must encode
+enough high-level type information for `lift-canonical-module` to be able to
+reconstruct a working component. This is achieved using [name mangling]. Unlike
+traditional C-family name mangling, which have a limited character set imposed
+by linkers and aim to be space-efficient enough to support millions of
+*internal* names, the Canonical ABI can use any valid UTF-8 string and only
+needs to mangle *external* names, of which there will only be a handful.
+Therefore, squeezing out every byte is a lower concern and so, for simplicity
+and readability, type information is mangled using a subset of the
+[`wit`](WIT.md) syntax.
+
+One final point of note is that `lift-canonical-module` is only able to produce
+a *subset* of all possible components (e.g., not covering nesting and
+virtualization scenarios); to express the full variety of components, a
+toolchain needs to emit proper components directly. Thus, the Canonical ABI
+serves as an incremental adoption path to the full component model, allowing
+existing Core WebAssembly toolchains to produce simple components simply by
+emitting module imports and exports with the appropriate mangled names (e.g.,
+in LLVM using the [`import_name`] and [`export_name`] attributes).
+
+
+### Canonical Module Type
+
+For the same reason that core module and component [binaries](Binary.md)
+include a version number (that is intended to never change after it reaches
+1.0), the Canonical ABI defines its own version that is explicitly declared by
+a core module. Before reaching stable 1.0, the Canonical ABI is explicitly
+allowed to make breaking changes, so this version also serves the purpose of
+coordinating breaking changes in pre-1.0 tools and runtimes.
+```python
+CABI_VERSION = '0.1'
+```
+Working top-down, a canonical module type is defined by the following mapping:
+```python
+def canonical_module_type(ct: ComponentType) -> ModuleType:
+  start_params, import_funcs = mangle_instances(ct.imports)
+  start_results, export_funcs = mangle_instances(ct.exports)
+
+  imports = []
+  for name,ft in import_funcs:
+    flat_ft = flatten_functype(ft, 'lower')
+    imports.append(CoreImportDecl('', mangle_funcname(name, ft), flat_ft))
+
+  exports = []
+  exports.append(CoreExportDecl('cabi_memory', CoreMemoryType(initial=0, maximum=None)))
+  exports.append(CoreExportDecl('cabi_realloc', CoreFuncType(['i32','i32','i32','i32'], ['i32'])))
+
+  start_ft = FuncType(start_params, start_results)
+  start_name = mangle_funcname('cabi_start{cabi=' + CABI_VERSION + '}', start_ft)
+  exports.append(CoreExportDecl(start_name, flatten_functype(start_ft, 'lift')))
+
+  for name,ft in export_funcs:
+    flat_ft = flatten_functype(ft, 'lift')
+    exports.append(CoreExportDecl(mangle_funcname(name, ft), flat_ft))
+    if any(contains_dynamic_allocation(t) for t in ft.results):
+      exports.append(CoreExportDecl('cabi_post_' + name, CoreFuncType(flat_ft.results, [])))
+
+  return ModuleType(imports, exports)
+
+def contains_dynamic_allocation(t):
+  match despecialize(t):
+    case String()       : return True
+    case List(t)        : return True
+    case Record(fields) : return any(contains_dynamic_allocation(f.t) for f in fields)
+    case Variant(cases) : return any(contains_dynamic_allocation(c.t) for c in cases)
+    case _              : return False
+```
+This definition starts by mangling all nested instances into the names of the
+leaf fields, so that instances can be subsequently ignored. Next, each
+component-level function import/export is mapped to corresponding core function
+import/export with the function type mangled into the name. Additionally, each
+export whose return type implies possible dynamic allocation is given a
+`post-return` function so that it can deallocate after the caller reads the
+return value. Lastly, all value imports and exports are concatenated into a
+synthetic `cabi_start` function that is called immediately after instantiation.
+
+For imports (which in Core WebAssembly are [two-level]), the first-level name
+is set to be a zero-length string so that the entire rest of the first-level
+string space is available for [shared-everything linking].
+
+For imports and exports, the Canonical ABI assumes that `_` is not a valid
+character in a component-level import/export (as is currently the case in `wit`
+[identifiers](WIT.md#identifiers)) and thus can safely be used to prefix
+auxiliary Canonical ABI-induced imports/exports.
+
+Instance-mangling recursively builds a dotted path string (of instance names)
+that is included in the mangled core import/export name:
+```python
+def mangle_instances(xs, path = ''):
+  values = []
+  funcs = []
+  for x in xs:
+    name = path + x.name
+    match x.t:
+      case ValueType(t):
+        values.append( (name, t) )
+      case FuncType(params,results):
+        funcs.append( (name, x.t) )
+      case InstanceType(exports):
+        vs,fs = mangle_instances(exports, name + '.')
+        values += vs
+        funcs += fs
+      case TypeType(bounds):
+        assert(False) # TODO: resource types
+      case ComponentType(imports, exports):
+        assert(False) # TODO: `canon instantiate`
+      case ModuleType(imports, exports):
+        assert(False) # TODO: canonical shared-everything linking
+  return (values, funcs)
+```
+The three `TODO` cases are intended to be filled in by future PRs extending
+the Canonical ABI.
+
+Function and value types are recursively mangled into
+[`wit`](WIT.md)-compatible syntax:
+```python
+def mangle_funcname(name, ft):
+  return '{name}: func{params} -> {results}'.format(
+           name = name,
+           params = mangle_funcvec(ft.params, pre_space = False),
+           results = mangle_funcvec(ft.results, pre_space = True))
+
+def mangle_funcvec(es, pre_space):
+  if len(es) == 1 and isinstance(es[0], ValType):
+    return (' ' if not pre_space else '') + mangle_valtype(es[0])
+  assert(all(type(e) == tuple and len(e) == 2 for e in es))
+  mangled_elems = (e[0] + ': ' + mangle_valtype(e[1]) for e in es)
+  return '(' + ', '.join(mangled_elems) + ')'
+
+def mangle_valtype(t):
+  match t:
+    case Bool()           : return 'bool'
+    case S8()             : return 's8'
+    case U8()             : return 'u8'
+    case S16()            : return 's16'
+    case U16()            : return 'u16'
+    case S32()            : return 's32'
+    case U32()            : return 'u32'
+    case S64()            : return 's64'
+    case U64()            : return 'u64'
+    case Float32()        : return 'float32'
+    case Float64()        : return 'float64'
+    case Char()           : return 'char'
+    case String()         : return 'string'
+    case List(t)          : return 'list<' + mangle_valtype(t) + '>'
+    case Record(fields)   : return mangle_recordtype(fields)
+    case Tuple(ts)        : return mangle_tupletype(ts)
+    case Flags(labels)    : return mangle_flags(labels)
+    case Variant(cases)   : return mangle_varianttype(cases)
+    case Enum(labels)     : return mangle_enumtype(labels)
+    case Union(ts)        : return mangle_uniontype(ts)
+    case Option(t)        : return mangle_optiontype(t)
+    case Result(ok,error) : return mangle_resulttype(ok,error)
+
+def mangle_recordtype(fields):
+  mangled_fields = (f.label + ': ' + mangle_valtype(f.t) for f in fields)
+  return 'record { ' + ', '.join(mangled_fields) + ' }'
+
+def mangle_tupletype(ts):
+  return 'tuple<' + ', '.join(mangle_valtype(t) for t in ts) + '>'
+
+def mangle_flags(labels):
+  return 'flags { ' + ', '.join(labels) + ' }'
+
+def mangle_varianttype(cases):
+  mangled_cases = (c.label + '(' + mangle_maybevaltype(c.t) + ')' for c in cases)
+  return 'variant { ' + ', '.join(mangled_cases) + ' }'
+
+def mangle_enumtype(labels):
+  return 'enum { ' + ', '.join(labels) + ' }'
+
+def mangle_uniontype(ts):
+  return 'union { ' + ', '.join(mangle_valtype(t) for t in ts) + ' }'
+
+def mangle_optiontype(t):
+  return 'option<' + mangle_valtype(t) + '>'
+
+def mangle_resulttype(ok, error):
+  return 'result<' + mangle_maybevaltype(ok) + ', ' + mangle_maybevaltype(error) + '>'
+
+def mangle_maybevaltype(t):
+  if t is None:
+    return '_'
+  return mangle_valtype(t)
+```
+As an example, given a component type:
+```wasm
+(component
+  (import "foo" (func))
+  (import "a" (instance
+    (export "bar" (func (param "x" u32) (param "y" u32) (result u32)))
+  ))
+  (import "v1" (value string))
+  (export "baz" (func (param string) (result string)))
+  (export "v2" (value list<list<string>>))
+)
+```
+the `canonical_module_type` would be:
+```wasm
+(module
+  (import "" "foo: func() -> ()" (func))
+  (import "" "a.bar: func(x: u32, y: u32) -> u32" (func param i32 i32) (result i32))
+  (export "cabi_memory" (memory 0))
+  (export "cabi_realloc" (func (param i32 i32 i32 i32) (result i32)))
+  (export "cabi_start{cabi=0.1}: func (v1: string) -> (v2: list<list<string>>)" (func (param i32 i32) (result i32)))
+  (export "baz: func string -> string" (func (param i32 i32) (result i32)))
+  (export "cabi_post_baz" (func (param i32)))
+)
+```
+
+### Lifting Canonical Modules
+
+TODO
+
+```python
+class Module:
+  t: ModuleType
+  instantiate: Callable[typing.List[typing.Tuple[str,str,Value]], typing.List[typing.Tuple[str,Value]]]
+
+class Component:
+  t: ComponentType
+  instantiate: Callable[typing.List[typing.Tuple[str,any]], typing.List[typing.Tuple[str,any]]]
+
+def lift_canonical_module(module: Module) -> Component:
+  # TODO: define component.instantiate by:
+  #  1. creating canonical import adapters
+  #  2. creating a core module instance that imports (1)
+  #  3. creating canonical export adapters from the exports of (2)
+  pass
+```
+
+
 
 [Canonical Definitions]: Explainer.md#canonical-definitions
 [`canonopt`]: Explainer.md#canonical-definitions
@@ -1314,13 +1584,16 @@ the AOT compiler as requiring an intermediate copy to implement the above
 [Component Invariants]: Explainer.md#component-invariants
 [JavaScript Embedding]: Explainer.md#JavaScript-embedding
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
+[Shared-Everything Linking]: examples/SharedEverythingLinking.md
 
 [Administrative Instructions]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-instr-admin
 [Implementation Limits]: https://webassembly.github.io/spec/core/appendix/implementation.html
 [Function Instance]: https://webassembly.github.io/spec/core/exec/runtime.html#function-instances
+[Two-level]: https://webassembly.github.io/spec/core/syntax/modules.html#syntax-import
 
 [Multi-value]: https://github.com/WebAssembly/multi-value/blob/master/proposals/multi-value/Overview.md
 [Exceptions]: https://github.com/WebAssembly/exception-handling/blob/main/proposals/exception-handling/Exceptions.md
+[WASI]: https://github.com/webassembly/wasi
 
 [Alignment]: https://en.wikipedia.org/wiki/Data_structure_alignment
 [UTF-8]: https://en.wikipedia.org/wiki/UTF-8
@@ -1329,3 +1602,7 @@ the AOT compiler as requiring an intermediate copy to implement the above
 [Unicode Scalar Value]: https://unicode.org/glossary/#unicode_scalar_value
 [Unicode Code Point]: https://unicode.org/glossary/#code_point
 [Surrogate]: https://unicode.org/faq/utf_bom.html#utf16-2
+[Name Mangling]: https://en.wikipedia.org/wiki/Name_mangling
+
+[`import_name`]: https://clang.llvm.org/docs/AttributeReference.html#import-name
+[`export_name`]: https://clang.llvm.org/docs/AttributeReference.html#export-name
