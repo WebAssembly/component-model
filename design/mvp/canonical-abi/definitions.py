@@ -201,6 +201,7 @@ class Opts:
 
 def load(opts, ptr, t):
   assert(ptr == align_to(ptr, alignment(t)))
+  assert(ptr + size(t) <= len(opts.memory))
   match despecialize(t):
     case Bool()         : return convert_int_to_bool(load_int(opts, ptr, 1))
     case U8()           : return load_int(opts, ptr, 1)
@@ -223,7 +224,6 @@ def load(opts, ptr, t):
 #
 
 def load_int(opts, ptr, nbytes, signed = False):
-  trap_if(ptr + nbytes > len(opts.memory))
   return int.from_bytes(opts.memory[ptr : ptr+nbytes], 'little', signed=signed)
 
 #
@@ -272,12 +272,15 @@ UTF16_TAG = 1 << 31
 def load_string_from_range(opts, ptr, tagged_code_units):
   match opts.string_encoding:
     case 'utf8':
+      alignment = 1
       byte_length = tagged_code_units
       encoding = 'utf-8'
     case 'utf16':
+      alignment = 2
       byte_length = 2 * tagged_code_units
       encoding = 'utf-16-le'
     case 'latin1+utf16':
+      alignment = 2
       if bool(tagged_code_units & UTF16_TAG):
         byte_length = 2 * (tagged_code_units ^ UTF16_TAG)
         encoding = 'utf-16-le'
@@ -285,6 +288,7 @@ def load_string_from_range(opts, ptr, tagged_code_units):
         byte_length = tagged_code_units
         encoding = 'latin-1'
 
+  trap_if(ptr != align_to(ptr, alignment))
   trap_if(ptr + byte_length > len(opts.memory))
   try:
     s = opts.memory[ptr : ptr+byte_length].decode(encoding)
@@ -358,6 +362,7 @@ def unpack_flags_from_int(i, labels):
 
 def store(opts, v, t, ptr):
   assert(ptr == align_to(ptr, alignment(t)))
+  assert(ptr + size(t) <= len(opts.memory))
   match despecialize(t):
     case Bool()         : store_int(opts, int(bool(v)), ptr, 1)
     case U8()           : store_int(opts, v, ptr, 1)
@@ -380,7 +385,6 @@ def store(opts, v, t, ptr):
 #
 
 def store_int(opts, v, ptr, nbytes, signed = False):
-  trap_if(ptr + nbytes > len(opts.memory))
   opts.memory[ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed=signed)
 
 #
@@ -447,6 +451,8 @@ def store_string_copy(opts, src, src_code_units, dst_code_unit_size, dst_alignme
   dst_byte_length = dst_code_unit_size * src_code_units
   trap_if(dst_byte_length > MAX_STRING_BYTE_LENGTH)
   ptr = opts.realloc(0, 0, dst_alignment, dst_byte_length)
+  trap_if(ptr != align_to(ptr, dst_alignment))
+  trap_if(ptr + dst_byte_length > len(opts.memory))
   encoded = src.encode(dst_encoding)
   assert(dst_byte_length == len(encoded))
   opts.memory[ptr : ptr+len(encoded)] = encoded
@@ -465,15 +471,18 @@ def store_latin1_to_utf8(opts, src, src_code_units):
 def store_string_to_utf8(opts, src, src_code_units, worst_case_size):
   assert(src_code_units <= MAX_STRING_BYTE_LENGTH)
   ptr = opts.realloc(0, 0, 1, src_code_units)
+  trap_if(ptr + src_code_units > len(opts.memory))
   encoded = src.encode('utf-8')
   assert(src_code_units <= len(encoded))
   opts.memory[ptr : ptr+src_code_units] = encoded[0 : src_code_units]
   if src_code_units < len(encoded):
     trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
     ptr = opts.realloc(ptr, src_code_units, 1, worst_case_size)
+    trap_if(ptr + worst_case_size > len(opts.memory))
     opts.memory[ptr+src_code_units : ptr+len(encoded)] = encoded[src_code_units : ]
     if worst_case_size > len(encoded):
       ptr = opts.realloc(ptr, worst_case_size, 1, len(encoded))
+      trap_if(ptr + len(encoded) > len(opts.memory))
   return (ptr, len(encoded))
 
 #
@@ -482,10 +491,14 @@ def store_utf8_to_utf16(opts, src, src_code_units):
   worst_case_size = 2 * src_code_units
   trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
   ptr = opts.realloc(0, 0, 2, worst_case_size)
+  trap_if(ptr != align_to(ptr, 2))
+  trap_if(ptr + worst_case_size > len(opts.memory))
   encoded = src.encode('utf-16-le')
   opts.memory[ptr : ptr+len(encoded)] = encoded
   if len(encoded) < worst_case_size:
     ptr = opts.realloc(ptr, worst_case_size, 2, len(encoded))
+    trap_if(ptr != align_to(ptr, 2))
+    trap_if(ptr + len(encoded) > len(opts.memory))
   code_units = int(len(encoded) / 2)
   return (ptr, code_units)
 
@@ -494,6 +507,8 @@ def store_utf8_to_utf16(opts, src, src_code_units):
 def store_string_to_latin1_or_utf16(opts, src, src_code_units):
   assert(src_code_units <= MAX_STRING_BYTE_LENGTH)
   ptr = opts.realloc(0, 0, 2, src_code_units)
+  trap_if(ptr != align_to(ptr, 2))
+  trap_if(ptr + src_code_units > len(opts.memory))
   dst_byte_length = 0
   for usv in src:
     if ord(usv) < (1 << 8):
@@ -503,6 +518,8 @@ def store_string_to_latin1_or_utf16(opts, src, src_code_units):
       worst_case_size = 2 * src_code_units
       trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
       ptr = opts.realloc(ptr, src_code_units, 2, worst_case_size)
+      trap_if(ptr != align_to(ptr, 2))
+      trap_if(ptr + worst_case_size > len(opts.memory))
       for j in range(dst_byte_length-1, -1, -1):
         opts.memory[ptr + 2*j] = opts.memory[ptr + j]
         opts.memory[ptr + 2*j + 1] = 0
@@ -510,10 +527,14 @@ def store_string_to_latin1_or_utf16(opts, src, src_code_units):
       opts.memory[ptr+2*dst_byte_length : ptr+len(encoded)] = encoded[2*dst_byte_length : ]
       if worst_case_size > len(encoded):
         ptr = opts.realloc(ptr, worst_case_size, 2, len(encoded))
+        trap_if(ptr != align_to(ptr, 2))
+        trap_if(ptr + len(encoded) > len(opts.memory))
       tagged_code_units = int(len(encoded) / 2) | UTF16_TAG
       return (ptr, tagged_code_units)
   if dst_byte_length < src_code_units:
     ptr = opts.realloc(ptr, src_code_units, 2, dst_byte_length)
+    trap_if(ptr != align_to(ptr, 2))
+    trap_if(ptr + dst_byte_length > len(opts.memory))
   return (ptr, dst_byte_length)
 
 #
@@ -522,6 +543,8 @@ def store_probably_utf16_to_latin1_or_utf16(opts, src, src_code_units):
   src_byte_length = 2 * src_code_units
   trap_if(src_byte_length > MAX_STRING_BYTE_LENGTH)
   ptr = opts.realloc(0, 0, 2, src_byte_length)
+  trap_if(ptr != align_to(ptr, 2))
+  trap_if(ptr + src_byte_length > len(opts.memory))
   encoded = src.encode('utf-16-le')
   opts.memory[ptr : ptr+len(encoded)] = encoded
   if any(ord(c) >= (1 << 8) for c in src):
@@ -531,6 +554,7 @@ def store_probably_utf16_to_latin1_or_utf16(opts, src, src_code_units):
   for i in range(latin1_size):
     opts.memory[ptr + i] = opts.memory[ptr + 2*i]
   ptr = opts.realloc(ptr, src_byte_length, 1, latin1_size)
+  trap_if(ptr + latin1_size > len(opts.memory))
   return (ptr, latin1_size)
 
 #
@@ -840,6 +864,7 @@ def lift(opts, max_flat, vi, ts):
     ptr = vi.next('i32')
     tuple_type = Tuple(ts)
     trap_if(ptr != align_to(ptr, alignment(tuple_type)))
+    trap_if(ptr + size(tuple_type) > len(opts.memory))
     return list(load(opts, ptr, tuple_type).values())
   else:
     return [ lift_flat(opts, vi, t) for t in ts ]
@@ -856,6 +881,7 @@ def lower(opts, max_flat, vs, ts, out_param = None):
     else:
       ptr = out_param.next('i32')
     trap_if(ptr != align_to(ptr, alignment(tuple_type)))
+    trap_if(ptr + size(tuple_type) > len(opts.memory))
     store(opts, tuple_value, tuple_type, ptr)
     return [ Value('i32', ptr) ]
   else:
