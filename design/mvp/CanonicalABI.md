@@ -68,13 +68,12 @@ function to replace specialized value types with their expansion:
 ```python
 def despecialize(t):
   match t:
-    case Tuple(ts)           : return Record([ Field(str(i), t) for i,t in enumerate(ts) ])
-    case Unit()              : return Record([])
-    case Union(ts)           : return Variant([ Case(str(i), t) for i,t in enumerate(ts) ])
-    case Enum(labels)        : return Variant([ Case(l, Unit()) for l in labels ])
-    case Option(t)           : return Variant([ Case("none", Unit()), Case("some", t) ])
-    case Expected(ok, error) : return Variant([ Case("ok", ok), Case("error", error) ])
-    case _                   : return t
+    case Tuple(ts)         : return Record([ Field(str(i), t) for i,t in enumerate(ts) ])
+    case Union(ts)         : return Variant([ Case(str(i), t) for i,t in enumerate(ts) ])
+    case Enum(labels)      : return Variant([ Case(l, None) for l in labels ])
+    case Option(t)         : return Variant([ Case("none", None), Case("some", t) ])
+    case Result(ok, error) : return Variant([ Case("ok", ok), Case("error", error) ])
+    case _                 : return t
 ```
 The specialized value types `string` and `flags` are missing from this list
 because they are given specialized canonical ABI representations distinct from
@@ -98,17 +97,17 @@ def alignment(t):
     case Float64()          : return 8
     case Char()             : return 4
     case String() | List(_) : return 4
-    case Record(fields)     : return max_alignment(types_of(fields))
-    case Variant(cases)     : return max_alignment(types_of(cases) + [discriminant_type(cases)])
+    case Record(fields)     : return alignment_record(fields)
+    case Variant(cases)     : return alignment_variant(cases)
     case Flags(labels)      : return alignment_flags(labels)
+```
 
-def types_of(fields_or_cases):
-  return [x.t for x in fields_or_cases]
-
-def max_alignment(ts):
+Record alignment is tuple alignment, with the definitions split for reuse below:
+```python
+def alignment_record(fields):
   a = 1
-  for t in ts:
-    a = max(a, alignment(t))
+  for f in fields:
+    a = max(a, alignment(f.t))
   return a
 ```
 
@@ -117,6 +116,9 @@ covering the number of cases in the variant. Depending on the payload type,
 this can allow more compact representations of variants in memory. This smallest
 integer type is selected by the following function, used above and below:
 ```python
+def alignment_variant(cases):
+  return max(alignment(discriminant_type(cases)), max_case_alignment(cases))
+
 def discriminant_type(cases):
   n = len(cases)
   assert(0 < n < (1 << 32))
@@ -125,6 +127,13 @@ def discriminant_type(cases):
     case 1: return U8()
     case 2: return U16()
     case 3: return U32()
+
+def max_case_alignment(cases):
+  a = 1
+  for c in cases:
+    if c.t is not None:
+      a = max(a, alignment(c.t))
+  return a
 ```
 
 As an optimization, `flags` are represented as packed bit-vectors. Like variant
@@ -164,19 +173,20 @@ def size_record(fields):
   for f in fields:
     s = align_to(s, alignment(f.t))
     s += size(f.t)
-  return align_to(s, alignment(Record(fields)))
+  return align_to(s, alignment_record(fields))
 
 def align_to(ptr, alignment):
   return math.ceil(ptr / alignment) * alignment
 
 def size_variant(cases):
   s = size(discriminant_type(cases))
-  s = align_to(s, max_alignment(types_of(cases)))
+  s = align_to(s, max_case_alignment(cases))
   cs = 0
   for c in cases:
-    cs = max(cs, size(c.t))
+    if c.t is not None:
+      cs = max(cs, size(c.t))
   s += cs
-  return align_to(s, alignment(Variant(cases)))
+  return align_to(s, alignment_variant(cases))
 
 def size_flags(labels):
   n = len(labels)
@@ -362,18 +372,21 @@ string operations.
 ```python
 def load_variant(opts, ptr, cases):
   disc_size = size(discriminant_type(cases))
-  disc = load_int(opts, ptr, disc_size)
+  case_index = load_int(opts, ptr, disc_size)
   ptr += disc_size
-  trap_if(disc >= len(cases))
-  case = cases[disc]
-  ptr = align_to(ptr, max_alignment(types_of(cases)))
-  return { case_label_with_refinements(case, cases): load(opts, ptr, case.t) }
+  trap_if(case_index >= len(cases))
+  c = cases[case_index]
+  ptr = align_to(ptr, max_case_alignment(cases))
+  case_label = case_label_with_refinements(c, cases)
+  if c.t is None:
+    return { case_label: None }
+  return { case_label: load(opts, ptr, c.t) }
 
-def case_label_with_refinements(case, cases):
-  label = case.label
-  while case.refines is not None:
-    case = cases[find_case(case.refines, cases)]
-    label += '|' + case.label
+def case_label_with_refinements(c, cases):
+  label = c.label
+  while c.refines is not None:
+    c = cases[find_case(c.refines, cases)]
+    label += '|' + c.label
   return label
 
 def find_case(label, cases):
@@ -702,8 +715,10 @@ def store_variant(opts, v, ptr, cases):
   disc_size = size(discriminant_type(cases))
   store_int(opts, case_index, ptr, disc_size)
   ptr += disc_size
-  ptr = align_to(ptr, max_alignment(types_of(cases)))
-  store(opts, case_value, cases[case_index].t, ptr)
+  ptr = align_to(ptr, max_case_alignment(cases))
+  c = cases[case_index]
+  if c.t is not None:
+    store(opts, case_value, c.t, ptr)
 
 def match_case(v, cases):
   assert(len(v.keys()) == 1)
@@ -771,7 +786,7 @@ def flatten(functype, context):
   if len(flat_params) > MAX_FLAT_PARAMS:
     flat_params = ['i32']
 
-  flat_results = flatten_type(functype.result)
+  flat_results = flatten_types(functype.results)
   if len(flat_results) > MAX_FLAT_RESULTS:
     match context:
       case 'lift':
@@ -799,9 +814,18 @@ def flatten_type(t):
     case Float64()            : return ['f64']
     case Char()               : return ['i32']
     case String() | List(_)   : return ['i32', 'i32']
-    case Record(fields)       : return flatten_types(types_of(fields))
+    case Record(fields)       : return flatten_record(fields)
     case Variant(cases)       : return flatten_variant(cases)
     case Flags(labels)        : return ['i32'] * num_i32_flags(labels)
+```
+
+Record flattening simply flattens each field in sequence.
+```python
+def flatten_record(fields):
+  flat = []
+  for f in fields:
+    flat += flatten_type(f.t)
+  return flat
 ```
 
 Variant flattening is more involved due to the fact that each case payload can
@@ -816,11 +840,12 @@ an `i32` into an `i64`.
 def flatten_variant(cases):
   flat = []
   for c in cases:
-    for i,ft in enumerate(flatten_type(c.t)):
-      if i < len(flat):
-        flat[i] = join(flat[i], ft)
-      else:
-        flat.append(ft)
+    if c.t is not None:
+      for i,ft in enumerate(flatten_type(c.t)):
+        if i < len(flat):
+          flat[i] = join(flat[i], ft)
+        else:
+          flat.append(ft)
   return flatten_type(discriminant_type(cases)) + flat
 
 def join(a, b):
@@ -929,9 +954,8 @@ high bits of an `i64` are set for a 32-bit type:
 def lift_flat_variant(opts, vi, cases):
   flat_types = flatten_variant(cases)
   assert(flat_types.pop(0) == 'i32')
-  disc = vi.next('i32')
-  trap_if(disc >= len(cases))
-  case = cases[disc]
+  case_index = vi.next('i32')
+  trap_if(case_index >= len(cases))
   class CoerceValueIter:
     def next(self, want):
       have = flat_types.pop(0)
@@ -942,10 +966,14 @@ def lift_flat_variant(opts, vi, cases):
         case ('i64', 'f32') : return reinterpret_i32_as_float(wrap_i64_to_i32(x))
         case ('i64', 'f64') : return reinterpret_i64_as_float(x)
         case _              : return x
-  v = lift_flat(opts, CoerceValueIter(), case.t)
+  c = cases[case_index]
+  if c.t is None:
+    v = None
+  else:
+    v = lift_flat(opts, CoerceValueIter(), c.t)
   for have in flat_types:
     _ = vi.next(have)
-  return { case_label_with_refinements(case, cases): v }
+  return { case_label_with_refinements(c, cases): v }
 
 def wrap_i64_to_i32(i):
   assert(0 <= i < (1 << 64))
@@ -1034,7 +1062,11 @@ def lower_flat_variant(opts, v, cases):
   case_index, case_value = match_case(v, cases)
   flat_types = flatten_variant(cases)
   assert(flat_types.pop(0) == 'i32')
-  payload = lower_flat(opts, case_value, cases[case_index].t)
+  c = cases[case_index]
+  if c.t is None:
+    payload = []
+  else:
+    payload = lower_flat(opts, case_value, c.t)
   for i,have in enumerate(payload):
     want = flat_types.pop(0)
     match (have.t, want):
@@ -1177,21 +1209,21 @@ def canon_lift(callee_opts, callee_instance, callee, functype, args, called_as_e
   except CoreWebAssemblyException:
     trap()
 
-  [result] = lift(callee_opts, MAX_FLAT_RESULTS, ValueIter(flat_results), [functype.result])
+  results = lift(callee_opts, MAX_FLAT_RESULTS, ValueIter(flat_results), functype.results)
   def post_return():
     if callee_opts.post_return is not None:
       callee_opts.post_return(flat_results)
     if called_as_export:
       callee_instance.may_enter = True
 
-  return (result, post_return)
+  return (results, post_return)
 ```
 There are a number of things to note about this definition:
 
 Uncaught Core WebAssembly [exceptions] result in a trap at component
 boundaries. Thus, if a component wishes to signal an error, it must use some
-sort of explicit type such as `expected` (whose `error` case particular
-language bindings may choose to map to and from exceptions).
+sort of explicit type such as `result` (whose `error` case particular language
+bindings may choose to map to and from exceptions).
 
 The `called_as_export` parameter indicates whether `canon_lift` is being called
 as part of a component export or whether this `canon_lift` is being called
@@ -1234,10 +1266,10 @@ def canon_lower(caller_opts, caller_instance, callee, functype, flat_args):
   flat_args = ValueIter(flat_args)
   args = lift(caller_opts, MAX_FLAT_PARAMS, flat_args, functype.params)
 
-  result, post_return = callee(args)
+  results, post_return = callee(args)
 
   caller_instance.may_leave = False
-  flat_results = lower(caller_opts, MAX_FLAT_RESULTS, [result], [functype.result], flat_args)
+  flat_results = lower(caller_opts, MAX_FLAT_RESULTS, results, functype.results, flat_args)
   caller_instance.may_leave = True
 
   post_return()

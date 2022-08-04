@@ -2,11 +2,11 @@ import definitions
 from definitions import *
 
 def equal_modulo_string_encoding(s, t):
+  if s is None and t is None:
+    return True
   if isinstance(s, (bool,int,float,str)) and isinstance(t, (bool,int,float,str)):
     return s == t
   if isinstance(s, tuple) and isinstance(t, tuple):
-    if s == () and t == ():
-      return True
     assert(isinstance(s[0], str))
     assert(isinstance(t[0], str))
     return s[0] == t[0]
@@ -92,7 +92,7 @@ def test(t, vals_to_lift, v,
   if not equal_modulo_string_encoding(got, lower_v):
     fail("{} re-lift expected {} but got {}".format(test_name(), lower_v, got))
 
-test(Unit(), [], {})
+test(Record([]), [], {})
 test(Record([Field('x',U8()), Field('y',U16()), Field('z',U32())]), [1,2,3], {'x':1,'y':2,'z':3})
 test(Tuple([Tuple([U8(),U8()]),U8()]), [1,2,3], {'0':{'0':1,'1':2},'1':3})
 t = Flags([])
@@ -103,11 +103,11 @@ test(t, [2], {'a':False,'b':True})
 test(t, [3], {'a':True,'b':True})
 test(t, [4], {'a':False,'b':False})
 test(Flags([str(i) for i in range(33)]), [0xffffffff,0x1], { str(i):True for i in range(33) })
-t = Variant([Case('x',U8()),Case('y',Float32()),Case('z',Unit())])
+t = Variant([Case('x',U8()),Case('y',Float32()),Case('z',None)])
 test(t, [0,42], {'x': 42})
 test(t, [0,256], {'x': 0})
 test(t, [1,0x4048f5c3], {'y': 3.140000104904175})
-test(t, [2,0xffffffff], {'z': {}})
+test(t, [2,0xffffffff], {'z': None})
 t = Union([U32(),U64()])
 test(t, [0,42], {'0':42})
 test(t, [0,(1<<35)], {'0':0})
@@ -128,9 +128,9 @@ t = Union([Tuple([U8(),Float32()]), U64()])
 test(t, [0,42,3.14], {'0': {'0':42, '1':3.14}})
 test(t, [1,(1<<35),0], {'1': (1<<35)})
 t = Option(Float32())
-test(t, [0,3.14], {'none':{}})
+test(t, [0,3.14], {'none':None})
 test(t, [1,3.14], {'some':3.14})
-t = Expected(U8(),U32())
+t = Result(U8(),U32())
 test(t, [0, 42], {'ok':42})
 test(t, [1, 1000], {'error':1000})
 t = Variant([Case('w',U8()), Case('x',U8(),'w'), Case('y',U8()), Case('z',U8(),'x')])
@@ -164,7 +164,7 @@ test_pairs(Float32(), [(3.14,3.14)])
 test_pairs(Float64(), [(3.14,3.14)])
 test_pairs(Char(), [(0,'\x00'), (65,'A'), (0xD7FF,'\uD7FF'), (0xD800,None), (0xDFFF,None)])
 test_pairs(Char(), [(0xE000,'\uE000'), (0x10FFFF,'\U0010FFFF'), (0x110000,None), (0xFFFFFFFF,None)])
-test_pairs(Enum(['a','b']), [(0,{'a':{}}), (1,{'b':{}}), (2,None)])
+test_pairs(Enum(['a','b']), [(0,{'a':None}), (1,{'b':None}), (2,None)])
 
 def test_nan32(inbits, outbits):
   f = lift_flat(Opts(), ValueIter([Value('f32', reinterpret_i32_as_float(inbits))]), Float32())
@@ -242,7 +242,7 @@ def test_heap(t, expect, args, byte_array):
   opts = mk_opts(heap.memory, 'utf8', None, None)
   test(t, args, expect, opts)
 
-test_heap(List(Unit()), [{},{},{}], [0,3], [])
+test_heap(List(Record([])), [{},{},{}], [0,3], [])
 test_heap(List(Bool()), [True,False,True], [0,3], [1,0,1])
 test_heap(List(Bool()), [True,False,True], [0,3], [1,0,2])
 test_heap(List(Bool()), [True,False,True], [3,3], [0xff,0xff,0xff, 1,0,1])
@@ -276,7 +276,7 @@ test_heap(List(Tuple([U16(),U8()])), [mk_tup(6,7),mk_tup(8,9)], [0,2],
           [6,0, 7, 0x0ff, 8,0, 9, 0xff])
 test_heap(List(Tuple([Tuple([U16(),U8()]),U8()])), [mk_tup([4,5],6),mk_tup([7,8],9)], [0,2],
           [4,0, 5,0xff, 6,0xff,  7,0, 8,0xff, 9,0xff])
-test_heap(List(Union([Unit(),U8(),Tuple([U8(),U16()])])), [{'0':{}}, {'1':42}, {'2':mk_tup(6,7)}], [0,3],
+test_heap(List(Union([Record([]),U8(),Tuple([U8(),U16()])])), [{'0':{}}, {'1':42}, {'2':mk_tup(6,7)}], [0,3],
           [0,0xff,0xff,0xff,0xff,0xff,  1,0xff,42,0xff,0xff,0xff,  2,0xff,6,0xff,7,0])
 test_heap(List(Union([U32(),U8()])), [{'0':256}, {'1':42}], [0,2],
           [0,0xff,0xff,0xff,0,1,0,0,  1,0xff,0xff,0xff,42,0xff,0xff,0xff])
@@ -332,19 +332,20 @@ def test_flatten(t, params, results):
   got = flatten(t, 'lower')
   assert(got == expect)
   
-test_flatten(Func([U8(),Float32(),Float64()],Unit()), ['i32','f32','f64'], [])
-test_flatten(Func([U8(),Float32(),Float64()],Float32()), ['i32','f32','f64'], ['f32'])
-test_flatten(Func([U8(),Float32(),Float64()],U8()), ['i32','f32','f64'], ['i32'])
-test_flatten(Func([U8(),Float32(),Float64()],Tuple([Float32()])), ['i32','f32','f64'], ['f32'])
-test_flatten(Func([U8(),Float32(),Float64()],Tuple([Float32(),Float32()])), ['i32','f32','f64'], ['f32','f32'])
-test_flatten(Func([U8() for _ in range(17)],Unit()), ['i32' for _ in range(17)], [])
-test_flatten(Func([U8() for _ in range(17)],Tuple([U8(),U8()])), ['i32' for _ in range(17)], ['i32','i32'])
+test_flatten(Func([U8(),Float32(),Float64()],[]), ['i32','f32','f64'], [])
+test_flatten(Func([U8(),Float32(),Float64()],[Float32()]), ['i32','f32','f64'], ['f32'])
+test_flatten(Func([U8(),Float32(),Float64()],[U8()]), ['i32','f32','f64'], ['i32'])
+test_flatten(Func([U8(),Float32(),Float64()],[Tuple([Float32()])]), ['i32','f32','f64'], ['f32'])
+test_flatten(Func([U8(),Float32(),Float64()],[Tuple([Float32(),Float32()])]), ['i32','f32','f64'], ['f32','f32'])
+test_flatten(Func([U8(),Float32(),Float64()],[Float32(),Float32()]), ['i32','f32','f64'], ['f32','f32'])
+test_flatten(Func([U8() for _ in range(17)],[]), ['i32' for _ in range(17)], [])
+test_flatten(Func([U8() for _ in range(17)],[Tuple([U8(),U8()])]), ['i32' for _ in range(17)], ['i32','i32'])
 
 def test_roundtrip(t, v):
   before = definitions.MAX_FLAT_RESULTS
   definitions.MAX_FLAT_RESULTS = 16
 
-  ft = Func([t],t)
+  ft = Func([t],[t])
   callee_instance = Instance()
   callee = lambda x: x
 

@@ -443,23 +443,26 @@ deftype       ::= <defvaltype>
                 | <functype>
                 | <componenttype>
                 | <instancetype>
-defvaltype    ::= unit
-                | bool
+defvaltype    ::= bool
                 | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64
                 | float32 | float64
                 | char | string
                 | (record (field <name> <valtype>)*)
-                | (variant (case <id>? <name> <valtype> (refines <id>)?)+)
+                | (variant (case <id>? <name> <valtype>? (refines <id>)?)+)
                 | (list <valtype>)
                 | (tuple <valtype>*)
                 | (flags <name>*)
                 | (enum <name>+)
                 | (union <valtype>+)
                 | (option <valtype>)
-                | (expected <valtype> <valtype>)
+                | (result <valtype>? (error <valtype>)?)
 valtype       ::= <typeidx>
                 | <defvaltype>
-functype      ::= (func (param <name>? <valtype>)* (result <valtype>))
+functype      ::= (func <paramlist> <resultlist>)
+paramlist     ::= (param <name> <valtype>)*
+                | (param <valtype>)
+resultlist    ::= (result <name> <valtype>)*
+                | (result <valtype>)
 componenttype ::= (component <componentdecl>*)
 instancetype  ::= (instance <instancedecl>*)
 componentdecl ::= <importdecl>
@@ -515,14 +518,13 @@ some `case` in the supertype.
 The sets of values allowed for the remaining *specialized value types* are
 defined by the following mapping:
 ```
-            (tuple <valtype>*) ↦ (record (field "𝒊" <valtype>)*) for 𝒊=0,1,...
-               (flags <name>*) ↦ (record (field <name> bool)*)
-                          unit ↦ (record)
-                (enum <name>+) ↦ (variant (case <name> unit)+)
-            (option <valtype>) ↦ (variant (case "none") (case "some" <valtype>))
-            (union <valtype>+) ↦ (variant (case "𝒊" <valtype>)+) for 𝒊=0,1,...
-(expected <valtype> <valtype>) ↦ (variant (case "ok" <valtype>) (case "error" <valtype>))
-                        string ↦ (list char)
+                    (tuple <valtype>*) ↦ (record (field "𝒊" <valtype>)*) for 𝒊=0,1,...
+                       (flags <name>*) ↦ (record (field <name> bool)*)
+                        (enum <name>+) ↦ (variant (case <name>)+)
+                    (option <valtype>) ↦ (variant (case "none") (case "some" <valtype>))
+                    (union <valtype>+) ↦ (variant (case "𝒊" <valtype>)+) for 𝒊=0,1,...
+(result <valtype>? (error <valtype>)?) ↦ (variant (case "ok" <valtype>?) (case "error" <valtype>?))
+                                string ↦ (list char)
 ```
 Note that, at least initially, variants are required to have a non-empty list of
 cases. This could be relaxed in the future to allow an empty list of cases, with
@@ -533,14 +535,13 @@ The remaining 3 type constructors in `deftype` use `valtype` to describe
 shared-nothing functions, components and component instances:
 
 The `func` type constructor describes a component-level function definition
-that takes and returns `valtype`. In contrast to [`core:functype`] which, as a
-low-level compiler target for a stack machine, returns zero or more results,
-`functype` always returns a single type, with `unit` being used for functions
-that don't return an interesting value (analogous to "void" in some languages).
-Having a single return type simplifies the binding of `functype` into a wide
-variety of source languages. As syntactic sugar, the text format of `functype`
-additionally allows `result` to be absent, interpreting this as `(result
-unit)`.
+that takes and returns a list of `valtype`. In contrast to [`core:functype`],
+the parameters and results of `functype` can have associated names which
+validation requires to be unique. If a name is not present, the name is taken
+to be a special "empty" name and uniqueness still requires there to only be one
+unnamed parameter/result. To avoid unnecessary complexity for language binding
+generators, parameter and result lists are not allowed to contain both named
+and unnamed parameters.
 
 The `instance` type constructor describes a list of named, typed definitions
 that can be imported or exported by a component. Informally, instance types
@@ -690,7 +691,7 @@ type. For example, with Core WebAssembly [exception-handling] and
 [stack-switching], a core function with type `(func (result i32))` can return
 an `i32`, throw, suspend or trap. In contrast, a component function with type
 `(func (result string))` may only return a `string` or trap. To express
-failure, component functions can return `expected` and languages with exception
+failure, component functions can return `result` and languages with exception
 handling can bind exceptions to the `error` case. Similarly, the forthcoming
 addition of [future and stream types] would explicitly declare patterns of
 stack-switching in component function signatures.
@@ -958,7 +959,6 @@ At a high level, the additional coercions would be:
 
 | Type | `ToJSValue` | `ToWebAssemblyValue` |
 | ---- | ----------- | -------------------- |
-| `unit` | `null` | accept everything |
 | `bool` | `true` or `false` | `ToBoolean` |
 | `s8`, `s16`, `s32` | as a Number value | `ToInt8`, `ToInt16`, `ToInt32` |
 | `u8`, `u16`, `u32` | as a Number value | `ToUint8`, `ToUint16`, `ToUint32` |
@@ -975,9 +975,16 @@ At a high level, the additional coercions would be:
 | `enum` | same as [`enum`] | same as [`enum`] |
 | `option` | same as [`T?`] | same as [`T?`] |
 | `union` | same as [`union`] | same as [`union`] |
-| `expected` | same as `variant`, but coerce a top-level `error` return value to a thrown exception | same as `variant`, but coerce uncaught exceptions to top-level `error` return values |
+| `result` | same as `variant`, but coerce a top-level `error` return value to a thrown exception | same as `variant`, but coerce uncaught exceptions to top-level `error` return values |
 
 Notes:
+* Function parameter names are ignored since JavaScript doesn't have named
+  parameters.
+* If a function's result type list is empty, the JavaScript function returns
+  `undefined`. If the result type list contains a single unnamed result, then
+  the return value is specified by `ToJSValue` above. Otherwise, the function
+  result is wrapped into a JS object whose field names are taken from the result
+  names and whose field values are specified by `ToJSValue` above.
 * The forthcoming addition of [resource and handle types] would additionally
   allow coercion to and from the remaining Symbol and Object JavaScript value
   types.

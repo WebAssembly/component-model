@@ -6,7 +6,6 @@ But roughly speaking:
 
 | Type                      | Subtyping |
 | ------------------------- | --------- |
-| `unit`                    | every value type is a subtype of `unit` |
 | `bool`                    | |
 | `s8`, `s16`, `s32`, `s64`, `u8`, `u16`, `u32`, `u64` | lossless coercions are allowed |
 | `float32`, `float64`      | `float32 <: float64` |
