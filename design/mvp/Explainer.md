@@ -726,7 +726,7 @@ takes a string, does some logging, then returns a string.
     (import "libc" "memory" (memory 1))
     (import "libc" "realloc" (func (param i32 i32) (result i32)))
     (import "wasi:logging" "log" (func $log (param i32 i32)))
-    (func (export "run") (param i32 i32) (result i32 i32)
+    (func (export "run") (param i32 i32) (result i32)
       ... (call $log) ...
     )
   )
@@ -786,7 +786,7 @@ exported string at instantiation time:
   (core instance $libc (instantiate $Libc))
   (core module $Main
     (import "libc" ...)
-    (func (export "start") (param i32 i32) (result i32 i32)
+    (func (export "start") (param i32 i32) (result i32)
       ... general-purpose compute
     )
   )
