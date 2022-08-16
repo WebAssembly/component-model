@@ -266,10 +266,11 @@ Notes:
 
 (See [Start Definitions](Explainer.md#start-definitions) in the explainer.)
 ```
-start ::= f:<funcidx> arg*:vec(<valueidx>) => (start f (value arg)*)
+start ::= f:<funcidx> arg*:vec(<valueidx>) r:<u32> => (start f (value arg)* (result (value))ʳ)
 ```
 Notes:
-* Validation requires `f` have `functype` with `param` arity and types matching `arg*`.
+* Validation requires `f` have `functype` with `param` arity and types matching `arg*`
+  and `result` arity `r`.
 * Validation appends the `result` types of `f` to the value index space (making
   them available for reference by subsequent definitions).
 

@@ -758,13 +758,14 @@ instantiation. Unlike modules, components can call start functions at multiple
 points during instantiation with each such call having parameters and results.
 Thus, `start` definitions in components look like function calls:
 ```
-start ::= (start <funcidx> (value <valueidx>)* (result (value <id>))?)
+start ::= (start <funcidx> (value <valueidx>)* (result (value <id>?))*)
 ```
 The `(value <valueidx>)*` list specifies the arguments passed to `funcidx` by
 indexing into the *value index space*. Value definitions (in the value index
 space) are like immutable `global` definitions in Core WebAssembly except that
 validation requires them to be consumed exactly once at instantiation-time
-(i.e., they are [linear]).
+(i.e., they are [linear]). The arity and types of the two value lists are
+validated to match the signature of `funcidx`.
 
 As with all definition sorts, values may be imported and exported by
 components. As an example value import:
