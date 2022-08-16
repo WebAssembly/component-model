@@ -420,14 +420,14 @@ module types always start with an empty type index space.
 (component $C
   (core type $C1 (module
     (type (func (param i32) (result i32)))
-    (import "a" (func (type 0)))
-    (export "b" (func (type 0)))
+    (import "a" "b" (func (type 0)))
+    (export "c" (func (type 0)))
   ))
   (core type $F (func (param i32) (result i32)))
   (core type $C2 (module
     (alias outer 1 $F (type))
-    (import "a" (func (type 0)))
-    (export "b" (func (type 0)))
+    (import "a" "b" (func (type 0)))
+    (export "c" (func (type 0)))
   ))
 )
 ```
