@@ -736,7 +736,7 @@ takes a string, does some logging, then returns a string.
   ))
   (func $run (param string) (result string) (canon lift
     (core func $main "run")
-    (memory $libc "mem") (realloc (func $libc "realloc"))
+    (memory (core memory $libc "mem")) (realloc (func $libc "realloc"))
   ))
   (export "run" (func $run))
 )
@@ -794,7 +794,7 @@ exported string at instantiation time:
   (core instance $main (instantiate $Main (with "libc" (instance $libc))))
   (func $start (param string) (result string) (canon lift
     (core func $main "start")
-    (memory $libc "mem") (realloc (func $libc "realloc"))
+    (memory (core memory $libc "mem")) (realloc (func $libc "realloc"))
   ))
   (start $start (value $name) (result (value $greeting)))
   (export "greeting" (value $greeting))

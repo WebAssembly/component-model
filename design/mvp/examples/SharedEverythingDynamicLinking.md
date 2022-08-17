@@ -129,17 +129,17 @@ would look like:
 ```wasm
 ;; zipper.wat
 (component
-  (import "libc" (module $Libc
+  (import "libc" (core module $Libc
     (export "memory" (memory 1))
     (export "malloc" (func (param i32) (result i32)))
   ))
-  (import "libzip" (module $Libzip
+  (import "libzip" (core module $Libzip
     (import "libc" "memory" (memory 1))
     (import "libc" "malloc" (func (param i32) (result i32)))
     (export "zip" (func (param i32 i32 i32) (result i32)))
   ))
 
-  (module $Main
+  (core module $Main
     (import "libc" "memory" (memory 1))
     (import "libc" "malloc" (func (param i32) (result i32)))
     (import "libzip" "zip" (func (param i32 i32 i32) (result i32)))
@@ -149,17 +149,17 @@ would look like:
     )
   )
 
-  (instance $libc (instantiate (module $Libc)))
-  (instance $libzip (instantiate (module $Libzip))
+  (core instance $libc (instantiate (module $Libc)))
+  (core instance $libzip (instantiate (module $Libzip))
     (with "libc" (instance $libc))
   ))
-  (instance $main (instantiate (module $Main)
+  (core instance $main (instantiate (module $Main)
     (with "libc" (instance $libc))
     (with "libzip" (instance $libzip))
   ))
   (func $zip (param (list u8)) (result (list u8)) (canon lift
-    (func $main "zip")
-    (memory $libc "memory") (realloc (func $libc "realloc"))
+    (core func $main "zip")
+    (memory (core memory $libc "memory")) (realloc (func $libc "realloc"))
   ))
   (export "zip" (func $zip))
 )
@@ -210,11 +210,11 @@ component-aware `clang`, the resulting component would look like:
 ```wasm
 ;; imgmgk.wat
 (component $Imgmgk
-  (import "libc" (module $Libc ...))
-  (import "libzip" (module $Libzip ...))
-  (import "libimg" (module $Libimg ...))
+  (import "libc" (core module $Libc ...))
+  (import "libzip" (core module $Libzip ...))
+  (import "libimg" (core module $Libimg ...))
 
-  (module $Main
+  (core module $Main
     (import "libc" "memory" (memory 1))
     (import "libc" "malloc" (func (param i32) (result i32)))
     (import "libimg" "compress" (func (param i32 i32 i32) (result i32)))
@@ -224,21 +224,21 @@ component-aware `clang`, the resulting component would look like:
     )
   )
 
-  (instance $libc (instantiate (module $Libc)))
-  (instance $libzip (instantiate (module $Libzip)
+  (core instance $libc (instantiate (module $Libc)))
+  (core instance $libzip (instantiate (module $Libzip)
     (with "libc" (instance $libc))
   ))
-  (instance $libimg (instantiate (module $Libimg)
+  (core instance $libimg (instantiate (module $Libimg)
     (with "libc" (instance $libc))
     (with "libzip" (instance $libzip))
   ))
-  (instance $main (instantiate (module $Main)
+  (core instance $main (instantiate (module $Main)
     (with "libc" (instance $libc))
     (with "libimg" (instance $libimg))
   ))
   (func $transform (param (list u8)) (result (list u8)) (canon lift
-    (func $main "transform")
-    (memory $libc "memory") (realloc (func $libc "realloc"))
+    (core func $main "transform")
+    (memory (core memory $libc "memory")) (realloc (func $libc "realloc"))
   ))
   (export "transform" (func $transform))
 )
@@ -254,14 +254,14 @@ components. The resulting component could look like:
 ```wasm
 ;; app.wat
 (component
-  (import "libc" (module $Libc ...))
-  (import "libzip" (module $Libzip ...))
-  (import "libimg" (module $Libimg ...))
+  (import "libc" (core module $Libc ...))
+  (import "libzip" (core module $Libzip ...))
+  (import "libimg" (core module $Libimg ...))
 
   (import "zipper" (component $Zipper ...))
   (import "imgmgk" (component $Imgmgk ...))
 
-  (module $Main
+  (core module $Main
     (import "libc" "memory" (memory 1))
     (import "libc" "malloc" (func (param i32) (result i32)))
     (import "zipper" "zip" (func (param i32 i32) (result i32 i32)))
@@ -282,23 +282,23 @@ components. The resulting component could look like:
     (with "libimg" (module $Libimg))
   ))
 
-  (instance $libc (instantiate (module $Libc)))
-  (func $zip (canon lower
+  (core instance $libc (instantiate (module $Libc)))
+  (core func $zip (canon lower
     (func $zipper "zip")
-    (memory $libc "memory") (realloc (func $libc "realloc"))
+    (memory (core memory $libc "memory")) (realloc (func $libc "realloc"))
   ))
-  (func $transform (canon lower
+  (core func $transform (canon lower
     (func $imgmgk "transform")
-    (memory $libc "memory") (realloc (func $libc "realloc"))
+    (memory (core memory $libc "memory")) (realloc (func $libc "realloc"))
   ))
-  (instance $main (instantiate (module $Main)
+  (core instance $main (instantiate (module $Main)
     (with "libc" (instance $libc))
     (with "zipper" (instance (export "zip" (func $zipper "zip"))))
     (with "imgmgk" (instance (export "transform" (func $imgmgk "transform"))))
   ))
   (func $run (param string) (result string) (canon lift
-    (func $main "run")
-    (memory $libc "memory") (realloc (func $libc "realloc"))
+    (core func $main "run")
+    (memory (core memory $libc "memory")) (realloc (func $libc "realloc"))
   ))
   (export "run" (func $run))
 )
@@ -358,17 +358,17 @@ a wrapper adapter module that supplies both `$A` and `$B` with a shared
 function table and `bar-index` mutable global.
 ```wat
 (component
-  (import "A" (module $A ...))
-  (import "B" (module $B ...))
-  (module $Linkage
+  (import "A" (core module $A ...))
+  (import "B" (core module $B ...))
+  (core module $Linkage
     (global (export "bar-index") (mut i32))
     (table (export "table") funcref 1)
   )
-  (instance $linkage (instantiate (module $Linkage)))
-  (instance $a (instantiate (module $A)
+  (core instance $linkage (instantiate (module $Linkage)))
+  (core instance $a (instantiate (module $A)
     (with "linkage" (instance $linkage))
   ))
-  (instance $b (instantiate (module $B)
+  (core instance $b (instantiate (module $B)
     (import "a" (instance $a))
     (with "linkage" (instance $linkage))
   ))
