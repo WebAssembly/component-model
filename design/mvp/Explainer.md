@@ -988,7 +988,7 @@ Notes:
 * In lieu of an existing standard JS representation for `variant`, the JS API
   would need to define its own custom binding built from objects. As a sketch,
   the JS values accepted by `(variant (case "a" u32) (case "b" string))` could
-  include `{ a: 42 }` and `{ b: "hi" }`.
+  include `{ tag: 'a', value: 42 }` and `{ tag: 'b', value: "hi" }`.
 * For `union` and `option`, when Web IDL doesn't support particular type
   combinations (e.g., `(option (option u32))`), the JS API would fall back to
   the JS API of the unspecialized `variant` (e.g.,
