@@ -968,7 +968,7 @@ At a high level, the additional coercions would be:
 | `float32`, `float64` | as a Number, mapping the canonical NaN to [JS NaN] | `ToNumber` mapping [JS NaN] to the canonical NaN |
 | `char` | same as [`USVString`] | same as [`USVString`], throw if the USV length is not 1 |
 | `record` | TBD: maybe a [JS Record]? | same as [`dictionary`] |
-| `variant` | TBD | TBD |
+| `variant` | see below | see below |
 | `list` | create a typed array copy for number types; otherwise produce a JS array (like [`sequence`]) | same as [`sequence`] |
 | `string` | same as [`USVString`]  | same as [`USVString`] |
 | `tuple` | TBD: maybe a [JS Tuple]? | TBD |
@@ -986,6 +986,15 @@ Notes:
   the return value is specified by `ToJSValue` above. Otherwise, the function
   result is wrapped into a JS object whose field names are taken from the result
   names and whose field values are specified by `ToJSValue` above.
+* In lieu of an existing standard JS representation for `variant`, the JS API
+  would need to define its own custom binding built from objects. As a sketch,
+  the JS values accepted by `(variant (case "a" u32) (case "b" string))` could
+  include `{ tag: 'a', value: 42 }` and `{ tag: 'b', value: "hi" }`.
+* For `union` and `option`, when Web IDL doesn't support particular type
+  combinations (e.g., `(option (option u32))`), the JS API would fall back to
+  the JS API of the unspecialized `variant` (e.g.,
+  `(variant (case "some" (option u32)) (case "none"))`, despecializing only
+  the problematic outer `option`).
 * The forthcoming addition of [resource and handle types] would additionally
   allow coercion to and from the remaining Symbol and Object JavaScript value
   types.
