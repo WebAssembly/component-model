@@ -397,11 +397,11 @@ test_mangle_functype([Tuple([U8()])], [Tuple([U8(),U8()])],
 test_mangle_functype([Flags(['a','b'])], [Enum(['a','b'])],
                      'func flags { a, b } -> enum { a, b }')
 test_mangle_functype([Variant([Case('a',None),Case('b',U8())])], [Union([U8(),List(String())])],
-                     'func variant { a(_), b(u8) } -> union { u8, list<string> }')
+                     'func variant { a, b(u8) } -> union { u8, list<string> }')
 test_mangle_functype([Option(Bool())],[Option(List(U8()))],
                      'func option<bool> -> option<list<u8>>')
 test_mangle_functype([], [('a',Result(None,None)),('b',Result(U8(),None)),('c',Result(None,U8()))],
-                     'func() -> (a: result<_, _>, b: result<u8, _>, c: result<_, u8>)')
+                     'func() -> (a: result, b: result<u8>, c: result<_, u8>)')
 
 def test_cabi(ct, expect):
   got = canonical_module_type(ct)

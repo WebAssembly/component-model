@@ -1509,7 +1509,10 @@ def mangle_flags(labels):
   return 'flags { ' + ', '.join(labels) + ' }'
 
 def mangle_varianttype(cases):
-  mangled_cases = (c.label + '(' + mangle_maybevaltype(c.t) + ')' for c in cases)
+  mangled_cases = ('{label}{payload}'.format(
+                     label = c.label,
+                     payload = '' if c.t is None else '(' + mangle_valtype(c.t) + ')')
+                   for c in cases)
   return 'variant { ' + ', '.join(mangled_cases) + ' }'
 
 def mangle_enumtype(labels):
@@ -1522,12 +1525,11 @@ def mangle_optiontype(t):
   return 'option<' + mangle_valtype(t) + '>'
 
 def mangle_resulttype(ok, error):
-  return 'result<' + mangle_maybevaltype(ok) + ', ' + mangle_maybevaltype(error) + '>'
-
-def mangle_maybevaltype(t):
-  if t is None:
-    return '_'
-  return mangle_valtype(t)
+  match (ok, error):
+    case (None, None) : return 'result'
+    case (None, _)    : return 'result<_, ' + mangle_valtype(error) + '>'
+    case (_, None)    : return 'result<' + mangle_valtype(ok) + '>'
+    case (_, _)       : return 'result<' + mangle_valtype(ok) + ', ' + mangle_valtype(error) + '>'
 ```
 As an example, given a component type:
 ```wasm
