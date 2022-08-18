@@ -992,7 +992,8 @@ Notes:
 * For `union` and `option`, when Web IDL doesn't support particular type
   combinations (e.g., `(option (option u32))`), the JS API would fall back to
   the JS API of the unspecialized `variant` (e.g.,
-  `(variant (case "some" (variant (case "some" u32) (case "none"))) (case "none"))`).
+  `(variant (case "some" (option u32)) (case "none"))`, despecializing only
+  the problematic outer `option`).
 * The forthcoming addition of [resource and handle types] would additionally
   allow coercion to and from the remaining Symbol and Object JavaScript value
   types.
