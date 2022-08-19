@@ -25,16 +25,15 @@ layer     ::= 0x01 0x00
 section   ::=    section_0(<core:custom>)         => ϵ
             | m*:section_1(<core:module>)         => [core-prefix(m)]
             | i*:section_2(vec(<core:instance>))  => core-prefix(i)*
-            | a*:section_3(vec(<core:alias>))     => core-prefix(a)*
-            | t*:section_4(vec(<core:type>))      => core-prefix(t)*
-            | c: section_5(<component>)           => [c]
-            | i*:section_6(vec(<instance>))       => i*
-            | a*:section_7(vec(<alias>))          => a*
-            | t*:section_8(vec(<type>))           => t*
-            | c*:section_9(vec(<canon>))          => c*
-            | s: section_10(<start>)              => [s]
-            | i*:section_11(vec(<import>))        => i*
-            | e*:section_12(vec(<export>))        => e*
+            | t*:section_3(vec(<core:type>))      => core-prefix(t)*
+            | c: section_4(<component>)           => [c]
+            | i*:section_5(vec(<instance>))       => i*
+            | a*:section_6(vec(<alias>))          => a*
+            | t*:section_7(vec(<type>))           => t*
+            | c*:section_8(vec(<canon>))          => c*
+            | s: section_9(<start>)               => [s]
+            | i*:section_10(vec(<import>))        => i*
+            | e*:section_11(vec(<export>))        => e*
 ```
 Notes:
 * Reused Core binary rules: [`core:section`], [`core:custom`], [`core:module`]
@@ -100,13 +99,10 @@ Notes:
 
 (See [Alias Definitions](Explainer.md#alias-definitions) in the explainer.)
 ```
-core:alias       ::= sort:<core:sort> target:<core:aliastarget> => (core alias target (sort))
-core:aliastarget ::= 0x00 i:<core:instanceidx> n:<name>         => export i n
-                   | 0x01 ct:<u32> idx:<u32>                    => outer ct idx
-
-alias            ::= sort:<sort> target:<aliastarget>           => (alias target (sort))
-aliastarget      ::= 0x00 i:<instanceidx> n:<name>              => export i n
-                   | 0x01 ct:<u32> idx:<u32>                    => outer ct idx
+alias            ::= s:<sort> t:<aliastarget>           => (alias t (s))
+aliastarget      ::= 0x00 i:<instanceidx> n:<name>      => export i n
+                   | 0x01 i:<core:instanceidx> n:<name> => core export i n
+                   | 0x02 ct:<u32> idx:<u32>            => outer ct idx
 ```
 Notes:
 * Reused Core binary rules: (variable-length encoded) [`core:u32`]
@@ -116,10 +112,7 @@ Notes:
   of enclosing components and `i` is validated to be a valid
   index in the `sort` index space of the `i`th enclosing component (counting
   outward, starting with `0` referring to the current component).
-* For `outer` aliases of `core:aliastarget`, validation restricts the `sort` to
-  `type` and `ct` must be `0` (for a component-level definition; see also the
-  `core:alias` case of `core:moduledecl` below).
-* For `outer` aliases of `aliastarget`, validation restricts the `sort` to one
+* For `outer` aliases, validation restricts the `sort` to one
   of `type`, `module` or `component`.
 
 
@@ -127,18 +120,20 @@ Notes:
 
 (See [Type Definitions](Explainer.md#type-definitions) in the explainer.)
 ```
-core:type       ::= dt:<core:deftype>                      => (type dt)        (GC proposal)
-core:deftype    ::= ft:<core:functype>                     => ft               (WebAssembly 1.0)
-                  | st:<core:structtype>                   => st               (GC proposal)
-                  | at:<core:arraytype>                    => at               (GC proposal)
-                  | mt:<core:moduletype>                   => mt
-core:moduletype ::= 0x50 md*:vec(<core:moduledecl>)        => (module md*)
-core:moduledecl ::= 0x00 i:<core:import>                   => i
-                  | 0x01 t:<core:type>                     => t
-                  | 0x02 a:<core:alias>                    => a
-                  | 0x03 e:<core:exportdecl>               => e
-core:importdecl ::= i:<core:import>                        => i
-core:exportdecl ::= n:<name> d:<core:importdesc>           => (export n d)
+core:type        ::= dt:<core:deftype>                  => (type dt)        (GC proposal)
+core:deftype     ::= ft:<core:functype>                 => ft               (WebAssembly 1.0)
+                   | st:<core:structtype>               => st               (GC proposal)
+                   | at:<core:arraytype>                => at               (GC proposal)
+                   | mt:<core:moduletype>               => mt
+core:moduletype  ::= 0x50 md*:vec(<core:moduledecl>)    => (module md*)
+core:moduledecl  ::= 0x00 i:<core:import>               => i
+                   | 0x01 t:<core:type>                 => t
+                   | 0x02 a:<core:alias>                => a
+                   | 0x03 e:<core:exportdecl>           => e
+core:alias       ::= s:<core:sort> t:<core:aliastarget> => (alias t (s))
+core:aliastarget ::= 0x01 ct:<u32> idx:<u32>            => outer ct idx
+core:importdecl  ::= i:<core:import>                    => i
+core:exportdecl  ::= n:<name> d:<core:importdesc>       => (export n d)
 ```
 Notes:
 * Reused Core binary rules: [`core:import`], [`core:importdesc`], [`core:functype`]
@@ -146,8 +141,9 @@ Notes:
   inside `type` declarators (i.e., nested core module types).
 * As described in the explainer, each module type is validated with an
   initially-empty type index space.
-* Validation of `alias` declarators only allows `outer` `type` aliases.
-  Validation of these aliases cannot see beyond the enclosing core type index
+* `alias` declarators currently only allow `outer` `type` aliases but
+  would add `export` aliases when core wasm adds type exports.
+* Validation of `outer` aliases cannot see beyond the enclosing core type index
   space. Since core modules and core module types cannot nest in the MVP, this
   means that the maximum `ct` in an MVP `alias` declarator is `1`.
 

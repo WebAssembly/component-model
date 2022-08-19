@@ -53,7 +53,6 @@ At the top-level, a `component` is a sequence of definitions of various kinds:
 component  ::= (component <id>? <definition>*)
 definition ::= core-prefix(<core:module>)
              | core-prefix(<core:instance>)
-             | core-prefix(<core:alias>)
              | core-prefix(<core:type>)
              | <component>
              | <instance>
@@ -221,23 +220,17 @@ and export component functions.
 
 Alias definitions project definitions out of other components' index spaces and
 into the current component's index spaces. As represented in the AST below,
-there are two kinds of "targets" for an alias: the `export` of an instance and
-a definition in an index space of an `outer` component (containing the current
-component):
+there are three kinds of "targets" for an alias: the `export` of a component
+instance, the `core export` of a core module instance and a definition of an
+`outer` component (containing the current component):
 ```
-core:alias       ::= (alias <core:aliastarget> (<core:sort> <id>?))
-core:aliastarget ::= export <core:instanceidx> <name>
-                   | outer <u32> <u32>
-
 alias            ::= (alias <aliastarget> (<sort> <id>?))
 aliastarget      ::= export <instanceidx> <name>
+                   | core export <core:instanceidx> <name>
                    | outer <u32> <u32>
 ```
-The `core:sort`/`sort` immediate of the alias specifies which index space in
-the target component is being read from and which index space of the containing
-component is being added to. If present, the `id` of the alias is bound to the
-new index added by the alias and can be used anywhere a normal `id` can be
-used.
+If present, the `id` of the alias is bound to the new index added by the alias
+and can be used anywhere a normal `id` can be used.
 
 In the case of `export` aliases, validation ensures `name` is an export in the
 target instance and has a matching sort.
@@ -248,14 +241,6 @@ skip and the second `u32` being an index into the target's sort's index space.
 In particular, the first `u32` can be `0`, in which case the outer alias refers
 to the current component. To maintain the acyclicity of module instantiation,
 outer aliases are only allowed to refer to *preceding* outer definitions.
-
-As with other core definitions, core aliases are only supposed to "see" other
-core definitions (as-if they were defined by Core WebAssembly extended with
-[module-linking]). Thus, core `outer` aliases must have a skip-count of `0`
-when defined within a component, only allowing them to duplicate core
-definitions in core index spaces. (Core `outer` aliases have a second use
-described in the next section, which is why they are included in the grammar
-at all.)
 
 Components containing outer aliases effectively produce a [closure] at
 instantiation time, including a copy of the outer-aliased definitions. Because
@@ -268,10 +253,18 @@ via some kind of "`stateful`" type attribute.)
 Both kinds of aliases come with syntactic sugar for implicitly declaring them
 inline:
 
-For `export` aliases, the inline sugar has the form `(<sort> <instanceidx> <name>+)`
-and can be used in place of a `sortidx` or any sort-specific index (such as a
-`typeidx` or `funcidx`). For example, the following snippet uses two inline
-function aliases:
+For `export` aliases, the inline sugar extends the definition of `sortidx`
+and the various sort-specific indices:
+```
+sortidx     ::= (<sort> <u32>)          ;; as above
+              | <inlinealias>
+Xidx        ::= <u32>                   ;; as above
+              | <inlinealias>
+inlinealias ::= (<sort> <u32> <name>+)
+```
+If `<sort>` refers to a `<core:sort>`, then the `<u32>` of `inlinealias` is a
+`<core:instanceidx>`; otherwise it's an `<instanceidx>`. For example, the
+following snippet uses two inline function aliases:
 ```wasm
 (instance $j (instantiate $J (with "f" (func $i "f"))))
 (export "x" (func $j "g" "h"))
@@ -310,9 +303,10 @@ is desugared into:
 Lastly, for symmetry with [imports][func-import-abbrev], aliases can be written
 in an inverted form that puts the sort first:
 ```wasm
-(func $f (import "i" "f") ...type...) ≡ (import "i" "f" (func $f ...type...))       (WebAssembly 1.0)
-(func $g (alias export $i "g1"))      ≡ (alias export $i "g1" (func $g))
-(core func $g (alias export $i "g1")) ≡ (core alias export $i "g1" (func $g))
+    (func $f (import "i" "f") ...type...) ≡ (import "i" "f" (func $f ...type...))   (WebAssembly 1.0)
+          (func $f (alias export $i "f")) ≡ (alias export $i "f" (func $f))
+   (core module $m (alias export $i "m")) ≡ (alias export $i "m" (core module $m))
+(core func $f (alias core export $i "f")) ≡ (alias core export $i "f" (core func $f))
 ```
 
 With what's defined so far, we're able to link modules with arbitrary renamings:
@@ -328,17 +322,17 @@ With what's defined so far, we're able to link modules with arbitrary renamings:
   )
   (core instance $a (instantiate $A))
   (core instance $b1 (instantiate $B
-    (with "a" (instance $a))                  ;; no renaming
+    (with "a" (instance $a))                     ;; no renaming
   ))
-  (core func $a_two (alias export $a "two"))  ;; ≡ (core alias export $a "two" (func $a_two))
+  (core func $a_two (alias core export $a "two") ;; ≡ (alias core export $a "two" (core func $a_two))
   (core instance $b2 (instantiate $B
     (with "a" (instance
-      (export "one" (func $a_two))            ;; renaming, using out-of-line alias
+      (export "one" (func $a_two))               ;; renaming, using out-of-line alias
     ))
   ))
   (core instance $b3 (instantiate $B
     (with "a" (instance
-      (export "one" (func $a "three"))        ;; renaming, using inline alias sugar
+      (export "one" (func $a "three"))           ;; renaming, using <inlinealias>
     ))
   ))
 )
@@ -352,19 +346,21 @@ type and function definitions which are introduced in the next two sections.
 The syntax for defining core types extends the existing core type definition
 syntax, adding a `module` type constructor:
 ```
-core:type       ::= (type <id>? <core:deftype>)               (GC proposal)
-core:deftype    ::= <core:functype>                           (WebAssembly 1.0)
-                  | <core:structtype>                         (GC proposal)
-                  | <core:arraytype>                          (GC proposal)
-                  | <core:moduletype>
-core:moduletype ::= (module <core:moduledecl>*)
-core:moduledecl ::= <core:importdecl>
-                  | <core:type>
-                  | <core:alias>
-                  | <core:exportdecl>
-core:importdecl ::= (import <name> <name> <core:importdesc>)
-core:exportdecl ::= (export <name> <core:exportdesc>)
-core:exportdesc ::= strip-id(<core:importdesc>)
+core:type        ::= (type <id>? <core:deftype>)              (GC proposal)
+core:deftype     ::= <core:functype>                          (WebAssembly 1.0)
+                   | <core:structtype>                        (GC proposal)
+                   | <core:arraytype>                         (GC proposal)
+                   | <core:moduletype>
+core:moduletype  ::= (module <core:moduledecl>*)
+core:moduledecl  ::= <core:importdecl>
+                   | <core:type>
+                   | <core:alias>
+                   | <core:exportdecl>
+core:alias       ::= (alias <core:aliastarget> (<core:sort> <id>?))
+core:aliastarget ::= outer <u32> <u32>
+core:importdecl  ::= (import <name> <name> <core:importdesc>)
+core:exportdecl  ::= (export <name> <core:exportdesc>)
+core:exportdesc  ::= strip-id(<core:importdesc>)
 
 where strip-id(X) parses '(' sort Y ')' when X parses '(' sort <id>? Y ')'
 ```
