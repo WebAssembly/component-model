@@ -180,7 +180,7 @@ use cases that require additional features:
    can encapsulate `i32` pointers to linear memory allocations that need to be
    safely freed when the last handle goes away.
 3. Developers import or export functions with signatures containing
-   concurrency-oriented types (e.g., async, future and stream) to address
+   concurrency-oriented types (e.g., future and stream) to address
    concurrency use cases like non-blocking I/O, early return and streaming. Both
    developers (the caller and callee) are able to use their respective languages'
    native concurrency support, if it exists, using the concurrency-oriented types

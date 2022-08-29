@@ -110,7 +110,6 @@ keyword ::= 'use'
           | 'static'
           | 'interface'
           | 'tuple'
-          | 'async'
           | 'future'
           | 'stream'
 ```
@@ -336,19 +335,17 @@ union-cases ::= ty,
 ## Item: `func`
 
 Functions can also be defined in a `wit` document. Functions have a name,
-parameters, and results. Functions can optionally also be declared as `async`
-functions.
+parameters, and results.
 
 ```wit
 thunk: func() -> ()
 fibonacci: func(n: u32) -> u32
-sleep: async func(ms: u64) -> ()
 ```
 
 Specifically functions have the structure:
 
 ```wit
-func-item ::= id ':' 'async'? 'func' func-vec '->' func-vec
+func-item ::= id ':' 'func' func-vec '->' func-vec
 
 func-vec ::= ty
            | '(' func-named-type-list ')'
@@ -377,7 +374,7 @@ resource file-descriptor
 resource request {
     static new: func() -> request
 
-    body: async func() -> list<u8>
+    body: func() -> future<list<u8>>
     headers: func() -> list<string>
 }
 ```
