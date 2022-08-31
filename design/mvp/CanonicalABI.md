@@ -1550,7 +1550,7 @@ the `canonical_module_type` would be:
   (import "" "a.bar: func(x: u32, y: u32) -> u32" (func param i32 i32) (result i32))
   (export "cabi_memory" (memory 0))
   (export "cabi_realloc" (func (param i32 i32 i32 i32) (result i32)))
-  (export "cabi_start{cabi=0.1}: func (v1: string) -> (v2: list<list<string>>)" (func (param i32 i32) (result i32)))
+  (export "cabi_start{cabi=0.1}: func(v1: string) -> (v2: list<list<string>>)" (func (param i32 i32) (result i32)))
   (export "baz: func string -> string" (func (param i32 i32) (result i32)))
   (export "cabi_post_baz" (func (param i32)))
 )
