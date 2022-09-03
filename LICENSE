@@ -4,6 +4,7 @@ to that directory and its relative sub-directories.
 The relevant directories and licenses are:
 
 design/           - Apache License 2.0
+spec/document/    - W3C Software and Document Notice and License
 
 (Other directories will be added when the [module-linking] repository merges.)
 

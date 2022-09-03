@@ -1,0 +1,495 @@
+\section{Components}
+
+\subsection{No Live Values In Context}
+\label{judgment:novalues}
+\fbox{$\novalues{\tyctx}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \novalues\tyctx.\TCPARENT\\
+    \forall i, \exists \evaltype, \tyctx.\TCVALUES[i] = \evaltype^\dagger\\
+    \begin{aligned}\forall i, \exists \overline{\eexterndeclad_j},{}&\tyctx.\TCINSTANCES[i] = \eexterndeclad\\\land{}&{}\forall j, \neg \exists \evaltype, \eexterndeclad_j = \EEMDVALUE~\evaltype\\\end{aligned}\\
+    \end{array}
+  }{
+    \novalues \tyctx
+  }
+\]
+
+\subsection{$\overline{\definition_i}$}
+\label{judgment:CatECT}
+\fbox{$\tyctx \vdashh!CatECT! \component \trelh!CatECT! \ecomponenttype$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \tyctx_0 = \{ \TCPARENT~\tyctx, \TCOB~\true \}\\
+    \forall i, \tyctx_{i-1} \vdashh!CDatECT! \definition_i \trelh!CDatECT! {\ecomponenttype}_i \dashvh!CDatECT! \tyctx_i\\
+    \novalues\tyctx_n\\
+    \ecomponenttype = \bigoplus_i \ecomponenttype_i\\
+    \tyctx_n.\TCVARS \cap \freeVars{\ecomponenttype} = \varnothing\\
+    \end{array}
+  }{
+    \tyctx \vdashh!CatECT! \overline{\definition_i}^n
+    \trelh!CatECT! \ecomponenttype
+  }
+\]
+
+\subsection{Core Sort Indices}
+\label{judgment:CSIatCID}
+\fbox{$\tyctx \vdashh!CSIatCID! \coresortidx \trelh!CSIatCID! \core:importdesc$}
+
+\subsection{Instantiate/Export Arguments}
+\label{judgment:SIatEED}
+\fbox{$\tyctx \vdashh!SIatEED! \sortidx \trelh!SIatEED! \eexterndesc$}
+
+\subsubsection{Core Modules}
+\[
+  \frac{
+    \tyctx \vdash \tyctx.\TCCORE.\CTCMODULES[i] \subtypeof \ecoremoduletype
+  }{
+    \tyctx \vdashh!SIatEED! \{ \SISORT~\SCORE~\CSMODULE, \SIIDX~i \}
+      \trelh!SIatEED! \EEMDCOREMODULE~\ecoremoduletype
+  }
+\]
+
+\subsubsection{Functions}
+\[
+  \frac{
+    \tyctx \vdash \tyctx.\TCFUNCS[i] \subtypeof \efunctype
+  }{
+    \tyctx \vdashh!SIatEED! \{ \SISORT~\SFUNC, \SIIDX~i \}
+      \trelh!SIatEED! \EEMDFUNC~\efunctype
+  }
+\]
+
+\subsubsection{Values}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \tyctx \vdash \tyctx.\TCVALUES[i] \subtypeof \evaltype\\
+    \tyctx \vdashh!EVT! \evaltype\\
+    \end{array}
+  }{
+    \tyctx \vdashh!SIatEED! \{ \SISORT~\SVALUE, \SIIDX~i \}
+      \trelh!SIatEED! \EEMDVALUE~\evaltype
+  }
+\]
+
+\subsubsection{Types}
+\[
+  \frac{
+    \tyctx \vdash \tyctx.\TCTYPES[i] \subtypeof \edeftype
+  }{
+    \tyctx \vdashh!SIatEED! \{ \SISORT~\STYPE, \SIIDX~i \}
+      \trelh!SIatEED! \EEMDTYPE~\edeftype
+  }
+\]
+
+\subsubsection{Instances}
+\[
+  \frac{
+    \tyctx \vdash \tyctx.\TCINSTANCES[i] \subtypeof \einstancetype
+  }{
+    \tyctx \vdashh!SIatEED! \{ \SISORT~\SINSTANCE, \SIIDX~i \}
+      \trelh!SIatEED! \EEMDINSTANCE~\einstancetype
+  }
+\]
+
+\subsubsection{Components}
+\[
+  \frac{
+    \tyctx \vdash \tyctx.\TCCOMPONENTS[i] \subtypeof \ecomponenttype
+  }{
+    \tyctx \vdashh!SIatEED! \{ \SISORT~\SCOMPONENT, \SIIDX~i \}
+      \trelh!SIatEED! \EEMDCOMPONENT~\ecomponenttype
+  }
+\]
+
+\subsection{Start Arguments}
+\label{judgment:VIsatPL}
+\fbox{$\tyctx \vdashh!VIsatPL! \overline{\valueidx_i} \trelh!VIsatPL! \paramlist$}
+\[
+  \frac{
+    \forall i, \tyctx \vdashh!VIsatPL! \valueidx_i \trelh!VIsatPL! {\evaltype}_i
+  }{
+    \tyctx \vdashh!VIsatPL! \overline{\valueidx_i} \trelh!VIsatPL! \overline{\EPLNAME~\name_i, \EPLTYPE~{\evaltype}_i}
+  }
+\]
+
+\subsection{Definitions}
+\label{judgment:CDatECT}
+\fbox{$\tyctx \vdashh!CDatECT! \definition \trelh!CDatECT! \ecomponenttype \dashvh!CDatECT! \tyctx'$}
+
+\subsubsection{$\DCOREMODULE~\core:module$}
+\[
+  \frac{
+    \vdash \core:module : \ecoremoduletype
+  }{
+    \begin{aligned}
+    \tyctx \vdashh!CDatECT!{}&\DCOREMODULE~\core:module\\
+    \trelh!CDatECT!{}&\forall \varnothing. \varnothing \to \exists \varnothing. \varnothing\\
+    \dashvh!CDatECT!{}&\tyctx \oplus \begin{aligned}\{{}&\TCCORE.\CTCMODULES~\ecoremoduletype\\,{}&\TCLD~\{ \SISORT~\SCORE~\CSMODULE, \SIIDX~\length{\tyctx.\TCCORE.\CTCMODULES} \}\}\end{aligned}\\
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DCOREINSTANCE~\CIINSTANTIATE~\coremoduleidx~\overline{\coreinstantiatearg_i}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \tyctx.\TCCORE.\CTCMODULES[\coremoduleidx] = \overline{\coreimportdecl_j} \to \overline{\ecoreinstancetype}\\
+    \begin{aligned}
+    \forall j, \exists i,&\coreinstantiatearg_i.\CIANAME = \coreimportdecl_j.\core:IMODULE\\
+    \land{}& \tyctx.\TCCORE.\CTCINSTANCES[\coreinstantiatearg_i.\CIAINSTANCE] = \overline{\coreexportdecl_l}\\
+    \land{}& {\begin{aligned}[t]
+      \exists l,&\coreexportdecl_l.\core:ENAME = \coreimportdecl_j.\core:INAME\\
+      \land{}&\coreexportdecl_l.\core:EDESC \subtypeof \coreimportdecl_j.\core:IDESC\\
+    \end{aligned}}
+    \end{aligned}\\
+    \forall i,\forall i', \coreinstantiatearg_i.\CIANAME = \coreinstantiatearg_{i'}.\CIANAME \Rightarrow i = i'\\
+    \end{array}
+  }{
+   \begin{aligned}
+    \tyctx \vdashh!CDatECT!{}&\DCOREINSTANCE~\CIINSTANTIATE~\coremoduleidx~\overline{\coreinstantiatearg_i}\\
+    \trelh!CDatECT!{}&\forall\varnothing.\varnothing \to \exists\varnothing.\varnothing\\
+    \dashvh!CDatECT!{}&\tyctx \oplus \begin{aligned}\{{}&\TCCORE.\CTCINSTANCES~\ecoreinstancetype\\,{}&\TCLD~\{\SISORT~\SCORE~\CSINSTANCE, \SIIDX~\length{\tyctx.\TCCORE.\CTCINSTANCES}\}\}\end{aligned}
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DCOREINSTANCE~\CIEXPORTS~\overline{\{\CENAME~\name_i, \CEDEF~\coresortidx_i \}}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \forall i, \tyctx \vdash \coresortidx_i : \core:importdesc_i\\
+    \forall i j, \name_i = \name_j \Rightarrow i = j
+    \end{array}
+  }{
+    \begin{aligned}
+    \tyctx \vdashh!CDatECT!{}& \DCOREINSTANCE~\CIEXPORTS~\overline{\{\CENAME~\name_i, \CEDEF~\coresortidx_i \}}\\
+    \trelh!CDatECT!{}& \forall\varnothing.\varnothing \to \exists\varnothing.\varnothing\\
+    \dashvh!CDatECT!{}& \tyctx \oplus \begin{aligned} \{{}& \TCCORE.\CTCINSTANCES~\overline{\{ \CEDNAME~\name_i, \CEDDESC~\core:importdesc_i\}}\\,{}&\TCLD~\{\SISORT~\SCORE~\CSINSTANCE, \SIIDX~\length{\tyctx.\TCCORE.\CTCINSTANCES} \}\}\end{aligned}\\
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DCORETYPE~\coredeftype$}
+\[
+  \frac{
+    \tyctx \vdash \coredeftype \leadsto \ecoredeftype
+  }{
+    \tyctx \vdashh!CDatECT! \DCORETYPE~\coredeftype
+    \trelh!CDatECT! \forall\varnothing.\varnothing \to \exists\varnothing.\varnothing
+    \dashvh!CDatECT! \tyctx \oplus \{ \TCCORE.\CTCTYPES~\ecoredeftype \}
+  }
+\]
+
+\subsubsection{$\DCOMPONENT~\component$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \tyctx = \tyctx_1 \boxplus \tyctx_2\\
+    \tyctx_1 \vdashh!CatECT! \component \trelh!CatECT! \ecomponenttype\\
+    \end{array}
+  }{
+    \tyctx \vdashh!CDatECT! \component
+    \trelh!CDatECT! \forall\varnothing.\varnothing \to \exists\varnothing.\varnothing
+    \dashvh!CDatECT! \tyctx_2 \oplus \begin{aligned} \{{}& \TCCOMPONENTS~\ecomponenttype\\,{}& \TCLD~\{\SISORT~\SCOMPONENT, \SIIDX~\length{\tyctx.\TCCOMPONENTS}\}\}\end{aligned}
+  }
+\]
+
+\subsubsection{$\DINSTANCE~\IINSTANTIATE~\componentidx~\overline{\instantiatearg_i}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \tyctx.\TCCOMPONENTS[\componentidx] = \forall\overline{\boundedtyvar_j}.\overline{{\eexterndecl}_k} \to \exists\overline{\boundedtyvar_o}. \einstancetype\\
+    \forall j, \exists {\edeftype}_j, {\edeftype}_j \subtypeof \boundedtyvar_j\\
+    \begin{aligned}&\overline{\eexterndecl'}_k\to\exists\overline{\boundedtyvar'_o}.\einstancetype' =\\&\quad (\overline{{\eexterndecl}_k} \to \exists\overline{\boundedtyvar_o}.\einstancetype)[\overline{{\edeftype}_j/\boundedtyvar_j}]\end{aligned}\\
+    \begin{aligned}
+    \forall k, \exists i, &\instantiatearg_i.\IANAME = {\eexterndecl'}_k.\EEDNAME\\\land{}&\tyctx \vdashh!SIatEED! \instantiatearg_i.\IAARG \trelh!SIatEED! {\eexterndecl'}_k.\EEDDESC
+    \end{aligned}\\
+    \forall l, \evaltypead_l = \begin{cases}
+       \tyctx.\TCVALUES[l]^\dagger&\text{if }\begin{aligned}\exists i,{}&\instantiatearg_i.\IAARG.\SISORT = \SVALUE\\\land{}&\instantiatearg_i.\IAARG.\SIIDX = k\\\end{aligned}\\
+       \tyctx.\TCVALUES[l]&\text{otherwise}\\
+    \end{cases}\\
+    \forall m, {\einstancetypead}_m = \begin{cases}
+      \einstancetype'&\text{if }m = \length{\tyctx.\TCINSTANCES}\\
+      \overline{\eexterndecl^\dagger}_n &\text{if }
+        \begin{aligned}
+          \exists i,{}&\instantiatearg_i.\IAARG.\SISORT = \SCOMPONENT\\
+          \land{}&\instantiatearg_i.\IAARG.\SIIDX = m\\
+          \land{}&\tyctx.\TCINSTANCES[m] = \overline{\eexterndeclad_n}\\
+        \end{aligned}\\
+      \tyctx.\TCINSTANCES[m] & \text{otherwise}\\
+    \end{cases}
+    \end{array}
+  }{
+    \begin{aligned}
+    \tyctx \vdashh!CDatECT!{}&\DINSTANCE~\IINSTANTIATE~\componentidx~\overline{\instantiatearg_i}\\
+    \trelh!CDatECT!{}&\forall\varnothing.\varnothing \to \exists\varnothing.\varnothing\\
+    \dashvh!CDatECT!{}&\tyctx' \ominus \{ \TCVALUES, \TCINSTANCES \} \oplus \begin{aligned} \{{}& \TCVARS~\overline{(\boundedtyvar'_o,)}, \TCINSTANCES~\overline{\einstancetypead}_m, \TCVALUES~\overline{\evaltypead_l}\\,{}& \TCLD~\{ \SISORT~\SINSTANCE, \SIIDX~\length{\tyctx.\TCINSTANCES}\}\}\end{aligned}\\
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DINSTANCE~\IEXPORTS~\overline{\{ \ENAME~\name_i, \EDEF~\sortidx_i \}}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+      \forall i, \tyctx \vdashh!SIatEED! \sortidx_i \trelh!SIatEED! {\eexterndesc}_i\\
+      \forall i j, \name_i = \name_j \Rightarrow i = j\\
+    \forall j, \evaltypead_j = \begin{cases}
+       \tyctx.\TCVALUES[j]^\dagger&\text{if }\begin{aligned}\exists i,{}&\sortidx_i.\SISORT = \SVALUE\\\land{}&\sortidx_i.\SIIDX = j\\\end{aligned}\\
+       \tyctx.\TCVALUES[j]&\text{otherwise}\\
+    \end{cases}\\
+    \einstancetype = \overline{ \EEDNAME~\name_i, \EEDDESC~{\eexterndesc}_i}\\
+    \forall k, \einstancetypead_k = \begin{cases}
+      \einstancetype&\text{if } k = \length{\tyctx.\TCINSTANCES}\\
+      \overline{{\eexterndecl^\dagger}_l}&\text{if }
+        \begin{aligned}
+          \exists i,{}&\sortidx_i.\SISORT = \SINSTANCE\\
+          \land{}&\sortidx_i.\SIIDX = k\\
+          \land{}&\tyctx.\TCINSTANCES[k] = \overline{\eexterndeclad_l}\\
+        \end{aligned}\\
+      \tyctx.\TCINSTANCES[k]&\text{otherwise}
+    \end{cases}
+    \end{array}
+  }{
+    \begin{aligned}
+    \tyctx \vdashh!CDatECT!{}& \DINSTANCE~\IEXPORTS~\overline{\{ \ENAME~\name_i, \EDEF~\sortidx_i \}}\\
+    \trelh!CDatECT!{}& \forall\varnothing.\varnothing \to \exists\varnothing.\varnothing\\
+    \dashvh!CDatECT!{}& \tyctx\ominus\{\TCINSTANCES,\TCVALUES\} \oplus \begin{aligned} \{{}& \TCINSTANCES~\overline{\einstancetypead_k},\TCVALUES~\overline{\evaltypead_j}\\,{}& \TCLD~\{ \SISORT~\SINSTANCE,\SIIDX~\length{\tyctx.\TCINSTANCES}\} \}\end{aligned}
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DALIAS~\{ \ASORT~\sort, \ATARGET~\ATEXPORT~\instanceidx~\name \}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \tyctx.\TCINSTANCES[\instanceidx] = \overline{{\eexterndeclad}_i}\\
+    \exists i, {\eexterndeclad}_i.\EEDNAME = \name\\
+    \forall j, {\eexterndeclad'}_j = \begin{cases}
+      {\eexterndeclad}_j^\dagger&\text{if } (\sort = \SVALUE \lor \sort = \SINSTANCE) \land j = i\\
+      {\eexterndeclad}_j&\text{otherwise}\\
+    \end{cases}\\
+    \end{array}
+  }{
+   \begin{aligned}
+    \tyctx \vdashh!CDatECT!{}& \DALIAS~\{ \ASORT~\sort, \ATARGET~\ATEXPORT~\instanceidx~\name \}\\
+    \trelh!CDatECT!{}& \forall\varnothing.\varnothing \to \exists\varnothing.\varnothing\\
+    \dashvh!CDatECT!{}& \tyctx \oplus \{ \F{index\_space}(\sort)~{\eexterndeclad}_i.\EEDDESC, \TCINSTANCES[i]~\overline{{\eexterndeclad'}_j} \}\\
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DALIAS~\{ \ASORT~\sort, \ATARGET~\ATCOREEXPORT~\coreinstanceidx~\name \}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \sort = \SCORE~\coresort\\
+    \tyctx.\TCCORE.\CTCINSTANCES[\coreinstanceidx] = \overline{\coreexportdecl_i}\\
+    {\coreexportdecl}_i.\CEDNAME~\name\\
+    \end{array}
+  }{
+    \begin{aligned}
+    \tyctx \vdashh!CDatECT!{}& \DALIAS~\{ \ASORT~\sort, \ATARGET~\ATCOREEXPORT~\coreinstanceidx~\name \}\\
+    \trelh!CDatECT!{}& \forall\varnothing.\varnothing \to \exists\varnothing.\varnothing\\
+    \dashvh!CDatECT!{}& \tyctx \oplus \{ \F{index\_space}(\sort)~{\coreexportdecl}_i.\CEDDESC \}
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DALIAS~\{ \ASORT~\sort, \ATARGET~\ATOUTER~\u32_o~\u32_i \}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+      \sort \in \{ \SCOMPONENT, \SCORE~\CSMODULE, \STYPE, \SCORE~\CSTYPE \}\\
+      \{\SISORT~\sort, \SIIDX~\u32_i\} \in \Gamma.\TCPARENT[\u32_o].\TCLD\\
+      \eexterndesc = \sort~\Gamma.\TCPARENT[\u32_o].\F{index\_space}(\sort)[\u32_i]\\
+      \mathit{boundary} = \bigvee_{j<\u32_o} \tyctx.\TCPARENT[j].\TCOB\\
+      \subst = \begin{cases}\resolveVars{\tyctx.\TCPARENT[\u32_o]} & \text{if } \mathit{boundary}\\\varnothing&\text{otherwise}\end{cases}\\
+      \eexterndesc' = \eexterndesc[\subst]\\
+      \tyctx.\TCPARENT[\u32_o] \vdashh!EED!_{\{\EDTPEXPORT~\true\}} \eexterndesc'\\
+      \mathit{boundary} \Rightarrow \freeVars{\eexterndesc'} = \varnothing\\
+    \end{array}
+  }{
+    \begin{aligned}
+    \tyctx \vdashh!CDatECT!{}& \DALIAS~\{ \ASORT~\sort, \ATARGET~\ATOUTER~\u32_o~\u32_i \}\\
+    \trelh!CDatECT!{}&\forall\varnothing.\varnothing \to \exists\varnothing.\varnothing\\
+    \dashvh!CDatECT!{}&\tyctx \oplus \eexterndesc'\\
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DTYPE~\deftype$}
+\[
+  \frac{
+    \tyctx \vdashh!DTtoEDT! \deftype \leadstoh!DTtoEDT! \edeftype\\
+  }{
+    \begin{aligned}
+    \tyctx \vdashh!CDatECT!{}&\DTYPE~\deftype\\
+    \trelh!CDatECT!{}&\forall\varnothing.\varnothing \to \varnothing\\
+    \dashvh!CDatECT!{}&\tyctx \oplus \{ \TCTYPES~\edeftype \}\\
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DTYPE~\{ \RTREP~\mathtt{i32}, \RTDTOR~\funcidx \}$}
+\label{rule:CDatECT:DTYPE}
+\[
+  \frac{
+  }{
+    \begin{aligned}
+      \tyctx
+      \vdashh!CDatECT!{}&\DTYPE~\{ \RTREP~\mathtt{i32}, \RTDTOR~\funcidx \}\\
+      \trelh!CDatECT!{}&\forall \varnothing. \varnothing \to \varnothing\\
+      \dashvh!CDatECT!{}&\tyctx \oplus \{ \TCRTYPES~\{ \ERTREP~\mathtt{i32}, \ERTDTOR~\funcidx \}, \TCTYPES~\EDTRESOURCE~\length{\tyctx.\TCRTYPES} \}
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DCANON~\CLIFT~\core:funcidx~\overline{\canonopt_i}~\typeidx$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \tyctx.\TCTYPES[\typeidx] = \efunctype\\
+    \tyctx.\TCCORE.\CTCFUNCS[\core:funcidx] = \F{canon\_lower\_type}(\efunctype, \overline{\canonopt_i})\\
+    \end{array}
+  }{
+    \tyctx \vdashh!CDatECT! \DCANON~\CLIFT~\core:funcidx~\overline{\canonopt_i}~\typeidx
+    \trelh!CDatECT! \varnothing \to \varnothing
+    \dashvh!CDatECT! \tyctx \oplus \{ \TCFUNCS~\efunctype \}
+  }
+\]
+
+\subsubsection{$\DCANON~\CLOWER~\funcidx~\overline{\canonopt_i}$}
+\[
+  \frac{
+  }{
+    \begin{aligned}
+    \tyctx \vdashh!CDatECT!{}&\DCANON~\CLOWER~\funcidx~\overline{\canonopt_i}\\
+    \trelh!CDatECT!{}&\forall\varnothing.\varnothing \to \exists\varnothing.\varnothing\\
+    \dashvh!CDatECT!{}&\tyctx \oplus \{ \tyctx.\TCCORE.\CTCFUNCS~\F{canon\_lower\_type}(\tyctx.\TCFUNCS[\funcidx], \overline{\canonopt_i}) \}\\
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DCANON~\CRESOURCENEW~\typeidx$}
+% todo core xref for i32
+\[
+  \frac{
+    \tyctx.\TCTYPES[\typeidx] = \EDTRESOURCE~\rtidx\\
+  }{
+    \begin{aligned}
+      \tyctx \vdashh!CDatECT!{}&\DCANON~\CRESOURCENEW~\typeidx\\
+      \trelh!CDatECt!{}&\forall\varnothing.\varnothing\to\exists\varnothing.\varnothing\\
+      \dashvh!CDatECT!{}&\tyctx\oplus\{\tyctx.\TCCORE.\CTCFUNCS~\i32\to\i32\}\\
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DCANON~\CRESOURCEDROP~\typeidx$}
+\[
+  \frac{
+    \exists \edeftype, \tyctx.\TCTYPES[\typeidx] = \EVTOWN~\edeftype \lor \tyctx.\TCTYPES[\typeidx] = \EVTREF~\RSCALL~\edeftype
+  }{
+    \begin{aligned}
+      \tyctx \vdashh!CDatECT!{}&\DCANON~\CRESOURCEDROP~\typeidx\\
+      \trelh!CDatECt!{}&\forall\varnothing.\varnothing\to\exists\varnothing.\varnothing\\
+      \dashvh!CDatECT!{}&\tyctx\oplus\{\tyctx.\TCCORE.\CTCFUNCS~\i32\to\varnothing\}\\
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DCANON~\CRESOURCEREP~\typeidx$}
+\[
+  \frac{
+    \tyctx.\TCTYPES[\typeidx] = \EDTRESOURCE~\rtidx\\
+  }{
+    \begin{aligned}
+      \tyctx \vdashh!CDatECT!{}&\DCANON~\CRESOURCEREP~\typeidx\\
+      \trelh!CDatECt!{}&\forall\varnothing.\varnothing\to\exists\varnothing.\varnothing\\
+      \dashvh!CDatECT!{}&\tyctx\oplus\{\tyctx.\TCCORE.\CTCFUNCS~\i32\to\i32\}\\
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DSTART~\{ \FFUNC~\funcidx, \FARGS~\overline{\valueidx_i} \}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \tyctx.\TCFUNCS[\funcidx] = \eparamlist \to \eresultlist\\
+    \tyctx \vdashh!VIsatPL! \overline{\valueidx_i} \trelh!VIsatPL! \eparamlist\\
+    n = \F{length}(\tyctx.\TCVALUES)\\
+    \forall j, \evaltypead'_j = \begin{cases}
+      \tyctx.\TCVALUES[j]^\dagger&
+        {\begin{aligned}
+          \text{if }\exists i\,\forall \deftype,{} & j < n \land j = \valueidx_i\\
+          \land {}&{\eparamlist}_i.\EPLTYPE \neq \EVTREF~\RSCALL~\edeftype\\
+        \end{aligned}}\\
+      \tyctx.\TCVALUES[j]&\text{if }j <n\land j \notin \overline{\valueidx_i}\\
+      {\eresultlist}_{j-n}&\text{otherwise}\\
+    \end{cases}\\
+    \end{array}
+  }{
+    \begin{aligned}
+    \tyctx \vdashh!CDatECT!{}&\DSTART~\{ \FFUNC~\funcidx, \FARGS~\overline{\valueidx_i} \}\\
+    \trelh!CDatECT!{}&\forall\varnothing.\varnothing \to \exists\varnothing.\varnothing\\
+    \dashvh!CDatECT!{}&\tyctx \ominus \{ \TCVALUES \} \oplus \{ \TCVALUES~\overline{\evaltypead'_j} \}\\
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DIMPORT~\{ \IDNAME~\name, \IDDESC~\externdesc \}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+      \tyctx \vdashh!EDtoEED! \externdesc \leadstoh!EDtoEED! \forall\overline{\boundedtyvar_i}.\eexterndesc\\
+      \tyctx' = \tyctx \oplus \{ \TCVARS~\overline{(\boundedtyvar_i,)} \}\\
+      \tyctx' \vdashh!EED!_{\{\EDTPEXPORT~\true\}} \eexterndesc
+    \end{array}
+  }{
+    \begin{aligned}
+    \tyctx \vdashh!CDatECT!{}&\DIMPORT~\{ \IDNAME~\name, \IDDESC~\externdesc \}\\
+    \trelh!CDatECT!{}&\forall\overline{\boundedtyvar_i}.\{ \EEDNAME~\name, \EEDDESC~\eexterndesc \} \to \exists\varnothing.\varnothing\\
+    \dashvh!CDatECT!{}&\tyctx' \oplus \eexterndesc\\
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\DEXPORT~\{ \ENAME~\name, \EDEF~\sortidx, \EDESC~\externdesc \}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+      \tyctx \vdashh!SIatEED! \sortidx \trelh!SIatEED! \eexterndesc\\
+      \tyctx \vdashh!EDtoEED! \externdesc \leadstoh!EDatEED! \forall\overline{\boundedtyvar_i}.\eexterndesc'\\
+      \forall i, \exists \edeftype_i, \edeftype_i \subtypeof \boundedtyvar_i\\
+      \eexterndesc \subtypeof \eexterndesc'[\overline{\edeftype_i/\boundedtyvar_i}]\\
+      \edeftype^? =
+      \begin{cases}
+        \edeftype & \text{if } \eexterndesc = \EEMDTYPE~\edeftype\\
+        \epsilon & \text{otherwise}
+      \end{cases}\\
+      \Gamma' = \Gamma \oplus \{ \TCVARS~\overline{(\boundedtyvar_i,\edeftype^?)} \}\\
+      \Gamma' \vdashh!EED!_{\{\EDTPEXPORT~\true\}} \eexterndesc'\\
+    \forall j, \evaltypead'_j = \begin{cases}
+      \tyctx.\TCVALUES[j]^\dagger&\text{if }\sortidx.\SISORT=\SVALUE\land \sortidx.\SIIDX = j\\
+      \tyctx.\TCVALUES[j]&\text{otherwise}\\
+    \end{cases}\\
+    \forall k, \einstancetypead'_k = \begin{cases}
+      \overline{{\eexterndecl^\dagger}_l}&
+        \begin{aligned}
+          \text{if }&\sortidx.\SISORT = \SCOMPONENT \land \sortidx.\SIIDX = j\\
+          \land{}&\tyctx.\TCINSTANCES[j] = \overline{\eexterndeclad_l}\\
+        \end{aligned}\\
+      \tyctx.\TCINSTANCES[j]&\text{otherwise}\\
+    \end{cases}\\
+    \end{array}
+  }{
+    \begin{aligned}
+    \tyctx \vdashh!CDatECT!{}&\DEXPORT~\{ \ENAME~\name, \EDEF~\sortidx \}\\
+    \trelh!CDatECT!{}&\forall\varnothing.\varnothing \to \exists\varnothing.\{ \EEDNAME~\name, \EEDDESC~\eexterndesc \}\\
+    \dashvh!CDatECT!{}&\tyctx' \ominus \{ \TCVALUES, \TCINSTANCES \} \oplus \{ \TCVALUES~\overline{\evaltypead'_j}, \TCINSTANCES~\overline{\einstancetypead'_k} \} \oplus \eexterndesc'\\
+    \end{aligned}
+  }
+\]
