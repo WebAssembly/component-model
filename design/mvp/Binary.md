@@ -221,6 +221,8 @@ Notes:
 * As described in the explainer, each component and instance type is validated
   with an initially-empty type index space. Outer aliases can be used to pull
   in type definitions from containing components.
+* Not only type declarators and type import declarators add to the
+  type index space; type export declarators do so as well.
 * The uniqueness validation rules for `externname` described below are also
   applied at the instance- and component-type level.
 * Validation of `externdesc` requires the various `typeidx` type constructors
