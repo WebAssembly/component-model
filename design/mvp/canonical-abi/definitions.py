@@ -1144,10 +1144,10 @@ def mangle_valtype(t):
     case Result(ok,error) : return mangle_resulttype(ok,error)
 
 def mangle_recordtype(fields):
-  mangled_fields = (f.label + ': ' + mangle_valtype(f.t) for f in fields)
-  if len(mangled_fields) == 0:
+  if len(fields) == 0:
     return 'record {}'
   else:
+    mangled_fields = (f.label + ': ' + mangle_valtype(f.t) for f in fields)
     return 'record { ' + ', '.join(mangled_fields) + ' }'
 
 def mangle_tupletype(ts):
