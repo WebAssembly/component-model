@@ -1145,26 +1145,41 @@ def mangle_valtype(t):
 
 def mangle_recordtype(fields):
   mangled_fields = (f.label + ': ' + mangle_valtype(f.t) for f in fields)
-  return 'record { ' + ', '.join(mangled_fields) + ' }'
+  if len(mangled_fields) == 0:
+    return 'record {}'
+  else:
+    return 'record { ' + ', '.join(mangled_fields) + ' }'
 
 def mangle_tupletype(ts):
   return 'tuple<' + ', '.join(mangle_valtype(t) for t in ts) + '>'
 
 def mangle_flags(labels):
-  return 'flags { ' + ', '.join(labels) + ' }'
+  if len(labels) == 0:
+    return 'flags {}'
+  else:
+    return 'flags { ' + ', '.join(labels) + ' }'
 
 def mangle_varianttype(cases):
-  mangled_cases = ('{label}{payload}'.format(
-                     label = c.label,
-                     payload = '' if c.t is None else '(' + mangle_valtype(c.t) + ')')
-                   for c in cases)
-  return 'variant { ' + ', '.join(mangled_cases) + ' }'
+  if len(cases) == 0:
+    return 'variant {}'
+  else:
+    mangled_cases = ('{label}{payload}'.format(
+                       label = c.label,
+                       payload = '' if c.t is None else '(' + mangle_valtype(c.t) + ')')
+                     for c in cases)
+    return 'variant { ' + ', '.join(mangled_cases) + ' }'
 
 def mangle_enumtype(labels):
-  return 'enum { ' + ', '.join(labels) + ' }'
+  if len(labels) == 0:
+    return 'enum {}'
+  else:
+    return 'enum { ' + ', '.join(labels) + ' }'
 
 def mangle_uniontype(ts):
-  return 'union { ' + ', '.join(mangle_valtype(t) for t in ts) + ' }'
+  if len(ts) == 0:
+    return 'union {}'
+  else:
+    return 'union { ' + ', '.join(mangle_valtype(t) for t in ts) + ' }'
 
 def mangle_optiontype(t):
   return 'option<' + mangle_valtype(t) + '>'
