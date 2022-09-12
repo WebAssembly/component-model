@@ -1429,6 +1429,8 @@ character in a component-level import/export (as is currently the case in `wit`
 [identifiers](WIT.md#identifiers)) and thus can safely be used to prefix
 auxiliary Canonical ABI-induced imports/exports.
 
+#### Instance mangling
+
 Instance-mangling recursively builds a dotted path string (of instance names)
 that is included in the mangled core import/export name:
 ```python
@@ -1456,6 +1458,8 @@ def mangle_instances(xs, path = ''):
 ```
 The three `TODO` cases are intended to be filled in by future PRs extending
 the Canonical ABI.
+
+#### Function and value type mangling
 
 Function and value types are recursively mangled into
 [`wit`](WIT.md)-compatible syntax:
