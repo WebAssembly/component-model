@@ -1431,7 +1431,7 @@ auxiliary Canonical ABI-induced imports/exports.
 
 #### Instance type mangling
 
-Instance-mangling recursively builds a dotted path string (of instance names)
+Instance-type mangling recursively builds a dotted path string (of instance names)
 that is included in the mangled core import/export name:
 ```python
 def mangle_instances(xs, path = ''):
