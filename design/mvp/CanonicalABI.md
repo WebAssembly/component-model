@@ -1429,7 +1429,7 @@ character in a component-level import/export (as is currently the case in `wit`
 [identifiers](WIT.md#identifiers)) and thus can safely be used to prefix
 auxiliary Canonical ABI-induced imports/exports.
 
-#### Instance mangling
+#### Instance type mangling
 
 Instance-mangling recursively builds a dotted path string (of instance names)
 that is included in the mangled core import/export name:
