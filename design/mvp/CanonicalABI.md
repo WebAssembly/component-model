@@ -1461,7 +1461,7 @@ the Canonical ABI.
 
 #### Function type mangling
 
-Function and value types are recursively mangled into
+Function types are mangled into
 [`wit`](WIT.md)-compatible syntax:
 ```python
 def mangle_funcname(name, ft):
@@ -1476,6 +1476,11 @@ def mangle_funcvec(es, pre_space):
   assert(all(type(e) == tuple and len(e) == 2 for e in es))
   mangled_elems = (e[0] + ': ' + mangle_valtype(e[1]) for e in es)
   return '(' + ', '.join(mangled_elems) + ')'
+
+#### Value type mangling
+
+Value types are similarly mangled into [`wit`](WIT.md)-compatible syntax,
+recursively:
 
 def mangle_valtype(t):
   match t:
