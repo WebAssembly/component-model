@@ -1106,17 +1106,19 @@ def mangle_instances(xs, path = ''):
 #
 
 def mangle_funcname(name, ft):
-  return '{name}: func{params} -> {results}'.format(
-           name = name,
-           params = mangle_funcvec(ft.params, pre_space = False),
-           results = mangle_funcvec(ft.results, pre_space = True))
+  params = mangle_named_types(ft.params)
+  if len(ft.results) == 1 and isinstance(ft.results[0], ValType):
+    results = mangle_valtype(ft.results[0])
+  else:
+    results = mangle_named_types(ft.results)
+  return f'{name}: func{params} -> {results}'
 
-def mangle_funcvec(es, pre_space):
-  if len(es) == 1 and isinstance(es[0], ValType):
-    return (' ' if not pre_space else '') + mangle_valtype(es[0])
-  assert(all(type(e) == tuple and len(e) == 2 for e in es))
-  mangled_elems = (e[0] + ': ' + mangle_valtype(e[1]) for e in es)
+def mangle_named_types(nts):
+  assert(all(type(nt) == tuple and len(nt) == 2 for nt in nts))
+  mangled_elems = (nt[0] + ': ' + mangle_valtype(nt[1]) for nt in nts)
   return '(' + ', '.join(mangled_elems) + ')'
+
+#
 
 def mangle_valtype(t):
   match t:

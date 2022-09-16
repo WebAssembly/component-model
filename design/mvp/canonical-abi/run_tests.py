@@ -381,25 +381,25 @@ def test_mangle_functype(params, results, expect):
   if got != expect:
     fail("test_mangle_func() got:\n  {}\nexpected:\n  {}".format(got, expect))
 
-test_mangle_functype([U8()], [U8()], 'func u8 -> u8')
-test_mangle_functype([U8()], [], 'func u8 -> ()')
+test_mangle_functype([('x',U8())], [U8()], 'func(x: u8) -> u8')
+test_mangle_functype([('x',U8())], [], 'func(x: u8) -> ()')
 test_mangle_functype([], [U8()], 'func() -> u8')
 test_mangle_functype([('x',U8())], [('y',U8())], 'func(x: u8) -> (y: u8)')
 test_mangle_functype([('a',Bool()),('b',U8()),('c',S16()),('d',U32()),('e',S64())],
                      [('a',S8()),('b',U16()),('c',S32()),('d',U64())],
                      'func(a: bool, b: u8, c: s16, d: u32, e: s64) -> (a: s8, b: u16, c: s32, d: u64)')
-test_mangle_functype([List(List(String()))], [],
-                     'func list<list<string>> -> ()')
-test_mangle_functype([Record([Field('x',Record([Field('y',String())])),Field('z',U32())])], [],
-                     'func record { x: record { y: string }, z: u32 } -> ()')
-test_mangle_functype([Tuple([U8()])], [Tuple([U8(),U8()])],
-                     'func tuple<u8> -> tuple<u8, u8>')
-test_mangle_functype([Flags(['a','b'])], [Enum(['a','b'])],
-                     'func flags { a, b } -> enum { a, b }')
-test_mangle_functype([Variant([Case('a',None),Case('b',U8())])], [Union([U8(),List(String())])],
-                     'func variant { a, b(u8) } -> union { u8, list<string> }')
-test_mangle_functype([Option(Bool())],[Option(List(U8()))],
-                     'func option<bool> -> option<list<u8>>')
+test_mangle_functype([('l',List(List(String())))], [],
+                     'func(l: list<list<string>>) -> ()')
+test_mangle_functype([('r',Record([Field('x',Record([Field('y',String())])),Field('z',U32())]))], [],
+                     'func(r: record { x: record { y: string }, z: u32 }) -> ()')
+test_mangle_functype([('t',Tuple([U8()]))], [Tuple([U8(),U8()])],
+                     'func(t: tuple<u8>) -> tuple<u8, u8>')
+test_mangle_functype([('f',Flags(['a','b']))], [Enum(['a','b'])],
+                     'func(f: flags { a, b }) -> enum { a, b }')
+test_mangle_functype([('v',Variant([Case('a',None),Case('b',U8())]))], [Union([U8(),List(String())])],
+                     'func(v: variant { a, b(u8) }) -> union { u8, list<string> }')
+test_mangle_functype([('o',Option(Bool()))],[Option(List(U8()))],
+                     'func(o: option<bool>) -> option<list<u8>>')
 test_mangle_functype([], [('a',Result(None,None)),('b',Result(U8(),None)),('c',Result(None,U8()))],
                      'func() -> (a: result, b: result<u8>, c: result<_, u8>)')
 
@@ -410,24 +410,24 @@ def test_cabi(ct, expect):
 
 test_cabi(
   ComponentType(
-    [ExternDecl('a', FuncType([U8()],[U8()])),
+    [ExternDecl('a', FuncType([('x',U8())],[U8()])),
      ExternDecl('b', ValueType(String()))],
-    [ExternDecl('c', FuncType([S8()],[S8()])),
+    [ExternDecl('c', FuncType([('x',S8())],[S8()])),
      ExternDecl('d', ValueType(List(U8())))]
   ),
   ModuleType(
-    [CoreImportDecl('','a: func u8 -> u8', CoreFuncType(['i32'],['i32']))],
+    [CoreImportDecl('','a: func(x: u8) -> u8', CoreFuncType(['i32'],['i32']))],
     [CoreExportDecl('cabi_memory', CoreMemoryType(0, None)),
      CoreExportDecl('cabi_realloc', CoreFuncType(['i32','i32','i32','i32'],['i32'])),
      CoreExportDecl('cabi_start{cabi=0.1}: func(b: string) -> (d: list<u8>)',
                     CoreFuncType(['i32','i32'],['i32'])),
-     CoreExportDecl('c: func s8 -> s8', CoreFuncType(['i32'],['i32']))]
+     CoreExportDecl('c: func(x: s8) -> s8', CoreFuncType(['i32'],['i32']))]
   )
 )
 test_cabi(
   ComponentType(
     [ExternDecl('a', InstanceType([
-      ExternDecl('b', FuncType([U8()],[U8()])),
+      ExternDecl('b', FuncType([('x',U8())],[U8()])),
       ExternDecl('c', ValueType(Float32()))
     ]))],
     [ExternDecl('d', InstanceType([
@@ -436,7 +436,7 @@ test_cabi(
     ]))]
   ),
   ModuleType(
-    [CoreImportDecl('','a.b: func u8 -> u8', CoreFuncType(['i32'],['i32']))],
+    [CoreImportDecl('','a.b: func(x: u8) -> u8', CoreFuncType(['i32'],['i32']))],
     [CoreExportDecl('cabi_memory', CoreMemoryType(0, None)),
      CoreExportDecl('cabi_realloc', CoreFuncType(['i32','i32','i32','i32'],['i32'])),
      CoreExportDecl('cabi_start{cabi=0.1}: func(a.c: float32) -> (d.f: float64)',
@@ -452,7 +452,7 @@ test_cabi( # from CanonicalABI.md
        ExternDecl('bar', FuncType([('x', U32()),('y', U32())],[U32()]))
      ])),
      ExternDecl('v1', ValueType(String()))],
-    [ExternDecl('baz', FuncType([String()], [String()])),
+    [ExternDecl('baz', FuncType([('s',String())], [String()])),
      ExternDecl('v2', ValueType(List(List(String()))))]
   ),
   ModuleType(
@@ -462,7 +462,7 @@ test_cabi( # from CanonicalABI.md
      CoreExportDecl('cabi_realloc', CoreFuncType(['i32','i32','i32','i32'],['i32'])),
      CoreExportDecl('cabi_start{cabi=0.1}: func(v1: string) -> (v2: list<list<string>>)',
                     CoreFuncType(['i32','i32'],['i32'])),
-     CoreExportDecl('baz: func string -> string', CoreFuncType(['i32','i32'],['i32'])),
+     CoreExportDecl('baz: func(s: string) -> string', CoreFuncType(['i32','i32'],['i32'])),
      CoreExportDecl('cabi_post_baz', CoreFuncType(['i32'],[]))]
   )
 )
