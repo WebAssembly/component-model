@@ -345,15 +345,17 @@ fibonacci: func(n: u32) -> u32
 Specifically functions have the structure:
 
 ```wit
-func-item ::= id ':' 'func' func-vec '->' func-vec
+func-item ::= id ':' 'func' param-list '->' result-list
 
-func-vec ::= ty
-           | '(' func-named-type-list ')'
+param-list ::= '(' named-type-list ')'
 
-func-named-type-list ::= nil
-                       | func-named-type ( ',' func-named-type )*
+result-list ::= ty
+              | '(' named-type-list ')
 
-func-named-type ::= id ':' ty
+named-type-list ::= nil
+                  | named-type ( ',' named-type )*
+
+named-type ::= id ':' ty
 ```
 
 ## Item: `resource`

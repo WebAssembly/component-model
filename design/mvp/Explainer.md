@@ -456,7 +456,6 @@ valtype       ::= <typeidx>
                 | <defvaltype>
 functype      ::= (func <paramlist> <resultlist>)
 paramlist     ::= (param <name> <valtype>)*
-                | (param <valtype>)
 resultlist    ::= (result <name> <valtype>)*
                 | (result <valtype>)
 componenttype ::= (component <componentdecl>*)
@@ -533,11 +532,11 @@ shared-nothing functions, components and component instances:
 The `func` type constructor describes a component-level function definition
 that takes and returns a list of `valtype`. In contrast to [`core:functype`],
 the parameters and results of `functype` can have associated names which
-validation requires to be unique. If a name is not present, the name is taken
-to be a special "empty" name and uniqueness still requires there to only be one
-unnamed parameter/result. To avoid unnecessary complexity for language binding
-generators, parameter and result lists are not allowed to contain both named
-and unnamed parameters.
+validation requires to be unique. To improve the ergonomics and performance of
+the common case of single-value-returning functions, function types may
+additionally have a single unnamed return type. For this special case, bindings
+generators are naturally encouraged to return the single value directly without
+wrapping it in any containing record/object/struct.
 
 The `instance` type constructor describes a list of named, typed definitions
 that can be imported or exported by a component. Informally, instance types

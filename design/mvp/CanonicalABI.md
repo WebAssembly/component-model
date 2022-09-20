@@ -1461,27 +1461,28 @@ the Canonical ABI.
 
 #### Function type mangling
 
-Function types are mangled into
-[`wit`](WIT.md)-compatible syntax:
+Function types are mangled into [`wit`](WIT.md)-compatible syntax:
 ```python
 def mangle_funcname(name, ft):
-  return '{name}: func{params} -> {results}'.format(
-           name = name,
-           params = mangle_funcvec(ft.params, pre_space = False),
-           results = mangle_funcvec(ft.results, pre_space = True))
+  params = mangle_named_types(ft.params)
+  if len(ft.results) == 1 and isinstance(ft.results[0], ValType):
+    results = mangle_valtype(ft.results[0])
+  else:
+    results = mangle_named_types(ft.results)
+  return f'{name}: func{params} -> {results}'
 
-def mangle_funcvec(es, pre_space):
-  if len(es) == 1 and isinstance(es[0], ValType):
-    return (' ' if not pre_space else '') + mangle_valtype(es[0])
-  assert(all(type(e) == tuple and len(e) == 2 for e in es))
-  mangled_elems = (e[0] + ': ' + mangle_valtype(e[1]) for e in es)
+def mangle_named_types(nts):
+  assert(all(type(nt) == tuple and len(nt) == 2 for nt in nts))
+  mangled_elems = (nt[0] + ': ' + mangle_valtype(nt[1]) for nt in nts)
   return '(' + ', '.join(mangled_elems) + ')'
+```
 
 #### Value type mangling
 
 Value types are similarly mangled into [`wit`](WIT.md)-compatible syntax,
 recursively:
 
+```
 def mangle_valtype(t):
   match t:
     case Bool()           : return 'bool'
@@ -1548,7 +1549,7 @@ As an example, given a component type:
     (export "bar" (func (param "x" u32) (param "y" u32) (result u32)))
   ))
   (import "v1" (value string))
-  (export "baz" (func (param string) (result string)))
+  (export "baz" (func (param "s" string) (result string)))
   (export "v2" (value list<list<string>>))
 )
 ```
@@ -1560,7 +1561,7 @@ the `canonical_module_type` would be:
   (export "cabi_memory" (memory 0))
   (export "cabi_realloc" (func (param i32 i32 i32 i32) (result i32)))
   (export "cabi_start{cabi=0.1}: func(v1: string) -> (v2: list<list<string>>)" (func (param i32 i32) (result i32)))
-  (export "baz: func string -> string" (func (param i32 i32) (result i32)))
+  (export "baz: func(s: string) -> string" (func (param i32 i32) (result i32)))
   (export "cabi_post_baz" (func (param i32)))
 )
 ```
