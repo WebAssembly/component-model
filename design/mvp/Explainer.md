@@ -1022,21 +1022,29 @@ a 16-bit `layer` field with `0` for modules and `1` for components).
 
 Once compiled, a `WebAssembly.Component` could be instantiated using the
 existing JS API `WebAssembly.instantiate(Streaming)`. Since components have the
-same basic import/export structure as modules, this mostly just means extending
-the [*read the imports*] logic to support single-level imports as well as
+same basic import/export structure as modules, this means extending the [*read
+the imports*] logic to support single-level imports (of kebab-case component
+import names converted to lowerCamelCase JavaScript identifiers) as well as
 imports of modules, components and instances. Since the results of
 instantiating a component is a record of JavaScript values, just like an
 instantiated module, `WebAssembly.instantiate` would always produce a
-`WebAssembly.Instance` object for both module and component arguments.
+`WebAssembly.Instance` object for both module and component arguments
+(again, with kebab-case component export names converted to lowerCamelCase).
+
+Since the JavaScript embedding is generic, loading all component types, it
+needs to allow the JS client to refer to either of the `name` or `URL` fields
+of component `externname`s. On the import side, this means that, when a `URL`
+is present, *read the imports* will first attempt to [`Get`] the `URL` and, on
+failure, `Get` the `name`. On the export side, this means that *both* the
+`name` and `URL` are exposed as exports in the export object (both holding the
+same value). Since `name` and `URL` are necessarily disjoint sets of strings
+(in particular, `URL`s must contain a `:`, `name` must not), there should not
+be any conflicts in either of these cases.
 
 Lastly, when given a component binary, the compile-then-instantiate overloads
 of `WebAssembly.instantiate(Streaming)` would inherit the compound behavior of
 the abovementioned functions (again, using the `layer` field to eagerly
 distinguish between modules and components).
-
-TODO: describe how kebab-names are mapped to JS identifiers
-
-TODO: describe how the fields can accept either a name or a URL (which are disjoint sets of strings)
 
 For example, the following component:
 ```wasm
@@ -1139,8 +1147,10 @@ the same places where modules can be loaded today, branching on the `layer`
 field in the binary format to determine whether to decode as a module or a
 component.
 
-TODO: explain how `URL` field is used as module specifier, if present, falling
-back to the `name` field, which can be implemented by [import maps]
+When the `URL` field of an imported `externname` is present, the `URL` is
+used as the module specifier, using the same resolution path as JS module.
+Otherwise, the `name` field is used as the module specifier, which requires
+[Import Maps] support to resolve to a `URL`.
 
 The main question is how to deal with component imports having a
 single string as well as the new importable component, module and instance
@@ -1244,6 +1254,7 @@ and will be added over the coming months to complete the MVP proposal:
 [`enum`]: https://webidl.spec.whatwg.org/#es-enumeration
 [`T?`]: https://webidl.spec.whatwg.org/#es-nullable-type
 [`union`]: https://webidl.spec.whatwg.org/#es-union
+[`Get`]: https://tc39.es/ecma262/#sec-get-o-p
 [JS NaN]: https://tc39.es/ecma262/#sec-ecmascript-language-types-number-type
 [Import Reflection]: https://github.com/tc39-transfer/proposal-import-reflection
 [Module Record]: https://tc39.es/ecma262/#sec-abstract-module-records
