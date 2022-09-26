@@ -951,7 +951,7 @@ maps to the following component type:
 ```
 A component *targeting* `wasi:cli/Command` would thus need to be a *subtype* of
 `$Command` (importing a subset of these imports and exporting a superset of
-these exports) while a host *implementing* `wasi:cli/Command` would need to be
+these exports) while a host *supporting* `wasi:cli/Command` would need to be
 a *supertype* of `$Command` (offering a superset of these imports and expecting
 to call a subset of these exports).
 
