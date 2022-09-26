@@ -865,7 +865,7 @@ type:
 ```
 a Rust bindings generator for a component with this export could produce a
 trait `OneTwo` requiring a function `three_four` while the JS Embedding would
-expect the JS module implementing this component type to export a function
+expect the JS module implementing this component type to export a variable
 `oneTwo` containing an object with a field `threeFour` containing a function.
 
 The `name` field can also be used by *host* source-code bindings, defining the
