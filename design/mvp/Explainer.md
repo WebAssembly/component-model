@@ -939,9 +939,9 @@ default world Command {
   export main: "wasi:cli/main"
 }
 ```
-where `wasi:filesystem`, `wasi:log` and `wasi:main` are separately defined
-interfaces that map to instance types. This "World" definition then maps to the
-following component type:
+where `wasi:filesystem`, `wasi:cli/console` and `wasi:cli/main` are separately
+defined interfaces that map to instance types. This "World" definition then
+maps to the following component type:
 ```
 (component $Command
   (import "fs" "wasi:filesystem" (instance ... filesystem function exports ...))
