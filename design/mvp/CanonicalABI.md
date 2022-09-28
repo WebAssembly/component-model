@@ -1422,7 +1422,7 @@ synthetic `cabi_start` function that is called immediately after instantiation.
 
 For imports (which in Core WebAssembly are [two-level]), the first-level name
 is set to be a zero-length string so that the entire rest of the first-level
-string space is available for [shared-everything linking].
+string space is available for [shared-everything dynamic linking].
 
 For imports and exports, the Canonical ABI assumes that `_` is not a valid
 character in a component-level import/export (as is currently the case in `wit`
@@ -1596,7 +1596,7 @@ def lift_canonical_module(module: Module) -> Component:
 [Component Invariants]: Explainer.md#component-invariants
 [JavaScript Embedding]: Explainer.md#JavaScript-embedding
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
-[Shared-Everything Linking]: examples/SharedEverythingLinking.md
+[Shared-Everything Dynamic Linking]: examples/SharedEverythingDynamicLinking.md
 
 [Administrative Instructions]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-instr-admin
 [Implementation Limits]: https://webassembly.github.io/spec/core/appendix/implementation.html
