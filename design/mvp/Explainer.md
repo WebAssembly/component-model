@@ -879,12 +879,12 @@ an *externally-defined* specification of what an import "wants" or what an
 export has "implemented". One example is a URL naming a standard interface such
 as `wasi:filesystem` (assuming that WASI registered the `wasi:` URI scheme with
 IANA). Pre-standard, non-standard or proprietary interfaces could be referred
-to by an `http:` URL in an interface registry. For imports, a URL could
+to by an `https:` URL in an interface registry. For imports, a URL could
 alternatively refer to a *particular implementation* (e.g., at a hosted storage
 location) or a *query* for a *set of possible implementations* (e.g., using the
 query API of a public registry). Because of the wide variety of hosts executing
 components, the Component Model doesn't specify how URLs are to be interpreted,
-just that they are grammatically URLs. Even `http:` URLs may or may not be
+just that they are grammatically URLs. Even `https:` URLs may or may not be
 literally fetched by the host (c.f. [import maps]).
 
 When present, `URL`s must *also* be unique (*in addition* the abovementioned
