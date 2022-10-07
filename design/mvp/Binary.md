@@ -55,8 +55,8 @@ Notes:
 ```
 core:instance       ::= ie:<instance-expr>                                 => (instance ie)
 core:instanceexpr   ::= 0x00 m:<moduleidx> arg*:vec(<core:instantiatearg>) => (instantiate m arg*)
-                      | 0x01 e*:vec(<core:export>)                         => e*
-core:instantiatearg ::= n:<name> 0x12 i:<instanceidx>                      => (with n (instance i))
+                      | 0x01 e*:vec(<core:inlineexport>)                   => e*
+core:instantiatearg ::= n:<core:name> 0x12 i:<instanceidx>                 => (with n (instance i))
 core:sortidx        ::= sort:<core:sort> idx:<u32>                         => (sort idx)
 core:sort           ::= 0x00                                               => func
                       | 0x01                                               => table
@@ -65,11 +65,11 @@ core:sort           ::= 0x00                                               => fu
                       | 0x10                                               => type
                       | 0x11                                               => module
                       | 0x12                                               => instance
-core:export         ::= n:<name> si:<core:sortidx>                         => (export n si)
+core:inlineexport   ::= n:<core:name> si:<core:sortidx>                    => (export n si)
 
 instance            ::= ie:<instance-expr>                                 => (instance ie)
 instanceexpr        ::= 0x00 c:<componentidx> arg*:vec(<instantiatearg>)   => (instantiate c arg*)
-                      | 0x01 e*:vec(<export>)                              => e*
+                      | 0x01 e*:vec(<inlineexport>)                        => e*
 instantiatearg      ::= n:<name> si:<sortidx>                              => (with n si)
 sortidx             ::= sort:<sort> idx:<u32>                              => (sort idx)
 sort                ::= 0x00 cs:<core:sort>                                => core cs
@@ -78,7 +78,12 @@ sort                ::= 0x00 cs:<core:sort>                                => co
                       | 0x03                                               => type
                       | 0x04                                               => component
                       | 0x05                                               => instance
-export              ::= n:<name> si:<sortidx>                              => (export n si)
+inlineexport        ::= n:<name> si:<sortidx>                              => (export n si)
+name                ::= len:<u32> n:<name-chars>                           => n (if len = |n|)
+name-chars          ::= w:<word>                                           => w
+                      | n:<name> 0x2d w:<word>                             => n-w
+word                ::= w:[0x61-0x7a] x*:[0x30-0x39,0x61-0x7a]*            => char(w)char(x)*
+                      | W:[0x41-0x5a] X*:[0x30-0x39,0x41-0x5a]*            => char(W)char(X)*
 ```
 Notes:
 * Reused Core binary rules: [`core:name`], (variable-length encoded) [`core:u32`]
@@ -92,6 +97,8 @@ Notes:
   for aliases (below).
 * Validation of `core:instantiatearg` initially only allows the `instance`
   sort, but would be extended to accept other sorts as core wasm is extended.
+* Validation of `instantiate` requires that `name` is present in an
+  `externname` of `c` (with a matching type).
 * The indices in `sortidx` are validated according to their `sort`'s index
   spaces, which are built incrementally as each definition is validated.
 
@@ -99,10 +106,10 @@ Notes:
 
 (See [Alias Definitions](Explainer.md#alias-definitions) in the explainer.)
 ```
-alias            ::= s:<sort> t:<aliastarget>           => (alias t (s))
-aliastarget      ::= 0x00 i:<instanceidx> n:<name>      => export i n
-                   | 0x01 i:<core:instanceidx> n:<name> => core export i n
-                   | 0x02 ct:<u32> idx:<u32>            => outer ct idx
+alias       ::= s:<sort> t:<aliastarget>                => (alias t (s))
+aliastarget ::= 0x00 i:<instanceidx> n:<name>           => export i n
+              | 0x01 i:<core:instanceidx> n:<core:name> => core export i n
+              | 0x02 ct:<u32> idx:<u32>                 => outer ct idx
 ```
 Notes:
 * Reused Core binary rules: (variable-length encoded) [`core:u32`]
@@ -133,7 +140,7 @@ core:moduledecl  ::= 0x00 i:<core:import>               => i
 core:alias       ::= s:<core:sort> t:<core:aliastarget> => (alias t (s))
 core:aliastarget ::= 0x01 ct:<u32> idx:<u32>            => outer ct idx
 core:importdecl  ::= i:<core:import>                    => i
-core:exportdecl  ::= n:<name> d:<core:importdesc>       => (export n d)
+core:exportdecl  ::= n:<core:name> d:<core:importdesc>  => (export n d)
 ```
 Notes:
 * Reused Core binary rules: [`core:import`], [`core:importdesc`], [`core:functype`]
@@ -175,12 +182,11 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x6d n*:vec(<name>)                     => (enum n*)
                 | 0x6c t*:vec(<valtype>)                  => (union t*)
                 | 0x6b t:<valtype>                        => (option t)
-                | 0x6a t?:<casetype> u?:<casetype>        => (result t? (error u)?)
+                | 0x6a t?:<valtype>? u?:<valtype>?        => (result t? (error u)?)
 namedvaltype  ::= n:<name> t:<valtype>                    => n t
-case          ::= n:<name> t?:<casetype> 0x0              => (case n t?)
-                | n:<name> t?:<casetype> 0x1 i:<u32>      => (case n t? (refines case-label[i]))
-casetype      ::= 0x00                                    =>
-                | 0x01 t:<valtype>                        => t
+case          ::= n:<name> t?:<valtype>? r?:<u32>?        => (case n t? (refines case-label[r])?)
+<T>?          ::= 0x00                                    =>
+                | 0x01 t:<T>                              => t
 valtype       ::= i:<typeidx>                             => i
                 | pvt:<primvaltype>                       => pvt
 functype      ::= 0x40 ps:<paramlist> rs:<resultlist>     => (func ps rs)
@@ -195,8 +201,8 @@ instancedecl  ::= 0x00 t:<core:type>                      => t
                 | 0x01 t:<type>                           => t
                 | 0x02 a:<alias>                          => a
                 | 0x04 ed:<exportdecl>                    => ed
-importdecl    ::= n:<name> ed:<externdesc>                => (import n ed)
-exportdecl    ::= n:<name> ed:<externdesc>                => (export n ed)
+importdecl    ::= en:<externname> ed:<externdesc>         => (import en ed)
+exportdecl    ::= en:<externname> ed:<externdesc>         => (export en ed)
 externdesc    ::= 0x00 0x11 i:<core:typeidx>              => (core module (type i))
                 | 0x01 i:<typeidx>                        => (func (type i))
                 | 0x02 t:<valtype>                        => (value t)
@@ -215,6 +221,8 @@ Notes:
 * As described in the explainer, each component and instance type is validated
   with an initially-empty type index space. Outer aliases can be used to pull
   in type definitions from containing components.
+* The uniqueness validation rules for `externname` described below are also
+  applied at the instance- and component-type level.
 * Validation of `externdesc` requires the various `typeidx` type constructors
   to match the preceding `sort`.
 * Validation of function parameter and result names, record field names,
@@ -286,13 +294,21 @@ flags are set.
 (See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
 in the explainer.)
 ```
-import ::= n:<name> ed:<externdesc> => (import n ed)
-export ::= n:<name> si:<sortidx>    => (export n si)
+import     ::= en:<externname> ed:<externdesc> => (import en ed)
+export     ::= en:<externname> si:<sortidx>    => (export en si)
+externname ::= n:<name> u?:<URL>?              => n u?
+URL        ::= b*:vec(byte)                    => char(b)*, if char(b)* parses as a URL
 ```
 Notes:
-* Validation requires all import and export `name`s are unique.
+* The "parses as a URL" condition is defined by executing the [basic URL
+  parser] with `char(b)*` as *input*, no optional parameters and non-fatal
+  validation errors (which coincides with definition of `URL` in JS and `rust-url`).
 * Validation requires any exported `sortidx` to have a valid `externdesc`
   (which disallows core sorts other than `core module`).
+* The `name` fields of `externname` must be unique among imports and exports,
+  respectively. The `URL` fields of `externname` (that are present) must
+  independently unique among imports and exports, respectively.
+* URLs are compared for equality by plain byte identity.
 
 
 [`core:u32`]: https://webassembly.github.io/spec/core/binary/values.html#integers
@@ -307,3 +323,5 @@ Notes:
 
 [type-imports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
 [module-linking]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md
+
+[Basic URL Parser]: https://url.spec.whatwg.org/#concept-basic-url-parser

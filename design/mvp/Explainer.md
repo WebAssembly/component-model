@@ -129,9 +129,9 @@ The syntax for defining a core module instance is:
 ```
 core:instance       ::= (instance <id>? <core:instancexpr>)
 core:instanceexpr   ::= (instantiate <core:moduleidx> <core:instantiatearg>*)
-                      | <core:export>*
-core:instantiatearg ::= (with <name> (instance <core:instanceidx>))
-                      | (with <name> (instance <core:export>*))
+                      | <core:inlineexport>*
+core:instantiatearg ::= (with <core:name> (instance <core:instanceidx>))
+                      | (with <core:name> (instance <core:inlineexport>*))
 core:sortidx        ::= (<core:sort> <u32>)
 core:sort           ::= func
                       | table
@@ -140,17 +140,17 @@ core:sort           ::= func
                       | type
                       | module
                       | instance
-core:export         ::= (export <name> <core:sortidx>)
+core:inlineexport   ::= (export <core:name> <core:sortidx>)
 ```
 When instantiating a module via `instantiate`, the two-level imports of the
 core modules are resolved as follows:
-1. The first `name` of the import is looked up in the named list of
+1. The first `core:name` of the import is looked up in the named list of
    `core:instantiatearg` to select a core module instance. (In the future,
    other `core:sort`s could be allowed if core wasm adds single-level
    imports.)
-2. The second `name` of the import is looked up in the named list of exports of
-   the core module instance found by the first step to select the imported
-   core definition.
+2. The second `core:name` of the import is looked up in the named list of
+   exports of the core module instance found by the first step to select the
+   imported core definition.
 
 Each `core:sort` corresponds 1:1 with a distinct [index space] that contains
 only core definitions of that *sort*. The `u32` field of `core:sortidx`
@@ -173,22 +173,23 @@ following component:
 To see examples of other sorts, we'll need `alias` definitions, which are
 introduced in the next section.
 
-The `<core:export>*` form of `core:instanceexpr` allows module instances to be
-created by directly tupling together preceding definitions, without the need to
-`instantiate` a helper module. The "inline" form of `<core:export>*` inside
-`(with ...)` is syntactic sugar that is expanded during text format parsing
-into an out-of-line instance definition referenced by `with`. To show an
-example of these, we'll also need the `alias` definitions introduced in the
+The `<core:inlineexport>*` form of `core:instanceexpr` allows module instances
+to be created by directly tupling together preceding definitions, without the
+need to `instantiate` a helper module. The `<core:inlineexport>*` form of
+`core:instantiatearg` is syntactic sugar that is expanded during text format
+parsing into an out-of-line instance definition referenced by `with`. To show
+an example of these, we'll also need the `alias` definitions introduced in the
 next section.
 
 The syntax for defining component instances is symmetric to core module
-instances, but with an expanded component-level definition of `sort`:
+instances, but with an expanded component-level definition of `sort` and
+more restricted version of `name`:
 ```
 instance       ::= (instance <id>? <instanceexpr>)
 instanceexpr   ::= (instantiate <componentidx> <instantiatearg>*)
-                 | <export>*
+                 | <inlineexport>*
 instantiatearg ::= (with <name> <sortidx>)
-                 | (with <name> (instance <export>*))
+                 | (with <name> (instance <inlineexport>*))
 sortidx        ::= (<sort> <u32>)
 sort           ::= core <core:sort>
                  | func
@@ -196,7 +197,11 @@ sort           ::= core <core:sort>
                  | type
                  | component
                  | instance
-export         ::= (export <name> <sortidx>)
+inlineexport   ::= (export <name> <sortidx>)
+name           ::= <word>
+                 | <name>-<word>
+word           ::= [a-z][0-9a-z]*
+                 | [A-Z][0-9A-Z]*
 ```
 Because component-level function, type and instance definitions are different
 than core-level function, type and instance definitions, they are put into
@@ -210,6 +215,21 @@ rules to throw out the core sorts that aren't allowed in various contexts).
 The `value` sort refers to a value that is provided and consumed during
 instantiation. How this works is described in the
 [start definitions](#start-definitions) section.
+
+The component-level definition of `name` above corresponds to [kebab case]. The
+reason for this particular form of casing is to unambiguously separate words
+and acronyms (represented as all-caps words) so that source language bindings
+can convert a `name` into the idiomatic casing of that language. (Indeed,
+because hyphens are often invalid in identifiers, kebab case practically forces
+language bindings to make such a conversion.) For example, the `name` `is-XML`
+could be mapped to `isXML`, `IsXml` or `is_XML`, depending on the target
+language. The highly-restricted character set ensures that capitalization is
+trivial and does not require consulting Unicode tables. Having this structured
+data encoded as a plain string provides a single canonical name for use in
+tools and language-agnostic contexts, without requiring each to invent its own
+custom interpretation. While the use of `name` above is mostly for internal
+wiring, `name` is used in a number of productions below that are
+developer-facing and imply bindings generation.
 
 To see a non-trivial example of component instantiation, we'll first need to
 introduce a few other definitions below that allow components to import, define
@@ -226,7 +246,7 @@ instance, the `core export` of a core module instance and a definition of an
 ```
 alias            ::= (alias <aliastarget> (<sort> <id>?))
 aliastarget      ::= export <instanceidx> <name>
-                   | core export <core:instanceidx> <name>
+                   | core export <core:instanceidx> <core:name>
                    | outer <u32> <u32>
 ```
 If present, the `id` of the alias is bound to the new index added by the alias
@@ -358,8 +378,8 @@ core:moduledecl  ::= <core:importdecl>
                    | <core:exportdecl>
 core:alias       ::= (alias <core:aliastarget> (<core:sort> <id>?))
 core:aliastarget ::= outer <u32> <u32>
-core:importdecl  ::= (import <name> <name> <core:importdesc>)
-core:exportdecl  ::= (export <name> <core:exportdesc>)
+core:importdecl  ::= (import <core:name> <core:name> <core:importdesc>)
+core:exportdecl  ::= (export <core:name> <core:exportdesc>)
 core:exportdesc  ::= strip-id(<core:importdesc>)
 
 where strip-id(X) parses '(' sort Y ')' when X parses '(' sort <id>? Y ')'
@@ -466,8 +486,8 @@ instancedecl  ::= core-prefix(<core:type>)
                 | <type>
                 | <alias>
                 | <exportdecl>
-importdecl    ::= (import <name> bind-id(<externdesc>))
-exportdecl    ::= (export <name> <externdesc>)
+importdecl    ::= (import <externname> bind-id(<externdesc>))
+exportdecl    ::= (export <externname> <externdesc>)
 externdesc    ::= (<sort> (type <u32>) )
                 | core-prefix(<core:moduletype>)
                 | <functype>
@@ -559,10 +579,11 @@ core module declarators introduced above.
 
 As with core modules, `importdecl` and `exportdecl` classify component `import`
 and `export` definitions, with `importdecl` allowing an identifier to be
-bound for use within the type. Following the precedent of [`core:typeuse`], the
-text format allows both references to out-of-line type definitions (via
-`(type <typeidx>)`) and inline type expressions that the text format desugars
-into out-of-line type definitions.
+bound for use within the type. The definition of `externname` is given in the
+[imports and exports](#import-and-export-definitions) section below. Following
+the precedent of [`core:typeuse`], the text format allows both references to
+out-of-line type definitions (via `(type <typeidx>)`) and inline type
+expressions that the text format desugars into out-of-line type definitions.
 
 The `value` case of `externdesc` describes a runtime value that is imported or
 exported at instantiation time as described in the
@@ -802,41 +823,144 @@ of core linear memory.
 
 ### Import and Export Definitions
 
-Lastly, imports and exports are defined in terms of the above as:
+Lastly, imports and exports are defined as:
 ```
-import ::= <importdecl>
-export ::= (export <name> <sortidx>)
+import     ::= (import <externname> bind-id(<externdesc>))
+export     ::= (export <externname> <sortidx>)
+externname ::= <name> <URL>?
 ```
-All import and export names within a component must be unique, respectively.
+Components split the single externally-visible name of imports and exports into
+two sub-fields: a kebab-case `name` (as defined [above](#instance-definitions))
+and a `URL` (defined by the [URL Standard], noting that, in this URL Standard,
+the term "URL" subsumes what has historically been called a [URI], including
+URLs that "identify" as opposed to "locate"). This subdivision of external
+names allows component producers to represent a variety of intentions for how a
+component is to be instantiated and executed so that a variety of hosts can
+portably execute the component.
 
-With what's defined so far, we can write a component that imports, links and
-exports other components:
-```wasm
+The `name` field of `externname` is required to be unique. Thus, a single
+`name` has been used in the preceding definitions of `with` and `alias` to
+uniquely identify imports and exports.
+
+In guest source-code bindings, the `name` is meant to be translated to
+source-language identifiers (applying case-conversion, as described
+[above](#instance-definitions)) attached to whatever source-language constructs
+represent the imports and exports (functions, globals, types, classes, etc).
+For example, given an import in a component type:
+```
+(import "one-two" (instance
+  (export "three-four" (func (param string) (result string)))
+))
+```
+a Rust bindings generator for a component targeting this type could produce an
+`extern crate one_two` containing the function `three_four`. Similarly, a
+[JS Embedding](#js-embedding) could allow `import {threeFour} from 'one-two'`
+to resolve to the imported function. Conversely, given an export in a component
+type:
+```
+(export "one-two" (instance
+  (export "three-four" (func (param string) (result string)))
+))
+```
+a Rust bindings generator for a component with this export could produce a
+trait `OneTwo` requiring a function `three_four` while the JS Embedding would
+expect the JS module implementing this component type to export a variable
+`oneTwo` containing an object with a field `threeFour` containing a function.
+
+The `name` field can also be used by *host* source-code bindings, defining the
+source-language identifiers that are to be used when instantiating a component
+and accessing its exports. For example, the [JS API]'s
+[`WebAssembly.instantiate()`] would use import `name`s in the [*read the
+imports*] step and use export `name`s in the [*create an exports object*] step.
+
+The optional `URL` field of `externname` allows a component author to refer to
+an *externally-defined* specification of what an import "wants" or what an
+export has "implemented". One example is a URL naming a standard interface such
+as `wasi:filesystem` (assuming that WASI registered the `wasi:` URI scheme with
+IANA). Pre-standard, non-standard or proprietary interfaces could be referred
+to by an `https:` URL in an interface registry. For imports, a URL could
+alternatively refer to a *particular implementation* (e.g., at a hosted storage
+location) or a *query* for a *set of possible implementations* (e.g., using the
+query API of a public registry). Because of the wide variety of hosts executing
+components, the Component Model doesn't specify how URLs are to be interpreted,
+just that they are grammatically URLs. Even `https:` URLs may or may not be
+literally fetched by the host (c.f. [import maps]).
+
+When present, `URL`s must *also* be unique (*in addition* the abovementioned
+uniqueness of `name`s). Thus, a `URL` can *also* be used to uniquely identify
+the subset of imports or exports that have `URL`s.
+
+While the `name` field is meant for source-code bindings generators, the `URL`
+field is meant for automated interpretation by hosts and toolchains. In
+particular, hosts are expected to identify their host-implemented imports and
+host-called exports by `URL`, not `name`. This allows hosts to implement a
+wide collection of independently-developed interfaces where `name`s are chosen
+for developer ergonomics (and name collisions are handled independently in
+the binding generators, which is needed in any case) and `URL`s serve as
+the invariant identifier that concretely links the guest to host. If there was
+only a `name`, interface authors would be forced to implicitly coordinate
+across the ecosystem to avoid collisions (which in general, isn't possible)
+while if there was only a `URL`, the developer-friendly identifiers would have
+to be specified manually by every developer or derived in an ad hoc fashion
+from the `URL`, whose contents may vary widely. This dual-name scheme is thus
+proposed to resolve these competing requirements.
+
+Inside the component model, this dual-name scheme shows up in [subtyping](#Subtyping.md),
+where the component subtyping simply ignores the `name` field when the `URL`
+field is present. For example, the component:
+```
 (component
-  (import "c" (instance $c
-    (export "f" (func (result string)))
-  ))
-  (import "d" (component $D
-    (import "c" (instance $c
-      (export "f" (func (result string)))
-    ))
-    (export "g" (func (result string)))
-  ))
-  (instance $d1 (instantiate $D
-    (with "c" (instance $c))
-  ))
-  (instance $d2 (instantiate $D
-    (with "c" (instance
-      (export "f" (func $d1 "g"))
-    ))
-  ))
-  (export "d2" (instance $d2))
+  (import "fs" "wasi:filesystem" ...)
 )
 ```
-Here, the imported component `d` is instantiated *twice*: first, with its
-import satisfied by the imported instance `c`, and second, with its import
-satisfied with the first instance of `d`. While this seems a little circular,
-note that all definitions are acyclic as is the resulting instance graph.
+can be supplied for the `x` import of the component:
+```
+(component
+  (import "x" (component
+    (import "filesystem" "wasi:filesystem" ...)
+  ))
+)
+```
+because the `name`s are ignored and the `URL`s match. This subtyping is
+symmetric to what was described above for hosts, allowing components to
+serve as the "host" of other components, enabling [virtualization](examples/LinkTimeVirtualization.md).
+
+Since the concrete artifacts defining the host/guest interface is a collection
+of [Wit files](WIT.md), Wit must naturally allow interface authors to specify
+both the `name` and `URL` of component imports and exports. While the syntax is
+still very much [in flux](https://github.com/WebAssembly/component-model/pull/83),
+a hypothetical simplified interface between a guest and host might look like:
+```
+// wasi:cli/Command
+default world Command {
+  import fs: "wasi:filesystem"
+  import console: "wasi:cli/console"
+  export main: "wasi:cli/main"
+}
+```
+where `wasi:filesystem`, `wasi:cli/console` and `wasi:cli/main` are separately
+defined interfaces that map to instance types. This "World" definition then
+maps to the following component type:
+```
+(component $Command
+  (import "fs" "wasi:filesystem" (instance ... filesystem function exports ...))
+  (import "console" "wasi:cli/console" (instance ... log function exports ...))
+  (export "main" "wasi:cli/main" (instance (export "main" (func ...))))
+)
+```
+A component *targeting* `wasi:cli/Command` would thus need to be a *subtype* of
+`$Command` (importing a subset of these imports and exporting a superset of
+these exports) while a host *supporting* `wasi:cli/Command` would need to be
+a *supertype* of `$Command` (offering a superset of these imports and expecting
+to call a subset of these exports).
+
+Importantly, this `wasi:cli/Command` World has been able to define the short
+developer-facing names like `fs` and `console` without worrying if there are
+any other Worlds that conflict with these names. If a host wants to implement
+`wasi:cli/Command` and some other World that also happens to pick `fs`, either
+the `URL` fields are the same, and so the two imports can be unified, or the
+`URL` fields are different, and the host supplies two distinct imports,
+identified by `URL`.
 
 
 ## Component Invariants
@@ -897,12 +1021,24 @@ a 16-bit `layer` field with `0` for modules and `1` for components).
 
 Once compiled, a `WebAssembly.Component` could be instantiated using the
 existing JS API `WebAssembly.instantiate(Streaming)`. Since components have the
-same basic import/export structure as modules, this mostly just means extending
-the [*read the imports*] logic to support single-level imports as well as
+same basic import/export structure as modules, this means extending the [*read
+the imports*] logic to support single-level imports (of kebab-case component
+import names converted to lowerCamelCase JavaScript identifiers) as well as
 imports of modules, components and instances. Since the results of
 instantiating a component is a record of JavaScript values, just like an
 instantiated module, `WebAssembly.instantiate` would always produce a
-`WebAssembly.Instance` object for both module and component arguments.
+`WebAssembly.Instance` object for both module and component arguments
+(again, with kebab-case component export names converted to lowerCamelCase).
+
+Since the JavaScript embedding is generic, loading all component types, it
+needs to allow the JS client to refer to either of the `name` or `URL` fields
+of component `externname`s. On the import side, this means that, when a `URL`
+is present, *read the imports* will first attempt to [`Get`] the `URL` and, on
+failure, `Get` the `name`. On the export side, this means that *both* the
+`name` and `URL` are exposed as exports in the export object (both holding the
+same value). Since `name` and `URL` are necessarily disjoint sets of strings
+(in particular, `URL`s must contain a `:`, `name` must not), there should not
+be any conflicts in either of these cases.
 
 Lastly, when given a component binary, the compile-then-instantiate overloads
 of `WebAssembly.instantiate(Streaming)` would inherit the compound behavior of
@@ -1005,10 +1141,17 @@ Notes:
 
 ### ESM-integration
 
-Like the JS API, [esm-integration] can be extended to load components in all
+Like the JS API, [ESM-integration] can be extended to load components in all
 the same places where modules can be loaded today, branching on the `layer`
 field in the binary format to determine whether to decode as a module or a
-component. The main question is how to deal with component imports having a
+component.
+
+When the `URL` field of an imported `externname` is present, the `URL` is
+used as the module specifier, using the same resolution path as JS module.
+Otherwise, the `name` field is used as the module specifier, which requires
+[Import Maps] support to resolve to a `URL`.
+
+The main question is how to deal with component imports having a
 single string as well as the new importable component, module and instance
 types. Going through these one by one:
 
@@ -1086,6 +1229,7 @@ and will be added over the coming months to complete the MVP proposal:
 [Index Space]: https://webassembly.github.io/spec/core/syntax/modules.html#indices
 [Abbreviations]: https://webassembly.github.io/spec/core/text/conventions.html#abbreviations
 
+[`core:name`]: https://webassembly.github.io/spec/core/syntax/values.html#syntax-name
 [`core:module`]: https://webassembly.github.io/spec/core/text/modules.html#text-module
 [`core:type`]: https://webassembly.github.io/spec/core/text/modules.html#types
 [`core:importdesc`]: https://webassembly.github.io/spec/core/text/modules.html#text-importdesc
@@ -1096,8 +1240,11 @@ and will be added over the coming months to complete the MVP proposal:
 [func-import-abbrev]: https://webassembly.github.io/spec/core/text/modules.html#text-func-abbrev
 [`core:version`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-version
 
+[`WebAssembly.instantiate()`]: https://developer.mozilla.org/en-US/docs/WebAssembly/JavaScript_interface/instantiate
+
 [JS API]: https://webassembly.github.io/spec/js-api/index.html
 [*read the imports*]: https://webassembly.github.io/spec/js-api/index.html#read-the-imports
+[*create the exports*]: https://webassembly.github.io/spec/js-api/index.html#create-an-exports-object
 [`ToJSValue`]: https://webassembly.github.io/spec/js-api/index.html#tojsvalue
 [`ToWebAssemblyValue`]: https://webassembly.github.io/spec/js-api/index.html#towebassemblyvalue
 [`USVString`]: https://webidl.spec.whatwg.org/#es-USVString
@@ -1106,6 +1253,7 @@ and will be added over the coming months to complete the MVP proposal:
 [`enum`]: https://webidl.spec.whatwg.org/#es-enumeration
 [`T?`]: https://webidl.spec.whatwg.org/#es-nullable-type
 [`union`]: https://webidl.spec.whatwg.org/#es-union
+[`Get`]: https://tc39.es/ecma262/#sec-get-o-p
 [JS NaN]: https://tc39.es/ecma262/#sec-ecmascript-language-types-number-type
 [Import Reflection]: https://github.com/tc39-transfer/proposal-import-reflection
 [Module Record]: https://tc39.es/ecma262/#sec-abstract-module-records
@@ -1115,6 +1263,7 @@ and will be added over the coming months to complete the MVP proposal:
 [JS Tuple]: https://github.com/tc39/proposal-record-tuple
 [JS Record]: https://github.com/tc39/proposal-record-tuple
 
+[Kebab Case]: https://en.wikipedia.org/wiki/Letter_case#Kebab_case
 [De Bruijn Index]: https://en.wikipedia.org/wiki/De_Bruijn_index
 [Closure]: https://en.wikipedia.org/wiki/Closure_(computer_programming)
 [Empty Type]: https://en.wikipedia.org/w/index.php?title=Empty_type
@@ -1130,6 +1279,10 @@ and will be added over the coming months to complete the MVP proposal:
 [Linear]: https://en.wikipedia.org/wiki/Substructural_type_system#Linear_type_systems
 [Interface Definition Language]: https://en.wikipedia.org/wiki/Interface_description_language
 
+[URL Standard]: https://url.spec.whatwg.org
+[URI]: https://en.wikipedia.org/wiki/Uniform_Resource_Identifier
+[Import Maps]: https://wicg.github.io/import-maps/
+
 [module-linking]: https://github.com/WebAssembly/module-linking/blob/main/design/proposals/module-linking/Explainer.md
 [interface-types]: https://github.com/WebAssembly/interface-types/blob/main/proposals/interface-types/Explainer.md
 [type-imports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
@@ -1141,6 +1294,8 @@ and will be added over the coming months to complete the MVP proposal:
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Canonical ABI]: CanonicalABI.md
 [Shared-Nothing]: ../high-level/Choices.md
+[Use Cases]: ../high-level/UseCases.md
+[Host Embeddings]: ../high-level/UseCases.md#hosts-embedding-components
 
 [`wizer`]: https://github.com/bytecodealliance/wizer
 

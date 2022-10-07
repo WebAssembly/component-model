@@ -18,6 +18,7 @@ But roughly speaking:
 | `expected`                | `T <: (expected T _)` |
 | `union`                   | `T <: (union ... T ...)` |
 | `func`                    | parameter names must match in order; contravariant parameter subtyping; superfluous parameters can be ignored in the subtype; `option` parameters can be ignored in the supertype; covariant result subtyping |
+| `component`               | all imports in the subtype must be present in the supertype with matching types; all exports in the supertype must be present in the subtype; the `URL` is treated as the complete name, when present, ignoring the `name` field |
 
 The remaining specialized value types inherit their subtyping from their
 fundamental value types.

@@ -474,9 +474,8 @@ through a `use` statement or they can be defined locally.
 ## Identifiers
 
 Identifiers in `wit` can be defined with two different forms. The first is a
-lower-case [stream-safe] [NFC] [kebab-case] identifier where each part delimited
-by '-'s starts with a `XID_Start` scalar value with a zero Canonical Combining
-Class:
+[kebab-case] identifier defined by the [`name`](Explainer.md#instance-definitions)
+production in the Component Model text format.
 
 ```wit
 foo: func(bar: u32) -> ()
@@ -498,9 +497,6 @@ prefixed with '%':
 ```
 
 [kebab-case]: https://en.wikipedia.org/wiki/Letter_case#Kebab_case
-[Unicode identifier]: http://www.unicode.org/reports/tr31/
-[stream-safe]: https://unicode.org/reports/tr15/#Stream_Safe_Text_Format
-[NFC]: https://unicode.org/reports/tr15/#Norm_Forms
 
 ## Name resolution
 
