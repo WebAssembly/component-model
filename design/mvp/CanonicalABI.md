@@ -116,9 +116,10 @@ def alignment_record(fields):
 ```
 
 As an optimization, `variant` discriminants are represented by the smallest integer
-covering the number of cases in the variant. Depending on the payload type,
-this can allow more compact representations of variants in memory. This smallest
-integer type is selected by the following function, used above and below:
+covering the number of cases in the variant (with cases numbered in order from
+`0` to `len(cases)-1`). Depending on the payload type, this can allow more
+compact representations of variants in memory. This smallest integer type is
+selected by the following function, used above and below:
 ```python
 def alignment_variant(cases):
   return max(alignment(discriminant_type(cases)), max_case_alignment(cases))
@@ -366,13 +367,13 @@ guaranteed to be a no-op on the first iteration because the record as
 a whole starts out aligned (as asserted at the top of `load`).
 
 Variants are loaded using the order of the cases in the type to determine the
-case index. To support the subtyping allowed by `refines`, a lifted variant
-value semantically includes a full ordered list of its `refines` case
-labels so that the lowering code (defined below) can search this list to find a
-case label it knows about. While the code below appears to perform case-label
-lookup at runtime, a normal implementation can build the appropriate index
-tables at compile-time so that variant-passing is always O(1) and not involving
-string operations.
+case index, assigning `0` to the first case, `1` to the next case, etc. To
+support the subtyping allowed by `refines`, a lifted variant value semantically
+includes a full ordered list of its `refines` case labels so that the lowering
+code (defined below) can search this list to find a case label it knows about.
+While the code below appears to perform case-label lookup at runtime, a normal
+implementation can build the appropriate index tables at compile-time so that
+variant-passing is always O(1) and not involving string operations.
 ```python
 def load_variant(opts, ptr, cases):
   disc_size = size(discriminant_type(cases))
