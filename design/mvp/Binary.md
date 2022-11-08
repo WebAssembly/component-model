@@ -310,6 +310,34 @@ Notes:
   independently unique among imports and exports, respectively.
 * URLs are compared for equality by plain byte identity.
 
+## Name Section
+
+Like the core wasm [name
+section](https://webassembly.github.io/spec/core/appendix/custom.html#name-section)
+a similar `name` custom section is specified here for components to be able to
+name all the declarations that can happen within a component. Similarly like its
+core wasm counterpart validity of this custom section is not required and
+engines should not reject components which have an invalid `name` section.
+
+```
+namesec    ::= section_0(namedata)
+namedata   ::= n:<name>                (if n = 'component-name')
+               name:<componentnamesubsec>?
+               sortnames*:<sortnamesubsec>*
+namesubsection_N(B) ::= N:<byte> size:<u32> B     (if size == |B|)
+
+componentnamesubsec ::= namesubsection_0(<name>)
+sortnamesubsec ::= namesubsection_1(<sortnames>)
+sortnames ::= sort:<sort> names:<namemap>
+
+namemap ::= names:vec(<nameassoc>)
+nameassoc ::= idx:<u32> name:<name>
+```
+
+where `namemap` is the same as for core wasm. A particular `sort` should only
+appear once within a `name` section, for example component instances can only be
+named once.
+
 
 [`core:u32`]: https://webassembly.github.io/spec/core/binary/values.html#integers
 [`core:section`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-section
@@ -325,31 +353,3 @@ Notes:
 [module-linking]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md
 
 [Basic URL Parser]: https://url.spec.whatwg.org/#concept-basic-url-parser
-
-## Name Section
-
-Like the core wasm [name
-section](https://webassembly.github.io/spec/core/appendix/custom.html#name-section)
-a similar `name` custom section is specified here for components to be able to
-name all the declarations that can happen within a component. Similarly like its
-core wasm counterpart validity of this custom section is not required and
-engines should not reject components which have an invalid `name` section.
-
-```
-namesec    ::= section_0(namedata)
-namedata   ::= n:<name>                (if n = 'component-name')
-               name:<componentnamesubsec>?
-               decls*:<declnamesubsec>*
-namesubsection_N(B) ::= N:<byte> size:<u32> B     (if size == |B|)
-
-componentnamesubsec ::= namesubsection_0(<name>)
-declnamesubsec ::= namesubsection_1(<declnames>)
-declnames ::= sort:<sort> names:<namemap>
-
-namemap ::= names:vec(<nameassoc>)
-nameassoc ::= idx:<u32> name:<name>
-```
-
-where `namemap` is the same as for core wasm. A particular `sort` should only
-appear once within a `name` section, for example component instances can only be
-named once.
