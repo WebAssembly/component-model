@@ -325,3 +325,51 @@ Notes:
 [module-linking]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md
 
 [Basic URL Parser]: https://url.spec.whatwg.org/#concept-basic-url-parser
+
+## Name Section
+
+Like the core wasm [name
+section](https://webassembly.github.io/spec/core/appendix/custom.html#name-section)
+a similar `name` custom section is specified here for components to be able to
+name all the declarations that can happen within a component. Similarly like its
+core wasm counterpart validity of this custom section is not required and
+engines should not reject components which have an invalid `name` section.
+
+```
+namesec    ::= section_0(namedata)
+namedata   ::= n:<name>                (if n = 'name')
+               sections*:<subsection>*
+subsection ::= 0x00 0x00 funcs:<corefuncsubsec>
+               0x00 0x01 tables:<coretablesubsec>
+               0x00 0x02 memories:<corememorysubsec>
+               0x00 0x03 globals:<coreglobalsubsec>
+               0x00 0x10 types:<coretypesubsec>
+               0x00 0x11 modules:<coremodulesubsec>
+               0x00 0x12 instances:<coreinstancesubsec>
+               0x01 funcs:<funcsubsec>
+               0x02 values:<valuesubsec>
+               0x03 types:<typesubsec>
+               0x04 components:<componentsubsec>
+               0x05 instances:<instancesubsec>
+
+corefuncsubsec ::= map:<namemap>
+coretablesubsec ::= map:<namemap>
+corememorysubsec ::= map:<namemap>
+coreglobalsubsec ::= map:<namemap>
+coretypesubsec ::= map:<namemap>
+coremodulesubsec ::= map:<namemap>
+coreinstancesubsec ::= map:<namemap>
+
+funcsubsec ::= map:<namemap>
+valuesubsec ::= map:<namemap>
+typesubsec ::= map:<namemap>
+componentsubsec ::= map:<namemap>
+instancesubsec ::= map:<namemap>
+
+namemap ::= names:vec(<nameassoc>)
+nameassoc ::= idx:<u32> name:<name>
+```
+
+where `namemap` is the same as for core wasm. A particular `sort` should only
+appear once within a `name` section, for example component instances can only be
+named once.
