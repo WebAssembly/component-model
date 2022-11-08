@@ -340,7 +340,7 @@ namesec    ::= section_0(namedata)
 namedata   ::= n:<name>                (if n = 'component-name')
                name:<componentnamesubsec>?
                decls*:<declnamesubsec>*
-namesubsection_N(B) ::= N: byte size:<u32> B     (if size == |B|)
+namesubsection_N(B) ::= N:<byte> size:<u32> B     (if size == |B|)
 
 componentnamesubsec ::= namesubsection_0(<name>)
 declnamesubsec ::= namesubsection_1(<declnames>)
