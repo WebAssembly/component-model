@@ -339,32 +339,7 @@ engines should not reject components which have an invalid `name` section.
 namesec    ::= section_0(namedata)
 namedata   ::= n:<name>                (if n = 'name')
                sections*:<subsection>*
-subsection ::= 0x00 0x00 funcs:<corefuncsubsec>
-               0x00 0x01 tables:<coretablesubsec>
-               0x00 0x02 memories:<corememorysubsec>
-               0x00 0x03 globals:<coreglobalsubsec>
-               0x00 0x10 types:<coretypesubsec>
-               0x00 0x11 modules:<coremodulesubsec>
-               0x00 0x12 instances:<coreinstancesubsec>
-               0x01 funcs:<funcsubsec>
-               0x02 values:<valuesubsec>
-               0x03 types:<typesubsec>
-               0x04 components:<componentsubsec>
-               0x05 instances:<instancesubsec>
-
-corefuncsubsec ::= map:<namemap>
-coretablesubsec ::= map:<namemap>
-corememorysubsec ::= map:<namemap>
-coreglobalsubsec ::= map:<namemap>
-coretypesubsec ::= map:<namemap>
-coremodulesubsec ::= map:<namemap>
-coreinstancesubsec ::= map:<namemap>
-
-funcsubsec ::= map:<namemap>
-valuesubsec ::= map:<namemap>
-typesubsec ::= map:<namemap>
-componentsubsec ::= map:<namemap>
-instancesubsec ::= map:<namemap>
+subsection ::= sort:<sort> names:<namemap>
 
 namemap ::= names:vec(<nameassoc>)
 nameassoc ::= idx:<u32> name:<name>
