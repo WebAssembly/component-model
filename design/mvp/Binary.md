@@ -337,7 +337,7 @@ engines should not reject components which have an invalid `name` section.
 
 ```
 namesec    ::= section_0(namedata)
-namedata   ::= n:<name>                (if n = 'name')
+namedata   ::= n:<name>                (if n = 'component-name')
                name:<componentnamesubsec>?
                decls*:<declnamesubsec>*
 namesubsection_N(B) ::= N: byte size:<u32> B     (if size == |B|)
