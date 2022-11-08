@@ -530,6 +530,13 @@ subtyping. In particular, a `variant` subtype can contain a `case` not present
 in the supertype if the subtype's `case` `refines` (directly or transitively)
 some `case` in the supertype.
 
+How these abstract values are produced and consumed from Core WebAssembly
+values and linear memory is configured by the component via *canonical lifting
+and lowering definitions*, which are introduced [below](#canonical-definitions).
+For example, while abstract `variant`s contain a list of `case`s labelled by
+name, canonical lifting and lowering map each case to an `i32` value starting
+at `0`.
+
 The sets of values allowed for the remaining *specialized value types* are
 defined by the following mapping:
 ```
