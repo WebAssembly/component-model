@@ -339,7 +339,8 @@ engines should not reject components which have an invalid `name` section.
 namesec    ::= section_0(namedata)
 namedata   ::= n:<name>                (if n = 'name')
                sections*:<subsection>*
-subsection ::= sort:<sort> names:<namemap>
+subsection ::= sort:<sort> namesubsection(<namemap>)
+namesubsection(B) ::= size:<u32> B     (if size == |B|)
 
 namemap ::= names:vec(<nameassoc>)
 nameassoc ::= idx:<u32> name:<name>
