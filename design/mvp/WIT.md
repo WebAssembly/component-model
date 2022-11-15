@@ -32,6 +32,7 @@ token ::= whitespace
         | operator
         | keyword
         | identifier
+        | strlit
 ```
 
 Whitespace and comments are ignored when parsing structures defined elsewhere
@@ -118,6 +119,50 @@ keyword ::= 'use'
 A `wit` document is a sequence of items specified at the top level. These items
 come one after another and it's recommended to separate them with newlines for
 readability but this isn't required.
+
+Concretely, the structure of a `wit` document is:
+```
+wit-document ::= interface-item*
+```
+
+## Item: `interface`
+
+Interfaces can be defined in a `wit` document. Interfaces have a name and a sequence of items and functions.
+
+```wit
+interface example {
+    thunk: func() -> ()
+    fibonacci: func(n: u32) -> u32
+}
+```
+
+Specifically interfaces have the structure:
+
+```wit
+interface-item ::= 'interface' id strlit? '{' interface-items* '}'
+
+interface-items ::= resource-item
+                  | variant-items
+                  | record-item
+                  | union-items
+                  | flags-items
+                  | enum-items
+                  | type-item
+                  | use-item
+                  | func-item
+
+func-item ::= id ':' 'func' param-list '->' result-list
+
+param-list ::= '(' named-type-list ')'
+
+result-list ::= ty
+              | '(' named-type-list ')
+
+named-type-list ::= nil
+                  | named-type ( ',' named-type )*
+
+named-type ::= id ':' ty
+```
 
 ## Item: `use`
 
@@ -329,32 +374,6 @@ union-items ::= 'union' id '{' union-cases '}'
 
 union-cases ::= ty,
               | ty ',' union-cases?
-```
-
-## Item: `func`
-
-Functions can also be defined in a `wit` document. Functions have a name,
-parameters, and results.
-
-```wit
-thunk: func() -> ()
-fibonacci: func(n: u32) -> u32
-```
-
-Specifically functions have the structure:
-
-```wit
-func-item ::= id ':' 'func' param-list '->' result-list
-
-param-list ::= '(' named-type-list ')'
-
-result-list ::= ty
-              | '(' named-type-list ')
-
-named-type-list ::= nil
-                  | named-type ( ',' named-type )*
-
-named-type ::= id ':' ty
 ```
 
 ## Item: `resource`
