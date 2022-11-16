@@ -87,7 +87,8 @@ bare as an identifier. These are used to help parse the format, and the list of
 keywords is still in flux at this time but the current set is:
 
 ```wit
-keyword ::= 'use'
+keyword ::= 'wit-version'
+          | 'use'
           | 'type'
           | 'resource'
           | 'func'
@@ -116,13 +117,18 @@ keyword ::= 'use'
 
 ## Top-level items
 
-A `wit` document is a sequence of items specified at the top level. These items
+A `wit` document starts with a `wit-version` followed by a string specifying
+a version of the language. Currently the only supported version is "0xa".
+
+Next, it contains a sequence of items specified at the top level. These items
 come one after another and it's recommended to separate them with newlines for
 readability but this isn't required.
 
 Concretely, the structure of a `wit` document is:
 ```
-wit-document ::= interface-item*
+wit-document ::= wit-version-declaration interface-item*
+
+wit-version-declaration ::= 'wit-version' strlit
 ```
 
 ## Item: `interface`
