@@ -438,6 +438,7 @@ ty ::= 'u8' | 'u16' | 'u32' | 'u64'
      | list
      | option
      | result
+     | handle
      | future
      | stream
      | id
@@ -489,6 +490,41 @@ meanings though so they're also provided as first-class types.
 Finally the last case of a `ty` is simply an `id` which is intended to refer to
 another type or resource defined in the document. Note that definitions can come
 through a `use` statement or they can be defined locally.
+
+## Handles
+
+There are two types of handles in Wit: "owned" handles and "borrowed" handles.
+Owned handles represent the passing of unique ownership of a resource between
+two components. When the owner of an owned handle drops that handle, the
+resource is destroyed. In contrast, a borrowed handle represents a temporary
+loan of a handle from the caller to the callee for the duration of the call.
+
+The syntax for handles is:
+```
+handle ::= id
+         | 'borrow' '<' id '>'
+```
+
+The `id` case denotes an owned handle, where `id` is the name of a preceding
+`resource` item. Thus, the "default" way that resources are passed between
+components is via transfer of unique ownership.
+
+The resource method syntax defined above is syntactic sugar that expands into
+separate function items that take a first parameter named `self` of type
+`borrow`. For example, the compound definition:
+```
+resource file {
+    read: func(n: u32) -> list<u8>
+}
+```
+is expanded into:
+```
+resource file
+%[method]file.read: func(self: borrow<file>, n: u32) -> list<u8>
+```
+where `%[method]file.read` is the desugared name of a method according to the
+Component Model's definition of [`name`](Explainer.md).
+
 
 ## Identifiers
 

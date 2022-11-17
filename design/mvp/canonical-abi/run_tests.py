@@ -40,6 +40,8 @@ def mk_cx(memory = bytearray(), encoding = 'utf8', realloc = None, post_return =
   cx.opts.realloc = realloc
   cx.opts.post_return = post_return
   cx.inst = ComponentInstance()
+  cx.inst.handles = HandleTable()
+  cx.call = Call()
   cx.called_as_export = True
   return cx
 
@@ -349,7 +351,7 @@ def test_roundtrip(t, v):
 
   callee_heap = Heap(1000)
   callee_cx = mk_cx(callee_heap.memory, 'utf8', callee_heap.realloc, lambda x: () )
-  lifted_callee = lambda args: canon_lift(callee_cx, callee, ft, args)
+  lifted_callee = lambda act, args: canon_lift(callee_cx, callee, ft, act, args)
 
   caller_heap = Heap(1000)
   caller_cx = mk_cx(caller_heap.memory, 'utf8', caller_heap.realloc)
@@ -370,5 +372,78 @@ test_roundtrip(Tuple([U16(),U16()]), mk_tup(3,4))
 test_roundtrip(List(String()), [mk_str("hello there")])
 test_roundtrip(List(List(String())), [[mk_str("one"),mk_str("two")],[mk_str("three")]])
 test_roundtrip(List(Option(Tuple([String(),U16()]))), [{'some':mk_tup(mk_str("answer"),42)}])
+
+def test_handles():
+  before = definitions.MAX_FLAT_RESULTS
+  definitions.MAX_FLAT_RESULTS = 16
+
+  dtor_value = None
+  def dtor(x):
+    nonlocal dtor_value
+    dtor_value = x
+  rt = ResourceType(dtor)
+  r1 = Resource(rt, 42)
+  r2 = Resource(rt, 43)
+  r3 = Resource(rt, 44)
+
+  def host_import(act, args):
+    assert(len(args) == 2)
+    assert(args[0] is r1)
+    assert(args[1] is r3)
+    return ([Resource(rt, 45)], lambda:())
+
+  cx = mk_cx()
+  def core_wasm(args):
+    nonlocal dtor_value
+
+    assert(len(args) == 3)
+    assert(args[0].t == 'i32' and args[0].v == 0)
+    assert(args[1].t == 'i32' and args[1].v == 1)
+    assert(args[2].t == 'i32' and args[2].v == 2)
+    assert(canon_resource_rep(cx, rt, 0) == 42)
+    assert(canon_resource_rep(cx, rt, 1) == 43)
+    assert(canon_resource_rep(cx, rt, 2) == 44)
+
+    host_ft = FuncType([Borrow(rt),Borrow(rt)],[Own(rt)])
+    results = canon_lower(cx, host_import, host_ft, [Value('i32',0),Value('i32',2)])
+    assert(len(results) == 1)
+    assert(results[0].t == 'i32' and results[0].v == 3)
+    assert(canon_resource_rep(cx, rt, 3) == 45)
+
+    dtor_value = None
+    canon_resource_drop(cx, Own(rt), 0)
+    assert(dtor_value == 42)
+    assert(len(cx.inst.handles.array) == 4)
+    assert(cx.inst.handles.array[0] is None)
+    assert(len(cx.inst.handles.free) == 1)
+
+    h = canon_resource_new(cx, rt, 46)
+    assert(h == 0)
+    assert(len(cx.inst.handles.array) == 4)
+    assert(cx.inst.handles.array[0] is not None)
+    assert(len(cx.inst.handles.free) == 0)
+
+    dtor_value = None
+    canon_resource_drop(cx, Borrow(rt), 2)
+    assert(dtor_value is None)
+    assert(len(cx.inst.handles.array) == 4)
+    assert(cx.inst.handles.array[2] is None)
+    assert(len(cx.inst.handles.free) == 1)
+
+    return [Value('i32', 0), Value('i32', 1), Value('i32', 3)]
+
+  ft = FuncType([Own(rt),Own(rt),Borrow(rt)],[Own(rt),Own(rt),Own(rt)])
+  got,post_return = canon_lift(cx, core_wasm, ft, Call(), [r1, r2, r3])
+
+  assert(len(got) == 3)
+  assert(got[0].rep == 46)
+  assert(got[1] is r2)
+  assert(got[2].rep == 45)
+  assert(len(cx.inst.handles.array) == 4)
+  assert(all(cx.inst.handles.array[i] is None for i in range(3)))
+  assert(len(cx.inst.handles.free) == 4)
+  definitions.MAX_FLAT_RESULTS = before
+
+test_handles()
 
 print("All tests passed")
