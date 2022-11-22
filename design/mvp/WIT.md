@@ -273,7 +273,7 @@ Specifically the structure of this is:
 ```wit
 flags-items ::= 'flags' id '{' flags-fields '}'
 
-flags-fields ::= id,
+flags-fields ::= id
                | id ',' flags-fields?
 ```
 
@@ -302,7 +302,7 @@ Specifically the structure of this is:
 ```wit
 variant-items ::= 'variant' id '{' variant-cases '}'
 
-variant-cases ::= variant-case,
+variant-cases ::= variant-case
                 | variant-case ',' variant-cases?
 
 variant-case ::= id
@@ -341,7 +341,7 @@ Specifically the structure of this is:
 ```wit
 enum-items ::= 'enum' id '{' enum-cases '}'
 
-enum-cases ::= id,
+enum-cases ::= id
              | id ',' enum-cases?
 ```
 
@@ -372,7 +372,7 @@ Specifically the structure of this is:
 ```wit
 union-items ::= 'union' id '{' union-cases '}'
 
-union-cases ::= ty,
+union-cases ::= ty
               | ty ',' union-cases?
 ```
 
