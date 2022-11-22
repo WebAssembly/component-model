@@ -156,7 +156,7 @@ func-item ::= id ':' 'func' param-list '->' result-list
 param-list ::= '(' named-type-list ')'
 
 result-list ::= ty
-              | '(' named-type-list ')
+              | '(' named-type-list ')'
 
 named-type-list ::= nil
                   | named-type ( ',' named-type )*
