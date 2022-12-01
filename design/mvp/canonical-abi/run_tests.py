@@ -32,13 +32,14 @@ class Heap:
     self.memory[ret : ret + original_size] = self.memory[original_ptr : original_ptr + original_size]
     return ret
 
-def mk_opts(memory, encoding, realloc, post_return):
-  opts = Opts()
-  opts.memory = memory
-  opts.string_encoding = encoding
-  opts.realloc = realloc
-  opts.post_return = post_return
-  return opts
+def mk_cx(memory, encoding = None, realloc = None, post_return = None):
+  cx = Context()
+  cx.opts = CanonicalOptions()
+  cx.opts.memory = memory
+  cx.opts.string_encoding = encoding
+  cx.opts.realloc = realloc
+  cx.opts.post_return = post_return
+  return cx
 
 def mk_str(s):
   return (s, 'utf8', len(s.encode('utf-8')))
@@ -54,7 +55,7 @@ def fail(msg):
   raise BaseException(msg)
 
 def test(t, vals_to_lift, v,
-         opts = mk_opts(bytearray(), 'utf8', None, None),
+         cx = mk_cx(bytearray(), 'utf8', None, None),
          dst_encoding = None,
          lower_t = None,
          lower_v = None):
@@ -65,12 +66,12 @@ def test(t, vals_to_lift, v,
 
   if v is None:
     try:
-      got = lift_flat(opts, vi, t)
+      got = lift_flat(cx, vi, t)
       fail("{} expected trap, but got {}".format(test_name(), got))
     except Trap:
       return
 
-  got = lift_flat(opts, vi, t)
+  got = lift_flat(cx, vi, t)
   assert(vi.i == len(vi.values))
   if got != v:
     fail("{} initial lift_flat() expected {} but got {}".format(test_name(), v, got))
@@ -80,15 +81,15 @@ def test(t, vals_to_lift, v,
   if lower_v is None:
     lower_v = v
 
-  heap = Heap(5*len(opts.memory))
+  heap = Heap(5*len(cx.opts.memory))
   if dst_encoding is None:
-    dst_encoding = opts.string_encoding
-  opts = mk_opts(heap.memory, dst_encoding, heap.realloc, None)
-  lowered_vals = lower_flat(opts, v, lower_t)
+    dst_encoding = cx.opts.string_encoding
+  cx = mk_cx(heap.memory, dst_encoding, heap.realloc, None)
+  lowered_vals = lower_flat(cx, v, lower_t)
   assert(flatten_type(lower_t) == list(map(lambda v: v.t, lowered_vals)))
 
   vi = ValueIter(lowered_vals)
-  got = lift_flat(opts, vi, lower_t)
+  got = lift_flat(cx, vi, lower_t)
   if not equal_modulo_string_encoding(got, lower_v):
     fail("{} re-lift expected {} but got {}".format(test_name(), lower_v, got))
 
@@ -167,21 +168,17 @@ test_pairs(Char(), [(0xE000,'\uE000'), (0x10FFFF,'\U0010FFFF'), (0x110000,None),
 test_pairs(Enum(['a','b']), [(0,{'a':None}), (1,{'b':None}), (2,None)])
 
 def test_nan32(inbits, outbits):
-  f = lift_flat(Opts(), ValueIter([Value('f32', reinterpret_i32_as_float(inbits))]), Float32())
+  f = lift_flat(Context(), ValueIter([Value('f32', reinterpret_i32_as_float(inbits))]), Float32())
   assert(reinterpret_float_as_i32(f) == outbits)
-  load_opts = Opts()
-  load_opts.memory = bytearray(4)
-  load_opts.memory = int.to_bytes(inbits, 4, 'little')
-  f = load(load_opts, 0, Float32())
+  cx = mk_cx(int.to_bytes(inbits, 4, 'little'))
+  f = load(cx, 0, Float32())
   assert(reinterpret_float_as_i32(f) == outbits)
 
 def test_nan64(inbits, outbits):
-  f = lift_flat(Opts(), ValueIter([Value('f64', reinterpret_i64_as_float(inbits))]), Float64())
+  f = lift_flat(Context(), ValueIter([Value('f64', reinterpret_i64_as_float(inbits))]), Float64())
   assert(reinterpret_float_as_i64(f) == outbits)
-  load_opts = Opts()
-  load_opts.memory = bytearray(8)
-  load_opts.memory = int.to_bytes(inbits, 8, 'little')
-  f = load(load_opts, 0, Float64())
+  cx = mk_cx(int.to_bytes(inbits, 8, 'little'))
+  f = load(cx, 0, Float64())
   assert(reinterpret_float_as_i64(f) == outbits)
 
 test_nan32(0x7fc00000, CANONICAL_FLOAT32_NAN)
@@ -202,9 +199,9 @@ test_nan64(0x3ff0000000000000, 0x3ff0000000000000)
 def test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units):
   heap = Heap(len(encoded))
   heap.memory[:] = encoded[:]
-  opts = mk_opts(heap.memory, src_encoding, None, None)
+  cx = mk_cx(heap.memory, src_encoding, None, None)
   v = (s, src_encoding, tagged_code_units)
-  test(String(), [0, tagged_code_units], v, opts, dst_encoding)
+  test(String(), [0, tagged_code_units], v, cx, dst_encoding)
 
 def test_string(src_encoding, dst_encoding, s):
   if src_encoding == 'utf8':
@@ -239,8 +236,8 @@ for src_encoding in encodings:
 
 def test_heap(t, expect, args, byte_array):
   heap = Heap(byte_array)
-  opts = mk_opts(heap.memory, 'utf8', None, None)
-  test(t, args, expect, opts)
+  cx = mk_cx(heap.memory, 'utf8', None, None)
+  test(t, args, expect, cx)
 
 test_heap(List(Record([])), [{},{},{}], [0,3], [])
 test_heap(List(Bool()), [True,False,True], [0,3], [1,0,1])
@@ -350,16 +347,16 @@ def test_roundtrip(t, v):
   callee = lambda x: x
 
   callee_heap = Heap(1000)
-  callee_opts = mk_opts(callee_heap.memory, 'utf8', callee_heap.realloc, lambda x: () )
-  lifted_callee = lambda args: canon_lift(callee_opts, callee_instance, callee, ft, args, True)
+  callee_cx = mk_cx(callee_heap.memory, 'utf8', callee_heap.realloc, lambda x: () )
+  lifted_callee = lambda args: canon_lift(callee_cx, callee_instance, callee, ft, args, True)
 
   caller_heap = Heap(1000)
   caller_instance = Instance()
-  caller_opts = mk_opts(caller_heap.memory, 'utf8', caller_heap.realloc, None)
+  caller_cx = mk_cx(caller_heap.memory, 'utf8', caller_heap.realloc, None)
 
-  flat_args = lower_flat(caller_opts, v, t)
-  flat_results = canon_lower(caller_opts, caller_instance, lifted_callee, ft, flat_args)
-  got = lift_flat(caller_opts, ValueIter(flat_results), t)
+  flat_args = lower_flat(caller_cx, v, t)
+  flat_results = canon_lower(caller_cx, caller_instance, lifted_callee, ft, flat_args)
+  got = lift_flat(caller_cx, ValueIter(flat_results), t)
 
   if got != v:
     fail("test_roundtrip({},{},{}) got {}".format(t, v, caller_args, got))
