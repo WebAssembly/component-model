@@ -74,11 +74,14 @@ def despecialize(t):
   match t:
     case Tuple(ts)         : return Record([ Field(str(i), t) for i,t in enumerate(ts) ])
     case Union(ts)         : return Variant([ Case(str(i), t) for i,t in enumerate(ts) ])
-    case Enum(labels)      : return Variant([ Case(l, None) for l in labels ])
+    case Enum(labels)      : return Variant([ Case("", None), ...Case(l, None) for l in labels ])
     case Option(t)         : return Variant([ Case("none", None), Case("some", t) ])
     case Result(ok, error) : return Variant([ Case("ok", ok), Case("error", error) ])
     case _                 : return t
 ```
+Enums start at the first index, permiting singular result code return patterns
+in corresponding core function ABIs.
+
 The specialized value types `string` and `flags` are missing from this list
 because they are given specialized canonical ABI representations distinct from
 their respective expansions.
