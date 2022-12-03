@@ -213,6 +213,7 @@ definitions via the `cx` parameter:
 class Context:
   opts: CanonicalOptions
   inst: ComponentInstance
+  called_as_export: bool
 ```
 
 The `opts` field represents the [`canonopt`] values supplied to
@@ -237,6 +238,11 @@ class ComponentInstance:
   may_enter = True
   # ...
 ```
+
+Lastly, the `called_as_export` field indicates whether the lifted function is
+being called through a component export or whether this is an internal call,
+(for example, when a child component calls an import that is defined by its
+parent component).
 
 
 ### Loading
@@ -1206,29 +1212,29 @@ component*.
 
 Given the above closure arguments, `canon_lift` is defined:
 ```python
-def canon_lift(callee_cx, callee, ft, args, called_as_export):
-  if called_as_export:
-    trap_if(not callee_cx.inst.may_enter)
-    callee_cx.inst.may_enter = False
+def canon_lift(cx, callee, ft, args):
+  if cx.called_as_export:
+    trap_if(not cx.inst.may_enter)
+    cx.inst.may_enter = False
   else:
-    assert(not callee_cx.inst.may_enter)
+    assert(not cx.inst.may_enter)
 
-  assert(callee_cx.inst.may_leave)
-  callee_cx.inst.may_leave = False
-  flat_args = lower_values(callee_cx, MAX_FLAT_PARAMS, args, ft.param_types())
-  callee_cx.inst.may_leave = True
+  assert(cx.inst.may_leave)
+  cx.inst.may_leave = False
+  flat_args = lower_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
+  cx.inst.may_leave = True
 
   try:
     flat_results = callee(flat_args)
   except CoreWebAssemblyException:
     trap()
 
-  results = lift_values(callee_cx, MAX_FLAT_RESULTS, ValueIter(flat_results), ft.result_types())
+  results = lift_values(cx, MAX_FLAT_RESULTS, ValueIter(flat_results), ft.result_types())
   def post_return():
-    if callee_cx.opts.post_return is not None:
-      callee_cx.opts.post_return(flat_results)
-    if called_as_export:
-      callee_cx.inst.may_enter = True
+    if cx.opts.post_return is not None:
+      cx.opts.post_return(flat_results)
+    if cx.called_as_export:
+      cx.inst.may_enter = True
 
   return (results, post_return)
 ```
@@ -1239,15 +1245,13 @@ boundaries. Thus, if a component wishes to signal an error, it must use some
 sort of explicit type such as `result` (whose `error` case particular language
 bindings may choose to map to and from exceptions).
 
-The `called_as_export` parameter indicates whether `canon_lift` is being called
-as part of a component export or whether this `canon_lift` is being called
-internally (for example, by a child component instance). By clearing
-`may_enter` for the duration of `canon_lift` when called as an export, the
-dynamic traps ensure that components cannot be reentered, which is a [component
-invariant]. Furthermore, because `may_enter` is not cleared on the exceptional
-exit path taken by `trap()`, if there is a trap during Core WebAssembly
-execution or lifting/lowering, the component is left permanently un-enterable,
-ensuring the lockdown-after-trap [component invariant].
+By clearing `may_enter` for the duration of `canon_lift` when the function is
+called as an export, the dynamic traps ensure that components cannot be
+reentered, ensuring the non-reentrance [component invariant]. Furthermore,
+because `may_enter` is not cleared on the exceptional exit path taken by
+`trap()`, if there is a trap during Core WebAssembly execution of lifting or
+lowering, the component is left permanently un-enterable, ensuring the
+lockdown-after-trap [component invariant].
 
 The contract assumed by `canon_lift` (and ensured by `canon_lower` below) is
 that the caller of `canon_lift` *must* call `post_return` right after lowering
@@ -1274,17 +1278,17 @@ Thus, from the perspective of Core WebAssembly, `$f` is a [function instance]
 containing a `hostfunc` that closes over `$opts`, `$inst`, `$callee` and `$ft`
 and, when called from Core WebAssembly code, calls `canon_lower`, which is defined as:
 ```python
-def canon_lower(caller_cx, callee, ft, flat_args):
-  trap_if(not caller_cx.inst.may_leave)
+def canon_lower(cx, callee, ft, flat_args):
+  trap_if(not cx.inst.may_leave)
 
   flat_args = ValueIter(flat_args)
-  args = lift_values(caller_cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
+  args = lift_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
   results, post_return = callee(args)
 
-  caller_cx.inst.may_leave = False
-  flat_results = lower_values(caller_cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
-  caller_cx.inst.may_leave = True
+  cx.inst.may_leave = False
+  flat_results = lower_values(cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
+  cx.inst.may_leave = True
 
   post_return()
 

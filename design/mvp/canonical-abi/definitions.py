@@ -275,6 +275,7 @@ def num_i32_flags(labels):
 class Context:
   opts: CanonicalOptions
   inst: ComponentInstance
+  called_as_export: bool
 
 #
 
@@ -1007,45 +1008,45 @@ def lower_values(cx, max_flat, vs, ts, out_param = None):
 
 ### `lift`
 
-def canon_lift(callee_cx, callee, ft, args, called_as_export):
-  if called_as_export:
-    trap_if(not callee_cx.inst.may_enter)
-    callee_cx.inst.may_enter = False
+def canon_lift(cx, callee, ft, args):
+  if cx.called_as_export:
+    trap_if(not cx.inst.may_enter)
+    cx.inst.may_enter = False
   else:
-    assert(not callee_cx.inst.may_enter)
+    assert(not cx.inst.may_enter)
 
-  assert(callee_cx.inst.may_leave)
-  callee_cx.inst.may_leave = False
-  flat_args = lower_values(callee_cx, MAX_FLAT_PARAMS, args, ft.param_types())
-  callee_cx.inst.may_leave = True
+  assert(cx.inst.may_leave)
+  cx.inst.may_leave = False
+  flat_args = lower_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
+  cx.inst.may_leave = True
 
   try:
     flat_results = callee(flat_args)
   except CoreWebAssemblyException:
     trap()
 
-  results = lift_values(callee_cx, MAX_FLAT_RESULTS, ValueIter(flat_results), ft.result_types())
+  results = lift_values(cx, MAX_FLAT_RESULTS, ValueIter(flat_results), ft.result_types())
   def post_return():
-    if callee_cx.opts.post_return is not None:
-      callee_cx.opts.post_return(flat_results)
-    if called_as_export:
-      callee_cx.inst.may_enter = True
+    if cx.opts.post_return is not None:
+      cx.opts.post_return(flat_results)
+    if cx.called_as_export:
+      cx.inst.may_enter = True
 
   return (results, post_return)
 
 ### `lower`
 
-def canon_lower(caller_cx, callee, ft, flat_args):
-  trap_if(not caller_cx.inst.may_leave)
+def canon_lower(cx, callee, ft, flat_args):
+  trap_if(not cx.inst.may_leave)
 
   flat_args = ValueIter(flat_args)
-  args = lift_values(caller_cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
+  args = lift_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
   results, post_return = callee(args)
 
-  caller_cx.inst.may_leave = False
-  flat_results = lower_values(caller_cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
-  caller_cx.inst.may_leave = True
+  cx.inst.may_leave = False
+  flat_results = lower_values(cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
+  cx.inst.may_leave = True
 
   post_return()
 

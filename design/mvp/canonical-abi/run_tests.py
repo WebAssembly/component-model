@@ -32,7 +32,7 @@ class Heap:
     self.memory[ret : ret + original_size] = self.memory[original_ptr : original_ptr + original_size]
     return ret
 
-def mk_cx(memory, encoding = None, realloc = None, post_return = None):
+def mk_cx(memory = bytearray(), encoding = 'utf8', realloc = None, post_return = None):
   cx = Context()
   cx.opts = CanonicalOptions()
   cx.opts.memory = memory
@@ -40,6 +40,7 @@ def mk_cx(memory, encoding = None, realloc = None, post_return = None):
   cx.opts.realloc = realloc
   cx.opts.post_return = post_return
   cx.inst = ComponentInstance()
+  cx.called_as_export = True
   return cx
 
 def mk_str(s):
@@ -56,7 +57,7 @@ def fail(msg):
   raise BaseException(msg)
 
 def test(t, vals_to_lift, v,
-         cx = mk_cx(bytearray(), 'utf8', None, None),
+         cx = mk_cx(),
          dst_encoding = None,
          lower_t = None,
          lower_v = None):
@@ -85,7 +86,7 @@ def test(t, vals_to_lift, v,
   heap = Heap(5*len(cx.opts.memory))
   if dst_encoding is None:
     dst_encoding = cx.opts.string_encoding
-  cx = mk_cx(heap.memory, dst_encoding, heap.realloc, None)
+  cx = mk_cx(heap.memory, dst_encoding, heap.realloc)
   lowered_vals = lower_flat(cx, v, lower_t)
   assert(flatten_type(lower_t) == list(map(lambda v: v.t, lowered_vals)))
 
@@ -200,7 +201,7 @@ test_nan64(0x3ff0000000000000, 0x3ff0000000000000)
 def test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units):
   heap = Heap(len(encoded))
   heap.memory[:] = encoded[:]
-  cx = mk_cx(heap.memory, src_encoding, None, None)
+  cx = mk_cx(heap.memory, src_encoding)
   v = (s, src_encoding, tagged_code_units)
   test(String(), [0, tagged_code_units], v, cx, dst_encoding)
 
@@ -237,7 +238,7 @@ for src_encoding in encodings:
 
 def test_heap(t, expect, args, byte_array):
   heap = Heap(byte_array)
-  cx = mk_cx(heap.memory, 'utf8', None, None)
+  cx = mk_cx(heap.memory)
   test(t, args, expect, cx)
 
 test_heap(List(Record([])), [{},{},{}], [0,3], [])
@@ -348,10 +349,10 @@ def test_roundtrip(t, v):
 
   callee_heap = Heap(1000)
   callee_cx = mk_cx(callee_heap.memory, 'utf8', callee_heap.realloc, lambda x: () )
-  lifted_callee = lambda args: canon_lift(callee_cx, callee, ft, args, True)
+  lifted_callee = lambda args: canon_lift(callee_cx, callee, ft, args)
 
   caller_heap = Heap(1000)
-  caller_cx = mk_cx(caller_heap.memory, 'utf8', caller_heap.realloc, None)
+  caller_cx = mk_cx(caller_heap.memory, 'utf8', caller_heap.realloc)
 
   flat_args = lower_flat(caller_cx, v, t)
   flat_results = canon_lower(caller_cx, lifted_callee, ft, flat_args)
