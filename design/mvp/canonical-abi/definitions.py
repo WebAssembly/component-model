@@ -4,6 +4,7 @@
 
 ### Boilerplate
 
+from __future__ import annotations
 import math
 import struct
 from dataclasses import dataclass
@@ -271,20 +272,24 @@ def num_i32_flags(labels):
 
 ### Context
 
+class Context:
+  opts: CanonicalOptions
+  inst: ComponentInstance
+
+#
+
 class CanonicalOptions:
   memory: bytearray
   string_encoding: str
   realloc: Callable[[int,int,int,int],int]
   post_return: Callable[[],None]
 
+#
+
 class ComponentInstance:
   may_leave = True
   may_enter = True
   # ...
-
-class Context:
-  opts: CanonicalOptions
-  inst: ComponentInstance
 
 ### Loading
 

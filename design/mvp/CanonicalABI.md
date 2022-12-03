@@ -210,31 +210,33 @@ The subsequent definitions of loading and storing a value from linear memory
 require additional context, which is threaded through most subsequent
 definitions via the `cx` parameter:
 ```python
+class Context:
+  opts: CanonicalOptions
+  inst: ComponentInstance
+```
+
+The `opts` field represents the [`canonopt`] values supplied to
+currently-executing `canon lift` or `canon lower`:
+```python
 class CanonicalOptions:
   memory: bytearray
   string_encoding: str
   realloc: Callable[[int,int,int,int],int]
   post_return: Callable[[],None]
+```
 
+The `inst` field represents the component instance that the currently-executing
+canonical definition is defined to execute inside. The `may_enter` and
+`may_leave` fields are used to enforce the [component invariants]: `may_leave`
+indicates whether the instance may call out to an import and the `may_enter`
+state indicates whether the instance may be called from the outside world
+through an export.
+```python
 class ComponentInstance:
   may_leave = True
   may_enter = True
   # ...
-
-class Context:
-  opts: CanonicalOptions
-  inst: ComponentInstance
 ```
-Going through the fields of `Context`:
-
-The `opts` field represents the [`canonopt`] values supplied to
-currently-executing `canon lift` or `canon lower`.
-
-The `inst` field represents the component instance that the currently-executing
-canonical definition is closed over. The `may_enter` and `may_leave` fields are
-used to enforce the [component invariants]: `may_leave` indicates whether the
-instance may call out to an import and the `may_enter` state indicates whether
-the instance may be called from the outside world through an export.
 
 
 ### Loading
