@@ -216,15 +216,26 @@ class CanonicalOptions:
   realloc: Callable[[int,int,int,int],int]
   post_return: Callable[[],None]
 
+class ComponentInstance:
+  may_leave = True
+  may_enter = True
+  # ...
+
 class Context:
   opts: CanonicalOptions
+  inst: ComponentInstance
 ```
 Going through the fields of `Context`:
 
 The `opts` field represents the [`canonopt`] values supplied to
 currently-executing `canon lift` or `canon lower`.
 
-(Others will be added shortly.)
+The `inst` field represents the component instance that the currently-executing
+canonical definition is closed over. The `may_enter` and `may_leave` fields are
+used to enforce the [component invariants]: `may_leave` indicates whether the
+instance may call out to an import and the `may_enter` state indicates whether
+the instance may be called from the outside world through an export.
+
 
 ### Loading
 
@@ -1191,31 +1202,19 @@ export. In any case, `canon lift` specifies how these variously-produced values
 are consumed as parameters (and produced as results) by a *single host-agnostic
 component*.
 
-The `$inst` captured above is assumed to have at least the following two fields,
-which are used to implement the [component invariants]:
-```python
-class Instance:
-  may_leave = True
-  may_enter = True
-  # ...
-```
-The `may_leave` state indicates whether the instance may call out to an import
-and the `may_enter` state indicates whether the instance may be called from
-the outside world through an export.
-
 Given the above closure arguments, `canon_lift` is defined:
 ```python
-def canon_lift(callee_cx, callee_instance, callee, ft, args, called_as_export):
+def canon_lift(callee_cx, callee, ft, args, called_as_export):
   if called_as_export:
-    trap_if(not callee_instance.may_enter)
-    callee_instance.may_enter = False
+    trap_if(not callee_cx.inst.may_enter)
+    callee_cx.inst.may_enter = False
   else:
-    assert(not callee_instance.may_enter)
+    assert(not callee_cx.inst.may_enter)
 
-  assert(callee_instance.may_leave)
-  callee_instance.may_leave = False
+  assert(callee_cx.inst.may_leave)
+  callee_cx.inst.may_leave = False
   flat_args = lower_values(callee_cx, MAX_FLAT_PARAMS, args, ft.param_types())
-  callee_instance.may_leave = True
+  callee_cx.inst.may_leave = True
 
   try:
     flat_results = callee(flat_args)
@@ -1227,7 +1226,7 @@ def canon_lift(callee_cx, callee_instance, callee, ft, args, called_as_export):
     if callee_cx.opts.post_return is not None:
       callee_cx.opts.post_return(flat_results)
     if called_as_export:
-      callee_instance.may_enter = True
+      callee_cx.inst.may_enter = True
 
   return (results, post_return)
 ```
@@ -1273,17 +1272,17 @@ Thus, from the perspective of Core WebAssembly, `$f` is a [function instance]
 containing a `hostfunc` that closes over `$opts`, `$inst`, `$callee` and `$ft`
 and, when called from Core WebAssembly code, calls `canon_lower`, which is defined as:
 ```python
-def canon_lower(caller_cx, caller_instance, callee, ft, flat_args):
-  trap_if(not caller_instance.may_leave)
+def canon_lower(caller_cx, callee, ft, flat_args):
+  trap_if(not caller_cx.inst.may_leave)
 
   flat_args = ValueIter(flat_args)
   args = lift_values(caller_cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
   results, post_return = callee(args)
 
-  caller_instance.may_leave = False
+  caller_cx.inst.may_leave = False
   flat_results = lower_values(caller_cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
-  caller_instance.may_leave = True
+  caller_cx.inst.may_leave = True
 
   post_return()
 

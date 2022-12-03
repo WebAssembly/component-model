@@ -39,6 +39,7 @@ def mk_cx(memory, encoding = None, realloc = None, post_return = None):
   cx.opts.string_encoding = encoding
   cx.opts.realloc = realloc
   cx.opts.post_return = post_return
+  cx.inst = ComponentInstance()
   return cx
 
 def mk_str(s):
@@ -343,26 +344,24 @@ def test_roundtrip(t, v):
   definitions.MAX_FLAT_RESULTS = 16
 
   ft = FuncType([t],[t])
-  callee_instance = Instance()
   callee = lambda x: x
 
   callee_heap = Heap(1000)
   callee_cx = mk_cx(callee_heap.memory, 'utf8', callee_heap.realloc, lambda x: () )
-  lifted_callee = lambda args: canon_lift(callee_cx, callee_instance, callee, ft, args, True)
+  lifted_callee = lambda args: canon_lift(callee_cx, callee, ft, args, True)
 
   caller_heap = Heap(1000)
-  caller_instance = Instance()
   caller_cx = mk_cx(caller_heap.memory, 'utf8', caller_heap.realloc, None)
 
   flat_args = lower_flat(caller_cx, v, t)
-  flat_results = canon_lower(caller_cx, caller_instance, lifted_callee, ft, flat_args)
+  flat_results = canon_lower(caller_cx, lifted_callee, ft, flat_args)
   got = lift_flat(caller_cx, ValueIter(flat_results), t)
 
   if got != v:
     fail("test_roundtrip({},{},{}) got {}".format(t, v, caller_args, got))
 
-  assert(caller_instance.may_leave and caller_instance.may_enter)
-  assert(callee_instance.may_leave and callee_instance.may_enter)
+  assert(caller_cx.inst.may_leave and caller_cx.inst.may_enter)
+  assert(callee_cx.inst.may_leave and callee_cx.inst.may_enter)
   definitions.MAX_FLAT_RESULTS = before
 
 test_roundtrip(S8(), -1)

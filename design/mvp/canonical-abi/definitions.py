@@ -277,8 +277,14 @@ class CanonicalOptions:
   realloc: Callable[[int,int,int,int],int]
   post_return: Callable[[],None]
 
+class ComponentInstance:
+  may_leave = True
+  may_enter = True
+  # ...
+
 class Context:
   opts: CanonicalOptions
+  inst: ComponentInstance
 
 ### Loading
 
@@ -996,24 +1002,17 @@ def lower_values(cx, max_flat, vs, ts, out_param = None):
 
 ### `lift`
 
-class Instance:
-  may_leave = True
-  may_enter = True
-  # ...
-
-#
-
-def canon_lift(callee_cx, callee_instance, callee, ft, args, called_as_export):
+def canon_lift(callee_cx, callee, ft, args, called_as_export):
   if called_as_export:
-    trap_if(not callee_instance.may_enter)
-    callee_instance.may_enter = False
+    trap_if(not callee_cx.inst.may_enter)
+    callee_cx.inst.may_enter = False
   else:
-    assert(not callee_instance.may_enter)
+    assert(not callee_cx.inst.may_enter)
 
-  assert(callee_instance.may_leave)
-  callee_instance.may_leave = False
+  assert(callee_cx.inst.may_leave)
+  callee_cx.inst.may_leave = False
   flat_args = lower_values(callee_cx, MAX_FLAT_PARAMS, args, ft.param_types())
-  callee_instance.may_leave = True
+  callee_cx.inst.may_leave = True
 
   try:
     flat_results = callee(flat_args)
@@ -1025,23 +1024,23 @@ def canon_lift(callee_cx, callee_instance, callee, ft, args, called_as_export):
     if callee_cx.opts.post_return is not None:
       callee_cx.opts.post_return(flat_results)
     if called_as_export:
-      callee_instance.may_enter = True
+      callee_cx.inst.may_enter = True
 
   return (results, post_return)
 
 ### `lower`
 
-def canon_lower(caller_cx, caller_instance, callee, ft, flat_args):
-  trap_if(not caller_instance.may_leave)
+def canon_lower(caller_cx, callee, ft, flat_args):
+  trap_if(not caller_cx.inst.may_leave)
 
   flat_args = ValueIter(flat_args)
   args = lift_values(caller_cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
   results, post_return = callee(args)
 
-  caller_instance.may_leave = False
+  caller_cx.inst.may_leave = False
   flat_results = lower_values(caller_cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
-  caller_instance.may_leave = True
+  caller_cx.inst.may_leave = True
 
   post_return()
 
