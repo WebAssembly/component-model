@@ -1182,16 +1182,16 @@ built-ins).
 
 ### `canon lift`
 
-For a function:
+For a canonical definition:
 ```
 (canon lift $callee:<funcidx> $opts:<canonopt>* (func $f (type $ft)))
 ```
 validation specifies:
- * `$callee` must have type `flatten($ft, 'lift')`
- * `$f` is given type `$ft`
- * a `memory` is present if required by lifting and is a subtype of `(memory 1)`
- * a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
- * if a `post-return` is present, it has type `(func (param flatten($ft)['results']))`
+* `$callee` must have type `flatten($ft, 'lift')`
+* `$f` is given type `$ft`
+* a `memory` is present if required by lifting and is a subtype of `(memory 1)`
+* a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
+* if a `post-return` is present, it has type `(func (param flatten($ft)['results']))`
 
 When instantiating component instance `$inst`:
 * Define `$f` to be the closure `lambda args: canon_lift(Context($opts, $inst), $callee, $ft, args)`
@@ -1261,15 +1261,15 @@ actions after the lowering is complete.
 
 ### `canon lower`
 
-For a function:
+For a canonical definition:
 ```
 (canon lower $callee:<funcidx> $opts:<canonopt>* (core func $f))
 ```
 where `$callee` has type `$ft`, validation specifies:
 * `$f` is given type `flatten($ft, 'lower')`
- * a `memory` is present if required by lifting and is a subtype of `(memory 1)`
- * a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
- * there is no `post-return` in `$opts`
+* a `memory` is present if required by lifting and is a subtype of `(memory 1)`
+* a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
+* there is no `post-return` in `$opts`
 
 When instantiating component instance `$inst`:
 * Define `$f` to be the closure: `lambda args: canon_lower(Context($opts, $inst), $callee, $ft, args)`
