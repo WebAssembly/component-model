@@ -1194,7 +1194,7 @@ validation specifies:
  * if a `post-return` is present, it has type `(func (param flatten($ft)['results']))`
 
 When instantiating component instance `$inst`:
-* Define `$f` to be the closure `lambda args: canon_lift($opts, $inst, $callee, $ft, args)`
+* Define `$f` to be the closure `lambda args: canon_lift(Context($opts, $inst), $callee, $ft, args)`
 
 Thus, `$f` captures `$opts`, `$inst`, `$callee` and `$ft` in a closure which
 can be subsequently exported or passed into a child instance (via `with`). If
@@ -1272,7 +1272,7 @@ where `$callee` has type `$ft`, validation specifies:
  * there is no `post-return` in `$opts`
 
 When instantiating component instance `$inst`:
-* Define `$f` to be the closure: `lambda args: canon_lower($opts, $inst, $callee, $ft, args)`
+* Define `$f` to be the closure: `lambda args: canon_lower(Context($opts, $inst), $callee, $ft, args)`
 
 Thus, from the perspective of Core WebAssembly, `$f` is a [function instance]
 containing a `hostfunc` that closes over `$opts`, `$inst`, `$callee` and `$ft`
