@@ -112,6 +112,9 @@ keyword ::= 'use'
           | 'tuple'
           | 'future'
           | 'stream'
+          | 'world'
+          | 'import'
+          | 'export'
 ```
 
 ## Top-level items
@@ -122,19 +125,31 @@ readability but this isn't required.
 
 Concretely, the structure of a `wit` document is:
 ```
-wit-document ::= interface-item*
+wit-document ::= (interface-item | world-item)*
+```
+
+## Item: `world`
+
+Worlds define a [componenttype](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#type-definitions) as a collection of imports and exports.
+
+Concretely, the structure of a world is:
+
+```wit
+world-item ::= 'world' id '{' world-items* '}'
+
+world-items ::= export-item | import-item
+
+export-item ::= 'export' id ':' extern-type
+import-item ::= 'import' id ':' extern-type
+
+extern-type ::= ty | func-type | interface-type
+
+interface-type ::= 'interface' '{' interface-items* '}'
 ```
 
 ## Item: `interface`
 
 Interfaces can be defined in a `wit` document. Interfaces have a name and a sequence of items and functions.
-
-```wit
-interface example {
-    thunk: func() -> ()
-    fibonacci: func(n: u32) -> u32
-}
-```
 
 Specifically interfaces have the structure:
 
@@ -151,7 +166,9 @@ interface-items ::= resource-item
                   | use-item
                   | func-item
 
-func-item ::= id ':' 'func' param-list '->' result-list
+func-item ::= id ':' func-type
+
+func-type ::= 'func' param-list '->' result-list
 
 param-list ::= '(' named-type-list ')'
 
