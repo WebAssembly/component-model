@@ -627,16 +627,17 @@ Worlds define a [componenttype](https://github.com/WebAssembly/component-model/b
 Concretely, the structure of a world is:
 
 ```wit
-world-item ::= 'world' id '{' world-items* '}'
+world-item ::= 'default'? 'world' id '{' world-items* '}'
 
 world-items ::= export-item | import-item
 
 export-item ::= 'export' id ':' extern-type
 import-item ::= 'import' id ':' extern-type
 
-extern-type ::= ty | func-type | interface-type
+extern-type ::= func-type | interface-type
 
 interface-type ::= 'interface' '{' interface-items* '}'
+                 | use-from
 ```
 
 ## Item: `interface`
