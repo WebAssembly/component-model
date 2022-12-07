@@ -606,6 +606,7 @@ keyword ::= 'use'
           | 'import'
           | 'export'
           | 'default'
+          | 'in'
 ```
 
 ## Top-level items
