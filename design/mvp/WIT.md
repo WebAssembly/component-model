@@ -34,7 +34,7 @@ would correspond to:
 
 ```wasm
 (component
-  (import "host" (insance $host
+  (import "host" (instance $host
     (export "log" (func (param "msg" string)))
   ))
   ;; ...
@@ -157,7 +157,7 @@ reusability. This enables a sort of module system for WIT syntax where files may
 import from one another.
 
 > **Note**: The precise semantics of imports and how everything maps out is
-> still being design. Basic filesystem-based organization works but it's
+> still being designed. Basic filesystem-based organization works but it's
 > intended to extend to URL-based organization in the near future. For example
 > the strings below are intended to integrate into a registry-based workflow as
 > well in addition to looking up files on the filesystem.
@@ -343,7 +343,7 @@ world my-world {
 }
 ```
 
-This is an invalid WIT document due because `my-world` needs to import two
+This is an invalid WIT document because `my-world` needs to import two
 unique interfaces called `shared`. To disambiguate a manual import is required:
 
 ```
