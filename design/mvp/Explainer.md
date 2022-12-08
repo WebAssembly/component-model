@@ -752,10 +752,11 @@ example, in the following compound component:
     (type $ListListString3 (list $ListString3))
     (type $ListString4 (alias outer $A $ListString))
     (type $ListListString4 (list $ListString4))
+    (type $ListListString5 (alias outer $A $ListString2))
   )
 )
 ```
-all 4 variations of `$ListListStringX` are considered equal since, after
+all 5 variations of `$ListListStringX` are considered equal since, after
 decoding, they all have the same AST.
 
 Next, the type equality relation on ASTs is relaxed to a more flexible
