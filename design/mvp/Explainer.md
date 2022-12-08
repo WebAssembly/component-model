@@ -996,25 +996,19 @@ In summary: all type constructors are *structural* with the exception of
 bound are *abstract (resource) types* and follow the standard introduction and
 elimination rules of universal and existential types.
 
-Lastly, since "nominal" is sometimes intended to mean "the opposite of
-structural", a valid question is whether any of this is "nominal typing".
-Unfortunately, "nominal" has a fuzzy meaning in modular contexts like the
-Component Model where there is [necessarily](../high-level/Choices.md) no
-shared global namespace. Instead, the main use cases for nominal types are
-independently addressed by the addition of abstract and generative types
-mentioned above. In particular, while importing or exporting an abstract type
-allows a name to be assigned to a type that is visible to the outside world,
-this name is ultimately just a *parameter name* or a *field name*, resp., whose
-linkage to the outside world is entirely controlled by the component's
-immediate parent (which can be another component). Note that a common
-assumption concerning "nominal" types is that "the same name means the same
-thing everywhere" which is definitely *not* the case for resource types but
-*is* the case for *structural* types like `string` and `list`. See also the
-explanation [below](#import-and-export-definitions) of how the URL field of
-`externname` can be used by a component to name the semantic contract it
-*expects* of imports or *claims* for exports. This naming of a contract with
-a URL meant to have a global meaning is "nominal" in spirit but independent of
-the type system.
+Lastly, since "nominal" is often taken to mean "the opposite of structural", a
+valid question is whether any of the above "nominal typing". Inside a
+component, resource types act "nominally": each resource type definition
+produces a new local "name" for a resource type that is distinct from all
+preceding resource types. The interesting case is when resource type equality
+is considered from *outside* the component, particularly when a single
+component is instantiated multiple times. In this case, a single resource type
+definition that is exported with a single `externname` will get a fresh type
+with each component instance, with the abstract typing rules mentioned above
+ensuring that each of the component's instance's resource types are kept
+distinct. Thus, in a sense, the generativity of resource types *generalize*
+traditional name-based nominal typing, providing a finer granularity of
+isolation than otherwise achievable with a shared global namespace.
 
 
 ### Canonical Definitions
