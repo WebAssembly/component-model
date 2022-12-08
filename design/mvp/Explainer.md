@@ -952,11 +952,11 @@ When supplying a resource type (imported *or* defined) to a type import via
 (component $P
   (import "C1" (component $C1
     (import "T" (type $T (sub resource)))
-    (export "foo" (param (own $T)))
+    (export "foo" (func (param (own $T))))
   ))
   (import "C2" (component $C2
     (import "T" (type $T (sub resource)))
-    (import "foo" (param (own $T)))
+    (import "foo" (func (param (own $T))))
   ))
   (type $R (resource (rep i32)))
   (instance $c1 (instantiate $C1 (with "T" (type $R))))
