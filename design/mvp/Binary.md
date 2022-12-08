@@ -260,7 +260,7 @@ Notes:
 * Validation rejects `resourcetype` type definitions inside `componenttype` and
   `instancettype`. Thus, handle types inside a `componenttype` can only refer
   to resource types that are imported or exported.
-* Validation requires the all types used in the type of an export are introduced
+* Validation requires all types used in the type of an export are introduced
   by an `exportdecl` (not an `importdecl`).
 * The uniqueness validation rules for `externname` described below are also
   applied at the instance- and component-type level.
