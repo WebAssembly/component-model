@@ -837,23 +837,33 @@ the types `$T2` and `$T3` are equal to each other but not to `$T1`. By the
 above transitive structural equality rules, the types `$List2` and `$List3` are
 equal to each other but not to `$List1`.
 
-Handle types (`own` and `borrow`) are purely structural, but, since they refer
-to resource types, transitively "inherit" the freshness of abstract resource
-types. For example, in the following component:
+Handle types (`own` and `borrow`) are structural types (like `list`) but, since
+they refer to resource types, transitively "inherit" the freshness of abstract
+resource types. For example, in the following component:
 ```wasm
 (component
   (import "T" (type $T (sub resource)))
   (import "U" (type $U (sub resource)))
-  (type $Handle1 (own $T))
-  (type $Handle2 (own $T))
-  (type $Handle3 (own $U))
+  (type $Own1 (own $T))
+  (type $Own2 (own $T))
+  (type $Own3 (own $U))
+  (type $ListOwn1 (list $Own1))
+  (type $ListOwn2 (list $Own2))
+  (type $ListOwn3 (list $Own3))
+  (type $Borrow1 (borrow $T))
+  (type $Borrow2 (borrow $T))
+  (type $Borrow3 (borrow $U))
+  (type $ListBorrow1 (list $Borrow1))
+  (type $ListBorrow2 (list $Borrow2))
+  (type $ListBorrow3 (list $Borrow3))
 )
 ```
-the types `$Handle1` and `$Handle2` are equal to each other but not to
-`$Handle3`. Transitively, any types containing `$Handle1` or `$Handle2` are
-equal, such as a `(list $Handle1)` and `(list $Handle2)` or function types
-using handles in their parameters and results. These type-checking rules for
-type imports mirror the *introduction* rule of [universal types]  (∀T).
+the types `$Own1` and `$Own2` are equal to each other but not to `$Own3` or
+any of the `$Borrow*`.  Similarly, `$Borrow1` and `$Borrow2` are equal to
+each other but not `$Borrow3`. Transitively, the types `$ListOwn1` and
+`$ListOwn2` are equal to each other but not `$ListOwn3` or any of the
+`$ListBorrow*`. These type-checking rules for type imports mirror the
+*introduction* rule of [universal types]  (∀T).
 
 The above examples all show abstract types in terms of *imports*, but the same
 "freshness" condition applies when aliasing the *exports* of another component
