@@ -928,18 +928,21 @@ the fact that the underlying concrete type is the same is kept an encapsulated
 implementation detail. For example, in the following component:
 ```wasm
 (component
-  (component $C
-    (type $r (resource (rep i32)))
-    (export "r1" (type (sub $r)))
-    (export "r2" (type (sub $r)))
-  )
-  (instance $c (instantiate $C))
-  (type $r1 (alias export $c "r1"))
-  (type $r2 (alias export $c "r2"))
+  (type $r (resource (rep i32)))
+  (export "r1" (type (sub $r)))
+  (export "r2" (type (sub $r)))
 )
 ```
-The types `$r1` and `$r2` are unequal. These type-checking rules for
-type exports mirror the *introduction* rule of [existential types]  (∃T).
+Any client of this component will treat `r1` and `r2` as totally distinct
+types since this component definition has the `componenttype`:
+```wasm
+(component
+  (export "r1" (type (sub resource)))
+  (export "r2" (type (sub resource)))
+)
+```
+The assignment of this type to the above component mirrors the *introduction*
+rule of [existential types]  (∃T).
 
 When supplying a resource type (imported *or* defined) to a type import via
 `instantiate`, type checking performs a substitution, replacing all uses of the
