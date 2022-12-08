@@ -816,9 +816,7 @@ following component:
   (import "T2" (type $T2 (sub resource)))
 )
 ```
-the types `$T1` and `$T2` are not equal. If type imports worked purely
-structurally, then they would be equal because structurally they have the same
-AST.
+the types `$T1` and `$T2` are not equal.
 
 Once a type is imported, it can be referred to by subsequent equality-bound
 type imports, thereby adding more types that it is equal to. For example, in
