@@ -1006,7 +1006,7 @@ component is instantiated multiple times. In this case, a single resource type
 definition that is exported with a single `externname` will get a fresh type
 with each component instance, with the abstract typing rules mentioned above
 ensuring that each of the component's instance's resource types are kept
-distinct. Thus, in a sense, the generativity of resource types *generalize*
+distinct. Thus, in a sense, the generativity of resource types *generalizes*
 traditional name-based nominal typing, providing a finer granularity of
 isolation than otherwise achievable with a shared global namespace.
 
