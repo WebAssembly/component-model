@@ -868,11 +868,12 @@ The above examples all show abstract types in terms of *imports*, but the same
 as well. For example, in this component:
 ```wasm
 (component
-  (import "i" (instance $i
+  (import "C" (component $C
     (export "T1" (type $T1 (sub resource)))
     (export "T2" (type $T2 (sub resource)))
     (export "T3" (type $T3 (eq $T2)))
   ))
+  (instance $c (instantiate $C))
   (type $T1 (alias export $i "T1"))
   (type $T2 (alias export $i "T2"))
   (type $T3 (alias export $i "T3"))
