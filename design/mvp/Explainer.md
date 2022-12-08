@@ -947,8 +947,7 @@ rule of [existential types]  (∃T).
 When supplying a resource type (imported *or* defined) to a type import via
 `instantiate`, type checking performs a substitution, replacing all uses of the
 `import` in the instantiated component with the actual type supplied via
-`with`. This means that, from the parent's point of view, the type imports stop
-being abstract. For example, the following component validates:
+`with`. For example, the following component validates:
 ```wasm
 (component $P
   (import "C1" (component $C1
