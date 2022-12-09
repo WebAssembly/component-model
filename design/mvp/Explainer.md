@@ -883,13 +883,18 @@ the types `$T2` and `$T3` are equal to each other but not to `$T1`. These
 type-checking rules for aliases of type exports mirror the *elimination* rule
 of [existential types]  (∃T).
 
-Next, we consider resource type definitions, which are half-like abstract types
-in that they also produce a *fresh* type that is unequal to every preceding
-type. However, a resource type definition is **not** abstract; it has a
-concrete representation that is known to the containing component (and *only*
-the containing component). Thus, local resource type definitions are neither
-structural nor abstract: they are "[generative]". For example, in the following
-example component:
+Next, we consider resource type *definitions* which are a *third* source of
+abstract types. Unlike the abstract types introduced by type imports and
+exports, resource type definitions provide operations for setting and getting a
+resource's private representation value: `resource.new` and `resource.rep`
+(introduced [below](#canonical-built-ins)). However, these accessor operations
+are necessarily scoped to the component instance that generated the resource
+type, thereby hiding access to a resource type's representation from the outside
+world. Because each component instantiation generates fresh resource types
+distinct from all preceding instances of the same component, resource types are
+["generative"].
+
+For example, in the following example component:
 ```wasm
 (component
   (type $R1 (resource (rep i32)))
@@ -901,10 +906,9 @@ example component:
 the types `$R1` and `$R2` are unequal and thus the return type of `$f1`
 is incompatible with the parameter type of `$f2`.
 
-The generativity of resource type definitions is well-suited to the abstract
-typing rules of type exports mentioned above, which force all clients of the
-component to bind a fresh abstract type. For example, in the following
-component:
+The generativity of resource type definitions matches the abstract typing rules
+of type exports mentioned above, which force all clients of the component to
+bind a fresh abstract type. For example, in the following component:
 ```wasm
 (component
   (component $C
@@ -992,9 +996,9 @@ standard [avoidance problem] that appears in module systems with abstract
 types.
 
 In summary: all type constructors are *structural* with the exception of
-`resource`, which is *generative*. Type imports and exports that have a subtype
-bound are *abstract (resource) types* and follow the standard introduction and
-elimination rules of universal and existential types.
+`resource`, which is *abstract* and *generative*. Type imports and exports that
+have a subtype bound also introduce abstract types and follow the standard
+introduction and elimination rules of universal and existential types.
 
 Lastly, since "nominal" is often taken to mean "the opposite of structural", a
 valid question is whether any of the above "nominal typing". Inside a
