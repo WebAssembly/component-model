@@ -513,30 +513,6 @@ characters and numbers that are `-` separated.
 
 For more information on this see the [binary format](./Binary.md).
 
-## WIT in Markdown
-[markdown]: #wit-in-markdown
-
-The WIT text format can also additionally be parsed from markdown files with the
-extension `wit.md`, for example `foo.wit.md`:
-
-    # This would be
-
-    Some markdown text
-
-    ```wit
-    // interspersed with actual `*.wit`
-    interface my-interface {
-    ```
-
-    ```wit
-    // which can be broken up between multiple blocks
-    }
-    ```
-
-Triple-fence code blocks with the `wit` marker will be extracted from a markdown
-file and concatenated into a single string which is then parsed as a normal
-`*.wit` file.
-
 # Lexical structure
 [lexical-structure]: #lexical-structure
 
