@@ -63,7 +63,7 @@ and [function][functions] definitions. For example:
 
 ```wit
 interface wasi-fs {
-  use { errno } from .types
+  use pkg.types.{errno}
 
   record stat {
     ino: u64,
@@ -137,9 +137,9 @@ function or an interface.
 
 ```wit
 world wasi {
-  import wasi-fs: "wasi-fs"
-  import wasi-random: "wasi-random"
-  import wasi-clock: "wasi-clock"
+  import wasi-fs: wasi.fs
+  import wasi-random: wasi.random
+  import wasi-clock: wasi.clock
   // ...
 
   export command: func(args: list<string>)
@@ -159,8 +159,8 @@ interface out-of-line {
 }
 
 world your-world {
-  import out-of-line: out-of-line
-  // ... is equivalent to ...
+  import out-of-line: self.out-of-line
+  // ... is roughtly equivalent to ...
   import out-of-line2: interface {
     the-function: func()
   }
@@ -177,6 +177,7 @@ an explicitly named world must be chosen:
 
 ```wit
 default world my-world {
+  // ...
 }
 ```
 
@@ -203,20 +204,21 @@ interface types {
 }
 
 interface my-host-functions {
-  use { errno, size } from types
+  use self.types.{errno, size}
 }
 ```
 
-Here the destination of the `from` is resolved to the `types` interface defined
-locally within the file. The interface `types` may come either after or before
-the `use` directive's `interface`. Interfaces linked with `use` are not allowed
-to be cyclic.
+Here the `use` starts with `self` which indicates that something from the
+current document is being used. Then the interface named `types` is listed,
+followed by a list of type names to use from the interface. The interface
+`types` may textually come either after or before the `use` directive's
+`interface`.  Interfaces linked with `use` are not allowed to be cyclic.
 
 Names imported via `use` can be renamed as they're imported as well:
 
 ```wit
 interface my-host-functions {
-  use { errno as my-errno } from types
+  use self.types.{errno as my-errno}
 }
 ```
 
@@ -233,14 +235,14 @@ default interface types {
 
 // host.wit
 interface my-host-functions {
-  use { errno, size } from .types
+  use pkg.types.{errno, size}
 }
 ```
 
-Note the `.` in the `.types` destination of the `from` here, which indicates
-that a sibling document is being imported from. Additionally note the usage of
-`default interface` in the `types.wit` file which simplifies the `from`
-directive of the `use`. WIT documents can also import from any interface defined
+The `pkg` keyword indicates that the `use` statement starts at the package root,
+as opposed to the `self` keyword described above starting in the local document.
+Additionally note the usage of `default interface` in the `types.wit` file which
+simplifies the `use`. WIT documents can also import from any interface defined
 within another document, however:
 
 ```wit
@@ -253,23 +255,23 @@ interface more-types {
 
 // host.wit
 interface my-host-functions {
-  use { another-type } from more-types in .types
+  use pkg.types.more-types.{another-type}
 }
 ```
 
-Here the `more-types in ...` indicates that a specific non-`default` interface
-is being chosen to import from. Documents in a WIT package must be named after a
-[valid identifier][identifiers] and be unique within the package. Documents
-cannot contain cycles between them as well with `use` statements.
+Here `more-types in the `use` path indicates that it's the specific interface
+being referenced. Documents in a WIT package must be named after a [valid
+identifier][identifiers] and be unique within the package. Documents cannot
+contain cycles between them as well with `use` statements.
 
 When importing or exporting an [interface][interfaces] in a [world][worlds]
-the same syntax is used after the `:` as what's after a `from` in a `use`:
+the same syntax is used after the `:` as `use`:
 
 ```wit
 world my-world {
-  import host: host
-  import other-functionality: .sibling-file
-  import more-functionality: specific-interface in .sibling-file
+  import host: self.host
+  import other-functionality: pkg.sibling-file
+  import more-functionality: pkg.sibling-file.specific-interface
 }
 
 interface host {
@@ -277,37 +279,74 @@ interface host {
 }
 ```
 
-The target of a `use` or the type of an import/export in a `world` may also be a
-quoted string:
+The `use` statement so far has always started with `self` or `pkg`, but it may
+also start with any valid identifier:
 
 ```wit
 interface foo {
-  use { /* ... */ } from "registry:package/document"
+  use package.other-document.{some-type}
 }
 ```
 
-This quoted string form indicates that the import is located in a different WIT
-package. Locating a package is a higher-level tooling concern than the WIT
-specification and is expected to be arbitrated by a registry, for example, with
-integration into per-language tooling. A parser for WIT would need to be
-configured where this package lives to resolve the interface `foo`.
+This form indicates that the identifier `package` corresponds to some externally
+specified package. Resolution of this WIT document requires the name `package`
+to be provided via external configuration. For example a registry might indicate
+that `package` was downloaded to a particular path at a particular version. The
+name `package` could also perhaps be another package defined in the local
+project which is configured via bindings generation.
 
-Import strings must be valid URLs. An import string additionally refers to a
-specific document within a package. In the above example `registry:package` can
-be thought of as the base URL for what's being imported, while `/document` is
-selecting the WIT document called `document`.
+This syntax allows `use` paths starting with any identifier other than `self`
+and `pkg` to create a set of names that the document needs to be resolved
+correctly. These names are considered the dependency packages of the current
+package being parsed. Note that the set of names here are local to this package
+do not need to conflict with dependency names in other packages. This enables
+each package to be resolved entirely separately and, if necessary, the name
+`foo` could mean different things to different packages.
 
-> **Note**: Integration of URLs into WIT and packages is still pretty early days
-> and the specifics here may change.
-
-Like with importing from sibling packages a `use` directive can also explicitly
-list the requested interface to select a non-`default` one:
-
-```wit
-default interface foo {
-  use { /* ... */ } from bar in "registry:package/document
-}
-```
+> **Note**: The tooling for and mechanism for precisly how these external names
+> are defined is not specified here. This is something that will be iterated on
+> to create documentation of the tooling in question and community standards
+> about how best to do this.
+>
+> As an example, however, imagine a CLI tool to generate C bindings for creating
+> a component that takes, as input, the world to generate.
+>
+>   generate-c-bindings pkg.my-component
+>
+> The specification of `pkg` here indicates that a locally-written WIT file
+> is being consumed. This could look inside of a `wit` folder in the current
+> directory for a package to parse as a set of WIT files. Inside this package
+> the `my-component` document would be selected and it would be expected to have
+> a `default world`.
+>
+> Similarly an invocation such as:
+>
+>   generate-c-bindings pkg.my-component --extern wasi=./wit/wasi
+>
+> Could indicate that the identifier `wasi` within `my-component` would be
+> resolved to a WIT package located in the `./wit/wasi` folder. Instead of
+> `./wit/wasi` it could even pass `./wit/wasi.wasm` which would be the binary
+> encoding of the `wasi` package. This sort of filesystem-based heuristic could
+> be applied by the `generate-c-bindings` tool as well.
+>
+> Alternatively there could also be a tool which takes a configuration file:
+>
+> ```toml
+> [wit-dependencies]
+> wasi = "1.0"
+> ```
+>
+> Where running `wit-registry` (a hypothetical CLI command) would parse this
+> file, resolve it fully, and download the `wasi` package and place it somewhere
+> along with perhaps a `resolve.json` file. This `resolve.json` could then be
+> consumed by `generate-c-bindings` as an additional method for defining the
+> dependency graph of components.
+>
+> Note that these scenarios are all hypothetical at this time and are the rough
+> direction that tooling is expected to go in. This will evolve over time but is
+> intended to set the stage for "what actually happens when I refer to a
+> dependency package" where the high-level idea is that it's a concern external
+> to the WIT package itself and resolved by higher-level tooling.
 
 ### Transitive imports and worlds
 
@@ -328,7 +367,7 @@ interface shared {
 
 world my-world {
   import host: interface {
-    use { metadata } from shared
+    use self.shared.{metadata})
 
     get: func() -> metadata
   }
@@ -368,10 +407,10 @@ default interface shared { /* ... */ }
 // world.wit
 world my-world {
   import foo: interface {
-    use { a-type } from .shared1
+    use pkg.shared1.{a-type}
   }
   import bar: interface {
-    use { other-type } from .shared2
+    use pkg.shared2.{other-type}
   }
 }
 ```
@@ -381,14 +420,14 @@ unique interfaces called `shared`. To disambiguate a manual import is required:
 
 ```
 world my-world {
-  import shared1: .shared1
-  import shared2: .shared2
+  import shared1: pkg.shared1
+  import shared2: pkg.shared2
 
   import foo: interface {
-    use { a-type } from .shared1
+    use pkg.shared1.{a-type}
   }
   import bar: interface {
-    use { other-type } from .shared2
+    use pkg.shared2.{other-type}
   }
 }
 ```
@@ -532,7 +571,6 @@ token ::= whitespace
         | operator
         | keyword
         | identifier
-        | strlit
 ```
 
 Whitespace and comments are ignored when parsing structures defined elsewhere
@@ -606,7 +644,6 @@ keyword ::= 'use'
           | 'list'
           | 'result'
           | 'as'
-          | 'from'
           | 'static'
           | 'interface'
           | 'tuple'
@@ -616,7 +653,6 @@ keyword ::= 'use'
           | 'import'
           | 'export'
           | 'default'
-          | 'in'
 ```
 
 ## Top-level items
@@ -647,7 +683,7 @@ import-item ::= 'import' id ':' extern-type
 extern-type ::= func-type | interface-type
 
 interface-type ::= 'interface' '{' interface-items* '}'
-                 | use-from
+                 | use-path
 ```
 
 Note that worlds can import types and define their own types to be exported
@@ -697,14 +733,15 @@ A `use` statement enables importing type or resource definitions from other
 wit documents. The structure of a use statement is:
 
 ```wit
-use { a, list, of, names } from another-interface
-use { name as other-name } from interface in "a:separate/package"
+use self.interface.{a, list, of, names}
+use pkg.document.some-type
+use my-dependency.document.other-type
 ```
 
 Specifically the structure of this is:
 
 ```wit
-use-item ::= 'use' '{' use-names-list '}' 'from' use-from
+use-item ::= 'use' use-path '.' '{' use-names-list '}'
 
 use-names-list ::= use-names-item
                  | use-names-item ',' use-names-list?
@@ -712,11 +749,7 @@ use-names-list ::= use-names-item
 use-names-item ::= id
                  | id 'as' id
 
-use-from ::= id
-           | '.' id
-           | id in '.' id
-           | strlit
-           | id 'in' strlit
+use-path ::= id ('.' id)*
 ```
 
 Note: Here `use-names-list?` means at least one `use-name-list` term.
@@ -1080,7 +1113,7 @@ interface types {
 }
 
 interface console {
-  use { level } from types
+  use self.types.{level}
   log: func(level: level, msg: string)
 }
 ```
@@ -1193,13 +1226,13 @@ would correspond to:
 )
 ```
 
-Imports of packages via a URL are encoded as imports to the outermost component
+Imports of packages are encoded as imports to the outermost component
 type as well.
 
 ```wit
 // foo.wit
 interface foo {
-  use { some-type } from "a:url/types"
+  use registry-package.types.{some-type}
 }
 ```
 
@@ -1208,7 +1241,7 @@ would correspond to:
 ```wasm
 (component
   (type (export "foo") (component
-    (import "types" "a:url/types" (instance $types
+    (import "types" "URL" (instance $types
       (type $some-type ...)
       (export "some-type" (type $some-type))
     ))
@@ -1222,7 +1255,10 @@ would correspond to:
 )
 ```
 
-putting all of this together an example of development of the `wasi-http`
+Note that `URL` would be provided by external tooling providing the definition
+of `registry-package` here as well.
+
+Putting all of this together an example of development of the `wasi-http`
 package would be:
 
 ```wit
@@ -1236,15 +1272,15 @@ default interface types {
 
 // wit/handler.wit
 default interface handler {
-  use { request, response } from .types
+  use pkg.types.{request, response}
   handle: func(request) -> response
 }
 
 // wit/proxy.wit
 default world proxy {
-  import console: "wasi:logging/backend"
-  import origin: .handler
-  export handler: .handler
+  import console: wasi-logging.backend
+  import origin: pkg.handler
+  export handler: pkg.handler
 }
 ```
 
@@ -1289,9 +1325,9 @@ and its corresponding binary encoding would be:
       (alias export $types "request" (type $request))
       (alias export $types "response" (type $response))
 
-      ;; This is filled in with the contents of what `wasi:logging/backend`
+      ;; This is filled in with the contents of what `wasi-logging.backend`
       ;; resolved to
-      (import "console" "wasi:logging/backend" (instance
+      (import "console" "URL-for-wasi-logging.backend" (instance
         ...
       ))
       (import "origin" (instance
