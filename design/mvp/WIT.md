@@ -160,7 +160,7 @@ interface out-of-line {
 
 world your-world {
   import out-of-line: self.out-of-line
-  // ... is roughtly equivalent to ...
+  // ... is roughly equivalent to ...
   import out-of-line2: interface {
     the-function: func()
   }
@@ -259,7 +259,7 @@ interface my-host-functions {
 }
 ```
 
-Here `more-types in the `use` path indicates that it's the specific interface
+Here `more-types` in the `use` path indicates that it's the specific interface
 being referenced. Documents in a WIT package must be named after a [valid
 identifier][identifiers] and be unique within the package. Documents cannot
 contain cycles between them as well with `use` statements.
@@ -303,7 +303,7 @@ do not need to conflict with dependency names in other packages. This enables
 each package to be resolved entirely separately and, if necessary, the name
 `foo` could mean different things to different packages.
 
-> **Note**: The tooling for and mechanism for precisly how these external names
+> **Note**: The tooling for and mechanism for precisely how these external names
 > are defined is not specified here. This is something that will be iterated on
 > to create documentation of the tooling in question and community standards
 > about how best to do this.
