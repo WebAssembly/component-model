@@ -390,9 +390,9 @@ would generate this component:
 ```
 
 Here it can be seen that despite the `world` only listing `host` as an import
-the component additionally import a `shared` instance. This is due to the fact
+the component additionally imports a `shared` instance. This is due to the fact
 that the `use { ... } from shared` implicitly requires that `shared` is imported
-to the component as well.
+into the component as well.
 
 Note that the name `"shared"` here is derived from the name of the `interface`
 which can also lead to conflicts:
@@ -1124,7 +1124,7 @@ would correspond to:
 (component
   (type (export "host") (component
     (type $types (instance
-      (export "enum" (type (enum "info" "debug")))
+      (export "level" (type (enum "info" "debug")))
     ))
     (export $types "types" (instance (type $types)))
     (alias export $types "level" (type $level))
