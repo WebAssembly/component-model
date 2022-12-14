@@ -264,26 +264,15 @@ The `Resource` class represents a runtime instance of a resource type:
 class Resource:
   t: ResourceType
   rep: int
-  borrowers: MutableMapping[ComponentInstance, int]
 
   def __init__(self, t, rep):
     self.t = t
     self.rep = rep
-    self.borrowers = {}
 ```
 The `t` field points to the [`resourcetype`](Explainer.md#type-definitions)
 used to create this `Resource` and is used to perform dynamic type checking
-below. Next, `rep` is the core representation of this `Resource` which is
-currently fixed to `i32` as described in the Explainer. Lastly, `borrowers` is
-a list of component instances that currently hold a `borrow` handle along with
-the index of this `borrow` handle in the `HandleTable`. This map is used to
-deduplicate `borrow` handles, preserving the invariant that a component
-instance contains *at most one* handle referring to a particular `Resource`.
-While the map here is a Python dictionary, using static analysis of the flow of
-resource types throughout a component instance DAG, an AOT compiler can
-alternatively implement `borrowers` with a fixed-size array embedded directly
-in the resource, assigning a static index to each potential client instance in
-the DAG.
+below. The `rep` field stores the representation value of this `Resource` whose
+type is currently fixed to `i32` as described in the Explainer.
 
 The `OwnHandle` and `BorrowHandle` classes represent runtime handle values of
 `own` and `borrow` type, resp:
@@ -353,13 +342,6 @@ class HandleTable:
     self.free = []
 
   def insert(self, cx, h):
-    match h:
-      case OwnHandle():
-        assert(len(h.resource.borrowers) == 0)
-      case BorrowHandle():
-        if cx.inst in h.resource.borrowers:
-          return h.resource.borrowers[cx.inst]
-
     if self.free:
       i = self.free.pop()
       assert(self.array[i] is None)
@@ -367,21 +349,18 @@ class HandleTable:
     else:
       i = len(self.array)
       self.array.append(h)
-
     if isinstance(h, BorrowHandle):
-      h.resource.borrowers[cx.inst] = i
       cx.call.borrow_count += 1
     return i
 ```
 The `HandleTable` class maintains a dense array of handles that can contain
-holes created by the `remove` method (defined below). These holes are kept
-in a separate Python list here, but an optimizing implementation could instead
-store the free list in the free elements of `array`. When inserting a new
-handle, `HandleTable` first consults the `free` list, which is popped LIFO to
-better detect use-after-free bugs in the guest code. The `insert` method
-uses the `Handle.borrowers` map to deduplicate borrowed handles. For
-non-deduplicated handles, `insert` increments `Call.borrow_count` to guard that
-this handle has been dropped by the end of the call.
+holes created by the `remove` method (defined below). These holes are kept in a
+separate Python list here, but an optimizing implementation could instead store
+the free list in the free elements of `array`. When inserting a new handle,
+`HandleTable` first consults the `free` list, which is popped LIFO to better
+detect use-after-free bugs in the guest code. The `insert` method increments
+`Call.borrow_count` to guard that this handle has been dropped by the end of
+the call.
 
 The `get` method is used by other `HandleTable` methods and canonical
 definitions below and uses dynamic guards to catch out-of-bounds and
@@ -418,11 +397,9 @@ for later recycling by `insert` (above).
     match t:
       case Own(_):
         trap_if(not isinstance(h, OwnHandle))
-        assert(len(h.resource.borrowers) == 0)
       case Borrow(_):
         trap_if(not isinstance(h, BorrowHandle))
         cx.call.borrow_count -= 1
-        del h.resource.borrowers[cx.inst]
     self.array[i] = None
     self.free.append(i)
     return h

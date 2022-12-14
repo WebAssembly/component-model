@@ -316,12 +316,10 @@ class ComponentInstance:
 class Resource:
   t: ResourceType
   rep: int
-  borrowers: MutableMapping[ComponentInstance, int]
 
   def __init__(self, t, rep):
     self.t = t
     self.rep = rep
-    self.borrowers = {}
 
 #
 
@@ -365,13 +363,6 @@ class HandleTable:
     self.free = []
 
   def insert(self, cx, h):
-    match h:
-      case OwnHandle():
-        assert(len(h.resource.borrowers) == 0)
-      case BorrowHandle():
-        if cx.inst in h.resource.borrowers:
-          return h.resource.borrowers[cx.inst]
-
     if self.free:
       i = self.free.pop()
       assert(self.array[i] is None)
@@ -379,9 +370,7 @@ class HandleTable:
     else:
       i = len(self.array)
       self.array.append(h)
-
     if isinstance(h, BorrowHandle):
-      h.resource.borrowers[cx.inst] = i
       cx.call.borrow_count += 1
     return i
 
@@ -409,11 +398,9 @@ class HandleTable:
     match t:
       case Own(_):
         trap_if(not isinstance(h, OwnHandle))
-        assert(len(h.resource.borrowers) == 0)
       case Borrow(_):
         trap_if(not isinstance(h, BorrowHandle))
         cx.call.borrow_count -= 1
-        del h.resource.borrowers[cx.inst]
     self.array[i] = None
     self.free.append(i)
     return h
