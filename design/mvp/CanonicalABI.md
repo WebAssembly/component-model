@@ -21,9 +21,6 @@ of modules in Core WebAssembly.
   * [`canon resource.new`](#canon-resourcenew)
   * [`canon resource.drop`](#canon-resourcedrop)
   * [`canon resource.rep`](#canon-resourcerep)
-* [Canonical ABI](#canonical-abi)
-  * [Canonical Module Type](#canonical-module-type)
-  * [Lifting Canonical Modules](#lifting-canonical-modules)
 
 
 ## Supporting definitions
