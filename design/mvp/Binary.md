@@ -260,8 +260,6 @@ Notes:
 * Validation rejects `resourcetype` type definitions inside `componenttype` and
   `instancettype`. Thus, handle types inside a `componenttype` can only refer
   to resource types that are imported or exported.
-* Validation requires that all resource types transitively used in the type of an
-  export are introduced by a preceding `exportdecl`.
 * The uniqueness validation rules for `externname` described below are also
   applied at the instance- and component-type level.
 * Validation of `externdesc` requires the various `typeidx` type constructors
@@ -335,7 +333,7 @@ Notes:
 * All exports (of all `sort`s) introduce a new index that aliases the exported
   definition and can be used by all subsequent definitions just like an alias.
 * Validation requires that all resource types transitively used in the type of an
-  export are introduced by a preceding `exportdecl`.
+  export are introduced by a preceding `importdecl` or `exportdecl`.
 * The "parses as a URL" condition is defined by executing the [basic URL
   parser] with `char(b)*` as *input*, no optional parameters and non-fatal
   validation errors (which coincides with definition of `URL` in JS and `rust-url`).
