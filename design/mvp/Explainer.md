@@ -1001,7 +1001,7 @@ have a subtype bound also introduce abstract types and follow the standard
 introduction and elimination rules of universal and existential types.
 
 Lastly, since "nominal" is often taken to mean "the opposite of structural", a
-valid question is whether any of the above "nominal typing". Inside a
+valid question is whether any of the above is "nominal typing". Inside a
 component, resource types act "nominally": each resource type definition
 produces a new local "name" for a resource type that is distinct from all
 preceding resource types. The interesting case is when resource type equality
