@@ -926,27 +926,45 @@ bind a fresh abstract type. For example, in the following component:
 all four types aliases in the outer component are unequal, reflecting the fact
 that each instance of `$C` generates two fresh resource types.
 
-However, even if a single resource type definition is exported twice with `sub`
-bounds, clients must *still* treat the two types as abstract and thus unequal;
-the fact that the underlying concrete type is the same is kept an encapsulated
-implementation detail. For example, in the following component:
+If a single resource type definition is exported twice, clients must *still*
+treat each export as abstract and thus unequal; the fact that the underlying
+concrete type is the same is kept an encapsulated implementation detail. For
+example, the following component:
 ```wasm
 (component
   (type $r (resource (rep i32)))
-  (export "r1" (type (sub $r)))
-  (export "r2" (type (sub $r)))
+  (export "r1" (type $r))
+  (export "r2" (type $r))
 )
 ```
-Any client of this component will treat `r1` and `r2` as totally distinct
-types since this component definition has the `componenttype`:
+is assigned the following `componenttype`:
 ```wasm
 (component
   (export "r1" (type (sub resource)))
   (export "r2" (type (sub resource)))
 )
 ```
-The assignment of this type to the above component mirrors the *introduction*
-rule of [existential types]  (∃T).
+Thus, from an external perspective, `r1` and `r2` are completely distinct. The
+assignment of this type to the above component mirrors the *introduction* rule
+of [existential types]  (∃T).
+
+If a component *wants* to publicly export a single private resource type twice
+with the second export equal to the first, it can do so by having the second
+export refer to the type index introduced by the first export. For example, the
+following component:
+```wasm
+(component
+  (type $r (resource (rep i32)))
+  (export $r1 "r1" (type $r))
+  (export "r2" (type $r1))
+```
+is assigned the following `componenttype`:
+```wasm
+(component
+  (export $r1 "r1" (type (sub resource)))
+  (export "r2" (type (eq $r1)))
+)
+```
 
 When supplying a resource type (imported *or* defined) to a type import via
 `instantiate`, type checking performs a substitution, replacing all uses of the
