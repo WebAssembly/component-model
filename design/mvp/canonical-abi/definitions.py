@@ -315,22 +315,20 @@ class ComponentInstance:
 
 #
 
+@dataclass
 class Resource:
-  t: ResourceType
   rep: int
-
-  def __init__(self, t, rep):
-    self.t = t
-    self.rep = rep
 
 #
 
 class Handle:
   resource: Resource
+  rt: ResourceType
   lend_count: int
 
-  def __init__(self, resource):
+  def __init__(self, resource, rt):
     self.resource = resource
+    self.rt = rt
     self.lend_count = 0
 
 class OwnHandle(Handle): pass
@@ -381,7 +379,7 @@ class HandleTable:
   def get(self, i, rt):
     trap_if(i >= len(self.array))
     trap_if(self.array[i] is None)
-    trap_if(self.array[i].resource.t is not rt)
+    trap_if(self.array[i].rt is not rt)
     return self.array[i]
 
 #
@@ -845,13 +843,11 @@ def pack_flags_into_int(v, labels):
 #
 
 def lower_own(cx, resource, rt):
-  assert(resource.t is rt)
-  h = OwnHandle(resource)
+  h = OwnHandle(resource, rt)
   return cx.inst.handles.insert(cx, h)
 
 def lower_borrow(cx, resource, rt):
-  assert(resource.t is rt)
-  h = BorrowHandle(resource)
+  h = BorrowHandle(resource, rt)
   return cx.inst.handles.insert(cx, h)
 
 ### Flattening
@@ -1215,7 +1211,7 @@ def canon_lower(cx, callee, ft, flat_args):
 ### `resource.new`
 
 def canon_resource_new(cx, rt, rep):
-  h = OwnHandle(Resource(rt, rep))
+  h = OwnHandle(Resource(rep), rt)
   return cx.inst.handles.insert(cx, h)
 
 ### `resource.drop`
