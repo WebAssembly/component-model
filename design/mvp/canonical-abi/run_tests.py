@@ -40,7 +40,6 @@ def mk_cx(memory = bytearray(), encoding = 'utf8', realloc = None, post_return =
   cx.opts.realloc = realloc
   cx.opts.post_return = post_return
   cx.inst = ComponentInstance()
-  cx.inst.handles = HandleTable()
   cx.call = Call()
   cx.called_as_export = True
   return cx

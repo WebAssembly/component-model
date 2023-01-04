@@ -304,12 +304,14 @@ class CanonicalOptions:
 #
 
 class ComponentInstance:
-  may_leave = True
-  may_enter = True
+  may_leave: bool
+  may_enter: bool
   handles: HandleTable
 
   def __init__(self):
-    handles = HandleTable()
+    self.may_leave = True
+    self.may_enter = True
+    self.handles = HandleTable()
 
 #
 
