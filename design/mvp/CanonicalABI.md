@@ -219,7 +219,6 @@ class Context:
   opts: CanonicalOptions
   inst: ComponentInstance
   call: Call
-  called_as_export: bool
 ```
 
 The `opts` field represents the [`canonopt`] values supplied to
@@ -250,20 +249,17 @@ class ComponentInstance:
     self.handles = HandleTable()
 ```
 
-Lastly, the `called_as_export` field of `Context` indicates whether the lifted
-function is being called through a component export or whether this is an
-internal call (for example, when a child component calls an import that is
-defined by its parent component).
-
 The `HandleTable` class is defined in terms of a collection of supporting
 runtime bookkeeping classes that we'll go through first.
 
 The `Resource` class represents a runtime instance of a resource type, storing
-the core representation value (which is currently fixed to `i32`):
+the core representation value (which is currently fixed to `i32`) and the
+component instance that is implementing this resource.
 ```python
 @dataclass
 class Resource:
   rep: int
+  impl: ComponentInstance
 ```
 
 The `OwnHandle` and `BorrowHandle` classes represent runtime handle values of
@@ -1422,11 +1418,7 @@ component*.
 Given the above closure arguments, `canon_lift` is defined:
 ```python
 def canon_lift(cx, callee, ft, call, args):
-  if cx.called_as_export:
-    trap_if(not cx.inst.may_enter)
-    cx.inst.may_enter = False
-  else:
-    assert(not cx.inst.may_enter)
+  trap_if(not cx.inst.may_enter)
 
   outer_call = cx.call
   cx.call = call
@@ -1447,9 +1439,6 @@ def canon_lift(cx, callee, ft, call, args):
     if cx.opts.post_return is not None:
       cx.opts.post_return(flat_results)
 
-    if cx.called_as_export:
-      cx.inst.may_enter = True
-
     cx.call.finish_lift()
     cx.call = outer_call
 
@@ -1461,14 +1450,6 @@ Uncaught Core WebAssembly [exceptions] result in a trap at component
 boundaries. Thus, if a component wishes to signal an error, it must use some
 sort of explicit type such as `result` (whose `error` case particular language
 bindings may choose to map to and from exceptions).
-
-By clearing `may_enter` for the duration of `canon_lift` when the function is
-called as an export, the dynamic traps ensure that components cannot be
-reentered, ensuring the non-reentrance [component invariant]. Furthermore,
-because `may_enter` is not cleared on the exceptional exit path taken by
-`trap()`, if there is a trap during Core WebAssembly execution of lifting or
-lowering, the component is left permanently un-enterable, ensuring the
-lockdown-after-trap [component invariant].
 
 The `call` parameter is assumed to have been created by the caller (the host or
 `canon lower`) for this one call. Since, in `not cx.called_as_export` scenarios
@@ -1500,8 +1481,12 @@ Thus, from the perspective of Core WebAssembly, `$f` is a [function instance]
 containing a `hostfunc` that closes over `$opts`, `$inst`, `$callee` and `$ft`
 and, when called from Core WebAssembly code, calls `canon_lower`, which is defined as:
 ```python
-def canon_lower(cx, callee, ft, flat_args):
+def canon_lower(cx, callee, calling_import, ft, flat_args):
   trap_if(not cx.inst.may_leave)
+
+  assert(cx.inst.may_enter)
+  if calling_import:
+    cx.inst.may_enter = False
 
   outer_call = cx.call
   cx.call = Call()
@@ -1520,6 +1505,9 @@ def canon_lower(cx, callee, ft, flat_args):
   cx.call.finish_lower()
   cx.call = outer_call
 
+  if calling_import:
+    cx.inst.may_enter = True
+
   return flat_results
 ```
 The definitions of `canon_lift` and `canon_lower` are mostly symmetric (swapping
@@ -1537,6 +1525,20 @@ Since any cross-component call necessarily transits through a statically-known
 compilation of the permissive [subtyping](Subtyping.md) allowed between
 components (including the elimination of string operations on the labels of
 records and variants) as well as post-MVP [adapter functions].
+
+By clearing `may_enter` for the duration of calls to imports, the `may_enter`
+guard in `canon_lift` ensures that components cannot be externally reentered,
+which is part of the [component invariants]. The `calling_import` condition
+allows a parent component to call into a child component (which is, by
+definition, not a call to an import) and for the child to then reenter the
+parent through a function the parent explicitly supplied to the child's
+`instantiate`. This form of internal reentrance allows the parent to fully
+virtualize the child's imports.
+
+Because `may_enter` is not cleared on the exceptional exit path taken by
+`trap()`, if there is a trap during Core WebAssembly execution of lifting or
+lowering, the component is left permanently un-enterable, ensuring the
+lockdown-after-trap [component invariant].
 
 The `may_leave` flag set during lowering in `canon_lift` and `canon_lower`
 ensures that the relative ordering of the side effects of `lift` and `lower`
@@ -1567,7 +1569,7 @@ Calling `$f` invokes the following function, which creates a resource object
 and inserts it into the current instance's handle table:
 ```python
 def canon_resource_new(cx, rt, rep):
-  h = OwnHandle(Resource(rep), rt)
+  h = OwnHandle(Resource(rep, cx.inst), rt)
   return cx.inst.handles.insert(cx, h)
 ```
 
@@ -1588,8 +1590,11 @@ optional destructor.
 def canon_resource_drop(cx, t, i):
   h = cx.inst.handles.remove(cx, i, t)
   if isinstance(t, Own) and t.rt.dtor:
+    trap_if(not h.resource.impl.may_enter)
     t.rt.dtor(h.resource.rep)
 ```
+The `may_enter` guard ensures the non-reentrance [component invariant], since
+a destructor call is analogous to a call to an export.
 
 ### `canon resource.rep`
 
@@ -1618,6 +1623,7 @@ def canon_resource_rep(cx, rt, i):
 [`canonopt`]: Explainer.md#canonical-definitions
 [`canon`]: Explainer.md#canonical-definitions
 [Type Definitions]: Explainer.md#type-definitions
+[Component Invariant]: Explainer.md#component-invariants
 [Component Invariants]: Explainer.md#component-invariants
 [JavaScript Embedding]: Explainer.md#JavaScript-embedding
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions

@@ -356,7 +356,7 @@ def test_roundtrip(t, v):
   caller_cx = mk_cx(caller_heap.memory, 'utf8', caller_heap.realloc)
 
   flat_args = lower_flat(caller_cx, v, t)
-  flat_results = canon_lower(caller_cx, lifted_callee, ft, flat_args)
+  flat_results = canon_lower(caller_cx, lifted_callee, True, ft, flat_args)
   got = lift_flat(caller_cx, ValueIter(flat_results), t)
 
   if got != v:
@@ -381,17 +381,19 @@ def test_handles():
     nonlocal dtor_value
     dtor_value = x
   rt = ResourceType(dtor)
-  r1 = Resource(42)
-  r2 = Resource(43)
-  r3 = Resource(44)
+
+  cx = mk_cx()
+  r1 = Resource(42, cx.inst)
+  r2 = Resource(43, cx.inst)
+  r3 = Resource(44, cx.inst)
 
   def host_import(act, args):
+    nonlocal cx
     assert(len(args) == 2)
     assert(args[0] is r1)
     assert(args[1] is r3)
-    return ([Resource(45)], lambda:())
+    return ([Resource(45, cx.inst)], lambda:())
 
-  cx = mk_cx()
   def core_wasm(args):
     nonlocal dtor_value
 
@@ -404,7 +406,7 @@ def test_handles():
     assert(canon_resource_rep(cx, rt, 2) == 44)
 
     host_ft = FuncType([Borrow(rt),Borrow(rt)],[Own(rt)])
-    results = canon_lower(cx, host_import, host_ft, [Value('i32',0),Value('i32',2)])
+    results = canon_lower(cx, host_import, True, host_ft, [Value('i32',0),Value('i32',2)])
     assert(len(results) == 1)
     assert(results[0].t == 'i32' and results[0].v == 3)
     assert(canon_resource_rep(cx, rt, 3) == 45)
