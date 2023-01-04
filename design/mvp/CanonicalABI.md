@@ -240,12 +240,14 @@ state indicates whether the instance may be called from the outside world
 through an export. The `HandleTable` is defined next.
 ```python
 class ComponentInstance:
-  may_leave = True
-  may_enter = True
+  may_leave: bool
+  may_enter: bool
   handles: HandleTable
 
   def __init__(self):
-    handles = HandleTable()
+    self.may_leave = True
+    self.may_enter = True
+    self.handles = HandleTable()
 ```
 
 Lastly, the `called_as_export` field of `Context` indicates whether the lifted
