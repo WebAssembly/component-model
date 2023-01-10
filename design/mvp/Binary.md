@@ -80,8 +80,12 @@ sort                ::= 0x00 cs:<core:sort>                                => co
                       | 0x05                                               => instance
 inlineexport        ::= n:<name> si:<sortidx>                              => (export n si)
 name                ::= len:<u32> n:<name-chars>                           => n (if len = |n|)
-name-chars          ::= w:<word>                                           => w
-                      | n:<name> 0x2d w:<word>                             => n-w
+name-chars          ::= l:<label>                                          => l
+                      | '[constructor]' r:<label>                          => [constructor]r
+                      | '[method]' r:<label> '.' m:<label>                 => [method]r.m
+                      | '[static]' r:<label> '.' s:<label>                 => [static]r.s
+label               ::= w:<word>                                           => w
+                      | l:<label> '-' w:<word>                             => l-w
 word                ::= w:[0x61-0x7a] x*:[0x30-0x39,0x61-0x7a]*            => char(w)char(x)*
                       | W:[0x41-0x5a] X*:[0x30-0x39,0x41-0x5a]*            => char(W)char(X)*
 ```
@@ -99,8 +103,21 @@ Notes:
   sort, but would be extended to accept other sorts as core wasm is extended.
 * Validation of `instantiate` requires that `name` is present in an
   `externname` of `c` (with a matching type).
+* When validating `instantiate`, after each individual type-import is supplied
+  via `with`, the actual type supplied is immediately substituted for all uses
+  of the import, so that subsequent imports and all exports are now specialized
+  to the actual type.
 * The indices in `sortidx` are validated according to their `sort`'s index
   spaces, which are built incrementally as each definition is validated.
+* Validation requires that all annotated `name`s only occur on `func` `export`s
+  and that the `r` `label` matches the `name` of a preceding `resource` export.
+* Validation of `[constructor]` names requires that the `func` returns a
+  `(result (own $R))`, where `$R` is the resource labeled `r`.
+* Validation of `[method]` names requires the first parameter of the function
+  to be `(param "self" (borrow $R))`, where `$R` is the resource labeled `r`.
+* Validation of `[method]` and `[static]` names ensures that all field names
+  are disjoint.
+
 
 ## Alias Definitions
 
@@ -120,7 +137,8 @@ Notes:
   index in the `sort` index space of the `i`th enclosing component (counting
   outward, starting with `0` referring to the current component).
 * For `outer` aliases, validation restricts the `sort` to one
-  of `type`, `module` or `component`.
+  of `type`, `module` or `component` and additionally requires that the
+  outer-aliased type is not a `resource` type (which is generative).
 
 
 ## Type Definitions
@@ -174,25 +192,28 @@ primvaltype   ::= 0x7f                                    => bool
                 | 0x74                                    => char
                 | 0x73                                    => string
 defvaltype    ::= pvt:<primvaltype>                       => pvt
-                | 0x72 nt*:vec(<namedvaltype>)            => (record (field nt)*)
+                | 0x72 lt*:vec(<labelvaltype>)            => (record (field lt)*)
                 | 0x71 case*:vec(<case>)                  => (variant case*)
                 | 0x70 t:<valtype>                        => (list t)
                 | 0x6f t*:vec(<valtype>)                  => (tuple t*)
-                | 0x6e n*:vec(<name>)                     => (flags n*)
-                | 0x6d n*:vec(<name>)                     => (enum n*)
+                | 0x6e l*:vec(<label>)                    => (flags l*)
+                | 0x6d l*:vec(<label>)                    => (enum l*)
                 | 0x6c t*:vec(<valtype>)                  => (union t*)
                 | 0x6b t:<valtype>                        => (option t)
                 | 0x6a t?:<valtype>? u?:<valtype>?        => (result t? (error u)?)
-namedvaltype  ::= n:<name> t:<valtype>                    => n t
-case          ::= n:<name> t?:<valtype>? r?:<u32>?        => (case n t? (refines case-label[r])?)
+                | 0x69 i:<typeidx>                        => (own i)
+                | 0x68 i:<typeidx>                        => (borrow i)
+labelvaltype  ::= l:<label> t:<valtype>                   => l t
+case          ::= l:<label> t?:<valtype>? r?:<u32>?       => (case l t? (refines case-label[r])?)
 <T>?          ::= 0x00                                    =>
                 | 0x01 t:<T>                              => t
 valtype       ::= i:<typeidx>                             => i
                 | pvt:<primvaltype>                       => pvt
+resourcetype  ::= 0x3f 0x7f f?:<funcidx>?                 => (resource (rep i32) (dtor f)?)
 functype      ::= 0x40 ps:<paramlist> rs:<resultlist>     => (func ps rs)
-paramlist     ::= nt*:vec(<namedvaltype>)                 => (param nt)*
+paramlist     ::= lt*:vec(<labelvaltype>)                 => (param lt)*
 resultlist    ::= 0x00 t:<valtype>                        => (result t)
-                | 0x01 nt*:vec(<namedvaltype>)            => (result nt)*
+                | 0x01 lt*:vec(<labelvaltype>)            => (result lt)*
 componenttype ::= 0x41 cd*:vec(<componentdecl>)           => (component cd*)
 instancetype  ::= 0x42 id*:vec(<instancedecl>)            => (instance id*)
 componentdecl ::= 0x03 id:<importdecl>                    => id
@@ -210,17 +231,37 @@ externdesc    ::= 0x00 0x11 i:<core:typeidx>              => (core module (type 
                 | 0x04 i:<typeidx>                        => (instance (type i))
                 | 0x05 i:<typeidx>                        => (component (type i))
 typebound     ::= 0x00 i:<typeidx>                        => (eq i)
+                | 0x01                                    => (sub resource)
 ```
 Notes:
 * The type opcodes follow the same negative-SLEB128 scheme as Core WebAssembly,
   with type opcodes starting at SLEB128(-1) (`0x7f`) and going down,
   reserving the nonnegative SLEB128s for type indices.
 * Validation of `valtype` requires the `typeidx` to refer to a `defvaltype`.
-* Validation of `instancedecl` (currently) only allows `outer` `type` `alias`
-  declarators.
+* Validation of `own` and `borrow` requires the `typeidx` to refer to a
+  resource type.
+* Validation only allows `borrow` to be used inside the `param` of a `functype`.
+  (This is likely to change in a future PR, converting `functype` into a
+  compound type constructor analogous to `moduletype` and `componenttype` and
+  using scoping to enforce this constraint instead.)
+* Validation of `resourcetype` requires the destructor (if present) to have
+  type `[i32] -> []`.
+* Validation of `instancedecl` (currently) only allows the `type` and
+  `instance` sorts in `alias` declarators.
 * As described in the explainer, each component and instance type is validated
   with an initially-empty type index space. Outer aliases can be used to pull
   in type definitions from containing components.
+* `exportdecl` introduces a new type index that can be used by subsequent type
+  definitions. In the `(eq i)` case, the new type index is effectively an alias
+  to type `i`. In the `(sub resource)` case, the new type index refers to a
+  *fresh* abstract type unequal to every existing type in all existing type
+  index spaces. (Note: *subsequent* aliases can introduce new type indices
+  equivalent to this fresh type.)
+* Validation rejects `resourcetype` type definitions inside `componenttype` and
+  `instancettype`. Thus, handle types inside a `componenttype` can only refer
+  to resource types that are imported or exported.
+* Validation requires that all resource types transitively used in the type of an
+  export are introduced by a preceding `exportdecl`.
 * The uniqueness validation rules for `externname` described below are also
   applied at the instance- and component-type level.
 * Validation of `externdesc` requires the various `typeidx` type constructors
@@ -239,6 +280,9 @@ Notes:
 ```
 canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift f opts type-index-space[ft])
            | 0x01 0x00 f:<funcidx> opts:<opts>                   => (canon lower f opts (core func))
+           | 0x02 t:<typeidx>                                    => (canon resource.new t (core func))
+           | 0x03 t:<valtype>                                    => (canon resource.drop t (core func))
+           | 0x04 t:<typeidx>                                    => (canon resource.rep t (core func))
 opts     ::= opt*:vec(<canonopt>)                                => opt*
 canonopt ::= 0x00                                                => string-encoding=utf8
            | 0x01                                                => string-encoding=utf16
@@ -251,20 +295,8 @@ Notes:
 * The second `0x00` byte in `canon` stands for the `func` sort and thus the
   `0x00 <u32>` pair standards for a `func` `sortidx` or `core:sortidx`.
 * Validation prevents duplicate or conflicting `canonopt`.
-* Validation of `canon lift` requires `f` to have type `flatten(ft)` (defined
-  by the [Canonical ABI](CanonicalABI.md#flattening)). The function being
-  defined is given type `ft`.
-* Validation of `canon lower` requires `f` to be a component function. The
-  function being defined is given core function type `flatten(ft)` where `ft`
-  is the `functype` of `f`.
-* If the lifting/lowering operations implied by `lift` or `lower` require
-  access to `memory` or `realloc`, then validation requires these options to be
-  present. If present, `realloc` must have core type
-  `(func (param i32 i32 i32 i32) (result i32))`.
-* The `post-return` option is only valid for `canon lift` and it is always
-  optional; if present, it must have core type `(func (param ...))` where the
-  number and types of the parameters must match the results of the core function
-  being lifted and itself have no result values.
+* Validation of the individual canonical definitions is described in
+  [`CanonicalABI.md`](CanonicalABI.md#canonical-definitions).
 
 
 ## Start Definitions
@@ -300,6 +332,10 @@ externname ::= n:<name> u?:<URL>?              => n u?
 URL        ::= b*:vec(byte)                    => char(b)*, if char(b)* parses as a URL
 ```
 Notes:
+* All exports (of all `sort`s) introduce a new index that aliases the exported
+  definition and can be used by all subsequent definitions just like an alias.
+* Validation requires that all resource types transitively used in the type of an
+  export are introduced by a preceding `exportdecl`.
 * The "parses as a URL" condition is defined by executing the [basic URL
   parser] with `char(b)*` as *input*, no optional parameters and non-fatal
   validation errors (which coincides with definition of `URL` in JS and `rust-url`).

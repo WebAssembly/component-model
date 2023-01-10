@@ -9,7 +9,9 @@ native JavaScript runtimes.
   * [Instance definitions](#instance-definitions)
   * [Alias definitions](#alias-definitions)
   * [Type definitions](#type-definitions)
+    * [Type checking](#type-checking)
   * [Canonical definitions](#canonical-definitions)
+    * [Canonical built-ins](#canonical-built-ins)
   * [Start definitions](#start-definitions)
   * [Import and export definitions](#import-and-export-definitions)
 * [Component invariants](#component-invariants)
@@ -198,8 +200,12 @@ sort           ::= core <core:sort>
                  | component
                  | instance
 inlineexport   ::= (export <name> <sortidx>)
-name           ::= <word>
-                 | <name>-<word>
+name           ::= <label>
+                 | [constructor]<label>
+                 | [method]<label>.<label>
+                 | [static]<label>.<label>
+label          ::= <word>
+                 | <label>-<word>
 word           ::= [a-z][0-9a-z]*
                  | [A-Z][0-9A-Z]*
 ```
@@ -216,20 +222,35 @@ The `value` sort refers to a value that is provided and consumed during
 instantiation. How this works is described in the
 [start definitions](#start-definitions) section.
 
-The component-level definition of `name` above corresponds to [kebab case]. The
-reason for this particular form of casing is to unambiguously separate words
-and acronyms (represented as all-caps words) so that source language bindings
-can convert a `name` into the idiomatic casing of that language. (Indeed,
-because hyphens are often invalid in identifiers, kebab case practically forces
-language bindings to make such a conversion.) For example, the `name` `is-XML`
+The component-level definition of `name` captures several language-neutral
+syntactic hints that allow bindings generators to produce more idiomatic
+bindings in their target language. Having this structured data encoded as a
+plain string provides a single canonical name for use in tools and
+language-agnostic contexts, without requiring each to invent its own custom
+interpretation which would likely lead to inconsistencies followed by a need to
+canonicalize.
+
+At the top-level, a `name` allows functions to be annotated as being a
+constructor, method or static function of a preceding resource. In each of
+these cases, the first `label` is the name of the resource and the second
+`label` is the logical field name of the function. This additional nesting
+information allows bindings generators to insert the function into the nested
+scope of a class, abstract data type, object, namespace, package, module or
+whatever resources get bound to. For example, a function named `[method]C.foo`
+could be bound in C++ to a member function `foo` in a class `C`. The JS API
+[below](#JS-API) describes how the native JavaScript bindings could look.
+Validation described in [Binary.md](Binary.md) inspects the contents of `name`
+and ensures that the function has a compatible signature.
+
+The `label`s inside a `name` are required to have [kebab case]. The reason
+for this particular form of casing is to unambiguously separate words and
+acronyms (represented as all-caps words) so that source language bindings can
+convert a `name` into the idiomatic casing of that language. (Indeed, because
+hyphens are often invalid in identifiers, kebab case practically forces
+language bindings to make such a conversion.) For example, the `label` `is-XML`
 could be mapped to `isXML`, `IsXml` or `is_XML`, depending on the target
 language. The highly-restricted character set ensures that capitalization is
-trivial and does not require consulting Unicode tables. Having this structured
-data encoded as a plain string provides a single canonical name for use in
-tools and language-agnostic contexts, without requiring each to invent its own
-custom interpretation. While the use of `name` above is mostly for internal
-wiring, `name` is used in a number of productions below that are
-developer-facing and imply bindings generation.
+trivial and does not require consulting Unicode tables.
 
 To see a non-trivial example of component instantiation, we'll first need to
 introduce a few other definitions below that allow components to import, define
@@ -265,10 +286,10 @@ outer aliases are only allowed to refer to *preceding* outer definitions.
 Components containing outer aliases effectively produce a [closure] at
 instantiation time, including a copy of the outer-aliased definitions. Because
 of the prevalent assumption that components are immutable values, outer aliases
-are restricted to only refer to immutable definitions: types, modules and
-components. (In the future, outer aliases to all sorts of definitions could be
-allowed by recording the statefulness of the resulting component in its type
-via some kind of "`stateful`" type attribute.)
+are restricted to only refer to immutable definitions: non-resource types,
+modules and components. (In the future, outer aliases to all sorts of
+definitions could be allowed by recording the statefulness of the resulting
+component in its type via some kind of "`stateful`" type attribute.)
 
 Both kinds of aliases come with syntactic sugar for implicitly declaring them
 inline:
@@ -456,6 +477,7 @@ therefore be high-level, describing entire compound values.
 ```
 type          ::= (type <id>? <deftype>)
 deftype       ::= <defvaltype>
+                | <resourcetype>
                 | <functype>
                 | <componenttype>
                 | <instancetype>
@@ -463,20 +485,23 @@ defvaltype    ::= bool
                 | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64
                 | float32 | float64
                 | char | string
-                | (record (field <name> <valtype>)*)
-                | (variant (case <id>? <name> <valtype>? (refines <id>)?)+)
+                | (record (field <label> <valtype>)*)
+                | (variant (case <id>? <label> <valtype>? (refines <id>)?)+)
                 | (list <valtype>)
                 | (tuple <valtype>*)
-                | (flags <name>*)
-                | (enum <name>+)
+                | (flags <label>*)
+                | (enum <label>+)
                 | (union <valtype>+)
                 | (option <valtype>)
                 | (result <valtype>? (error <valtype>)?)
+                | (own <typeidx>)
+                | (borrow <typeidx>)
 valtype       ::= <typeidx>
                 | <defvaltype>
+resourcetype  ::= (resource (rep i32) (dtor <funcidx>)?)
 functype      ::= (func <paramlist> <resultlist>)
-paramlist     ::= (param <name> <valtype>)*
-resultlist    ::= (result <name> <valtype>)*
+paramlist     ::= (param <label> <valtype>)*
+resultlist    ::= (result <label> <valtype>)*
                 | (result <valtype>)
 componenttype ::= (component <componentdecl>*)
 instancetype  ::= (instance <instancedecl>*)
@@ -487,7 +512,7 @@ instancedecl  ::= core-prefix(<core:type>)
                 | <alias>
                 | <exportdecl>
 importdecl    ::= (import <externname> bind-id(<externdesc>))
-exportdecl    ::= (export <externname> <externdesc>)
+exportdecl    ::= (export <externname> bind-id(<externdesc>))
 externdesc    ::= (<sort> (type <u32>) )
                 | core-prefix(<core:moduletype>)
                 | <functype>
@@ -496,6 +521,7 @@ externdesc    ::= (<sort> (type <u32>) )
                 | (value <valtype>)
                 | (type <typebound>)
 typebound     ::= (eq <typeidx>)
+                | (sub resource)
 
 where bind-id(X) parses '(' sort <id>? Y ')' when X parses '(' sort Y ')'
 ```
@@ -513,6 +539,15 @@ sets of abstract values:
 | `record`                  | heterogeneous [tuples] of named values |
 | `variant`                 | heterogeneous [tagged unions] of named values |
 | `list`                    | homogeneous, variable-length [sequences] of values |
+| `own`                     | a unique, opaque address of a resource that will be destroyed when this value is dropped |
+| `borrow`                  | an opaque address of a resource that must be dropped before the current export call returns |
+
+How these abstract values are produced and consumed from Core WebAssembly
+values and linear memory is configured by the component via *canonical lifting
+and lowering definitions*, which are introduced [below](#canonical-definitions).
+For example, while abstract `variant`s contain a list of `case`s labelled by
+name, canonical lifting and lowering map each case to an `i32` value starting
+at `0`.
 
 The `float32` and `float64` values have their NaNs canonicalized to a single
 value so that:
@@ -523,26 +558,33 @@ value so that:
    assumptions that NaN payload bits are preserved by the other side (since
    they often aren't).
 
-The subtyping between all these types is described in a separate
+The `own` and `borrow` value types are both *handle types*. Handles logically
+contain the "address" of a resource instance. Handles avoid copying the
+underlying resource in cases where copying is impossible or undesirable for
+performance reasons. By way of metaphor to operating systems, handles are
+analogous to file descriptors, which are indices into a table of resources
+maintained by the kernel. In the Component Model, handles are lifted-from and
+lowered-into `i32` values that index an encapsulated per-component-instance
+*handle table* that is maintained by the canonical function definitions
+described [below](#canonical-definitions). The uniqueness and dropping
+conditions mentioned above are enforced at runtime by the Component Model
+through these canonical definitions. The `typeidx` immediate of a handle type
+must refer to a `resource` type (described below) that statically classifies
+the particular kinds of resources the handle can point to.
+
+The [subtyping] between all these types is described in a separate
 [subtyping explainer](Subtyping.md). Of note here, though: the optional
 `refines` field in the `case`s of `variant`s is exclusively concerned with
 subtyping. In particular, a `variant` subtype can contain a `case` not present
 in the supertype if the subtype's `case` `refines` (directly or transitively)
 some `case` in the supertype.
 
-How these abstract values are produced and consumed from Core WebAssembly
-values and linear memory is configured by the component via *canonical lifting
-and lowering definitions*, which are introduced [below](#canonical-definitions).
-For example, while abstract `variant`s contain a list of `case`s labelled by
-name, canonical lifting and lowering map each case to an `i32` value starting
-at `0`.
-
 The sets of values allowed for the remaining *specialized value types* are
 defined by the following mapping:
 ```
                     (tuple <valtype>*) ↦ (record (field "𝒊" <valtype>)*) for 𝒊=0,1,...
-                       (flags <name>*) ↦ (record (field <name> bool)*)
-                        (enum <name>+) ↦ (variant (case <name>)+)
+                      (flags <label>*) ↦ (record (field <label> bool)*)
+                       (enum <label>+) ↦ (variant (case <label>)+)
                     (option <valtype>) ↦ (variant (case "none") (case "some" <valtype>))
                     (union <valtype>+) ↦ (variant (case "𝒊" <valtype>)+) for 𝒊=0,1,...
 (result <valtype>? (error <valtype>)?) ↦ (variant (case "ok" <valtype>?) (case "error" <valtype>?))
@@ -565,6 +607,18 @@ additionally have a single unnamed return type. For this special case, bindings
 generators are naturally encouraged to return the single value directly without
 wrapping it in any containing record/object/struct.
 
+The `resource` type constructor creates a fresh type for each instance of the
+containing component (with "freshness" and its interaction with general
+type-checking described in more detail [below](#type-checking)). Resource types
+can be referred to by handle types (`own` and `borrow`) as well as the
+`resource.new` canonical built-in described [below](#canonical-built-ins). The
+`rep` immediate of a `resource` type specifies its *core representation type*,
+which is currently fixed to `i32`, but will be relaxed in the future (to at
+least include `i64`, but also potentially other types). When the owning handle
+of a resource is dropped, the resource's `dtor` function will be called (if
+present), allowing the implementing component to perform clean-up like freeing
+linear memory allocations.
+
 The `instance` type constructor describes a list of named, typed definitions
 that can be imported or exported by a component. Informally, instance types
 correspond to the usual concept of an "interface" and instance types thus serve
@@ -582,11 +636,12 @@ Both `instance` and `component` type constructors are built from a sequence of
 "declarators", of which there are four kinds&mdash;`type`, `alias`, `import` and
 `export`&mdash;where only `component` type constructors can contain `import`
 declarators. The meanings of these declarators is basically the same as the
-core module declarators introduced above.
+core module declarators introduced above, but expanded to cover the additional
+capabilities of the component model.
 
-As with core modules, `importdecl` and `exportdecl` classify component `import`
-and `export` definitions, with `importdecl` allowing an identifier to be
-bound for use within the type. The definition of `externname` is given in the
+The `importdecl` and `exportdecl` declarators correspond to component `import`
+and `export` definitions, respectively, allowing an identifier to be bound for
+use by subsequent declarators. The definition of `externname` is given in the
 [imports and exports](#import-and-export-definitions) section below. Following
 the precedent of [`core:typeuse`], the text format allows both references to
 out-of-line type definitions (via `(type <typeidx>)`) and inline type
@@ -597,21 +652,48 @@ exported at instantiation time as described in the
 [start definitions](#start-definitions) section below.
 
 The `type` case of `externdesc` describes an imported or exported type along
-with its bounds. The bounds currently only have an `eq` option that says that
-the imported/exported type must be exactly equal to the referenced type. There
-are two main use cases for this in the short-term:
-* Type exports allow a component or interface to associate a name with a
-  structural type (e.g., `(export "nanos" (type (eq u64)))`) which bindings
-  generators can use to generate type aliases (e.g., `typedef uint64_t nanos;`).
-* Type imports and exports can provide additional information to toolchains and
-  runtimes for defining the behavior of host APIs.
+with its "bound":
 
-When [resource and handle types] are added to the explainer, `typebound` will
-be extended with a `sub` option (symmetric to the [type-imports] proposal) that
-allows importing and exporting *abstract* types.
+The `sub` bound declares that the imported/exported type is an *abstract type*
+which is a *subtype* of some other type. Currently, the only supported bound is
+`resource` which (following the naming conventions of the [GC] proposal) means
+"any resource type". Thus, only resource types can be imported/exported
+abstractly, not arbitrary value types. This allows type imports to always be
+compiled independently of their arguments using a "universal representation" for
+handle values (viz., `i32`, as defined by the [Canonical ABI](CanonicalABI.md)).
+In the future, `sub` may be extended to allow referencing other resource types,
+thereby allowing abstract resource subtyping.
 
-With what's defined so far, we can define component types using a mix of inline
-and out-of-line type definitions:
+The `eq` bound says that the imported/exported type must be structurally equal
+to some preceding type definition. This allows:
+* an imported abstract type to be re-exported;
+* components to introduce another label for a preceding abstract type (which
+  can be necessary when implementing multiple independent interfaces with the
+  same resource); and
+* components to attach transparent type aliases to structural types to be
+  reflected in source-level bindings (e.g., `(export "bytes" (type (eq (list u64))))`
+  could generate in C++ a `typedef std::vector<uint64_t> bytes` or in JS an
+  exported field named `bytes` that aliases `Uint64Array`.
+
+Relaxing the restrictions of `core:alias` declarators mentioned above, `alias`
+declarators allow both `outer` and `export` aliases of `type` and `instance`
+sorts. This allows the type exports of `instance`-typed import and export
+declarators to be used by subsequent declarators in the type:
+```wasm
+(component
+  (import "fancy-fs" (instance $fancy-fs
+    (export "fs" (instance $fs
+      (export "file" (type $file (sub resource)))
+      ...
+    ))
+    (alias export $fs "file" (type $file))
+    (export "fancy-op" (func (param (borrow $file))))
+  ))
+)
+```
+
+With what's defined so far, we can define component types using a mix of type
+definitions:
 ```wasm
 (component $C
   (type $T (list (tuple string bool)))
@@ -624,11 +706,313 @@ and out-of-line type definitions:
     (import "g" (func (type $G)))
     (export "g" (func (type $G)))
     (export "h" (func (result $U)))
+    (import "T" (type $T (sub resource)))
+    (import "i" (func (param (list (own $T)))))
+    (export "T" (type $T' (eq $T)))
+    (export "U" (type $U (sub resource)))
+    (export "j" (func (param (borrow $T')) (result (own $U))))
   ))
 )
 ```
 Note that the inline use of `$G` and `$U` are syntactic sugar for `outer`
 aliases.
+
+#### Type Checking
+
+Like core modules, components have an up-front validation phase in which the
+definitions of a component are checked for basic consistency. Type checking
+is a central part of validation and, e.g., occurs when validating that the
+`with` arguments of an [`instantiate`](#instance-definitions) expression are
+type-compatible with the `import`s of the component being instantiated. To allow
+backwards-compatible API evolution, "compatibility" is defined in terms of a
+[subtyping] relation, saying that `t1` is "compatible" with `t2` when a value
+of type `t1` is *substitutable* for a value of `t2` without breaking any basic
+assumptions the receiver has about `t2` values.
+
+To incrementally describe how type-checking works, we'll start by asking how
+*type equality* works for non-resource, non-handle, local type definitions and
+build up from there.
+
+Type equality for almost all types (except as described below) is purely
+*structural*. In a structural setting, types are considered to be Abstract
+Syntax Trees whose nodes are type constructors with types like `u8` and
+`string` considered to be "nullary" type constructors that appear at leaves and
+non-nullary type constructors like `list` and `record` appearing at parent
+nodes. Then, type equality is defined to be AST equality. Importantly, these
+type ASTs do *not* contain any type indices or depend on index space layout;
+these binary format details are consumed by decoding to produce the AST. For
+example, in the following compound component:
+```wasm
+(component $A
+  (type $ListString1 (list string))
+  (type $ListListString1 (list $ListString1))
+  (type $ListListString2 (list $ListString1))
+  (component $B
+    (type $ListString3 (list string))
+    (type $ListListString3 (list $ListString3))
+    (type $ListString4 (alias outer $A $ListString))
+    (type $ListListString4 (list $ListString4))
+    (type $ListListString5 (alias outer $A $ListString2))
+  )
+)
+```
+all 5 variations of `$ListListStringX` are considered equal since, after
+decoding, they all have the same AST.
+
+Next, the type equality relation on ASTs is relaxed to a more flexible
+subtyping relation. This subtyping relation is recursively defined starting
+with a set of base-case rules such as:
+* `u8` is a subtype of `u16`
+* `f32` is a subtype of `f64`
+
+and then a set of inductive rules like:
+* If `t1` is a subtype of `t2`, `list t1` is a subtype of `list t2`
+* If `t1` is a subtype of `t2`, `option t1` is a subtype of `option t2`
+
+The full list of rules is in [`Subtyping.md`](Subtyping.md). The rules are
+defined so that a type-checking implementation can simply recurse on the ASTs
+of two types in tandem to determine at each node whether the "left-hand side" is
+a subtype of the "right-hand side". For example, the following component is
+valid because, using the rules just given, the decoded AST of `$L1` is a
+subtype of the decoded AST of `$L2`:
+```wasm
+(component
+  (import "v1" (value $v1 (list (list u8))))
+  (component $C
+    (import "v2" (value $v2 (list (list u16))))
+  )
+  (instance $c (instantiate $C (with "v2" (value $v1))))
+)
+```
+
+When we next consider type imports and exports, there are two distinct
+subcases of `typebound` to consider: `eq` and `sub`.
+
+The `eq` bound adds a type equality rule (extending the built-in set of
+subtyping rules mentioned above) saying that the imported type is structurally
+equivalent to the type referenced in the bound. For example, in the component:
+```wasm
+(component
+  (type $L1 (list u8))
+  (import "L2" (type $L2 (eq $L1)))
+  (import "L3" (type $L2 (eq $L1)))
+  (import "L4" (type $L2 (eq $L3)))
+)
+```
+all four `$L*` types are equal (in subtyping terms, they are all subtypes of
+each other).
+
+In contrast, the `sub` bound introduces a new *abstract* type which the rest of
+the component must conservatively assume can be *any* type that is a subtype of
+the bound. What this means for type-checking is that each subtype-bound type
+import/export introduces a *fresh* abstract type that is unequal to every
+preceding type definition. Currently (and likely in the MVP), the only
+supported type bound is `resource` (which means "any resource type") and thus
+the only abstract types are abstract *resource* types. As an example, in the
+following component:
+```wasm
+(component
+  (import "T1" (type $T1 (sub resource)))
+  (import "T2" (type $T2 (sub resource)))
+)
+```
+the types `$T1` and `$T2` are not equal.
+
+Once a type is imported, it can be referred to by subsequent equality-bound
+type imports, thereby adding more types that it is equal to. For example, in
+the following component:
+```wasm
+(component $C
+  (import "T1" (type $T1 (sub resource)))
+  (import "T2" (type $T2 (sub resource)))
+  (import "T3" (type $T3 (eq $T2))
+  (type $ListT1 (list $T1))
+  (type $ListT2 (list $T2))
+  (type $ListT3 (list $T3))
+)
+```
+the types `$T2` and `$T3` are equal to each other but not to `$T1`. By the
+above transitive structural equality rules, the types `$List2` and `$List3` are
+equal to each other but not to `$List1`.
+
+Handle types (`own` and `borrow`) are structural types (like `list`) but, since
+they refer to resource types, transitively "inherit" the freshness of abstract
+resource types. For example, in the following component:
+```wasm
+(component
+  (import "T" (type $T (sub resource)))
+  (import "U" (type $U (sub resource)))
+  (type $Own1 (own $T))
+  (type $Own2 (own $T))
+  (type $Own3 (own $U))
+  (type $ListOwn1 (list $Own1))
+  (type $ListOwn2 (list $Own2))
+  (type $ListOwn3 (list $Own3))
+  (type $Borrow1 (borrow $T))
+  (type $Borrow2 (borrow $T))
+  (type $Borrow3 (borrow $U))
+  (type $ListBorrow1 (list $Borrow1))
+  (type $ListBorrow2 (list $Borrow2))
+  (type $ListBorrow3 (list $Borrow3))
+)
+```
+the types `$Own1` and `$Own2` are equal to each other but not to `$Own3` or
+any of the `$Borrow*`.  Similarly, `$Borrow1` and `$Borrow2` are equal to
+each other but not `$Borrow3`. Transitively, the types `$ListOwn1` and
+`$ListOwn2` are equal to each other but not `$ListOwn3` or any of the
+`$ListBorrow*`. These type-checking rules for type imports mirror the
+*introduction* rule of [universal types]  (∀T).
+
+The above examples all show abstract types in terms of *imports*, but the same
+"freshness" condition applies when aliasing the *exports* of another component
+as well. For example, in this component:
+```wasm
+(component
+  (import "C" (component $C
+    (export "T1" (type $T1 (sub resource)))
+    (export "T2" (type $T2 (sub resource)))
+    (export "T3" (type $T3 (eq $T2)))
+  ))
+  (instance $c (instantiate $C))
+  (type $T1 (alias export $i "T1"))
+  (type $T2 (alias export $i "T2"))
+  (type $T3 (alias export $i "T3"))
+)
+```
+the types `$T2` and `$T3` are equal to each other but not to `$T1`. These
+type-checking rules for aliases of type exports mirror the *elimination* rule
+of [existential types]  (∃T).
+
+Next, we consider resource type *definitions* which are a *third* source of
+abstract types. Unlike the abstract types introduced by type imports and
+exports, resource type definitions provide operations for setting and getting a
+resource's private representation value: `resource.new` and `resource.rep`
+(introduced [below](#canonical-built-ins)). However, these accessor operations
+are necessarily scoped to the component instance that generated the resource
+type, thereby hiding access to a resource type's representation from the outside
+world. Because each component instantiation generates fresh resource types
+distinct from all preceding instances of the same component, resource types are
+["generative"].
+
+For example, in the following example component:
+```wasm
+(component
+  (type $R1 (resource (rep i32)))
+  (type $R2 (resource (rep i32)))
+  (func $f1 (result (own $R1)) (canon lift ...))
+  (func $f2 (param (own $R2)) (canon lift ...))
+)
+```
+the types `$R1` and `$R2` are unequal and thus the return type of `$f1`
+is incompatible with the parameter type of `$f2`.
+
+The generativity of resource type definitions matches the abstract typing rules
+of type exports mentioned above, which force all clients of the component to
+bind a fresh abstract type. For example, in the following component:
+```wasm
+(component
+  (component $C
+    (type $r1 (export "r1") (resource (rep i32)))
+    (type $r2 (export "r2") (resource (rep i32)))
+  )
+  (instance $c1 (instantiate $C))
+  (instance $c2 (instantiate $C))
+  (type $c1r1 (alias export $c1 "r1"))
+  (type $c1r2 (alias export $c1 "r2"))
+  (type $c2r1 (alias export $c2 "r1"))
+  (type $c2r2 (alias export $c2 "r2"))
+)
+```
+all four types aliases in the outer component are unequal, reflecting the fact
+that each instance of `$C` generates two fresh resource types.
+
+However, even if a single resource type definition is exported twice with `sub`
+bounds, clients must *still* treat the two types as abstract and thus unequal;
+the fact that the underlying concrete type is the same is kept an encapsulated
+implementation detail. For example, in the following component:
+```wasm
+(component
+  (type $r (resource (rep i32)))
+  (export "r1" (type (sub $r)))
+  (export "r2" (type (sub $r)))
+)
+```
+Any client of this component will treat `r1` and `r2` as totally distinct
+types since this component definition has the `componenttype`:
+```wasm
+(component
+  (export "r1" (type (sub resource)))
+  (export "r2" (type (sub resource)))
+)
+```
+The assignment of this type to the above component mirrors the *introduction*
+rule of [existential types]  (∃T).
+
+When supplying a resource type (imported *or* defined) to a type import via
+`instantiate`, type checking performs a substitution, replacing all uses of the
+`import` in the instantiated component with the actual type supplied via
+`with`. For example, the following component validates:
+```wasm
+(component $P
+  (import "C1" (component $C1
+    (import "T" (type $T (sub resource)))
+    (export "foo" (func (param (own $T))))
+  ))
+  (import "C2" (component $C2
+    (import "T" (type $T (sub resource)))
+    (import "foo" (func (param (own $T))))
+  ))
+  (type $R (resource (rep i32)))
+  (instance $c1 (instantiate $C1 (with "T" (type $R))))
+  (alias export $c1 "foo" (func $foo))
+  (instance $c2 (instantiate $C2 (with "T" (type $R)) (with "foo" (func $foo))))
+)
+```
+This depends critically on the `T` imports of `$C1` and `$C2` having been
+replaced by `$R` when validating the instantiations of `$c1` and `$c2`. These
+type-checking rules for instantiating type imports mirror the *elimination*
+rule of [universal types]  (∀T).
+
+As a final constraint on both the `export` declarators of a `componenttype` and
+the `export` definitions of a `component`, all transitive uses of abstract
+types in the types of exported functions or values must refer to *exported*
+abstract types (concretely, via the type index introduced by the `export`).
+This ensures that the client of a component is *always* able to define, in the
+client's own type index space, a type compatible with the component's exports.
+For example, in the following component:
+```wasm
+(component
+  (type $R (resource (rep i32)))
+  (export $R' "R" (type (sub $R)))
+  (func $f1 (result (own $R)) (canon lift ...))
+  (func $f2 (result (own $R') (canon lift ...))
+  ;; (export "f" (func $f1)) -- invalid
+  (export "f" (func $f2))
+)
+```
+the commented-out `export` is invalid because its type transitively refers to
+`$R`, which is not a type-export. This requirement is meant to address the
+standard [avoidance problem] that appears in module systems with abstract
+types.
+
+In summary: all type constructors are *structural* with the exception of
+`resource`, which is *abstract* and *generative*. Type imports and exports that
+have a subtype bound also introduce abstract types and follow the standard
+introduction and elimination rules of universal and existential types.
+
+Lastly, since "nominal" is often taken to mean "the opposite of structural", a
+valid question is whether any of the above is "nominal typing". Inside a
+component, resource types act "nominally": each resource type definition
+produces a new local "name" for a resource type that is distinct from all
+preceding resource types. The interesting case is when resource type equality
+is considered from *outside* the component, particularly when a single
+component is instantiated multiple times. In this case, a single resource type
+definition that is exported with a single `externname` will get a fresh type
+with each component instance, with the abstract typing rules mentioned above
+ensuring that each of the component's instance's resource types are kept
+distinct. Thus, in a sense, the generativity of resource types *generalizes*
+traditional name-based nominal typing, providing a finer granularity of
+isolation than otherwise achievable with a shared global namespace.
 
 
 ### Canonical Definitions
@@ -729,8 +1113,8 @@ definitions can also be written in an inverted form that puts the sort first:
 Note: in the future, `canon` may be generalized to define other sorts than
 functions (such as types), hence the explicit `sort`.
 
-Using canonical definitions, we can finally write a non-trivial component that
-takes a string, does some logging, then returns a string.
+Using canonical function definitions, we can finally write a non-trivial
+component that takes a string, does some logging, then returns a string.
 ```wasm
 (component
   (import "wasi:logging" (instance $logging
@@ -772,6 +1156,80 @@ exports are available for reference by `canon lower`. Without this separation
 (if `$Main` contained the `memory` and allocation functions), there would be a
 cyclic dependency between `canon lower` and `$Main` that would have to be
 broken using an auxiliary module performing `call_indirect`.
+
+#### Canonical Built-ins
+
+In addition to the `lift` and `lower` canonical function definitions which
+adapt *existing* functions, there are also a set of canonical "built-ins" that
+define core functions out of nothing that can be imported by core modules to
+dynamically interact with Canonical ABI entities like resources (and, when
+async is added to the proposal, [tasks][Future and Stream Types]).
+```
+canon ::= ...
+        | (canon resource.new <typeidx> (core func <id>?))
+        | (canon resource.drop <valtype> (core func <id>?))
+        | (canon resource.rep <typeidx> (core func <id>?))
+```
+The `resource.new` built-in requires that the given `typeidx` refers to a
+`resource` `deftype` (a resource defined within this component). The parameters
+of `resource.new` are the value types from the `(rep <valtype>)` immediate of
+the resource type. The return value of `resource.new` is an `i32` index
+referring to an `own` handle in the current component instance's handle table.
+Because resource type representations are currently fixed to be `i32`, the core
+function signature of `resource.new` is currently always `[i32] -> [i32]`.
+
+The `resource.drop` built-in has core function signature `[i32] -> []` and
+drops the handle at the given index from the handle table. The `valtype`
+immediate must either be an `own` or `borrow` handle type. If `own`, the
+resource type's `dtor` function is called synchronously, if present.
+
+In-between `resource.new` and `resource.drop`, `own` handles can be passed
+between components via import and export calls using `own` and `borrow` handle
+types in parameters and results. The Canonical ABI specifies that `own` handles
+are *transferred* from the producer component instance's handle table into the
+consumer component instance's handle table. In contrast, `borrow` handles are
+*copied* into the callee component instance's handle table, but with runtime
+(trapping) guards to ensure that the callee calls `resource.drop` on the
+borrowed handle before the end of the call and that the owner of the resource
+does not destroy the resource for the duration of the call.
+
+Lastly, given the `i32` index of an `own` or `borrow` handle, the component
+that defined a resource type (and only that component) can call the
+`resource.rep` built-in to access the `rep` value. (In the future a
+`resource.set` could potentially be added, if needed.) Because of the fixed
+`(rep i32)`, the core signature of `resource.rep` is `[i32] -> [i32]`.
+
+As an example, the following component imports the `resource.new` built-in,
+allowing it to create and return new resources to its client:
+```wasm
+(component
+  (import "Libc" (core module $Libc ...))
+  (core instance $libc (instantiate $Libc))
+  (type $R (resource (rep i32) (dtor (func $libc "free"))))
+  (core func $R_new (param i32) (result i32)
+    (canon resource.new $R)
+  )
+  (core module $Main
+    (import "canon" "R_new" (func $R_new (param i32) (result i32)))
+    (func (export "make_R") (param ...) (result i32)
+      (return (call $R_new ...))
+    )
+  )
+  (core instance $main (instantiate $Main
+    (with "canon" (instance (export "R_new" (func $R_new))))
+  ))
+  (export $R' "r" (type $R))
+  (func (export "make-r") (param ...) (result (own $R'))
+    (canon lift (core func $main "make_R"))
+  )
+)
+```
+Here, the `i32` returned by `resource.new`, which is an index into the
+component's handle-table, is immediately returned by `make_R`, thereby
+transferring ownership of the newly-created resource to the export's caller.
+
+See the [CanonicalABI.md](CanonicalABI.md#canonical-definitions) for detailed
+definitions of each of these built-ins and their interactions.
 
 
 ### Start Definitions
@@ -833,9 +1291,17 @@ of core linear memory.
 Lastly, imports and exports are defined as:
 ```
 import     ::= (import <externname> bind-id(<externdesc>))
-export     ::= (export <externname> <sortidx>)
+export     ::= (export <id>? <externname> <sortidx>)
 externname ::= <name> <URL>?
 ```
+Both import and export definitions append a new element to the index space of
+the imported/exported `sort` which can be optionally bound to an identifier in
+the text format. In the case of imports, the identifier is bound just like Core
+WebAssembly, as part of the `externdesc` (e.g., `(import "x" (func $iden))`).
+In the case of exports, the `<id>?` right after the `export` is bound (the
+`<id>` inside the `<sortidx>` is a reference to the preceding definition being
+exported).
+
 Components split the single externally-visible name of imports and exports into
 two sub-fields: a kebab-case `name` (as defined [above](#instance-definitions))
 and a `URL` (defined by the [URL Standard], noting that, in this URL Standard,
@@ -1047,6 +1513,32 @@ same value). Since `name` and `URL` are necessarily disjoint sets of strings
 (in particular, `URL`s must contain a `:`, `name` must not), there should not
 be any conflicts in either of these cases.
 
+Types are a new sort of definition that are not ([yet][type-imports]) present
+in Core WebAssembly and so the [*read the imports*] and [*create an exports
+object*] steps need to be expanded to cover them:
+
+For type exports, each type definition would export a JS constructor function.
+This function would be callable iff a `[constructor]`-annotated function was
+also exported. All `[method]`- and `[static]`-annotated functions would be
+dynamically installed on the constructor's prototype chain. In the case of
+re-exports and multiple exports of the same definition, the same constructor
+function object would be exported (following the same rules as WebAssembly
+Exported Functions today). In pathological cases (which, importantly, don't
+concern the global namespace, but involve the same actual type definition being
+imported and re-exported by multiple components), there can be collisions when
+installing constructors, methods and statics on the same constructor function
+object. In such cases, a conservative option is to undo the initial
+installation and require all clients to instead use the full explicit names
+as normal instance exports.
+
+For type imports, the constructors created by type exports would naturally
+be importable. Additionally, certain JS- and Web-defined objects that correspond
+to types (e.g., the `RegExp` and `ArrayBuffer` constructors or any Web IDL
+[interface object]) could be imported. The `ToWebAssemblyValue` checks on
+handle values mentioned below can then be defined to perform the associated
+[internal slot] type test, thereby providing static type guarantees for
+outgoing handles that can avoid runtime dynamic type tests.
+
 Lastly, when given a component binary, the compile-then-instantiate overloads
 of `WebAssembly.instantiate(Streaming)` would inherit the compound behavior of
 the abovementioned functions (again, using the `layer` field to eagerly
@@ -1115,6 +1607,7 @@ At a high level, the additional coercions would be:
 | `option` | same as [`T?`] | same as [`T?`] |
 | `union` | same as [`union`] | same as [`union`] |
 | `result` | same as `variant`, but coerce a top-level `error` return value to a thrown exception | same as `variant`, but coerce uncaught exceptions to top-level `error` return values |
+| `own`, `borrow` | see below | see below |
 
 Notes:
 * Function parameter names are ignored since JavaScript doesn't have named
@@ -1133,9 +1626,19 @@ Notes:
   the JS API of the unspecialized `variant` (e.g.,
   `(variant (case "some" (option u32)) (case "none"))`, despecializing only
   the problematic outer `option`).
-* The forthcoming addition of [resource and handle types] would additionally
-  allow coercion to and from the remaining Symbol and Object JavaScript value
-  types.
+* When coercing `ToWebAssemblyValue`, `own` and `borrow` handle types would
+  dynamically guard that the incoming JS value's dynamic type was compatible
+  with the imported resource type referenced by the handle type. For example,
+  if a component contains `(import "Object" (type $Object (sub resource)))` and
+  is instantiated with the JS `Object` constructor, then `(own $Object)` and
+  `(borrow $Object)` could accept JS `object` values.
+* When coercing `ToJSValue`, handle values would be wrapped with JS objects
+  that are instances of the handles' resource type's exported constructor
+  (described above). For `own` handles, a [`FinalizationRegistry`] would be
+  used to drop the `own` handle (thereby calling the resource destructor) when
+  its wrapper object was unreachable from JS. For `borrow` handles, the wrapper
+  object would become dynamically invalid (throwing on any access) at the end
+  of the export call.
 * The forthcoming addition of [future and stream types] would allow `Promise`
   and `ReadableStream` values to be passed directly to and from components
   without requiring handles or callbacks.
@@ -1222,7 +1725,6 @@ For some use-case-focused, worked examples, see:
 The following features are needed to address the [MVP Use Cases](../high-level/UseCases.md)
 and will be added over the coming months to complete the MVP proposal:
 * concurrency support ([slides][Future And Stream Types])
-* abstract ("resource") types ([slides][Resource and Handle Types])
 * optional imports, definitions and exports (subsuming
   [WASI Optional Imports](https://github.com/WebAssembly/WASI/blob/main/legacy/optional-imports.md)
   and maybe [conditional-sections](https://github.com/WebAssembly/conditional-sections/issues/22))
@@ -1248,10 +1750,12 @@ and will be added over the coming months to complete the MVP proposal:
 [`core:version`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-version
 
 [`WebAssembly.instantiate()`]: https://developer.mozilla.org/en-US/docs/WebAssembly/JavaScript_interface/instantiate
+[`FinalizationRegistry`]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry
 
 [JS API]: https://webassembly.github.io/spec/js-api/index.html
 [*read the imports*]: https://webassembly.github.io/spec/js-api/index.html#read-the-imports
-[*create the exports*]: https://webassembly.github.io/spec/js-api/index.html#create-an-exports-object
+[*create an exports object*]: https://webassembly.github.io/spec/js-api/index.html#create-an-exports-object
+[Interface Object]: https://webidl.spec.whatwg.org/#interface-object
 [`ToJSValue`]: https://webassembly.github.io/spec/js-api/index.html#tojsvalue
 [`ToWebAssemblyValue`]: https://webassembly.github.io/spec/js-api/index.html#towebassemblyvalue
 [`USVString`]: https://webidl.spec.whatwg.org/#es-USVString
@@ -1269,6 +1773,7 @@ and will be added over the coming months to complete the MVP proposal:
 [Imported Default Binding]: https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ImportedDefaultBinding
 [JS Tuple]: https://github.com/tc39/proposal-record-tuple
 [JS Record]: https://github.com/tc39/proposal-record-tuple
+[Internal Slot]: https://tc39.es/ecma262/#sec-object-internal-methods-and-internal-slots
 
 [Kebab Case]: https://en.wikipedia.org/wiki/Letter_case#Kebab_case
 [De Bruijn Index]: https://en.wikipedia.org/wiki/De_Bruijn_index
@@ -1285,6 +1790,11 @@ and will be added over the coming months to complete the MVP proposal:
 [Environment Variables]: https://en.wikipedia.org/wiki/Environment_variable
 [Linear]: https://en.wikipedia.org/wiki/Substructural_type_system#Linear_type_systems
 [Interface Definition Language]: https://en.wikipedia.org/wiki/Interface_description_language
+[Subtyping]: https://en.wikipedia.org/wiki/Subtyping
+[Universal Types]: https://en.wikipedia.org/wiki/System_F
+[Existential Types]: https://en.wikipedia.org/wiki/System_F
+[Generative]: https://www.researchgate.net/publication/2426300_A_Syntactic_Theory_of_Type_Generativity_and_Sharing
+[Avoidance Problem]: https://counterexamples.org/avoidance.html
 
 [URL Standard]: https://url.spec.whatwg.org
 [URI]: https://en.wikipedia.org/wiki/Uniform_Resource_Identifier
@@ -1307,5 +1817,4 @@ and will be added over the coming months to complete the MVP proposal:
 [`wizer`]: https://github.com/bytecodealliance/wizer
 
 [Scoping and Layering]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8
-[Resource and Handle Types]: https://docs.google.com/presentation/d/1ikwS2Ps-KLXFofuS5VAs6Bn14q4LBEaxMjPfLj61UZE
 [Future and Stream Types]: https://docs.google.com/presentation/d/1MNVOZ8hdofO3tI0szg_i-Yoy0N2QPU2C--LzVuoGSlE
