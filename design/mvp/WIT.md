@@ -1124,12 +1124,13 @@ would correspond to:
 (component
   (type (export "host") (component
     (type $types (instance
-      (export "level" (type (enum "info" "debug")))
+      (type $level (enum "info" "debug"))
+      (export "level" (type (eq $level)))
     ))
     (export $types "types" (instance (type $types)))
     (alias export $types "level" (type $level))
     (type $console (instance
-      (alias outer 1 $level (type $level'))
+      (export $level' "level" (type (eq $level)))
       (export "log" (func (param "level" $level') (param "msg" string)))
     ))
     (export "console" (instance (type $console)))
@@ -1155,11 +1156,10 @@ would correspond to:
 ```wasm
 (component
   (type (export "host") (component
-    (type $the-world (component
-      (import "test" (func))
+    (export "the-world" (component
+      (export "test" (func))
       (export "run" (func))
     ))
-    (export "the-world" (type $the-world))
   ))
 )
 ```
@@ -1189,12 +1189,11 @@ would correspond to:
       (export "log" (func (param "arg" string)))
     ))
     (export "console" (instance (type $console)))
-    (type $the-world (component
+    (export "the-world" (component
       (import "console" (instance
         (export "log" (func (param "arg" string)))
       ))
     ))
-    (export "the-world" (type $the-world))
   ))
 )
 ```
@@ -1243,12 +1242,11 @@ would correspond to:
   (type (export "foo") (component
     (import "types" "URL" (instance $types
       (type $some-type ...)
-      (export "some-type" (type $some-type))
+      (export "some-type" (type (eq $some-type)))
     ))
     (alias export $types "some-type" (type $some-type))
     (type $foo (instance
-      (alias outer 1 $some-type (type $some-type'))
-      (export "some-type" (type $some-type'))
+      (export "some-type" (type (eq $some-type)))
     ))
     (export "foo" (instance (type $foo)))
   ))
@@ -1291,26 +1289,30 @@ and its corresponding binary encoding would be:
   ;; corresponds to `wit/types.wit`
   (type (export "types") (component
     (export "types" (instance
-      (export "request" (type (sub resource)))
-      (export "response" (type (sub resource)))
+      (type $request (record))
+      (type $response (record))
+      (export "request" (type (eq $request)))
+      (export "response" (type (eq $response)))
     ))
   ))
   ;; corresponds to `wit/handler.wit`
   (type (export "handler") (component
     ;; interfaces not required in a document are imported here. The name "types"
     ;; with no URL refers to the `types` document in this package.
-    (import "types" (instance $types
-      (export "request" (type (sub resource)))
-      (export "response" (type (sub resource)))
+    (import "types" "pkg:/types/types" (instance $types
+      (type $request (record))
+      (type $response (record))
+      (export "request" (type (eq $request)))
+      (export "response" (type (eq $response)))
     ))
 
     ;; aliases represent `use` from the imported document
     (alias export $types "request" (type $request))
     (alias export $types "response" (type $response))
     (export "handler" (instance
-      (export $request' "request" (type $request))
-      (export $response' "response" (type $response))
-      (export "handle" (func (param (own $request')) (result (own $response'))))
+      (export $request' "request" (type (eq $request)))
+      (export $response' "response" (type (eq $response)))
+      (export "handle" (func (param "request" $request') (result $response')))
     ))
   ))
   ;; corresponds to `wit/proxy.wit`
@@ -1318,27 +1320,29 @@ and its corresponding binary encoding would be:
     (export "proxy" (component
       ;; This world transitively depends on "types" so it's listed as an
       ;; import.
-      (import "types" (instance $types
-        (export "request" (type (sub resource)))
-        (export "response" (type (sub resource)))
+      (import "types" "pkg:/types/types" (instance $types
+        (type $request (record))
+        (type $response (record))
+        (export "request" (type (eq $request)))
+        (export "response" (type (eq $response)))
       ))
       (alias export $types "request" (type $request))
       (alias export $types "response" (type $response))
 
       ;; This is filled in with the contents of what `wasi-logging.backend`
       ;; resolved to
-      (import "console" "URL-for-wasi-logging.backend" (instance
-        ...
+      (import "console" "dep:/foo/bar/baz" (instance
+        ;; ...
       ))
-      (import "origin" (instance
+      (import "origin" "pkg:/handler/handler" (instance
         (export $request' "request" (type (eq $request)))
         (export $response' "response" (type (eq $response)))
-        (export "handle" (func (param (own $request)) (result (own $response))))
+        (export "handle" (func (param "request" $request') (result $response')))
       ))
-      (export "handler" (instance $handler
+      (export "handler" "pkg:/handler/handler" (instance
         (export $request' "request" (type (eq $request)))
         (export $response' "response" (type (eq $response)))
-        (export "handle" (func (param (own $request')) (result (own $response'))))
+        (export "handle" (func (param "request" $request') (result $response')))
       ))
     ))
   ))
