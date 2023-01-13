@@ -692,6 +692,10 @@ declarators to be used by subsequent declarators in the type:
 )
 ```
 
+The `type` declarator is restricted by validation to disallow `resource` type
+definitions. Thus, the only resource types possible in an `instancetype` or
+`componenttype` are introduced by `importdecl` or `exportdecl`.
+
 With what's defined so far, we can define component types using a mix of type
 definitions:
 ```wasm
@@ -990,28 +994,6 @@ This depends critically on the `T` imports of `$C1` and `$C2` having been
 replaced by `$R` when validating the instantiations of `$c1` and `$c2`. These
 type-checking rules for instantiating type imports mirror the *elimination*
 rule of [universal types]  (∀T).
-
-As a final constraint on both the `export` declarators of a `componenttype` and
-the `export` definitions of a `component`, all transitive uses of abstract
-types in the types of exported functions or values must refer to *exported*
-abstract types (concretely, via the type index introduced by the `export`).
-This ensures that the client of a component is *always* able to define, in the
-client's own type index space, a type compatible with the component's exports.
-For example, in the following component:
-```wasm
-(component
-  (type $R (resource (rep i32)))
-  (export $R' "R" (type (sub $R)))
-  (func $f1 (result (own $R)) (canon lift ...))
-  (func $f2 (result (own $R') (canon lift ...))
-  ;; (export "f" (func $f1)) -- invalid
-  (export "f" (func $f2))
-)
-```
-the commented-out `export` is invalid because its type transitively refers to
-`$R`, which is not a type-export. This requirement is meant to address the
-standard [avoidance problem] that appears in module systems with abstract
-types.
 
 In summary: all type constructors are *structural* with the exception of
 `resource`, which is *abstract* and *generative*. Type imports and exports that
@@ -1319,6 +1301,29 @@ WebAssembly, as part of the `externdesc` (e.g., `(import "x" (func $iden))`).
 In the case of exports, the `<id>?` right after the `export` is bound (the
 `<id>` inside the `<sortidx>` is a reference to the preceding definition being
 exported).
+
+Validation of `export` requires that all transitive uses of resource types in
+the types of exported functions or values refer to resources that were either
+imported or exported (concretely, via the type index introduced by an `import`
+or `export`). For example, in the following component:
+```wasm
+(component
+  (import "R1" (type $R1 (sub resource)))
+  (type $R2 (resource (rep i32)))
+  (export $R2' "R2" (type $R2))
+  (func $f1 (result (own $R1)) (canon lift ...))
+  (func $f2 (result (own $R2)) (canon lift ...))
+  (func $f2' (result (own $R2')) (canon lift ...))
+  (export "f1" (func $f1))
+  ;; (export "f2" (func $f2)) -- invalid
+  (export "f2" (func $f2'))
+)
+```
+the commented-out `export` is invalid because its type transitively refers to
+`$R2`, which is a private type definition. This requirement is meant to address
+the standard [avoidance problem] that appears in module systems with abstract
+types. In particular, it ensures that a client of a component is able to
+externally define a type compatible with the exports of the component.
 
 Components split the single externally-visible name of imports and exports into
 two sub-fields: a kebab-case `name` (as defined [above](#instance-definitions))
