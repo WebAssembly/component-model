@@ -258,40 +258,38 @@ defined by its parent component).
 The `HandleTable` class is defined in terms of a collection of supporting
 runtime bookkeeping classes that we'll go through first.
 
-The `Resource` class represents a runtime instance of a resource type:
+The `Resource` class represents a runtime instance of a resource type, storing
+the core representation value (which is currently fixed to `i32`):
 ```python
+@dataclass
 class Resource:
-  t: ResourceType
   rep: int
-
-  def __init__(self, t, rep):
-    self.t = t
-    self.rep = rep
 ```
-The `t` field points to the [`resourcetype`](Explainer.md#type-definitions)
-used to create this `Resource` and is used to perform dynamic type checking
-below. The `rep` field stores the representation value of this `Resource` whose
-type is currently fixed to `i32` as described in the Explainer.
 
 The `OwnHandle` and `BorrowHandle` classes represent runtime handle values of
 `own` and `borrow` type, resp:
 ```python
 class Handle:
   resource: Resource
+  rt: ResourceType
   lend_count: int
 
-  def __init__(self, resource):
+  def __init__(self, resource, rt):
     self.resource = resource
+    self.rt = rt
     self.lend_count = 0
 
 class OwnHandle(Handle): pass
 class BorrowHandle(Handle): pass
 ```
 The `resource` field points to the resource instance this handle refers to. The
-`lend_count` field maintains a count of the outstanding handles that were lent
-from this handle (by calls to `borrow`-taking functions). This count is used
-below to dynamically enforce the invariant that a handle cannot be dropped
-while it has currently lent out a `borrow`.
+`rt` field points to a runtime value representing the static
+[`resourcetype`](Explainer.md#type-definitions) of this handle and is used by
+dynamic type checking below. Lastly, the `lend_count` field maintains a count
+of the outstanding handles that were lent from this handle (by calls to
+`borrow`-taking functions). This count is used below to dynamically enforce the
+invariant that a handle cannot be dropped while it has currently lent out a
+`borrow`.
 
 The `Call` class represents a single runtime call (activation) of a
 component-level function. A `Call` is finished in two steps by `finish_lift`
@@ -368,13 +366,16 @@ use-after-free:
   def get(self, i, rt):
     trap_if(i >= len(self.array))
     trap_if(self.array[i] is None)
-    trap_if(self.array[i].resource.t is not rt)
+    trap_if(self.array[i].rt is not rt)
     return self.array[i]
 ```
 Additionally, the `get` method takes the runtime resource type tag and checks
-a tag match before returning the handle with this new-valid resource type. Note
-that this is a non-structural, pointer-equality-based check to implement the
-[type-checking rules](Explainer.md) of resource types.
+a tag match before returning the handle with this new-valid resource type. This
+check is a non-structural, pointer-equality-based test used to enforce the
+[type-checking rules](Explainer.md) of resource types at runtime. Importantly,
+this check keeps type imports abstract, considering each type import to have a
+unique `rt` value distinct from every other type import even if the two imports
+happen to be instantiated with the same resource type at runtime.
 
 The `lend` method is called when borrowing a handle. `lend` uses `Call.lenders`
 to decrement the handle's `lend_count` at the end of the call.
@@ -978,16 +979,18 @@ Finally, `own` and `borrow` handles are lowered by inserting them into the
 current component instance's `HandleTable`:
 ```python
 def lower_own(cx, resource, rt):
-  assert(resource.t is rt)
-  h = OwnHandle(resource)
+  h = OwnHandle(resource, rt)
   return cx.inst.handles.insert(cx, h)
 
 def lower_borrow(cx, resource, rt):
-  assert(resource.t is rt)
-  h = BorrowHandle(resource)
+  h = BorrowHandle(resource, rt)
   return cx.inst.handles.insert(cx, h)
 ```
-The assertions are ensured by validation.
+Note that the `rt` value that is stored in the runtime `Handle` captures what
+is statically known about the handle right before losing this information in
+the homogeneous `HandleTable`. Moreoever, as described above, distinct type
+imports are given distinct `rt` values so that handles produced by lowering
+different type imports are never interchangeable.
 
 ### Flattening
 
@@ -1564,7 +1567,7 @@ Calling `$f` invokes the following function, which creates a resource object
 and inserts it into the current instance's handle table:
 ```python
 def canon_resource_new(cx, rt, rep):
-  h = OwnHandle(Resource(rt, rep))
+  h = OwnHandle(Resource(rep), rt)
   return cx.inst.handles.insert(cx, h)
 ```
 

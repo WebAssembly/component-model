@@ -995,6 +995,14 @@ replaced by `$R` when validating the instantiations of `$c1` and `$c2`. These
 type-checking rules for instantiating type imports mirror the *elimination*
 rule of [universal types]  (∀T).
 
+Importantly, this type substitution performed by the parent is not visible to
+the child at validation- or run-time. In particular, the type checks performed
+by the [Canonical ABI](CanonicalABI.md#context) use distinct type tags for
+distinct type imports and associate type tags with *handles*, not the underlying
+*resource*, leveraging the shared-nothing nature of components to type-tag handles
+at component boundaries and avoid the usual [type-exposure problems with
+dynamic casts][non-parametric parametricity].
+
 In summary: all type constructors are *structural* with the exception of
 `resource`, which is *abstract* and *generative*. Type imports and exports that
 have a subtype bound also introduce abstract types and follow the standard
@@ -1816,8 +1824,10 @@ and will be added over the coming months to complete the MVP proposal:
 [Subtyping]: https://en.wikipedia.org/wiki/Subtyping
 [Universal Types]: https://en.wikipedia.org/wiki/System_F
 [Existential Types]: https://en.wikipedia.org/wiki/System_F
+
 [Generative]: https://www.researchgate.net/publication/2426300_A_Syntactic_Theory_of_Type_Generativity_and_Sharing
 [Avoidance Problem]: https://counterexamples.org/avoidance.html
+[Non-Parametric Parametricity]: https://people.mpi-sws.org/~dreyer/papers/npp/main.pdf
 
 [URL Standard]: https://url.spec.whatwg.org
 [URI]: https://en.wikipedia.org/wiki/Uniform_Resource_Identifier

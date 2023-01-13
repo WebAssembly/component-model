@@ -381,15 +381,15 @@ def test_handles():
     nonlocal dtor_value
     dtor_value = x
   rt = ResourceType(dtor)
-  r1 = Resource(rt, 42)
-  r2 = Resource(rt, 43)
-  r3 = Resource(rt, 44)
+  r1 = Resource(42)
+  r2 = Resource(43)
+  r3 = Resource(44)
 
   def host_import(act, args):
     assert(len(args) == 2)
     assert(args[0] is r1)
     assert(args[1] is r3)
-    return ([Resource(rt, 45)], lambda:())
+    return ([Resource(45)], lambda:())
 
   cx = mk_cx()
   def core_wasm(args):
