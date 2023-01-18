@@ -102,10 +102,11 @@ not need to be specified as it's the `default`.
 ## WIT Worlds
 [worlds]: #wit-worlds
 
-WIT documents can contain a `world` annotation at the top-level in addition to
-[`interface`][interfaces]. A world is a complete description of both imports and
-exports of a component. A world can be thought of as an equivalent of a
-`component` type in the component model. For example this world:
+WIT documents can contain a `world` definition at the top-level in addition to
+[`interface`][interfaces] definitions. A world is a complete description of
+both imports and exports of a component. A world can be thought of as an
+equivalent of a `component` type in the component model. For example this
+world:
 
 ```wit
 world my-world {
@@ -136,13 +137,13 @@ Worlds can contain any number of imports and exports, and can be either a
 function or an interface.
 
 ```wit
-world wasi {
-  import wasi-fs: wasi.fs
-  import wasi-random: wasi.random
-  import wasi-clock: wasi.clock
+world command {
+  import fs: wasi-fs.fs
+  import random: wasi-random.random
+  import clock: wasi-clock.clock
   // ...
 
-  export command: func(args: list<string>)
+  export main: func(args: list<string>)
 }
 ```
 
