@@ -291,7 +291,6 @@ class Context:
   opts: CanonicalOptions
   inst: ComponentInstance
   call: Call
-  called_as_export: bool
 
 #
 
@@ -318,6 +317,7 @@ class ComponentInstance:
 @dataclass
 class Resource:
   rep: int
+  impl: ComponentInstance
 
 #
 
@@ -1151,11 +1151,7 @@ def lower_values(cx, max_flat, vs, ts, out_param = None):
 ### `lift`
 
 def canon_lift(cx, callee, ft, call, args):
-  if cx.called_as_export:
-    trap_if(not cx.inst.may_enter)
-    cx.inst.may_enter = False
-  else:
-    assert(not cx.inst.may_enter)
+  trap_if(not cx.inst.may_enter)
 
   outer_call = cx.call
   cx.call = call
@@ -1176,9 +1172,6 @@ def canon_lift(cx, callee, ft, call, args):
     if cx.opts.post_return is not None:
       cx.opts.post_return(flat_results)
 
-    if cx.called_as_export:
-      cx.inst.may_enter = True
-
     cx.call.finish_lift()
     cx.call = outer_call
 
@@ -1186,8 +1179,12 @@ def canon_lift(cx, callee, ft, call, args):
 
 ### `lower`
 
-def canon_lower(cx, callee, ft, flat_args):
+def canon_lower(cx, callee, calling_import, ft, flat_args):
   trap_if(not cx.inst.may_leave)
+
+  assert(cx.inst.may_enter)
+  if calling_import:
+    cx.inst.may_enter = False
 
   outer_call = cx.call
   cx.call = Call()
@@ -1206,12 +1203,15 @@ def canon_lower(cx, callee, ft, flat_args):
   cx.call.finish_lower()
   cx.call = outer_call
 
+  if calling_import:
+    cx.inst.may_enter = True
+
   return flat_results
 
 ### `resource.new`
 
 def canon_resource_new(cx, rt, rep):
-  h = OwnHandle(Resource(rep), rt)
+  h = OwnHandle(Resource(rep, cx.inst), rt)
   return cx.inst.handles.insert(cx, h)
 
 ### `resource.drop`
@@ -1219,6 +1219,7 @@ def canon_resource_new(cx, rt, rep):
 def canon_resource_drop(cx, t, i):
   h = cx.inst.handles.remove(cx, i, t)
   if isinstance(t, Own) and t.rt.dtor:
+    trap_if(not h.resource.impl.may_enter)
     t.rt.dtor(h.resource.rep)
 
 ### `resource.rep`
