@@ -53,7 +53,7 @@ Notes:
 
 (See [Instance Definitions](Explainer.md#instance-definitions) in the explainer.)
 ```
-core:instance       ::= ie:<instance-expr>                                 => (instance ie)
+core:instance       ::= ie:<core:instanceexpr>                             => (instance ie)
 core:instanceexpr   ::= 0x00 m:<moduleidx> arg*:vec(<core:instantiatearg>) => (instantiate m arg*)
                       | 0x01 e*:vec(<core:inlineexport>)                   => e*
 core:instantiatearg ::= n:<core:name> 0x12 i:<instanceidx>                 => (with n (instance i))
@@ -67,7 +67,7 @@ core:sort           ::= 0x00                                               => fu
                       | 0x12                                               => instance
 core:inlineexport   ::= n:<core:name> si:<core:sortidx>                    => (export n si)
 
-instance            ::= ie:<instance-expr>                                 => (instance ie)
+instance            ::= ie:<instanceexpr>                                  => (instance ie)
 instanceexpr        ::= 0x00 c:<componentidx> arg*:vec(<instantiatearg>)   => (instantiate c arg*)
                       | 0x01 e*:vec(<inlineexport>)                        => e*
 instantiatearg      ::= n:<name> si:<sortidx>                              => (with n si)
