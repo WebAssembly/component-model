@@ -368,7 +368,7 @@ interface shared {
 
 world my-world {
   import host: interface {
-    use self.shared.{metadata})
+    use self.shared.{metadata}
 
     get: func() -> metadata
   }
