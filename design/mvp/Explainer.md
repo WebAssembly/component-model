@@ -1299,7 +1299,7 @@ of core linear memory.
 Lastly, imports and exports are defined as:
 ```
 import     ::= (import <externname> bind-id(<externdesc>))
-export     ::= (export <id>? <externname> <sortidx>)
+export     ::= (export <id>? <externname> <sortidx> <externdesc>?)
 externname ::= <name> <URL>?
 ```
 Both import and export definitions append a new element to the index space of
@@ -1313,7 +1313,11 @@ exported).
 Validation of `export` requires that all transitive uses of resource types in
 the types of exported functions or values refer to resources that were either
 imported or exported (concretely, via the type index introduced by an `import`
-or `export`). For example, in the following component:
+or `export`). The optional `<externdesc>?` in `export` can be used to ascribe
+an equivalent-but-different type to an exported definition, allowing a private
+type definition to be replaced with a public (exported) type definition.
+
+For example, in the following component:
 ```wasm
 (component
   (import "R1" (type $R1 (sub resource)))
@@ -1324,6 +1328,7 @@ or `export`). For example, in the following component:
   (func $f2' (result (own $R2')) (canon lift ...))
   (export "f1" (func $f1))
   ;; (export "f2" (func $f2)) -- invalid
+  (export "f2" (func $f2) (func (result (own $R2'))))
   (export "f2" (func $f2'))
 )
 ```

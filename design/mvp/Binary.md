@@ -324,10 +324,10 @@ flags are set.
 (See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
 in the explainer.)
 ```
-import     ::= en:<externname> ed:<externdesc> => (import en ed)
-export     ::= en:<externname> si:<sortidx>    => (export en si)
-externname ::= n:<name> u?:<URL>?              => n u?
-URL        ::= b*:vec(byte)                    => char(b)*, if char(b)* parses as a URL
+import     ::= en:<externname> ed:<externdesc>                => (import en ed)
+export     ::= en:<externname> si:<sortidx> ed?:<externdesc>? => (export en si ed?)
+externname ::= n:<name> u?:<URL>?                             => n u?
+URL        ::= b*:vec(byte)                                   => char(b)*, if char(b)* parses as a URL
 ```
 Notes:
 * All exports (of all `sort`s) introduce a new index that aliases the exported
@@ -338,7 +338,10 @@ Notes:
   parser] with `char(b)*` as *input*, no optional parameters and non-fatal
   validation errors (which coincides with definition of `URL` in JS and `rust-url`).
 * Validation requires any exported `sortidx` to have a valid `externdesc`
-  (which disallows core sorts other than `core module`).
+  (which disallows core sorts other than `core module`). When the optional
+  `externdesc` immediate is present, validation requires it to be equal to
+  the inferred `externdesc` of the `sortidx` (where equality judges a type and
+  the `typeidx` of an export of that type (via `eq` or `sub`) equivalent).
 * The `name` fields of `externname` must be unique among imports and exports,
   respectively. The `URL` fields of `externname` (that are present) must
   independently unique among imports and exports, respectively.
