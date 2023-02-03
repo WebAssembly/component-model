@@ -228,8 +228,8 @@ externdesc    ::= 0x00 0x11 i:<core:typeidx>              => (core module (type 
                 | 0x01 i:<typeidx>                        => (func (type i))
                 | 0x02 t:<valtype>                        => (value t)
                 | 0x03 b:<typebound>                      => (type b)
-                | 0x04 i:<typeidx>                        => (instance (type i))
-                | 0x05 i:<typeidx>                        => (component (type i))
+                | 0x04 i:<typeidx>                        => (component (type i))
+                | 0x05 i:<typeidx>                        => (instance (type i))
 typebound     ::= 0x00 i:<typeidx>                        => (eq i)
                 | 0x01                                    => (sub resource)
 ```
