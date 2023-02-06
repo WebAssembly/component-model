@@ -339,9 +339,8 @@ Notes:
   validation errors (which coincides with definition of `URL` in JS and `rust-url`).
 * Validation requires any exported `sortidx` to have a valid `externdesc`
   (which disallows core sorts other than `core module`). When the optional
-  `externdesc` immediate is present, validation requires it to be equal to
-  the inferred `externdesc` of the `sortidx` (where equality judges a type and
-  the `typeidx` of an export of that type (via `eq` or `sub`) equivalent).
+  `externdesc` immediate is present, validation requires it to be a supertype
+  of the inferred `externdesc` of the `sortidx`.
 * The `name` fields of `externname` must be unique among imports and exports,
   respectively. The `URL` fields of `externname` (that are present) must
   independently unique among imports and exports, respectively.
