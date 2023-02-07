@@ -1313,9 +1313,10 @@ exported).
 Validation of `export` requires that all transitive uses of resource types in
 the types of exported functions or values refer to resources that were either
 imported or exported (concretely, via the type index introduced by an `import`
-or `export`). The optional `<externdesc>?` in `export` can be used to ascribe
-an equivalent-but-different type to an exported definition, allowing a private
-type definition to be replaced with a public (exported) type definition.
+or `export`). The optional `<externdesc>?` in `export` can be used to
+explicitly ascribe a type to an export which is validated to be a supertype of
+the definition's type, thereby allowing a private (non-exported) type
+definition to be replaced with a public (exported) type definition.
 
 For example, in the following component:
 ```wasm
