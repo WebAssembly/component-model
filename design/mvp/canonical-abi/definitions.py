@@ -321,18 +321,19 @@ class Resource:
 
 #
 
+@dataclass
 class Handle:
   resource: Resource
   rt: ResourceType
   lend_count: int
 
-  def __init__(self, resource, rt):
-    self.resource = resource
-    self.rt = rt
-    self.lend_count = 0
+@dataclass
+class OwnHandle(Handle):
+  pass
 
-class OwnHandle(Handle): pass
-class BorrowHandle(Handle): pass
+@dataclass
+class BorrowHandle(Handle):
+  pass
 
 #
 
@@ -843,11 +844,11 @@ def pack_flags_into_int(v, labels):
 #
 
 def lower_own(cx, resource, rt):
-  h = OwnHandle(resource, rt)
+  h = OwnHandle(resource, rt, 0)
   return cx.inst.handles.insert(cx, h)
 
 def lower_borrow(cx, resource, rt):
-  h = BorrowHandle(resource, rt)
+  h = BorrowHandle(resource, rt, 0)
   return cx.inst.handles.insert(cx, h)
 
 ### Flattening
@@ -1211,7 +1212,7 @@ def canon_lower(cx, callee, calling_import, ft, flat_args):
 ### `resource.new`
 
 def canon_resource_new(cx, rt, rep):
-  h = OwnHandle(Resource(rep, cx.inst), rt)
+  h = OwnHandle(Resource(rep, cx.inst), rt, 0)
   return cx.inst.handles.insert(cx, h)
 
 ### `resource.drop`

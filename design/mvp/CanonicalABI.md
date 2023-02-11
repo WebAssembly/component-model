@@ -265,18 +265,19 @@ class Resource:
 The `OwnHandle` and `BorrowHandle` classes represent runtime handle values of
 `own` and `borrow` type, resp:
 ```python
+@dataclass
 class Handle:
   resource: Resource
   rt: ResourceType
   lend_count: int
 
-  def __init__(self, resource, rt):
-    self.resource = resource
-    self.rt = rt
-    self.lend_count = 0
+@dataclass
+class OwnHandle(Handle):
+  pass
 
-class OwnHandle(Handle): pass
-class BorrowHandle(Handle): pass
+@dataclass
+class BorrowHandle(Handle):
+  pass
 ```
 The `resource` field points to the resource instance this handle refers to. The
 `rt` field points to a runtime value representing the static
@@ -975,11 +976,11 @@ Finally, `own` and `borrow` handles are lowered by inserting them into the
 current component instance's `HandleTable`:
 ```python
 def lower_own(cx, resource, rt):
-  h = OwnHandle(resource, rt)
+  h = OwnHandle(resource, rt, 0)
   return cx.inst.handles.insert(cx, h)
 
 def lower_borrow(cx, resource, rt):
-  h = BorrowHandle(resource, rt)
+  h = BorrowHandle(resource, rt, 0)
   return cx.inst.handles.insert(cx, h)
 ```
 Note that the `rt` value that is stored in the runtime `Handle` captures what
@@ -1569,7 +1570,7 @@ Calling `$f` invokes the following function, which creates a resource object
 and inserts it into the current instance's handle table:
 ```python
 def canon_resource_new(cx, rt, rep):
-  h = OwnHandle(Resource(rep, cx.inst), rt)
+  h = OwnHandle(Resource(rep, cx.inst), rt, 0)
   return cx.inst.handles.insert(cx, h)
 ```
 
