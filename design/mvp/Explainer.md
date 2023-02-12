@@ -1125,7 +1125,7 @@ Using canonical function definitions, we can finally write a non-trivial
 component that takes a string, does some logging, then returns a string.
 ```wasm
 (component
-  (import "wasi:logging" (instance $logging
+  (import "logging" (id "wasi:logging") (instance $logging
     (export "log" (func (param string)))
   ))
   (import "libc" (core module $Libc
@@ -1300,7 +1300,7 @@ Lastly, imports and exports are defined as:
 ```
 import     ::= (import <externname> bind-id(<externdesc>))
 export     ::= (export <id>? <externname> <sortidx> <externdesc>?)
-externname ::= <name> <URL>?
+externname ::= <name> (id <URL>)?
 ```
 Both import and export definitions append a new element to the index space of
 the imported/exported `sort` which can be optionally bound to an identifier in
@@ -1341,12 +1341,12 @@ externally define a type compatible with the exports of the component.
 
 Components split the single externally-visible name of imports and exports into
 two sub-fields: a kebab-case `name` (as defined [above](#instance-definitions))
-and a `URL` (defined by the [URL Standard], noting that, in this URL Standard,
-the term "URL" subsumes what has historically been called a [URI], including
-URLs that "identify" as opposed to "locate"). This subdivision of external
-names allows component producers to represent a variety of intentions for how a
-component is to be instantiated and executed so that a variety of hosts can
-portably execute the component.
+and an `id` field that contains a URL (as defined by the [URL Standard], noting
+that, in this URL Standard, the term "URL" subsumes what has historically been
+called a [URI], including URLs that "identify" as opposed to "locate"). This
+subdivision of external names allows component producers to represent a variety
+of intentions for how a component is to be instantiated and executed so that a
+variety of hosts can portably execute the component.
 
 The `name` field of `externname` is required to be unique. Thus, a single
 `name` has been used in the preceding definitions of `with` and `alias` to
@@ -1383,7 +1383,7 @@ and accessing its exports. For example, the [JS API]'s
 [`WebAssembly.instantiate()`] would use import `name`s in the [*read the
 imports*] step and use export `name`s in the [*create an exports object*] step.
 
-The optional `URL` field of `externname` allows a component author to refer to
+The optional `id` field of `externname` allows a component author to refer to
 an *externally-defined* specification of what an import "wants" or what an
 export has "implemented". One example is a URL naming a standard interface such
 as `wasi:filesystem` (assuming that WASI registered the `wasi:` URI scheme with
@@ -1396,48 +1396,48 @@ components, the Component Model doesn't specify how URLs are to be interpreted,
 just that they are grammatically URLs. Even `https:` URLs may or may not be
 literally fetched by the host (c.f. [import maps]).
 
-When present, `URL`s must *also* be unique (*in addition* the abovementioned
-uniqueness of `name`s). Thus, a `URL` can *also* be used to uniquely identify
-the subset of imports or exports that have `URL`s.
+The URLs of present `id` fields must *also* be unique (*in addition* the
+abovementioned uniqueness of `name`s). Thus, a URL can *also* be used to
+uniquely identify the subset of imports or exports that have URLs.
 
-While the `name` field is meant for source-code bindings generators, the `URL`
+While the `name` field is meant for source-code bindings generators, the `id`
 field is meant for automated interpretation by hosts and toolchains. In
 particular, hosts are expected to identify their host-implemented imports and
-host-called exports by `URL`, not `name`. This allows hosts to implement a
+host-called exports by URL, not `name`. This allows hosts to implement a
 wide collection of independently-developed interfaces where `name`s are chosen
 for developer ergonomics (and name collisions are handled independently in
-the binding generators, which is needed in any case) and `URL`s serve as
+the binding generators, which is needed in any case) and URLs to serve as
 the invariant identifier that concretely links the guest to host. If there was
 only a `name`, interface authors would be forced to implicitly coordinate
 across the ecosystem to avoid collisions (which in general, isn't possible)
-while if there was only a `URL`, the developer-friendly identifiers would have
+while if there was only a URL, the developer-friendly identifiers would have
 to be specified manually by every developer or derived in an ad hoc fashion
-from the `URL`, whose contents may vary widely. This dual-name scheme is thus
+from the URL, whose contents may vary widely. This dual-name scheme is thus
 proposed to resolve these competing requirements.
 
 Inside the component model, this dual-name scheme shows up in [subtyping](#Subtyping.md),
-where the component subtyping simply ignores the `name` field when the `URL`
+where the component subtyping simply ignores the `name` field when the `id`
 field is present. For example, the component:
 ```
 (component
-  (import "fs" "wasi:filesystem" ...)
+  (import "fs" (id "wasi:filesystem") ...)
 )
 ```
 can be supplied for the `x` import of the component:
 ```
 (component
   (import "x" (component
-    (import "filesystem" "wasi:filesystem" ...)
+    (import "filesystem" (id "wasi:filesystem") ...)
   ))
 )
 ```
-because the `name`s are ignored and the `URL`s match. This subtyping is
+because the `name`s are ignored and the `id`s match. This subtyping is
 symmetric to what was described above for hosts, allowing components to
 serve as the "host" of other components, enabling [virtualization](examples/LinkTimeVirtualization.md).
 
 Since the concrete artifacts defining the host/guest interface is a collection
 of [Wit files](WIT.md), Wit must naturally allow interface authors to specify
-both the `name` and `URL` of component imports and exports. While the syntax is
+both the `name` and `id` of component imports and exports. While the syntax is
 still very much [in flux](https://github.com/WebAssembly/component-model/pull/83),
 a hypothetical simplified interface between a guest and host might look like:
 ```
@@ -1453,9 +1453,9 @@ defined interfaces that map to instance types. This "World" definition then
 maps to the following component type:
 ```
 (component $Command
-  (import "fs" "wasi:filesystem" (instance ... filesystem function exports ...))
-  (import "console" "wasi:cli/console" (instance ... log function exports ...))
-  (export "main" "wasi:cli/main" (instance (export "main" (func ...))))
+  (import "fs" (id "wasi:filesystem") (instance ... filesystem function exports ...))
+  (import "console" (id "wasi:cli/console") (instance ... log function exports ...))
+  (export "main" (id "wasi:cli/main") (instance (export "main" (func ...))))
 )
 ```
 A component *targeting* `wasi:cli/Command` would thus need to be a *subtype* of
@@ -1467,10 +1467,10 @@ to call a subset of these exports).
 Importantly, this `wasi:cli/Command` World has been able to define the short
 developer-facing names like `fs` and `console` without worrying if there are
 any other Worlds that conflict with these names. If a host wants to implement
-`wasi:cli/Command` and some other World that also happens to pick `fs`, either
-the `URL` fields are the same, and so the two imports can be unified, or the
-`URL` fields are different, and the host supplies two distinct imports,
-identified by `URL`.
+`wasi:cli/command` and some other World that also happens to pick `fs`, either
+the `id` fields are the same, and so the two imports can be unified, or the
+`id` fields are different, and the host supplies two distinct imports,
+identified by URL.
 
 
 ## Component Invariants

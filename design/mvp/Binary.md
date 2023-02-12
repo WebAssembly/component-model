@@ -324,10 +324,12 @@ flags are set.
 (See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
 in the explainer.)
 ```
-import     ::= en:<externname> ed:<externdesc>                => (import en ed)
-export     ::= en:<externname> si:<sortidx> ed?:<externdesc>? => (export en si ed?)
-externname ::= n:<name> u?:<URL>?                             => n u?
-URL        ::= b*:vec(byte)                                   => char(b)*, if char(b)* parses as a URL
+import      ::= en:<externname> ed:<externdesc>                => (import en ed)
+export      ::= en:<externname> si:<sortidx> ed?:<externdesc>? => (export en si ed?)
+externname  ::= n:<name> ea:<externattrs>                      => n ea
+externattrs ::= 0x00                                           => ϵ
+              | 0x01 url:<URL>                                 => (id url)
+URL         ::= b*:vec(byte)                                   => char(b)*, if char(b)* parses as a URL
 ```
 Notes:
 * All exports (of all `sort`s) introduce a new index that aliases the exported
