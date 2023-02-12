@@ -218,7 +218,12 @@ definitions via the `cx` parameter:
 class Context:
   opts: CanonicalOptions
   inst: ComponentInstance
-  call: Call
+  borrow_scope: BorrowScope
+
+  def __init__(self):
+    self.opts = CanonicalOptions()
+    self.inst = ComponentInstance()
+    self.borrow_scope = BorrowScope()
 ```
 
 The `opts` field represents the [`canonopt`] values supplied to
@@ -277,7 +282,7 @@ class OwnHandle(Handle):
 
 @dataclass
 class BorrowHandle(Handle):
-  pass
+  scope: BorrowScope
 ```
 The `resource` field points to the resource instance this handle refers to. The
 `rt` field points to a runtime value representing the static
@@ -288,12 +293,10 @@ of the outstanding handles that were lent from this handle (by calls to
 invariant that a handle cannot be dropped while it has currently lent out a
 `borrow`.
 
-The `Call` class represents a single runtime call (activation) of a
-component-level function. A `Call` is finished in two steps by `finish_lift`
-and `finish_lower`, which are called at the end of `canon lift` and
-`canon lower`, resp.
+The `BorrowScope` class represents the scope of a single runtime call of a
+component-level function during which zero or more handles are borrowed.
 ```python
-class Call:
+class BorrowScope:
   borrow_count: int
   lenders: [OwnHandle]
 
@@ -301,28 +304,26 @@ class Call:
     self.borrow_count = 0
     self.lenders = []
 
-  def finish_lift(self):
-    trap_if(self.borrow_count != 0)
+  def add(self, src):
+    src.lend_count += 1
+    self.lenders.append(src)
+    self.borrow_count += 1
 
-  def finish_lower(self):
-    assert(self.borrow_count == 0)
+  def remove(self):
+    self.borrow_count -= 1
+
+  def exit(self):
+    trap_if(self.borrow_count != 0)
     for h in self.lenders:
       h.lend_count -= 1
 ```
-The `borrow_count` field tracks the number of outstanding `borrow` handles that
-were lent out for the duration of this call, trapping when the call finishes if
-there are any un-dropped `borrow` handles. The `lenders` field maintains a list
-of `own` handles that have lent out a `borrow` handle for the duration of the
-call. In an optimizing implementation, a `Call` can be stored directly on the
-stack with a layout specialized to the function signature which allows a
-fixed-size inline `lenders` list in the common case.
-
-`Call` objects serve as an intermediate reference point for both the caller and
-callee: the caller keeps lent resources alive *at least as long* as the `Call`;
-the callee holds on to borrowed resources *at most as long* as the `Call`. This
-decoupling ensures that when *exactly* the callee drops a borrowed handle isn't
-observable to the caller thereby avoiding implicit, non-contractual ordering
-dependencies.
+The `borrow_count` field tracks the number of outstanding `BorrowHandle`s that
+were created when lowering the parameters of the call that have not yet been
+dropped. The `lenders` field maintains a list of source `Handle`s that have
+lent out a `BorrowHandle` and are to be restored when the call finishes and
+`exit` is called. In an optimizing implementation, a `BorrowScope` can be
+stored inline in the stack frame with a layout specialized to the function
+signature, thereby avoiding dynamic allocation of `lenders` in many cases.
 
 Based on these supporting runtime data structures, we can define the
 `HandleTable` in pieces, starting with its fields and the `insert` method:
@@ -343,8 +344,6 @@ class HandleTable:
     else:
       i = len(self.array)
       self.array.append(h)
-    if isinstance(h, BorrowHandle):
-      cx.call.borrow_count += 1
     return i
 ```
 The `HandleTable` class maintains a dense array of handles that can contain
@@ -352,9 +351,7 @@ holes created by the `remove` method (defined below). These holes are kept in a
 separate Python list here, but an optimizing implementation could instead store
 the free list in the free elements of `array`. When inserting a new handle,
 `HandleTable` first consults the `free` list, which is popped LIFO to better
-detect use-after-free bugs in the guest code. The `insert` method increments
-`Call.borrow_count` to guard that this handle has been dropped by the end of
-the call.
+detect use-after-free bugs in the guest code.
 
 The `get` method is used by other `HandleTable` methods and canonical
 definitions below and uses dynamic guards to catch out-of-bounds and
@@ -374,21 +371,11 @@ this check keeps type imports abstract, considering each type import to have a
 unique `rt` value distinct from every other type import even if the two imports
 happen to be instantiated with the same resource type at runtime.
 
-The `lend` method is called when borrowing a handle. `lend` uses `Call.lenders`
-to decrement the handle's `lend_count` at the end of the call.
+Finally, the `remove` method is used to drop or transfer a handle out of the
+handle table. `remove` adds the removed handle to the `free` list for later
+recycling by `insert` (above).
 ```python
-  def lend(self, cx, i, rt):
-    h = self.get(i, rt)
-    h.lend_count += 1
-    cx.call.lenders.append(h)
-    return h
-```
-
-Finally, the `remove` method is used when dropping or transferring a handle
-out of the handle table. `remove` adds the removed handle to the `free` list
-for later recycling by `insert` (above).
-```python
-  def remove(self, cx, i, t):
+  def remove(self, i, t):
     h = self.get(i, t.rt)
     trap_if(h.lend_count != 0)
     match t:
@@ -396,7 +383,7 @@ for later recycling by `insert` (above).
         trap_if(not isinstance(h, OwnHandle))
       case Borrow(_):
         trap_if(not isinstance(h, BorrowHandle))
-        cx.call.borrow_count -= 1
+        h.scope.remove()
     self.array[i] = None
     self.free.append(i)
     return h
@@ -621,17 +608,15 @@ Finally, `own` and `borrow` handles are lifted by loading their referenced resou
 out of the current component instance's handle table:
 ```python
 def lift_own(cx, i, t):
-  h = cx.inst.handles.remove(cx, i, t)
-  return h.resource
+  return cx.inst.handles.remove(i, t)
 
 def lift_borrow(cx, i, t):
-  h = cx.inst.handles.lend(cx, i, t.rt)
-  return h.resource
+  return cx.inst.handles.get(i, t.rt)
 ```
-The `remove` method is used in `lift_own` and thus passing an `own` handle
+The `remove` method is used in `lift_own` so that passing an `own` handle
 across a component boundary transfers ownership. Note that `remove` checks
 *both* the resource type tag *and* that the indexed handle is an `OwnHandle`
-while `lend` only checks the resource type, thereby allowing both handle types.
+while `get` only checks the resource type, thereby allowing any handle type.
 
 
 ### Storing
@@ -975,12 +960,15 @@ def pack_flags_into_int(v, labels):
 Finally, `own` and `borrow` handles are lowered by inserting them into the
 current component instance's `HandleTable`:
 ```python
-def lower_own(cx, resource, rt):
-  h = OwnHandle(resource, rt, 0)
+def lower_own(cx, src, rt):
+  assert(isinstance(src, OwnHandle))
+  h = OwnHandle(src.resource, rt, 0)
   return cx.inst.handles.insert(cx, h)
 
-def lower_borrow(cx, resource, rt):
-  h = BorrowHandle(resource, rt, 0)
+def lower_borrow(cx, src, rt):
+  assert(isinstance(src, Handle))
+  cx.borrow_scope.add(src)
+  h = BorrowHandle(src.resource, rt, 0, cx.borrow_scope)
   return cx.inst.handles.insert(cx, h)
 ```
 Note that the `rt` value that is stored in the runtime `Handle` captures what
@@ -1418,11 +1406,11 @@ component*.
 
 Given the above closure arguments, `canon_lift` is defined:
 ```python
-def canon_lift(cx, callee, ft, call, args):
+def canon_lift(cx, callee, ft, args):
   trap_if(not cx.inst.may_enter)
 
-  outer_call = cx.call
-  cx.call = call
+  outer_borrow_scope = cx.borrow_scope
+  cx.borrow_scope = BorrowScope()
 
   assert(cx.inst.may_leave)
   cx.inst.may_leave = False
@@ -1440,8 +1428,8 @@ def canon_lift(cx, callee, ft, call, args):
     if cx.opts.post_return is not None:
       cx.opts.post_return(flat_results)
 
-    cx.call.finish_lift()
-    cx.call = outer_call
+    cx.borrow_scope.exit()
+    cx.borrow_scope = outer_borrow_scope
 
   return (results, post_return)
 ```
@@ -1451,11 +1439,6 @@ Uncaught Core WebAssembly [exceptions] result in a trap at component
 boundaries. Thus, if a component wishes to signal an error, it must use some
 sort of explicit type such as `result` (whose `error` case particular language
 bindings may choose to map to and from exceptions).
-
-The `call` parameter is assumed to have been created by the caller (the host or
-`canon lower`) for this one call. Since, in `not cx.called_as_export` scenarios
-a single component instance may be reentered (by its children), `cx.call` must
-save-and-restore a possible outer `Call` during an inner call.
 
 The contract assumed by `canon_lift` (and ensured by `canon_lower` below) is
 that the caller of `canon_lift` *must* call `post_return` right after lowering
@@ -1489,22 +1472,16 @@ def canon_lower(cx, callee, calling_import, ft, flat_args):
   if calling_import:
     cx.inst.may_enter = False
 
-  outer_call = cx.call
-  cx.call = Call()
-
   flat_args = ValueIter(flat_args)
   args = lift_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
-  results, post_return = callee(cx.call, args)
+  results, post_return = callee(args)
 
   cx.inst.may_leave = False
   flat_results = lower_values(cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
   cx.inst.may_leave = True
 
   post_return()
-
-  cx.call.finish_lower()
-  cx.call = outer_call
 
   if calling_import:
     cx.inst.may_enter = True
@@ -1589,7 +1566,7 @@ be of type `$t` from the handle table and then, for an `own` handle, calls the
 optional destructor.
 ```python
 def canon_resource_drop(cx, t, i):
-  h = cx.inst.handles.remove(cx, i, t)
+  h = cx.inst.handles.remove(i, t)
   if isinstance(t, Own) and t.rt.dtor:
     trap_if(not h.resource.impl.may_enter)
     t.rt.dtor(h.resource.rep)

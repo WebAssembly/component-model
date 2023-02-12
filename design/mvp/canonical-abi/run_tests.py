@@ -34,14 +34,10 @@ class Heap:
 
 def mk_cx(memory = bytearray(), encoding = 'utf8', realloc = None, post_return = None):
   cx = Context()
-  cx.opts = CanonicalOptions()
   cx.opts.memory = memory
   cx.opts.string_encoding = encoding
   cx.opts.realloc = realloc
   cx.opts.post_return = post_return
-  cx.inst = ComponentInstance()
-  cx.call = Call()
-  cx.called_as_export = True
   return cx
 
 def mk_str(s):
@@ -350,7 +346,7 @@ def test_roundtrip(t, v):
 
   callee_heap = Heap(1000)
   callee_cx = mk_cx(callee_heap.memory, 'utf8', callee_heap.realloc, lambda x: () )
-  lifted_callee = lambda act, args: canon_lift(callee_cx, callee, ft, act, args)
+  lifted_callee = lambda args: canon_lift(callee_cx, callee, ft, args)
 
   caller_heap = Heap(1000)
   caller_cx = mk_cx(caller_heap.memory, 'utf8', caller_heap.realloc)
@@ -387,12 +383,12 @@ def test_handles():
   r2 = Resource(43, cx.inst)
   r3 = Resource(44, cx.inst)
 
-  def host_import(act, args):
+  def host_import(args):
     nonlocal cx
     assert(len(args) == 2)
-    assert(args[0] is r1)
-    assert(args[1] is r3)
-    return ([Resource(45, cx.inst)], lambda:())
+    assert(args[0].resource is r1)
+    assert(args[1].resource is r3)
+    return ([OwnHandle(Resource(45, cx.inst), rt, 0)], lambda:())
 
   def core_wasm(args):
     nonlocal dtor_value
@@ -434,12 +430,13 @@ def test_handles():
     return [Value('i32', 0), Value('i32', 1), Value('i32', 3)]
 
   ft = FuncType([Own(rt),Own(rt),Borrow(rt)],[Own(rt),Own(rt),Own(rt)])
-  got,post_return = canon_lift(cx, core_wasm, ft, Call(), [r1, r2, r3])
+  args = [OwnHandle(r1, rt, 0), OwnHandle(r2, rt, 0), OwnHandle(r3, rt, 0)]
+  got,post_return = canon_lift(cx, core_wasm, ft, args)
 
   assert(len(got) == 3)
-  assert(got[0].rep == 46)
-  assert(got[1] is r2)
-  assert(got[2].rep == 45)
+  assert(got[0].resource.rep == 46)
+  assert(got[1].resource is r2)
+  assert(got[2].resource.rep == 45)
   assert(len(cx.inst.handles.array) == 4)
   assert(all(cx.inst.handles.array[i] is None for i in range(3)))
   assert(len(cx.inst.handles.free) == 4)
