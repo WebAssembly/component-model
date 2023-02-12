@@ -298,7 +298,7 @@ component-level function during which zero or more handles are borrowed.
 ```python
 class BorrowScope:
   borrow_count: int
-  lenders: [OwnHandle]
+  lenders: [Handle]
 
   def __init__(self):
     self.borrow_count = 0
