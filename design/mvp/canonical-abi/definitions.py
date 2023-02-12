@@ -70,7 +70,7 @@ class InstanceType(ExternType):
 
 @dataclass
 class FuncType(ExternType):
-  params: [ValType|typing.Tuple[str,ValType]]
+  params: [typing.Tuple[str,ValType]]
   results: [ValType|typing.Tuple[str,ValType]]
   def param_types(self):
     return self.extract_types(self.params)
