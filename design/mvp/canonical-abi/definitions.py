@@ -292,9 +292,9 @@ class Context:
   inst: ComponentInstance
   borrow_scope: BorrowScope
 
-  def __init__(self):
-    self.opts = CanonicalOptions()
-    self.inst = ComponentInstance()
+  def __init__(self, opts, inst):
+    self.opts = opts
+    self.inst = inst
     self.borrow_scope = BorrowScope()
 
 #
@@ -373,7 +373,7 @@ class HandleTable:
     self.array = []
     self.free = []
 
-  def insert(self, cx, h):
+  def insert(self, h):
     if self.free:
       i = self.free.pop()
       assert(self.array[i] is None)
@@ -844,13 +844,13 @@ def pack_flags_into_int(v, labels):
 def lower_own(cx, src, rt):
   assert(isinstance(src, OwnHandle))
   h = OwnHandle(src.resource, rt, 0)
-  return cx.inst.handles.insert(cx, h)
+  return cx.inst.handles.insert(h)
 
 def lower_borrow(cx, src, rt):
   assert(isinstance(src, Handle))
   cx.borrow_scope.add(src)
   h = BorrowHandle(src.resource, rt, 0, cx.borrow_scope)
-  return cx.inst.handles.insert(cx, h)
+  return cx.inst.handles.insert(h)
 
 ### Flattening
 
@@ -1152,16 +1152,14 @@ def lower_values(cx, max_flat, vs, ts, out_param = None):
 
 ### `lift`
 
-def canon_lift(cx, callee, ft, args):
-  trap_if(not cx.inst.may_enter)
+def canon_lift(opts, inst, callee, ft, args):
+  cx = Context(opts, inst)
+  trap_if(not inst.may_enter)
 
-  outer_borrow_scope = cx.borrow_scope
-  cx.borrow_scope = BorrowScope()
-
-  assert(cx.inst.may_leave)
-  cx.inst.may_leave = False
+  assert(inst.may_leave)
+  inst.may_leave = False
   flat_args = lower_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
-  cx.inst.may_leave = True
+  inst.may_leave = True
 
   try:
     flat_results = callee(flat_args)
@@ -1171,55 +1169,54 @@ def canon_lift(cx, callee, ft, args):
   results = lift_values(cx, MAX_FLAT_RESULTS, ValueIter(flat_results), ft.result_types())
 
   def post_return():
-    if cx.opts.post_return is not None:
-      cx.opts.post_return(flat_results)
-
+    if opts.post_return is not None:
+      opts.post_return(flat_results)
     cx.borrow_scope.exit()
-    cx.borrow_scope = outer_borrow_scope
 
   return (results, post_return)
 
 ### `lower`
 
-def canon_lower(cx, callee, calling_import, ft, flat_args):
-  trap_if(not cx.inst.may_leave)
+def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
+  cx = Context(opts, inst)
+  trap_if(not inst.may_leave)
 
-  assert(cx.inst.may_enter)
+  assert(inst.may_enter)
   if calling_import:
-    cx.inst.may_enter = False
+    inst.may_enter = False
 
   flat_args = ValueIter(flat_args)
   args = lift_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
   results, post_return = callee(args)
 
-  cx.inst.may_leave = False
+  inst.may_leave = False
   flat_results = lower_values(cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
-  cx.inst.may_leave = True
+  inst.may_leave = True
 
   post_return()
 
   if calling_import:
-    cx.inst.may_enter = True
+    inst.may_enter = True
 
   return flat_results
 
 ### `resource.new`
 
-def canon_resource_new(cx, rt, rep):
-  h = OwnHandle(Resource(rep, cx.inst), rt, 0)
-  return cx.inst.handles.insert(cx, h)
+def canon_resource_new(inst, rt, rep):
+  h = OwnHandle(Resource(rep, inst), rt, 0)
+  return inst.handles.insert(h)
 
 ### `resource.drop`
 
-def canon_resource_drop(cx, t, i):
-  h = cx.inst.handles.remove(i, t)
+def canon_resource_drop(inst, t, i):
+  h = inst.handles.remove(i, t)
   if isinstance(t, Own) and t.rt.dtor:
     trap_if(not h.resource.impl.may_enter)
     t.rt.dtor(h.resource.rep)
 
 ### `resource.rep`
 
-def canon_resource_rep(cx, rt, i):
-  h = cx.inst.handles.get(i, rt)
+def canon_resource_rep(inst, rt, i):
+  h = inst.handles.get(i, rt)
   return h.resource.rep
