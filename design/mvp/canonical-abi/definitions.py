@@ -129,10 +129,6 @@ class Tuple(ValType):
   ts: [ValType]
 
 @dataclass
-class Flags(ValType):
-  labels: [str]
-
-@dataclass
 class Case:
   label: str
   t: Optional[ValType]
@@ -158,6 +154,10 @@ class Option(ValType):
 class Result(ValType):
   ok: Optional[ValType]
   error: Optional[ValType]
+
+@dataclass
+class Flags(ValType):
+  labels: [str]
 
 @dataclass
 class ResourceType(Type):
