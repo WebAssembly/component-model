@@ -1348,9 +1348,13 @@ subdivision of external names allows component producers to represent a variety
 of intentions for how a component is to be instantiated and executed so that a
 variety of hosts can portably execute the component.
 
-The `name` field of `externname` is required to be unique. Thus, a single
-`name` has been used in the preceding definitions of `with` and `alias` to
-uniquely identify imports and exports.
+The `name` field of `externname` is required to be unique between all the imports
+and exports of a component definition, component type or instance type. Thus, a
+single `name` can be used to unambiguously select any import or export. Based on
+this, `with` and `alias` can use a `name` (not `externname`) to select an
+import or export. The uniqueness between imports and exports ensures that Wit
+and language bindings don't have to worry about separately namespacing imports
+and exports.
 
 In guest source-code bindings, the `name` is meant to be translated to
 source-language identifiers (applying case-conversion, as described
