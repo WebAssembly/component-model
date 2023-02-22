@@ -23,7 +23,7 @@ magic     ::= 0x00 0x61 0x73 0x6D
 version   ::= 0x0a 0x00
 layer     ::= 0x01 0x00
 section   ::=    section_0(<core:custom>)         => ϵ
-            | m*:section_1(<core:module>)         => [core-prefix(m)]
+            | m:section_1(<core:module>)          => [core-prefix(m)]
             | i*:section_2(vec(<core:instance>))  => core-prefix(i)*
             | t*:section_3(vec(<core:type>))      => core-prefix(t)*
             | c: section_4(<component>)           => [c]
