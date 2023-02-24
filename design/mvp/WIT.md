@@ -566,9 +566,8 @@ or codepoints that Unicode officially deprecates or strongly discourages.
 
 The current structure of tokens are:
 
-```wit
+```ebnf
 token ::= whitespace
-        | comment
         | operator
         | keyword
         | identifier
@@ -579,11 +578,11 @@ here.
 
 ### Whitespace
 
-A `whitespace` token in `wit` is a space, a newline, a carriage return, or a
-tab character:
+A `whitespace` token in `wit` is a space, a newline, a carriage return, a
+tab character, or a comment:
 
-```wit
-whitespace ::= ' ' | '\n' | '\r' | '\t'
+```ebnf
+whitespace ::= ' ' | '\n' | '\r' | '\t' | comment
 ```
 
 ### Comments
@@ -593,7 +592,7 @@ ends at the next newline (`\n`) character or it's a block comment which starts
 with `/*` and ends with `*/`. Note that block comments are allowed to be nested
 and their delimiters must be balanced
 
-```wit
+```ebnf
 comment ::= '//' character-that-isnt-a-newline*
           | '/*' any-unicode-character* '*/'
 ```
@@ -604,7 +603,7 @@ newline (`\n`) character or it's a block comment which starts with `/**` and end
 with `*/`. Note that block comments are allowed to be nested and their delimiters
 must be balanced
 
-```wit
+```ebnf
 doc-comment ::= '///' character-that-isnt-a-newline*
           | '/**' any-unicode-character* '*/'
 ```
@@ -615,7 +614,7 @@ There are some common operators in the lexical structure of `wit` used for
 various constructs. Note that delimiters such as `{` and `(` must all be
 balanced.
 
-```wit
+```ebnf
 operator ::= '=' | ',' | ':' | ';' | '(' | ')' | '{' | '}' | '<' | '>' | '*' | '->'
 ```
 
@@ -625,31 +624,18 @@ Certain identifiers are reserved for use in `wit` documents and cannot be used
 bare as an identifier. These are used to help parse the format, and the list of
 keywords is still in flux at this time but the current set is:
 
-```wit
+```ebnf
 keyword ::= 'use'
           | 'type'
           | 'resource'
           | 'func'
-          | 'u8' | 'u16' | 'u32' | 'u64'
-          | 's8' | 's16' | 's32' | 's64'
-          | 'float32' | 'float64'
-          | 'char'
           | 'record'
           | 'enum'
           | 'flags'
           | 'variant'
           | 'union'
-          | 'bool'
-          | 'string'
-          | 'option'
-          | 'list'
-          | 'result'
-          | 'as'
           | 'static'
           | 'interface'
-          | 'tuple'
-          | 'future'
-          | 'stream'
           | 'world'
           | 'import'
           | 'export'
@@ -663,7 +649,7 @@ come one after another and it's recommended to separate them with newlines for
 readability but this isn't required.
 
 Concretely, the structure of a `wit` document is:
-```
+```ebnf
 wit-document ::= (interface-item | world-item)*
 ```
 
@@ -673,7 +659,7 @@ Worlds define a [componenttype](https://github.com/WebAssembly/component-model/b
 
 Concretely, the structure of a world is:
 
-```wit
+```ebnf
 world-item ::= 'default'? 'world' id '{' world-items* '}'
 
 world-items ::= export-item | import-item | use-item | typedef-item
@@ -697,7 +683,7 @@ sequence of items and functions.
 
 Specifically interfaces have the structure:
 
-```wit
+```ebnf
 interface-item ::= 'default'? 'interface' id '{' interface-items* '}'
 
 interface-items ::= typedef-item
@@ -741,7 +727,7 @@ use my-dependency.document.other-type
 
 Specifically the structure of this is:
 
-```wit
+```ebnf
 use-item ::= 'use' use-path '.' '{' use-names-list '}'
 
 use-names-list ::= use-names-item
@@ -774,7 +760,7 @@ type my-complicated-tuple = tuple<u32, s32, string>
 
 Specifically the structure of this is:
 
-```wit
+```ebnf
 type-item ::= 'type' id '=' ty
 ```
 
@@ -799,7 +785,7 @@ record person {
 
 Specifically the structure of this is:
 
-```wit
+```ebnf
 record-item ::= 'record' id '{' record-fields '}'
 
 record-fields ::= record-field
@@ -824,7 +810,7 @@ flags properties {
 
 Specifically the structure of this is:
 
-```wit
+```ebnf
 flags-items ::= 'flags' id '{' flags-fields '}'
 
 flags-fields ::= id
@@ -853,7 +839,7 @@ variant filter {
 
 Specifically the structure of this is:
 
-```wit
+```ebnf
 variant-items ::= 'variant' id '{' variant-cases '}'
 
 variant-cases ::= variant-case
@@ -882,7 +868,7 @@ enum color {
 
 Specifically the structure of this is:
 
-```wit
+```ebnf
 enum-items ::= 'enum' id '{' enum-cases '}'
 
 enum-cases ::= id
@@ -905,7 +891,7 @@ union configuration {
 
 Specifically the structure of this is:
 
-```wit
+```ebnf
 union-items ::= 'union' id '{' union-cases '}'
 
 union-cases ::= ty
@@ -927,7 +913,7 @@ type headers = list<string>
 
 Specifically the following types are available:
 
-```wit
+```ebnf
 ty ::= 'u8' | 'u16' | 'u32' | 'u64'
      | 's8' | 's16' | 's32' | 's64'
      | 'float32' | 'float64'
@@ -990,7 +976,7 @@ resource is destroyed. In contrast, a borrowed handle represents a temporary
 loan of a handle from the caller to the callee for the duration of the call.
 
 The syntax for handles is:
-```
+```ebnf
 handle ::= id
          | 'borrow' '<' id '>'
 ```
