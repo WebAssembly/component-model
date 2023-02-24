@@ -568,7 +568,6 @@ The current structure of tokens are:
 
 ```ebnf
 token ::= whitespace
-        | comment
         | operator
         | keyword
         | identifier
@@ -579,11 +578,11 @@ here.
 
 ### Whitespace
 
-A `whitespace` token in `wit` is a space, a newline, a carriage return, or a
-tab character:
+A `whitespace` token in `wit` is a space, a newline, a carriage return, a
+tab character, or a comment:
 
 ```ebnf
-whitespace ::= ' ' | '\n' | '\r' | '\t'
+whitespace ::= ' ' | '\n' | '\r' | '\t' | comment
 ```
 
 ### Comments
