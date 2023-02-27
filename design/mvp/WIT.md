@@ -683,6 +683,8 @@ sequence of items and functions.
 
 Specifically interfaces have the structure:
 
+> **Note**: The symbol `ε`, also known as Epsilon, denotes an empty string.
+
 ```ebnf
 interface-item ::= 'default'? 'interface' id '{' interface-items* '}'
 
@@ -704,11 +706,11 @@ func-type ::= 'func' param-list result-list
 
 param-list ::= '(' named-type-list ')'
 
-result-list ::= nil
+result-list ::= ϵ
               | '->' ty
               | '->' '(' named-type-list ')'
 
-named-type-list ::= nil
+named-type-list ::= ϵ
                   | named-type ( ',' named-type )*
 
 named-type ::= id ':' ty
