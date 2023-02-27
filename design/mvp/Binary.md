@@ -343,9 +343,12 @@ Notes:
   (which disallows core sorts other than `core module`). When the optional
   `externdesc` immediate is present, validation requires it to be a supertype
   of the inferred `externdesc` of the `sortidx`.
-* The `name` fields of `externname` must be unique among imports and exports,
-  respectively. The `URL` fields of `externname` (that are present) must
-  independently unique among imports and exports, respectively.
+* The `name` fields of `externname` must be unique among all imports and exports
+  in the containing component definition, component type or instance type. (An
+  import and export cannot use the same `name`.)
+* The `id` fields of `externname` (that are present) must independently be
+  unique among imports and exports, respectively. (An import and export *may*
+  have the same `id`.)
 * URLs are compared for equality by plain byte identity.
 
 ## Name Section
