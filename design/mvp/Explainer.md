@@ -682,12 +682,12 @@ declarators to be used by subsequent declarators in the type:
 ```wasm
 (component
   (import "fancy-fs" (instance $fancy-fs
-    (export "fs" (instance $fs
-      (export "file" (type $file (sub resource)))
-      ...
+    (export $fs "fs" (instance
+      (export "file" (type (sub resource)))
+      ;; ...
     ))
     (alias export $fs "file" (type $file))
-    (export "fancy-op" (func (param (borrow $file))))
+    (export "fancy-op" (func (param "f" (borrow $file))))
   ))
 )
 ```
@@ -702,19 +702,19 @@ definitions:
 (component $C
   (type $T (list (tuple string bool)))
   (type $U (option $T))
-  (type $G (func (param (list $T)) (result $U)))
+  (type $G (func (param "x" (list $T)) (result $U)))
   (type $D (component
     (alias outer $C $T (type $C_T))
     (type $L (list $C_T))
-    (import "f" (func (param $L) (result (list u8))))
+    (import "f" (func (param "x" $L) (result (list u8))))
     (import "g" (func (type $G)))
-    (export "g" (func (type $G)))
+    (export "g2" (func (type $G)))
     (export "h" (func (result $U)))
     (import "T" (type $T (sub resource)))
-    (import "i" (func (param (list (own $T)))))
-    (export "T" (type $T' (eq $T)))
-    (export "U" (type $U (sub resource)))
-    (export "j" (func (param (borrow $T')) (result (own $U))))
+    (import "i" (func (param "x" (list (own $T)))))
+    (export $T' "T2" (type (eq $T)))
+    (export $U' "U" (type (sub resource)))
+    (export "j" (func (param "x" (borrow $T')) (result (own $U'))))
   ))
 )
 ```
@@ -829,10 +829,10 @@ the following component:
 (component $C
   (import "T1" (type $T1 (sub resource)))
   (import "T2" (type $T2 (sub resource)))
-  (import "T3" (type $T3 (eq $T2))
-  (type $ListT1 (list $T1))
-  (type $ListT2 (list $T2))
-  (type $ListT3 (list $T3))
+  (import "T3" (type $T3 (eq $T2)))
+  (type $ListT1 (list (own $T1)))
+  (type $ListT2 (list (own $T2)))
+  (type $ListT3 (list (own $T3)))
 )
 ```
 the types `$T2` and `$T3` are equal to each other but not to `$T1`. By the
@@ -873,14 +873,14 @@ as well. For example, in this component:
 ```wasm
 (component
   (import "C" (component $C
-    (export "T1" (type $T1 (sub resource)))
-    (export "T2" (type $T2 (sub resource)))
-    (export "T3" (type $T3 (eq $T2)))
+    (export "T1" (type (sub resource)))
+    (export $T2 "T2" (type (sub resource)))
+    (export "T3" (type (eq $T2)))
   ))
   (instance $c (instantiate $C))
-  (type $T1 (alias export $i "T1"))
-  (type $T2 (alias export $i "T2"))
-  (type $T3 (alias export $i "T3"))
+  (alias export $c "T1" (type $T1))
+  (alias export $c "T2" (type $T2))
+  (alias export $c "T3" (type $T3))
 )
 ```
 the types `$T2` and `$T3` are equal to each other but not to `$T1`. These
@@ -961,6 +961,7 @@ following component:
   (type $r (resource (rep i32)))
   (export $r1 "r1" (type $r))
   (export "r2" (type $r1))
+)
 ```
 is assigned the following `componenttype`:
 ```wasm
