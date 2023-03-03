@@ -699,6 +699,7 @@ keyword ::= 'use'
           | 'import'
           | 'export'
           | 'package'
+          | 'include'
 ```
 
 ### Integers
@@ -766,7 +767,7 @@ Concretely, the structure of a world is:
 ```ebnf
 world-item ::= 'world' id '{' world-items* '}'
 
-world-items ::= export-item | import-item | use-item | typedef-item
+world-items ::= export-item | import-item | use-item | typedef-item | include-item
 
 export-item ::= 'export' id ':' extern-type
               | 'export' interface
@@ -780,6 +781,25 @@ Note that worlds can import types and define their own types to be exported
 from the root of a component and used within functions imported and exported.
 The `interface` item here additionally defines the grammar for IDs used to refer
 to `interface` items.
+
+## Item: `include`
+
+A `include` statement enables union the current world with another world. The structure of an `include` statement is:
+
+```wit
+include pkg.my-world-1 with { a as a1, b as b1 }
+include self.my-world-2
+```
+
+```ebnf
+include-item ::= 'include' use-path
+               | 'include' use-path 'with' '{' include-names-list '}'
+
+include-names-list ::= include-names-item
+                 | include-names-item ',' include-names-item?
+
+include-names-item ::= id 'as' id
+```
 
 ## Item: `interface`
 
