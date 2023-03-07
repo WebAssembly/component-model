@@ -236,6 +236,165 @@ Kebab names cannot overlap and must be unique, even between imports and exports.
 IDs, however, can be both imported and exported. The same interface cannot be
 explicitly imported or exported twice.
 
+### Union of Worlds with `include`
+
+A World can be created by taking the union of two or more worlds. This operation allows
+world builders to form larger worlds from smaller worlds.
+
+Below is a simple example of a world that includes two other worlds.
+
+```wit
+// worlds.wit
+world my-world-1 {
+    import a: self.a
+    import b: self.b
+    export c: self.c
+}
+
+world my-world-2 {
+    import foo: self.foo
+    import bar: self.bar
+    export baz: self.baz
+}
+
+world union-my-world {
+     include self.my-world-1
+     include self.my-world-2
+}
+```
+
+The `include` statement is used to include the imports and exports of another World to the
+current World. It says that the new World should be able to run all components that target
+the included worlds and more.
+
+The `union-my-world` World defined above is equivalent to the following World:
+
+```wit
+world union-my-world {
+    import a: self.a
+    import b: self.b
+    export c: self.c
+    import foo: self.foo
+    import bar: self.bar
+    export baz: self.baz
+}
+```
+
+The `include` statement also works with [WIT package](#wit-packages-and-use) defined below with the same semantics. For example, the following World `union-my-world-1` is equivalent to `union-my-world-2`:
+
+```wit
+// b.wit
+interface b { ... }
+
+// a.wit
+interface a { ... }
+
+world my-world-1 {
+    import a: self.a 
+    import b: pkg.b
+    import c: io.c // external package
+    export d: interface exp { ... }
+}
+
+// union.wit
+
+world union-my-world-1 {
+    include pkg.my-world-1
+}
+
+world union-my-world-2 {
+    import a: pkg.a
+    import b: pkg.b
+    import c: io.c
+    export d: interface exp { ... }
+}
+```
+
+### Name Conflicts
+
+When two or more included Worlds have the same name for an import or export, the name is considered to be in conflict. The conflict needs to be explicitly resolved by the world author using the `with` keyword.
+
+`with` allows the world author to rename the import or export to a different name. For all the imports and exports that are not explicitly renamed, the name of the import or export from the included world is used.
+
+The following example shows how to resolve name conflicts where `union-my-world-1` and `union-my-world-2` are equivalent:
+
+```wit
+// my-world-1.wit
+world my-world-1 {
+    import a: self.a
+    import b: self.b
+    export d: self.d
+}
+
+// my-world-2.wit
+world my-world-2 {
+    import a: self.a
+    import b: self.b
+    export c: self.c
+}
+
+// union.wit
+world union-my-world-1 {
+    include pkg.my-world-1 with { a as a1, b as b1 }
+    include pkg.my-world-2
+}
+
+world union-my-world-2 {
+    // resolve conflicts
+    import a1: pkg.my-world-1.a
+    import b1: pkg.my-world-1.b
+    export d: pkg.my-world-1.d
+
+    import a: pkg.my-world-2.a
+    import b: pkg.my-world-2.b
+    export c: pkg.my-world-2.c
+}
+```
+
+### De-duplication (In the future)
+
+As of now, the `include` statement requires the world author to explicitly rename the imports and exports that have the same name.
+
+In the future, we may allow to de-duplicate the imports and exports of the included worlds if the yare structurally equivalent following the [Subtyping](Subtyping.md) rules. For example, the following world `union-my-world-3` is equivalent to `union-my-world-4`:
+
+```wit
+// a.wit
+// b.wit
+// c.wit
+
+// my-world-1.wit
+world my-world-1 {
+    import a: pkg.a
+    import b: pkg.b
+    export c: pkg.c
+}
+
+// my-world-2.wit
+world my-world-2 {
+    import a: pkg.a
+    import b: pkg.b
+    export c: pkg.c
+}
+
+// union.wit
+world union-my-world-3 {
+    include pkg.my-world-1
+    include pkg.my-world-2
+}
+
+world union-my-world-4 {
+    import a: pkg.a
+    import b: pkg.b
+    export c: pkg.c
+}
+```
+
+### A Note on SubTyping
+
+As of now, host bindings are required to implicitly interpret all exports as optional to make a component targeting an included World a subtype of the union World. This [comment](https://github.com/WebAssembly/component-model/issues/169#issuecomment-1446776193) describes the reasoning behind this decision.
+
+In the future, when `optional` export is supported, the world author may explicitly mark exports as optional to make a component targeting an included World a subtype of the union World.
+
 ## WIT Packages and `use`
 [use]: #wit-packages-and-use
 
