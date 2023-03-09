@@ -238,8 +238,7 @@ explicitly imported or exported twice.
 
 ### Union of Worlds with `include`
 
-A World can be created by taking the union of two or more worlds. This operation allows
-world builders to form larger worlds from smaller worlds.
+A World can be created by taking the union of two or more worlds. This operation allows world builders to form larger worlds from smaller worlds.
 
 Below is a simple example of a world that includes two other worlds.
 
@@ -263,9 +262,7 @@ world union-my-world {
 }
 ```
 
-The `include` statement is used to include the imports and exports of another World to the
-current World. It says that the new World should be able to run all components that target
-the included worlds and more.
+The `include` statement is used to include the imports and exports of another World to the current World. It says that the new World should be able to run all components that target the included worlds and more.
 
 The `union-my-world` World defined above is equivalent to the following World:
 
@@ -321,15 +318,15 @@ The following example shows how to resolve name conflicts where `union-my-world-
 ```wit
 // my-world-1.wit
 world my-world-1 {
-    import a: self.a
-    import b: self.b
+    import a: self.a1
+    import b: self.b1
     export d: self.d
 }
 
 // my-world-2.wit
 world my-world-2 {
-    import a: self.a
-    import b: self.b
+    import a: self.a2
+    import b: self.b2
     export c: self.c
 }
 
@@ -341,39 +338,34 @@ world union-my-world-1 {
 
 world union-my-world-2 {
     // resolve conflicts
-    import a1: pkg.my-world-1.a
-    import b1: pkg.my-world-1.b
+    import a1: pkg.my-world-1.a1
+    import b1: pkg.my-world-1.b1
     export d: pkg.my-world-1.d
 
-    import a: pkg.my-world-2.a
-    import b: pkg.my-world-2.b
+    import a: pkg.my-world-2.a2
+    import b: pkg.my-world-2.b2
     export c: pkg.my-world-2.c
 }
 ```
 
-### De-duplication (In the future)
+### De-duplication
 
-As of now, the `include` statement requires the world author to explicitly rename the imports and exports that have the same name.
-
-In the future, we may allow to de-duplicate the imports and exports of the included worlds if the yare structurally equivalent following the [Subtyping](Subtyping.md) rules. For example, the following world `union-my-world-3` is equivalent to `union-my-world-4`:
+If two interfaces have the same structure, then these two interfaces are considered to be structurally equivalent. The `include` statement can
+deduplicate the imports and exports of the included worlds if the they are structurally equivalent following the [Subtyping](Subtyping.md) rules. For example, the following world `union-my-world-3` is equivalent to `union-my-world-4`:
 
 ```wit
-// a.wit
-// b.wit
-// c.wit
-
 // my-world-1.wit
 world my-world-1 {
-    import a: pkg.a
-    import b: pkg.b
-    export c: pkg.c
+    import a1: pkg.a
+    import b1: pkg.b
+    export c1: pkg.c
 }
 
 // my-world-2.wit
 world my-world-2 {
-    import a: pkg.a
-    import b: pkg.b
-    export c: pkg.c
+    import a2: pkg.a
+    import b2: pkg.b
+    export c2: pkg.c
 }
 
 // union.wit
@@ -383,10 +375,47 @@ world union-my-world-3 {
 }
 
 world union-my-world-4 {
-    import a: pkg.a
-    import b: pkg.b
+    import a1: pkg.a
+    import b1: pkg.b
+    export c1: pkg.c
+}
+```
+
+As you can see, the names of the imports and exports in "union-my-world-4" are picking up the names from the first included world. This is because the second included world has structurally the same imports and exports and are deduplicated.
+
+### De-duplication with `with`
+
+When two worlds have both name conflicts and structurally equivalent imports and exports, the semantics of `include` will do deduplication first and then resolve the name conflicts with `with` statements. For example, the following world `union-my-world-5` is equivalent to `union-my-world-6`:
+
+```wit
+
+// my-world-1.wit
+world my-world-1 {
+    import a1: pkg.a
+    import b1: pkg.b
     export c: pkg.c
 }
+
+// my-world-2.wit
+world my-world-2 {
+    import a1: pkg.a
+    import b1: pkg.b
+    export c: pkg.d
+}
+
+// union
+world union-my-world-5 {
+    include pkg.my-world-1 with { c as c1 }
+    include pkg.my-world-2
+}
+
+world union-my-world-6 {
+    import a1: pkg.a
+    import b1: pkg.b
+    export c1: pkg.c
+    export c: pkg.d
+}
+
 ```
 
 ### A Note on SubTyping
