@@ -844,6 +844,8 @@ def lower_own(cx, src, rt):
 
 def lower_borrow(cx, src, rt):
   assert(isinstance(src, Handle))
+  if cx.inst is rt.impl:
+    return src.rep
   cx.borrow_scope.add(src)
   h = BorrowHandle(src.rep, rt, 0, cx.borrow_scope)
   return cx.inst.handles.insert(h)

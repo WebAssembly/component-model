@@ -384,9 +384,10 @@ def test_handles():
     nonlocal dtor_value
     dtor_value = x
 
-  rt = ResourceType(ComponentInstance(), dtor)
+  rt = ResourceType(ComponentInstance(), dtor) # usable in imports and exports
 
   inst = ComponentInstance()
+  rt2 = ResourceType(inst, dtor) # only usable in exports
   opts = mk_opts()
 
   def host_import(args):
@@ -400,10 +401,11 @@ def test_handles():
   def core_wasm(args):
     nonlocal dtor_value
 
-    assert(len(args) == 3)
+    assert(len(args) == 4)
     assert(args[0].t == 'i32' and args[0].v == 0)
     assert(args[1].t == 'i32' and args[1].v == 1)
     assert(args[2].t == 'i32' and args[2].v == 2)
+    assert(args[3].t == 'i32' and args[3].v == 13)
     assert(canon_resource_rep(inst, rt, 0) == 42)
     assert(canon_resource_rep(inst, rt, 1) == 43)
     assert(canon_resource_rep(inst, rt, 2) == 44)
@@ -436,8 +438,8 @@ def test_handles():
 
     return [Value('i32', 0), Value('i32', 1), Value('i32', 3)]
 
-  ft = FuncType([Own(rt),Own(rt),Borrow(rt)],[Own(rt),Own(rt),Own(rt)])
-  args = [OwnHandle(42, rt, 0), OwnHandle(43, rt, 0), OwnHandle(44, rt, 0)]
+  ft = FuncType([Own(rt),Own(rt),Borrow(rt),Borrow(rt2)],[Own(rt),Own(rt),Own(rt)])
+  args = [OwnHandle(42, rt, 0), OwnHandle(43, rt, 0), OwnHandle(44, rt, 0), OwnHandle(13, rt2, 0)]
   got,post_return = canon_lift(opts, inst, core_wasm, ft, args)
 
   assert(len(got) == 3)

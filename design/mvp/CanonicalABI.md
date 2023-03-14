@@ -968,10 +968,18 @@ def lower_own(cx, src, rt):
 
 def lower_borrow(cx, src, rt):
   assert(isinstance(src, Handle))
+  if cx.inst is rt.impl:
+    return src.rep
   cx.borrow_scope.add(src)
   h = BorrowHandle(src.rep, rt, 0, cx.borrow_scope)
   return cx.inst.handles.insert(h)
 ```
+The special case in `lower_borrow` is an optimization, recognizing that, when
+a borrowed handle is passed to the component that implemented the resource
+type, the only thing the borrowed handle is good for is calling
+`resource.rep`, so lowering might as well avoid the overhead of creating an
+intermediate borrow handle.
+
 Note that the `rt` value that is stored in the runtime `Handle` captures what
 is statically known about the handle right before losing this information in
 the homogeneous `HandleTable`. Moreoever, as described above, distinct type
