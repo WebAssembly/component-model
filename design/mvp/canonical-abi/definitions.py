@@ -160,10 +160,6 @@ class Flags(ValType):
   labels: [str]
 
 @dataclass
-class ResourceType(Type):
-  dtor: Optional[Callable[[int],None]]
-
-@dataclass
 class Own(ValType):
   rt: ResourceType
 
@@ -320,15 +316,15 @@ class ComponentInstance:
 #
 
 @dataclass
-class Resource:
-  rep: int
+class ResourceType(Type):
   impl: ComponentInstance
+  dtor: Optional[Callable[[int],None]]
 
 #
 
 @dataclass
 class Handle:
-  resource: Resource
+  rep: int
   rt: ResourceType
   lend_count: int
 
@@ -843,13 +839,13 @@ def pack_flags_into_int(v, labels):
 
 def lower_own(cx, src, rt):
   assert(isinstance(src, OwnHandle))
-  h = OwnHandle(src.resource, rt, 0)
+  h = OwnHandle(src.rep, rt, 0)
   return cx.inst.handles.insert(h)
 
 def lower_borrow(cx, src, rt):
   assert(isinstance(src, Handle))
   cx.borrow_scope.add(src)
-  h = BorrowHandle(src.resource, rt, 0, cx.borrow_scope)
+  h = BorrowHandle(src.rep, rt, 0, cx.borrow_scope)
   return cx.inst.handles.insert(h)
 
 ### Flattening
@@ -1204,7 +1200,7 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
 ### `resource.new`
 
 def canon_resource_new(inst, rt, rep):
-  h = OwnHandle(Resource(rep, inst), rt, 0)
+  h = OwnHandle(rep, rt, 0)
   return inst.handles.insert(h)
 
 ### `resource.drop`
@@ -1212,11 +1208,10 @@ def canon_resource_new(inst, rt, rep):
 def canon_resource_drop(inst, t, i):
   h = inst.handles.remove(i, t)
   if isinstance(t, Own) and t.rt.dtor:
-    trap_if(not h.resource.impl.may_enter)
-    t.rt.dtor(h.resource.rep)
+    trap_if(not t.rt.impl.may_enter)
+    t.rt.dtor(h.rep)
 
 ### `resource.rep`
 
 def canon_resource_rep(inst, rt, i):
-  h = inst.handles.get(i, rt)
-  return h.resource.rep
+  return inst.handles.get(i, rt).rep

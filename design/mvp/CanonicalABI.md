@@ -257,22 +257,24 @@ class ComponentInstance:
 The `HandleTable` class is defined in terms of a collection of supporting
 runtime bookkeeping classes that we'll go through first.
 
-The `Resource` class represents a runtime instance of a resource type, storing
-the core representation value (which is currently fixed to `i32`) and the
-component instance that is implementing this resource.
+The `ResourceType` class represents a resource type that has been defined by
+the specific component instance pointed to by `impl` with a particular
+function closure as the `dtor`.
 ```python
 @dataclass
-class Resource:
-  rep: int
+class ResourceType(Type):
   impl: ComponentInstance
+  dtor: Optional[Callable[[int],None]]
 ```
 
-The `OwnHandle` and `BorrowHandle` classes represent runtime handle values of
-`own` and `borrow` type, resp:
+The `Handle` class and its subclasses represent handle values referring to
+resources. The `rep` field of `Handle` stores the representation value
+(currently fixed to `i32`) pass to `resource.new` for the resource that this
+handle refers to.
 ```python
 @dataclass
 class Handle:
-  resource: Resource
+  rep: int
   rt: ResourceType
   lend_count: int
 
@@ -284,8 +286,7 @@ class OwnHandle(Handle):
 class BorrowHandle(Handle):
   scope: BorrowScope
 ```
-The `resource` field points to the resource instance this handle refers to. The
-`rt` field points to a runtime value representing the static
+The `rt` field points to a runtime value representing the static
 [`resourcetype`](Explainer.md#type-definitions) of this handle and is used by
 dynamic type checking below. Lastly, the `lend_count` field maintains a count
 of the outstanding handles that were lent from this handle (by calls to
@@ -962,13 +963,13 @@ current component instance's `HandleTable`:
 ```python
 def lower_own(cx, src, rt):
   assert(isinstance(src, OwnHandle))
-  h = OwnHandle(src.resource, rt, 0)
+  h = OwnHandle(src.rep, rt, 0)
   return cx.inst.handles.insert(h)
 
 def lower_borrow(cx, src, rt):
   assert(isinstance(src, Handle))
   cx.borrow_scope.add(src)
-  h = BorrowHandle(src.resource, rt, 0, cx.borrow_scope)
+  h = BorrowHandle(src.rep, rt, 0, cx.borrow_scope)
   return cx.inst.handles.insert(h)
 ```
 Note that the `rt` value that is stored in the runtime `Handle` captures what
@@ -1542,7 +1543,7 @@ Calling `$f` invokes the following function, which creates a resource object
 and inserts it into the current instance's handle table:
 ```python
 def canon_resource_new(inst, rt, rep):
-  h = OwnHandle(Resource(rep, inst), rt, 0)
+  h = OwnHandle(rep, rt, 0)
   return inst.handles.insert(h)
 ```
 
@@ -1563,8 +1564,8 @@ optional destructor.
 def canon_resource_drop(inst, t, i):
   h = inst.handles.remove(i, t)
   if isinstance(t, Own) and t.rt.dtor:
-    trap_if(not h.resource.impl.may_enter)
-    t.rt.dtor(h.resource.rep)
+    trap_if(not t.rt.impl.may_enter)
+    t.rt.dtor(h.rep)
 ```
 The `may_enter` guard ensures the non-reentrance [component invariant], since
 a destructor call is analogous to a call to an export.
@@ -1586,8 +1587,7 @@ matches. Note that the "locally-defined" requirement above ensures that only
 the component instance defining a resource can access its representation.
 ```python
 def canon_resource_rep(inst, rt, i):
-  h = inst.handles.get(i, rt)
-  return h.resource.rep
+  return inst.handles.get(i, rt).rep
 ```
 
 
