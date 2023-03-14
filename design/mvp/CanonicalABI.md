@@ -420,7 +420,7 @@ def load(cx, ptr, t):
     case S64()          : return load_int(cx, ptr, 8, signed=True)
     case Float32()      : return canonicalize32(reinterpret_i32_as_float(load_int(cx, ptr, 4)))
     case Float64()      : return canonicalize64(reinterpret_i64_as_float(load_int(cx, ptr, 8)))
-    case Char()         : return i32_to_char(cx, load_int(cx, ptr, 4))
+    case Char()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
     case String()       : return load_string(cx, ptr)
     case List(t)        : return load_list(cx, ptr, t)
     case Record(fields) : return load_record(cx, ptr, fields)
@@ -473,7 +473,7 @@ An `i32` is converted to a `char` (a [Unicode Scalar Value]) by dynamically
 testing that its unsigned integral value is in the valid [Unicode Code Point]
 range and not a [Surrogate]:
 ```python
-def i32_to_char(cx, i):
+def convert_i32_to_char(cx, i):
   trap_if(i >= 0x110000)
   trap_if(0xD800 <= i <= 0xDFFF)
   return chr(i)
@@ -1118,7 +1118,7 @@ def lift_flat(cx, vi, t):
     case S64()          : return lift_flat_signed(vi, 64, 64)
     case Float32()      : return canonicalize32(vi.next('f32'))
     case Float64()      : return canonicalize64(vi.next('f64'))
-    case Char()         : return i32_to_char(cx, vi.next('i32'))
+    case Char()         : return convert_i32_to_char(cx, vi.next('i32'))
     case String()       : return lift_flat_string(cx, vi)
     case List(t)        : return lift_flat_list(cx, vi, t)
     case Record(fields) : return lift_flat_record(cx, vi, fields)
