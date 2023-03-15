@@ -396,7 +396,7 @@ def test_handles():
     assert(len(args) == 2)
     assert(args[0].rep == 42)
     assert(args[1].rep == 44)
-    return ([OwnHandle(45, rt, 0)], lambda:())
+    return ([OwnHandle(45, 0)], lambda:())
 
   def core_wasm(args):
     nonlocal dtor_value
@@ -419,36 +419,36 @@ def test_handles():
     dtor_value = None
     canon_resource_drop(inst, Own(rt), 0)
     assert(dtor_value == 42)
-    assert(len(inst.handles.array) == 4)
-    assert(inst.handles.array[0] is None)
-    assert(len(inst.handles.free) == 1)
+    assert(len(inst.handles.table(rt).array) == 4)
+    assert(inst.handles.table(rt).array[0] is None)
+    assert(len(inst.handles.table(rt).free) == 1)
 
     h = canon_resource_new(inst, rt, 46)
     assert(h == 0)
-    assert(len(inst.handles.array) == 4)
-    assert(inst.handles.array[0] is not None)
-    assert(len(inst.handles.free) == 0)
+    assert(len(inst.handles.table(rt).array) == 4)
+    assert(inst.handles.table(rt).array[0] is not None)
+    assert(len(inst.handles.table(rt).free) == 0)
 
     dtor_value = None
     canon_resource_drop(inst, Borrow(rt), 2)
     assert(dtor_value is None)
-    assert(len(inst.handles.array) == 4)
-    assert(inst.handles.array[2] is None)
-    assert(len(inst.handles.free) == 1)
+    assert(len(inst.handles.table(rt).array) == 4)
+    assert(inst.handles.table(rt).array[2] is None)
+    assert(len(inst.handles.table(rt).free) == 1)
 
     return [Value('i32', 0), Value('i32', 1), Value('i32', 3)]
 
   ft = FuncType([Own(rt),Own(rt),Borrow(rt),Borrow(rt2)],[Own(rt),Own(rt),Own(rt)])
-  args = [OwnHandle(42, rt, 0), OwnHandle(43, rt, 0), OwnHandle(44, rt, 0), OwnHandle(13, rt2, 0)]
+  args = [OwnHandle(42, 0), OwnHandle(43, 0), OwnHandle(44, 0), OwnHandle(13, 0)]
   got,post_return = canon_lift(opts, inst, core_wasm, ft, args)
 
   assert(len(got) == 3)
   assert(got[0].rep == 46)
   assert(got[1].rep == 43)
   assert(got[2].rep == 45)
-  assert(len(inst.handles.array) == 4)
-  assert(all(inst.handles.array[i] is None for i in range(3)))
-  assert(len(inst.handles.free) == 4)
+  assert(len(inst.handles.table(rt).array) == 4)
+  assert(all(inst.handles.table(rt).array[i] is None for i in range(3)))
+  assert(len(inst.handles.table(rt).free) == 4)
   definitions.MAX_FLAT_RESULTS = before
 
 test_handles()
