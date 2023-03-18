@@ -241,39 +241,39 @@ canonical definition is defined to execute inside. The `may_enter` and
 `may_leave` fields are used to enforce the [component invariants]: `may_leave`
 indicates whether the instance may call out to an import and the `may_enter`
 state indicates whether the instance may be called from the outside world
-through an export. The `HandleTable` is defined next.
+through an export.
 ```python
 class ComponentInstance:
   may_leave: bool
   may_enter: bool
-  handles: HandleTable
+  handles: HandleTables
 
   def __init__(self):
     self.may_leave = True
     self.may_enter = True
-    self.handles = HandleTable()
+    self.handles = HandleTables()
 ```
+`HandleTables` is defined in terms of a collection of supporting runtime
+bookkeeping classes that we'll go through first.
 
-The `HandleTable` class is defined in terms of a collection of supporting
-runtime bookkeeping classes that we'll go through first.
-
-The `Resource` class represents a runtime instance of a resource type, storing
-the core representation value (which is currently fixed to `i32`) and the
-component instance that is implementing this resource.
+The `ResourceType` class represents a resource type that has been defined by
+the specific component instance pointed to by `impl` with a particular
+function closure as the `dtor`.
 ```python
 @dataclass
-class Resource:
-  rep: int
+class ResourceType(Type):
   impl: ComponentInstance
+  dtor: Optional[Callable[[int],None]]
 ```
 
-The `OwnHandle` and `BorrowHandle` classes represent runtime handle values of
-`own` and `borrow` type, resp:
+The `Handle` class and its subclasses represent handle values referring to
+resources. The `rep` field of `Handle` stores the representation value
+(currently fixed to `i32`) pass to `resource.new` for the resource that this
+handle refers to.
 ```python
 @dataclass
 class Handle:
-  resource: Resource
-  rt: ResourceType
+  rep: int
   lend_count: int
 
 @dataclass
@@ -284,14 +284,10 @@ class OwnHandle(Handle):
 class BorrowHandle(Handle):
   scope: BorrowScope
 ```
-The `resource` field points to the resource instance this handle refers to. The
-`rt` field points to a runtime value representing the static
-[`resourcetype`](Explainer.md#type-definitions) of this handle and is used by
-dynamic type checking below. Lastly, the `lend_count` field maintains a count
-of the outstanding handles that were lent from this handle (by calls to
-`borrow`-taking functions). This count is used below to dynamically enforce the
-invariant that a handle cannot be dropped while it has currently lent out a
-`borrow`.
+The `lend_count` field maintains a count of the outstanding handles that were
+lent from this handle (by calls to `borrow`-taking functions). This count is
+used below to dynamically enforce the invariant that a handle cannot be
+dropped while it has currently lent out a `borrow`.
 
 The `BorrowScope` class represents the scope of a single runtime call of a
 component-level function during which zero or more handles are borrowed.
@@ -325,8 +321,9 @@ lent out a `BorrowHandle` and are to be restored when the call finishes and
 stored inline in the stack frame with a layout specialized to the function
 signature, thereby avoiding dynamic allocation of `lenders` in many cases.
 
-Based on these supporting runtime data structures, we can define the
-`HandleTable` in pieces, starting with its fields and the `insert` method:
+`HandleTable` (singular) encapsulates a single mutable, growable array
+of handles that all share the same `ResourceType`. Defining `HandleTable` in
+chunks, we start with the fields and `insert` method:
 ```python
 class HandleTable:
   array: [Optional[Handle]]
@@ -357,26 +354,18 @@ The `get` method is used by other `HandleTable` methods and canonical
 definitions below and uses dynamic guards to catch out-of-bounds and
 use-after-free:
 ```python
-  def get(self, i, rt):
+  def get(self, i):
     trap_if(i >= len(self.array))
     trap_if(self.array[i] is None)
-    trap_if(self.array[i].rt is not rt)
     return self.array[i]
 ```
-Additionally, the `get` method takes the runtime resource type tag and checks
-a tag match before returning the handle with this new-valid resource type. This
-check is a non-structural, pointer-equality-based test used to enforce the
-[type-checking rules](Explainer.md) of resource types at runtime. Importantly,
-this check keeps type imports abstract, considering each type import to have a
-unique `rt` value distinct from every other type import even if the two imports
-happen to be instantiated with the same resource type at runtime.
 
-Finally, the `remove` method is used to drop or transfer a handle out of the
-handle table. `remove` adds the removed handle to the `free` list for later
-recycling by `insert` (above).
+The last method of `HandleTable`, `remove`, is used to drop or transfer a
+handle out of the handle table. `remove` adds the removed handle to the `free`
+list for later recycling by `insert` (above).
 ```python
   def remove(self, i, t):
-    h = self.get(i, t.rt)
+    h = self.get(i)
     trap_if(h.lend_count != 0)
     match t:
       case Own(_):
@@ -396,6 +385,36 @@ resource and that there aren't any dangling borrows hanging around from the
 previous owner. The bookkeeping performed by `remove` for borrowed handles
 records the fulfillment of the obligation of the borrower to drop the handle
 before the end of the call.
+
+Finally, we can define `HandleTables` (plural) as simply a wrapper around
+a mutable mapping from `ResourceType` to `HandleTable`:
+```python
+class HandleTables:
+  rt_to_table: MutableMapping[ResourceType, HandleTable]
+
+  def __init__(self):
+    self.rt_to_table = dict()
+
+  def table(self, rt):
+    if id(rt) not in self.rt_to_table:
+      self.rt_to_table[id(rt)] = HandleTable()
+    return self.rt_to_table[id(rt)]
+
+  def insert(self, h, rt):
+    return self.table(rt).insert(h)
+  def get(self, i, rt):
+    return self.table(rt).get(i)
+  def remove(self, i, t):
+    return self.table(t.rt).remove(i, t)
+```
+While this Python code performs a dynamic hash-table lookup on each handle
+table access, as we'll see below, the `rt` parameter is always statically
+known such that a normal implementation can statically enumerate all
+`HandleTable` objects at compile time and then route the calls to `insert`,
+`get` and `remove` to the correct `HandleTable` at the callsite. The net
+result is that each component instance will contain one handle table per
+resource type used by the component, with each compiled adapter function
+accessing the correct handle table as-if it were a global variable.
 
 
 ### Loading
@@ -962,15 +981,23 @@ current component instance's `HandleTable`:
 ```python
 def lower_own(cx, src, rt):
   assert(isinstance(src, OwnHandle))
-  h = OwnHandle(src.resource, rt, 0)
-  return cx.inst.handles.insert(h)
+  h = OwnHandle(src.rep, 0)
+  return cx.inst.handles.insert(h, rt)
 
 def lower_borrow(cx, src, rt):
   assert(isinstance(src, Handle))
+  if cx.inst is rt.impl:
+    return src.rep
   cx.borrow_scope.add(src)
-  h = BorrowHandle(src.resource, rt, 0, cx.borrow_scope)
-  return cx.inst.handles.insert(h)
+  h = BorrowHandle(src.rep, 0, cx.borrow_scope)
+  return cx.inst.handles.insert(h, rt)
 ```
+The special case in `lower_borrow` is an optimization, recognizing that, when
+a borrowed handle is passed to the component that implemented the resource
+type, the only thing the borrowed handle is good for is calling
+`resource.rep`, so lowering might as well avoid the overhead of creating an
+intermediate borrow handle.
+
 Note that the `rt` value that is stored in the runtime `Handle` captures what
 is statically known about the handle right before losing this information in
 the homogeneous `HandleTable`. Moreoever, as described above, distinct type
@@ -1542,8 +1569,8 @@ Calling `$f` invokes the following function, which creates a resource object
 and inserts it into the current instance's handle table:
 ```python
 def canon_resource_new(inst, rt, rep):
-  h = OwnHandle(Resource(rep, inst), rt, 0)
-  return inst.handles.insert(h)
+  h = OwnHandle(rep, 0)
+  return inst.handles.insert(h, rt)
 ```
 
 ### `canon resource.drop`
@@ -1563,8 +1590,8 @@ optional destructor.
 def canon_resource_drop(inst, t, i):
   h = inst.handles.remove(i, t)
   if isinstance(t, Own) and t.rt.dtor:
-    trap_if(not h.resource.impl.may_enter)
-    t.rt.dtor(h.resource.rep)
+    trap_if(not t.rt.impl.may_enter)
+    t.rt.dtor(h.rep)
 ```
 The `may_enter` guard ensures the non-reentrance [component invariant], since
 a destructor call is analogous to a call to an export.
@@ -1586,8 +1613,7 @@ matches. Note that the "locally-defined" requirement above ensures that only
 the component instance defining a resource can access its representation.
 ```python
 def canon_resource_rep(inst, rt, i):
-  h = inst.handles.get(i, rt)
-  return h.resource.rep
+  return inst.handles.get(i, rt).rep
 ```
 
 

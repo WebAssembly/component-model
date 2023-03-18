@@ -160,10 +160,6 @@ class Flags(ValType):
   labels: [str]
 
 @dataclass
-class ResourceType(Type):
-  dtor: Optional[Callable[[int],None]]
-
-@dataclass
 class Own(ValType):
   rt: ResourceType
 
@@ -310,26 +306,25 @@ class CanonicalOptions:
 class ComponentInstance:
   may_leave: bool
   may_enter: bool
-  handles: HandleTable
+  handles: HandleTables
 
   def __init__(self):
     self.may_leave = True
     self.may_enter = True
-    self.handles = HandleTable()
+    self.handles = HandleTables()
 
 #
 
 @dataclass
-class Resource:
-  rep: int
+class ResourceType(Type):
   impl: ComponentInstance
+  dtor: Optional[Callable[[int],None]]
 
 #
 
 @dataclass
 class Handle:
-  resource: Resource
-  rt: ResourceType
+  rep: int
   lend_count: int
 
 @dataclass
@@ -385,16 +380,15 @@ class HandleTable:
 
 #
 
-  def get(self, i, rt):
+  def get(self, i):
     trap_if(i >= len(self.array))
     trap_if(self.array[i] is None)
-    trap_if(self.array[i].rt is not rt)
     return self.array[i]
 
 #
 
   def remove(self, i, t):
-    h = self.get(i, t.rt)
+    h = self.get(i)
     trap_if(h.lend_count != 0)
     match t:
       case Own(_):
@@ -405,6 +399,26 @@ class HandleTable:
     self.array[i] = None
     self.free.append(i)
     return h
+
+#
+
+class HandleTables:
+  rt_to_table: MutableMapping[ResourceType, HandleTable]
+
+  def __init__(self):
+    self.rt_to_table = dict()
+
+  def table(self, rt):
+    if id(rt) not in self.rt_to_table:
+      self.rt_to_table[id(rt)] = HandleTable()
+    return self.rt_to_table[id(rt)]
+
+  def insert(self, h, rt):
+    return self.table(rt).insert(h)
+  def get(self, i, rt):
+    return self.table(rt).get(i)
+  def remove(self, i, t):
+    return self.table(t.rt).remove(i, t)
 
 ### Loading
 
@@ -843,14 +857,16 @@ def pack_flags_into_int(v, labels):
 
 def lower_own(cx, src, rt):
   assert(isinstance(src, OwnHandle))
-  h = OwnHandle(src.resource, rt, 0)
-  return cx.inst.handles.insert(h)
+  h = OwnHandle(src.rep, 0)
+  return cx.inst.handles.insert(h, rt)
 
 def lower_borrow(cx, src, rt):
   assert(isinstance(src, Handle))
+  if cx.inst is rt.impl:
+    return src.rep
   cx.borrow_scope.add(src)
-  h = BorrowHandle(src.resource, rt, 0, cx.borrow_scope)
-  return cx.inst.handles.insert(h)
+  h = BorrowHandle(src.rep, 0, cx.borrow_scope)
+  return cx.inst.handles.insert(h, rt)
 
 ### Flattening
 
@@ -1204,19 +1220,18 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
 ### `resource.new`
 
 def canon_resource_new(inst, rt, rep):
-  h = OwnHandle(Resource(rep, inst), rt, 0)
-  return inst.handles.insert(h)
+  h = OwnHandle(rep, 0)
+  return inst.handles.insert(h, rt)
 
 ### `resource.drop`
 
 def canon_resource_drop(inst, t, i):
   h = inst.handles.remove(i, t)
   if isinstance(t, Own) and t.rt.dtor:
-    trap_if(not h.resource.impl.may_enter)
-    t.rt.dtor(h.resource.rep)
+    trap_if(not t.rt.impl.may_enter)
+    t.rt.dtor(h.rep)
 
 ### `resource.rep`
 
 def canon_resource_rep(inst, rt, i):
-  h = inst.handles.get(i, rt)
-  return h.resource.rep
+  return inst.handles.get(i, rt).rep
