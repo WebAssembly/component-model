@@ -391,8 +391,6 @@ def test_handles():
   opts = mk_opts()
 
   def host_import(args):
-    nonlocal opts
-    nonlocal inst
     assert(len(args) == 2)
     assert(args[0].rep == 42)
     assert(args[1].rep == 44)
@@ -410,8 +408,17 @@ def test_handles():
     assert(canon_resource_rep(inst, rt, 1) == 43)
     assert(canon_resource_rep(inst, rt, 2) == 44)
 
-    host_ft = FuncType([Borrow(rt),Borrow(rt)],[Own(rt)])
-    results = canon_lower(opts, inst, host_import, True, host_ft, [Value('i32',0),Value('i32',2)])
+    host_ft = FuncType([
+      Borrow(rt),
+      Borrow(rt)
+    ],[
+      Own(rt)
+    ])
+    args = [
+      Value('i32',0),
+      Value('i32',2)
+    ]
+    results = canon_lower(opts, inst, host_import, True, host_ft, args)
     assert(len(results) == 1)
     assert(results[0].t == 'i32' and results[0].v == 3)
     assert(canon_resource_rep(inst, rt, 3) == 45)
@@ -438,8 +445,22 @@ def test_handles():
 
     return [Value('i32', 0), Value('i32', 1), Value('i32', 3)]
 
-  ft = FuncType([Own(rt),Own(rt),Borrow(rt),Borrow(rt2)],[Own(rt),Own(rt),Own(rt)])
-  args = [OwnHandle(42, 0), OwnHandle(43, 0), OwnHandle(44, 0), OwnHandle(13, 0)]
+  ft = FuncType([
+    Own(rt),
+    Own(rt),
+    Borrow(rt),
+    Borrow(rt2)
+  ],[
+    Own(rt),
+    Own(rt),
+    Own(rt)
+  ])
+  args = [
+    OwnHandle(42, 0),
+    OwnHandle(43, 0),
+    BorrowHandle(44, 0, None),
+    BorrowHandle(13, 0, None)
+  ]
   got,post_return = canon_lift(opts, inst, core_wasm, ft, args)
 
   assert(len(got) == 3)

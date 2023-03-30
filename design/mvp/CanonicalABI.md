@@ -218,13 +218,25 @@ definitions via the `cx` parameter:
 class Context:
   opts: CanonicalOptions
   inst: ComponentInstance
-  borrow_scope: BorrowScope
+  lenders: [Handle]
+  borrow_count: int
 
   def __init__(self, opts, inst):
     self.opts = opts
     self.inst = inst
-    self.borrow_scope = BorrowScope()
+    self.lenders = []
+    self.borrow_count = 0
 ```
+One `Context` is created for each call for both the caller and callee. Thus, a
+cross-component call will create 2 `Context` objects for the call, while a
+component-to-host or host-to-component call will create a single `Context` for
+the wasm caller or callee, resp.
+
+The `lenders` and `borrow_count` fields will be used below for dynamically
+enforcing the rules of borrow handles. The one thing to mention here is that
+the `lenders` list usually has a fixed size (in all cases except when a
+function signature has `borrow`s in `list`s) and thus can be stored inline in
+the native stack frame.
 
 The `opts` field represents the [`canonopt`] values supplied to
 currently-executing `canon lift` or `canon lower`:
@@ -282,48 +294,22 @@ class OwnHandle(Handle):
 
 @dataclass
 class BorrowHandle(Handle):
-  scope: BorrowScope
+  cx: Optional[Context]
 ```
 The `lend_count` field maintains a count of the outstanding handles that were
 lent from this handle (by calls to `borrow`-taking functions). This count is
 used below to dynamically enforce the invariant that a handle cannot be
 dropped while it has currently lent out a `borrow`.
 
-The `BorrowScope` class represents the scope of a single runtime call of a
-component-level function during which zero or more handles are borrowed.
-```python
-class BorrowScope:
-  borrow_count: int
-  lenders: [Handle]
-
-  def __init__(self):
-    self.borrow_count = 0
-    self.lenders = []
-
-  def add(self, src):
-    src.lend_count += 1
-    self.lenders.append(src)
-    self.borrow_count += 1
-
-  def remove(self):
-    self.borrow_count -= 1
-
-  def exit(self):
-    trap_if(self.borrow_count != 0)
-    for h in self.lenders:
-      h.lend_count -= 1
-```
-The `borrow_count` field tracks the number of outstanding `BorrowHandle`s that
-were created when lowering the parameters of the call that have not yet been
-dropped. The `lenders` field maintains a list of source `Handle`s that have
-lent out a `BorrowHandle` and are to be restored when the call finishes and
-`exit` is called. In an optimizing implementation, a `BorrowScope` can be
-stored inline in the stack frame with a layout specialized to the function
-signature, thereby avoiding dynamic allocation of `lenders` in many cases.
+The `BorrowHandle` class additionally stores the `Context` of the call that
+created this borrow for the purposes of `borrow_count` bookkeeping below.
+Until async is added to the Component Model, because of the non-reentrancy
+of components, there is at most one callee `Context` alive for a given
+component and thus the `cx` field of `BorrowHandle` can be optimized away.
 
 `HandleTable` (singular) encapsulates a single mutable, growable array
 of handles that all share the same `ResourceType`. Defining `HandleTable` in
-chunks, we start with the fields and `insert` method:
+chunks, we start with the fields and `add` method:
 ```python
 class HandleTable:
   array: [Optional[Handle]]
@@ -333,7 +319,7 @@ class HandleTable:
     self.array = []
     self.free = []
 
-  def insert(self, h):
+  def add(self, h, t):
     if self.free:
       i = self.free.pop()
       assert(self.array[i] is None)
@@ -341,12 +327,15 @@ class HandleTable:
     else:
       i = len(self.array)
       self.array.append(h)
+    match t:
+      case Borrow():
+        h.cx.borrow_count += 1
     return i
 ```
 The `HandleTable` class maintains a dense array of handles that can contain
 holes created by the `remove` method (defined below). These holes are kept in a
 separate Python list here, but an optimizing implementation could instead store
-the free list in the free elements of `array`. When inserting a new handle,
+the free list in the free elements of `array`. When adding a new handle,
 `HandleTable` first consults the `free` list, which is popped LIFO to better
 detect use-after-free bugs in the guest code.
 
@@ -362,17 +351,20 @@ use-after-free:
 
 The last method of `HandleTable`, `remove`, is used to drop or transfer a
 handle out of the handle table. `remove` adds the removed handle to the `free`
-list for later recycling by `insert` (above).
+list for later recycling by `add` (above).
 ```python
-  def remove(self, i, t):
+  def remove_or_drop(self, i, t, drop):
     h = self.get(i)
     trap_if(h.lend_count != 0)
     match t:
-      case Own(_):
+      case Own():
         trap_if(not isinstance(h, OwnHandle))
-      case Borrow(_):
+        if drop and t.rt.dtor:
+          trap_if(not t.rt.impl.may_enter)
+          t.rt.dtor(h.rep)
+      case Borrow():
         trap_if(not isinstance(h, BorrowHandle))
-        h.scope.remove()
+        h.cx.borrow_count -= 1
     self.array[i] = None
     self.free.append(i)
     return h
@@ -400,17 +392,19 @@ class HandleTables:
       self.rt_to_table[id(rt)] = HandleTable()
     return self.rt_to_table[id(rt)]
 
-  def insert(self, h, rt):
-    return self.table(rt).insert(h)
+  def add(self, h, t):
+    return self.table(t.rt).add(h, t)
   def get(self, i, rt):
     return self.table(rt).get(i)
   def remove(self, i, t):
-    return self.table(t.rt).remove(i, t)
+    return self.table(t.rt).remove_or_drop(i, t, drop = False)
+  def drop(self, i, t):
+    self.table(t.rt).remove_or_drop(i, t, drop = True)
 ```
 While this Python code performs a dynamic hash-table lookup on each handle
 table access, as we'll see below, the `rt` parameter is always statically
 known such that a normal implementation can statically enumerate all
-`HandleTable` objects at compile time and then route the calls to `insert`,
+`HandleTable` objects at compile time and then route the calls to `add`,
 `get` and `remove` to the correct `HandleTable` at the callsite. The net
 result is that each component instance will contain one handle table per
 resource type used by the component, with each compiled adapter function
@@ -445,8 +439,8 @@ def load(cx, ptr, t):
     case Record(fields) : return load_record(cx, ptr, fields)
     case Variant(cases) : return load_variant(cx, ptr, cases)
     case Flags(labels)  : return load_flags(cx, ptr, labels)
-    case Own(_)         : return lift_own(cx, load_int(opts, ptr, 4), t)
-    case Borrow(_)      : return lift_borrow(cx, load_int(opts, ptr, 4), t)
+    case Own()          : return lift_own(cx, load_int(opts, ptr, 4), t)
+    case Borrow()       : return lift_borrow(cx, load_int(opts, ptr, 4), t)
 ```
 
 Integers are loaded directly from memory, with their high-order bit interpreted
@@ -623,19 +617,31 @@ def unpack_flags_from_int(i, labels):
   return record
 ```
 
-Finally, `own` and `borrow` handles are lifted by loading their referenced resources
-out of the current component instance's handle table:
+Next, `own` handles are lifted removing the `OwnHandle` from the handle table
+and passing the underlying representation value as the lifted value. The other
+side will wrap this representation value in its own new `OwnHandle` in its on
+handle table.
 ```python
 def lift_own(cx, i, t):
-  return cx.inst.handles.remove(i, t)
-
-def lift_borrow(cx, i, t):
-  return cx.inst.handles.get(i, t.rt)
+  h = cx.inst.handles.remove(i, t)
+  return OwnHandle(h.rep, 0)
 ```
-The `remove` method is used in `lift_own` so that passing an `own` handle
-across a component boundary transfers ownership. Note that `remove` checks
-*both* the resource type tag *and* that the indexed handle is an `OwnHandle`
-while `get` only checks the resource type, thereby allowing any handle type.
+Note that `t` refers to an `own` type and thus `HandleTable.remove` will, as
+shown above, ensure that the handle at index `i` is an `OwnHandle`.
+
+Lastly, `borrow` handles are lifted by getting the handle out of the
+appropriate resource type's handle table.
+```python
+def lift_borrow(cx, i, t):
+  h = cx.inst.handles.get(i, t.rt)
+  h.lend_count += 1
+  cx.lenders.append(h)
+  return BorrowHandle(h.rep, 0, None)
+```
+Thus, `borrow` lifting allows all handle types to be supplied for a `borrow`,
+as long as they have a matching resource type (`t.rt`). The lending handle is
+passed as the lifted value so that the receiver can increment and decrement
+its `lend_count`.
 
 
 ### Storing
@@ -665,8 +671,8 @@ def store(cx, v, t, ptr):
     case Record(fields) : store_record(cx, v, ptr, fields)
     case Variant(cases) : store_variant(cx, v, ptr, cases)
     case Flags(labels)  : store_flags(cx, v, ptr, labels)
-    case Own(rt)        : store_int(cx, lower_own(opts, v, rt), ptr, 4)
-    case Borrow(rt)     : store_int(cx, lower_borrow(opts, v, rt), ptr, 4)
+    case Own()          : store_int(cx, lower_own(opts, v, t), ptr, 4)
+    case Borrow()       : store_int(cx, lower_borrow(opts, v, t), ptr, 4)
 ```
 
 Integers are stored directly into memory. Because the input domain is exactly
@@ -979,18 +985,16 @@ def pack_flags_into_int(v, labels):
 Finally, `own` and `borrow` handles are lowered by inserting them into the
 current component instance's `HandleTable`:
 ```python
-def lower_own(cx, src, rt):
-  assert(isinstance(src, OwnHandle))
-  h = OwnHandle(src.rep, 0)
-  return cx.inst.handles.insert(h, rt)
+def lower_own(cx, h, t):
+  assert(isinstance(h, OwnHandle))
+  return cx.inst.handles.add(h, t)
 
-def lower_borrow(cx, src, rt):
-  assert(isinstance(src, Handle))
-  if cx.inst is rt.impl:
-    return src.rep
-  cx.borrow_scope.add(src)
-  h = BorrowHandle(src.rep, 0, cx.borrow_scope)
-  return cx.inst.handles.insert(h, rt)
+def lower_borrow(cx, h, t):
+  assert(isinstance(h, BorrowHandle))
+  if cx.inst is t.rt.impl:
+    return h.rep
+  h.cx = cx
+  return cx.inst.handles.add(h, t)
 ```
 The special case in `lower_borrow` is an optimization, recognizing that, when
 a borrowed handle is passed to the component that implemented the resource
@@ -1151,8 +1155,8 @@ def lift_flat(cx, vi, t):
     case Record(fields) : return lift_flat_record(cx, vi, fields)
     case Variant(cases) : return lift_flat_variant(cx, vi, cases)
     case Flags(labels)  : return lift_flat_flags(vi, labels)
-    case Own(_)         : return lift_own(cx, vi.next('i32'), t)
-    case Borrow(_)      : return lift_borrow(cx, vi.next('i32'), t)
+    case Own()          : return lift_own(cx, vi.next('i32'), t)
+    case Borrow()       : return lift_borrow(cx, vi.next('i32'), t)
 ```
 
 Integers are lifted from core `i32` or `i64` values using the signedness of the
@@ -1275,8 +1279,8 @@ def lower_flat(cx, v, t):
     case Record(fields) : return lower_flat_record(cx, v, fields)
     case Variant(cases) : return lower_flat_variant(cx, v, cases)
     case Flags(labels)  : return lower_flat_flags(v, labels)
-    case Own(rt)        : return [Value('i32', lower_own(cx, v, rt))]
-    case Borrow(rt)     : return [Value('i32', lower_borrow(cx, v, rt))]
+    case Own()          : return [Value('i32', lower_own(cx, v, t))]
+    case Borrow()       : return [Value('i32', lower_borrow(cx, v, t))]
 ```
 
 Since component-level values are assumed in-range and, as previously stated,
@@ -1452,7 +1456,7 @@ def canon_lift(opts, inst, callee, ft, args):
   def post_return():
     if opts.post_return is not None:
       opts.post_return(flat_results)
-    cx.borrow_scope.exit()
+    trap_if(cx.borrow_count != 0)
 
   return (results, post_return)
 ```
@@ -1504,6 +1508,9 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
   inst.may_leave = True
 
   post_return()
+
+  for h in cx.lenders:
+    h.lend_count -= 1
 
   if calling_import:
     inst.may_enter = True
@@ -1566,11 +1573,11 @@ validation specifies:
   currently fixed to be `i32`.
 
 Calling `$f` invokes the following function, which creates a resource object
-and inserts it into the current instance's handle table:
+and adds it into the current instance's handle table:
 ```python
 def canon_resource_new(inst, rt, rep):
   h = OwnHandle(rep, 0)
-  return inst.handles.insert(h, rt)
+  return inst.handles.add(h, Own(rt))
 ```
 
 ### `canon resource.drop`
@@ -1588,10 +1595,7 @@ be of type `$t` from the handle table and then, for an `own` handle, calls the
 optional destructor.
 ```python
 def canon_resource_drop(inst, t, i):
-  h = inst.handles.remove(i, t)
-  if isinstance(t, Own) and t.rt.dtor:
-    trap_if(not t.rt.impl.may_enter)
-    t.rt.dtor(h.rep)
+  inst.handles.drop(i, t)
 ```
 The `may_enter` guard ensures the non-reentrance [component invariant], since
 a destructor call is analogous to a call to an export.
@@ -1613,7 +1617,8 @@ matches. Note that the "locally-defined" requirement above ensures that only
 the component instance defining a resource can access its representation.
 ```python
 def canon_resource_rep(inst, rt, i):
-  return inst.handles.get(i, rt).rep
+  h = inst.handles.get(i, rt)
+  return h.rep
 ```
 
 

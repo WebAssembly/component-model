@@ -286,12 +286,14 @@ def num_i32_flags(labels):
 class Context:
   opts: CanonicalOptions
   inst: ComponentInstance
-  borrow_scope: BorrowScope
+  lenders: [Handle]
+  borrow_count: int
 
   def __init__(self, opts, inst):
     self.opts = opts
     self.inst = inst
-    self.borrow_scope = BorrowScope()
+    self.lenders = []
+    self.borrow_count = 0
 
 #
 
@@ -333,30 +335,7 @@ class OwnHandle(Handle):
 
 @dataclass
 class BorrowHandle(Handle):
-  scope: BorrowScope
-
-#
-
-class BorrowScope:
-  borrow_count: int
-  lenders: [Handle]
-
-  def __init__(self):
-    self.borrow_count = 0
-    self.lenders = []
-
-  def add(self, src):
-    src.lend_count += 1
-    self.lenders.append(src)
-    self.borrow_count += 1
-
-  def remove(self):
-    self.borrow_count -= 1
-
-  def exit(self):
-    trap_if(self.borrow_count != 0)
-    for h in self.lenders:
-      h.lend_count -= 1
+  cx: Optional[Context]
 
 #
 
@@ -368,7 +347,7 @@ class HandleTable:
     self.array = []
     self.free = []
 
-  def insert(self, h):
+  def add(self, h, t):
     if self.free:
       i = self.free.pop()
       assert(self.array[i] is None)
@@ -376,6 +355,9 @@ class HandleTable:
     else:
       i = len(self.array)
       self.array.append(h)
+    match t:
+      case Borrow():
+        h.cx.borrow_count += 1
     return i
 
 #
@@ -387,15 +369,18 @@ class HandleTable:
 
 #
 
-  def remove(self, i, t):
+  def remove_or_drop(self, i, t, drop):
     h = self.get(i)
     trap_if(h.lend_count != 0)
     match t:
-      case Own(_):
+      case Own():
         trap_if(not isinstance(h, OwnHandle))
-      case Borrow(_):
+        if drop and t.rt.dtor:
+          trap_if(not t.rt.impl.may_enter)
+          t.rt.dtor(h.rep)
+      case Borrow():
         trap_if(not isinstance(h, BorrowHandle))
-        h.scope.remove()
+        h.cx.borrow_count -= 1
     self.array[i] = None
     self.free.append(i)
     return h
@@ -413,12 +398,14 @@ class HandleTables:
       self.rt_to_table[id(rt)] = HandleTable()
     return self.rt_to_table[id(rt)]
 
-  def insert(self, h, rt):
-    return self.table(rt).insert(h)
+  def add(self, h, t):
+    return self.table(t.rt).add(h, t)
   def get(self, i, rt):
     return self.table(rt).get(i)
   def remove(self, i, t):
-    return self.table(t.rt).remove(i, t)
+    return self.table(t.rt).remove_or_drop(i, t, drop = False)
+  def drop(self, i, t):
+    self.table(t.rt).remove_or_drop(i, t, drop = True)
 
 ### Loading
 
@@ -443,8 +430,8 @@ def load(cx, ptr, t):
     case Record(fields) : return load_record(cx, ptr, fields)
     case Variant(cases) : return load_variant(cx, ptr, cases)
     case Flags(labels)  : return load_flags(cx, ptr, labels)
-    case Own(_)         : return lift_own(cx, load_int(opts, ptr, 4), t)
-    case Borrow(_)      : return lift_borrow(cx, load_int(opts, ptr, 4), t)
+    case Own()          : return lift_own(cx, load_int(opts, ptr, 4), t)
+    case Borrow()       : return lift_borrow(cx, load_int(opts, ptr, 4), t)
 
 #
 
@@ -589,10 +576,16 @@ def unpack_flags_from_int(i, labels):
 #
 
 def lift_own(cx, i, t):
-  return cx.inst.handles.remove(i, t)
+  h = cx.inst.handles.remove(i, t)
+  return OwnHandle(h.rep, 0)
+
+#
 
 def lift_borrow(cx, i, t):
-  return cx.inst.handles.get(i, t.rt)
+  h = cx.inst.handles.get(i, t.rt)
+  h.lend_count += 1
+  cx.lenders.append(h)
+  return BorrowHandle(h.rep, 0, None)
 
 ### Storing
 
@@ -617,8 +610,8 @@ def store(cx, v, t, ptr):
     case Record(fields) : store_record(cx, v, ptr, fields)
     case Variant(cases) : store_variant(cx, v, ptr, cases)
     case Flags(labels)  : store_flags(cx, v, ptr, labels)
-    case Own(rt)        : store_int(cx, lower_own(opts, v, rt), ptr, 4)
-    case Borrow(rt)     : store_int(cx, lower_borrow(opts, v, rt), ptr, 4)
+    case Own()          : store_int(cx, lower_own(opts, v, t), ptr, 4)
+    case Borrow()       : store_int(cx, lower_borrow(opts, v, t), ptr, 4)
 
 #
 
@@ -855,18 +848,16 @@ def pack_flags_into_int(v, labels):
 
 #
 
-def lower_own(cx, src, rt):
-  assert(isinstance(src, OwnHandle))
-  h = OwnHandle(src.rep, 0)
-  return cx.inst.handles.insert(h, rt)
+def lower_own(cx, h, t):
+  assert(isinstance(h, OwnHandle))
+  return cx.inst.handles.add(h, t)
 
-def lower_borrow(cx, src, rt):
-  assert(isinstance(src, Handle))
-  if cx.inst is rt.impl:
-    return src.rep
-  cx.borrow_scope.add(src)
-  h = BorrowHandle(src.rep, 0, cx.borrow_scope)
-  return cx.inst.handles.insert(h, rt)
+def lower_borrow(cx, h, t):
+  assert(isinstance(h, BorrowHandle))
+  if cx.inst is t.rt.impl:
+    return h.rep
+  h.cx = cx
+  return cx.inst.handles.add(h, t)
 
 ### Flattening
 
@@ -971,8 +962,8 @@ def lift_flat(cx, vi, t):
     case Record(fields) : return lift_flat_record(cx, vi, fields)
     case Variant(cases) : return lift_flat_variant(cx, vi, cases)
     case Flags(labels)  : return lift_flat_flags(vi, labels)
-    case Own(_)         : return lift_own(cx, vi.next('i32'), t)
-    case Borrow(_)      : return lift_borrow(cx, vi.next('i32'), t)
+    case Own()          : return lift_own(cx, vi.next('i32'), t)
+    case Borrow()       : return lift_borrow(cx, vi.next('i32'), t)
 
 #
 
@@ -1070,8 +1061,8 @@ def lower_flat(cx, v, t):
     case Record(fields) : return lower_flat_record(cx, v, fields)
     case Variant(cases) : return lower_flat_variant(cx, v, cases)
     case Flags(labels)  : return lower_flat_flags(v, labels)
-    case Own(rt)        : return [Value('i32', lower_own(cx, v, rt))]
-    case Borrow(rt)     : return [Value('i32', lower_borrow(cx, v, rt))]
+    case Own()          : return [Value('i32', lower_own(cx, v, t))]
+    case Borrow()       : return [Value('i32', lower_borrow(cx, v, t))]
 
 #
 
@@ -1187,7 +1178,7 @@ def canon_lift(opts, inst, callee, ft, args):
   def post_return():
     if opts.post_return is not None:
       opts.post_return(flat_results)
-    cx.borrow_scope.exit()
+    trap_if(cx.borrow_count != 0)
 
   return (results, post_return)
 
@@ -1212,6 +1203,9 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
 
   post_return()
 
+  for h in cx.lenders:
+    h.lend_count -= 1
+
   if calling_import:
     inst.may_enter = True
 
@@ -1221,17 +1215,15 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
 
 def canon_resource_new(inst, rt, rep):
   h = OwnHandle(rep, 0)
-  return inst.handles.insert(h, rt)
+  return inst.handles.add(h, Own(rt))
 
 ### `resource.drop`
 
 def canon_resource_drop(inst, t, i):
-  h = inst.handles.remove(i, t)
-  if isinstance(t, Own) and t.rt.dtor:
-    trap_if(not t.rt.impl.may_enter)
-    t.rt.dtor(h.rep)
+  inst.handles.drop(i, t)
 
 ### `resource.rep`
 
 def canon_resource_rep(inst, rt, i):
-  return inst.handles.get(i, rt).rep
+  h = inst.handles.get(i, rt)
+  return h.rep
