@@ -576,8 +576,7 @@ def unpack_flags_from_int(i, labels):
 #
 
 def lift_own(cx, i, t):
-  h = cx.inst.handles.transfer(i, t)
-  return OwnHandle(h.rep, 0)
+  return cx.inst.handles.transfer(i, t)
 
 #
 

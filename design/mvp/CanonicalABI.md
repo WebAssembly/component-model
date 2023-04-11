@@ -370,13 +370,9 @@ handle to the `free` list for later recycling by `add` (above).
     return h
 ```
 The `lend_count` guard ensures that no dangling borrows are created when
-destroying a resource. Because `transfer_or_drop` is used for cross-component
-transfer of `own` handles (via `lift_own` below), this `lend_count` guard
-ensures that when a component receives an `own`, it receives a unique reference
-to the resource and that there aren't any dangling borrows hanging around from
-the previous owner. The bookkeeping performed by `transfer_or_drop` for
-borrowed handles records the fulfillment of the obligation of the borrower to
-drop the handle before the end of the call.
+destroying a resource. The bookkeeping performed for borrowed handles records
+the fulfillment of the obligation of the borrower to drop the handle before the
+end of the call.
 
 Finally, we can define `HandleTables` (plural) as simply a wrapper around
 a mutable mapping from `ResourceType` to `HandleTable`:
@@ -617,20 +613,21 @@ def unpack_flags_from_int(i, labels):
   return record
 ```
 
-Next, `own` handles are lifted removing the `OwnHandle` from the handle table
-and passing the underlying representation value as the lifted value. The other
-side will wrap this representation value in its own new `OwnHandle` in its on
-handle table.
+Next, `own` handles are lifted by extracting the `OwnHandle` from the current
+instance's handle table. This ensures that `own` handles are always uniquely
+referenced.
 ```python
 def lift_own(cx, i, t):
-  h = cx.inst.handles.transfer(i, t)
-  return OwnHandle(h.rep, 0)
+  return cx.inst.handles.transfer(i, t)
 ```
 Note that `t` refers to an `own` type and thus `HandleTable.transfer` will, as
 shown above, ensure that the handle at index `i` is an `OwnHandle`.
 
-Lastly, `borrow` handles are lifted by getting the handle out of the
-appropriate resource type's handle table.
+Lastly, `borrow` handles are lifted by handing out a `BorrowHandle` storing the
+same representation value as the lent handle. By incrementing `lend_count`,
+`lift_own` ensures that the lent handle will not be dropped before the end of
+the call (see the matching decrement in `canon_lower`) which transitively
+ensures that the lent resource will not be destroyed.
 ```python
 def lift_borrow(cx, i, t):
   h = cx.inst.handles.get(i, t.rt)
@@ -638,10 +635,6 @@ def lift_borrow(cx, i, t):
   cx.lenders.append(h)
   return BorrowHandle(h.rep, 0, None)
 ```
-Thus, `borrow` lifting allows all handle types to be supplied for a `borrow`,
-as long as they have a matching resource type (`t.rt`). The lending handle is
-passed as the lifted value so that the receiver can increment and decrement
-its `lend_count`.
 
 
 ### Storing
