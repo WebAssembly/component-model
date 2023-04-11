@@ -559,11 +559,11 @@ value so that:
    they often aren't).
 
 The `own` and `borrow` value types are both *handle types*. Handles logically
-contain the "address" of a resource instance. Handles avoid copying the
-underlying resource in cases where copying is impossible or undesirable for
-performance reasons. By way of metaphor to operating systems, handles are
-analogous to file descriptors, which are indices into a table of resources
-maintained by the kernel. In the Component Model, handles are lifted-from and
+contain the opaque address of a resource and avoid copying the resource when
+passed across component boundaries. By way of metaphor to operating systems,
+handles are analogous to file descriptors, which are stored in a table and may
+only be used indirectly by untrusted user-mode processes via their integer
+index in the table. In the Component Model, handles are lifted-from and
 lowered-into `i32` values that index an encapsulated per-component-instance
 *handle table* that is maintained by the canonical function definitions
 described [below](#canonical-definitions). The uniqueness and dropping
@@ -610,12 +610,12 @@ wrapping it in any containing record/object/struct.
 The `resource` type constructor creates a fresh type for each instance of the
 containing component (with "freshness" and its interaction with general
 type-checking described in more detail [below](#type-checking)). Resource types
-can be referred to by handle types (`own` and `borrow`) as well as the
-`resource.new` canonical built-in described [below](#canonical-built-ins). The
-`rep` immediate of a `resource` type specifies its *core representation type*,
-which is currently fixed to `i32`, but will be relaxed in the future (to at
-least include `i64`, but also potentially other types). When the owning handle
-of a resource is dropped, the resource's `dtor` function will be called (if
+can be referred to by handle types (such as `own` and `borrow`) as well as the
+canonical built-ins described [below](#canonical-built-ins). The `rep`
+immediate of a `resource` type specifies its *core representation type*, which
+is currently fixed to `i32`, but will be relaxed in the future (to at least
+include `i64`, but also potentially other types). When the last handle to a
+resource is dropped, the resource's `dtor` function will be called (if
 present), allowing the implementing component to perform clean-up like freeing
 linear memory allocations.
 
@@ -889,14 +889,13 @@ of [existential types]  (∃T).
 
 Next, we consider resource type *definitions* which are a *third* source of
 abstract types. Unlike the abstract types introduced by type imports and
-exports, resource type definitions provide operations for setting and getting a
-resource's private representation value: `resource.new` and `resource.rep`
-(introduced [below](#canonical-built-ins)). However, these accessor operations
-are necessarily scoped to the component instance that generated the resource
-type, thereby hiding access to a resource type's representation from the outside
-world. Because each component instantiation generates fresh resource types
-distinct from all preceding instances of the same component, resource types are
-["generative"].
+exports, resource type definitions provide canonical built-ins for setting and
+getting a resource's private representation value (that are introduced
+[below](#canonical-built-ins)). These built-ins are necessarily scoped to the
+component instance that generated the resource type, thereby hiding access to a
+resource type's representation from the outside world. Because each component
+instantiation generates fresh resource types distinct from all preceding
+instances of the same component, resource types are ["generative"].
 
 For example, in the following example component:
 ```wasm
