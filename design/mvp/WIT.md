@@ -1133,37 +1133,52 @@ through a `use` statement or they can be defined locally.
 
 ## Handles
 
-There are two types of handles in Wit: "owned" handles and "borrowed" handles.
-Owned handles represent the passing of unique ownership of a resource between
-two components. When the owner of an owned handle drops that handle, the
-resource is destroyed. In contrast, a borrowed handle represents a temporary
-loan of a handle from the caller to the callee for the duration of the call.
-
 The syntax for handles is:
 ```ebnf
 handle ::= id
+         | 'use' '<' id '>'
+         | 'consume' '<' id '>'
          | 'borrow' '<' id '>'
+         | 'child' id ( 'of' id )?
+         | 'child' 'use' '<' id '>' ( 'of' id )?
 ```
 
-The `id` case denotes an owned handle, where `id` is the name of a preceding
-`resource` item. Thus, the "default" way that resources are passed between
-components is via transfer of unique ownership.
+The `id` case translates to the component handle type `(own id)`, where `id`
+must resolve to a resource type. Thus, `own` is the "default" handle type. The
+other `H<id>` cases map to the analogous `handle` type abbreviations. The
+complete 2x3 matrix of ownership and scope is:
+
+| `(handle R ...)` | `own`          | `use`               |
+|------------------|----------------|---------------------|
+|                  | `R`            | `use<R>`            |
+| `(parent p)`     | `child R of p` | `child use<R> of p` |
+| `call`           | `consume<R>`   | `borrow<R>`         |
+
+
+The `child` prefix adds the `parent` scope to the succeeding handle type. If
+the `of` suffix is present, then `id` is the name of the parameter that
+points to the parent. If the `of` suffix is absent, then a default id of
+`self` is used.
 
 The resource method syntax defined above is syntactic sugar that expands into
 separate function items that take a first parameter named `self` of type
 `borrow`. For example, the compound definition:
 ```
 resource file {
-    read: func(n: u32) -> list<u8>
+    read-sync: func(n: u32) -> list<u8>
+    read-async: func(n: u32) -> child input-stream
 }
 ```
-is expanded into:
+is equivalent to:
 ```
 resource file
-%[method]file.read: func(self: borrow<file>, n: u32) -> list<u8>
+%[method]file.read-sync: func(self: borrow<file>, n: u32) -> list<u8>
+%[method]file.read-async: func(self: borrow<file>, n: u32) -> child input-stream of self
 ```
-where `%[method]file.read` is the desugared name of a method according to the
+where `%[method]file.read-sync` is the desugared name of a method according to the
 Component Model's definition of [`name`](Explainer.md).
+
+TODO: introduce `destructor` as resource sugar for `self: consume<R>`
 
 
 ## Identifiers

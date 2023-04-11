@@ -496,10 +496,14 @@ defvaltype    ::= bool
                 | (union <valtype>+)
                 | (option <valtype>)
                 | (result <valtype>? (error <valtype>)?)
-                | (own <typeidx>)
-                | (borrow <typeidx>)
+                | (handle <ownership> <scope> <typeidx>)
 valtype       ::= <typeidx>
                 | <defvaltype>
+ownership     ::= own
+                | use
+scope         ::=
+                | call
+                | (parent <label>)
 resourcetype  ::= (resource (rep i32) (dtor <funcidx>)?)
 functype      ::= (func <paramlist> <resultlist>)
 paramlist     ::= (param <label> <valtype>)*
@@ -541,8 +545,7 @@ sets of abstract values:
 | `record`                  | heterogeneous [tuples] of named values |
 | `variant`                 | heterogeneous [tagged unions] of named values |
 | `list`                    | homogeneous, variable-length [sequences] of values |
-| `own`                     | a unique, opaque address of a resource that will be destroyed when this value is dropped |
-| `borrow`                  | an opaque address of a resource that must be dropped before the current export call returns |
+| `handle`                  | an opaque address of a resource |
 
 How these abstract values are produced and consumed from Core WebAssembly
 values and linear memory is configured by the component via *canonical lifting
@@ -560,19 +563,21 @@ value so that:
    assumptions that NaN payload bits are preserved by the other side (since
    they often aren't).
 
-The `own` and `borrow` value types are both *handle types*. Handles logically
-contain the opaque address of a resource and avoid copying the resource when
-passed across component boundaries. By way of metaphor to operating systems,
-handles are analogous to file descriptors, which are stored in a table and may
-only be used indirectly by untrusted user-mode processes via their integer
-index in the table. In the Component Model, handles are lifted-from and
-lowered-into `i32` values that index an encapsulated per-component-instance
-*handle table* that is maintained by the canonical function definitions
-described [below](#canonical-definitions). The uniqueness and dropping
-conditions mentioned above are enforced at runtime by the Component Model
-through these canonical definitions. The `typeidx` immediate of a handle type
-must refer to a `resource` type (described below) that statically classifies
-the particular kinds of resources the handle can point to.
+The `handle` values contain the address of a resource and thereby avoid copying
+the resource when passed across component boundaries. By way of metaphor to
+operating systems, handles are analogous to file descriptors, which are stored
+in a table and may only be used indirectly by untrusted user-mode processes via
+their integer index. In the Component Model, handles are lifted-from and
+lowered-into `i32` values that index an encapsulated per-component-instance,
+per-resource-type *handle table* that is maintained by the canonical function
+definitions described [below](#canonical-definitions). The optional `own`
+immediate indicates that the handle will call the resource's destructor when
+it is dropped. The optional `scope` immediate indicates the maximum duration
+for which the handle can be held, which is either that of the call, or the
+lifetime of a resource passed as another parameter to the call. The [Canonical
+ABI] enforces the declared scope immediates using runtime bookkeeping and
+trapping guards. See the [HTTP example] for a demonstration of how these
+different configurations of handle types arise in practice.
 
 The [subtyping] between all these types is described in a separate
 [subtyping explainer](Subtyping.md). Of note here, though: the optional
@@ -591,6 +596,10 @@ defined by the following mapping:
                     (union <valtype>+) ↦ (variant (case "𝒊" <valtype>)+) for 𝒊=0,1,...
 (result <valtype>? (error <valtype>)?) ↦ (variant (case "ok" <valtype>?) (case "error" <valtype>?))
                                 string ↦ (list char)
+                  (own (parent p)? $R) ↦ (handle own (parent p)? $R)
+                  (use (parent p)? $R) ↦ (handle use (parent p)? $R)
+                          (consume $R) ↦ (handle own call $R)
+                           (borrow $R) ↦ (handle use call $R)
 ```
 Note that, at least initially, variants are required to have a non-empty list of
 cases. This could be relaxed in the future to allow an empty list of cases, with
@@ -841,7 +850,7 @@ the types `$T2` and `$T3` are equal to each other but not to `$T1`. By the
 above transitive structural equality rules, the types `$List2` and `$List3` are
 equal to each other but not to `$List1`.
 
-Handle types (`own` and `borrow`) are structural types (like `list`) but, since
+Handle types (like `own` and `borrow`) are structural types (like `list`) but, since
 they refer to resource types, transitively "inherit" the freshness of abstract
 resource types. For example, in the following component:
 ```wasm
@@ -1231,9 +1240,9 @@ allowing it to create and return new resources to its client:
   )
 )
 ```
-Here, the `i32` returned by `resource.new`, which is an index into the
-component's handle-table, is immediately returned by `make_R`, thereby
-transferring ownership of the newly-created resource to the export's caller.
+Here, the `i32` returned by `resource.new` is an index into a `$Main`-local
+handle table. When `make_R` returns this `i32` index, because the result type
+is `own`, the handle is removed from `$Main`'s handle table as part of lifting.
 
 See the [CanonicalABI.md](CanonicalABI.md#canonical-definitions) for detailed
 definitions of each of these built-ins and their interactions.
@@ -1557,7 +1566,7 @@ At a high level, the additional coercions would be:
 | `option` | same as [`T?`] | same as [`T?`] |
 | `union` | same as [`union`] | same as [`union`] |
 | `result` | same as `variant`, but coerce a top-level `error` return value to a thrown exception | same as `variant`, but coerce uncaught exceptions to top-level `error` return values |
-| `own`, `borrow` | see below | see below |
+| `handle` | see below | see below |
 
 Notes:
 * Function parameter names are ignored since JavaScript doesn't have named
@@ -1576,19 +1585,19 @@ Notes:
   the JS API of the unspecialized `variant` (e.g.,
   `(variant (case "some" (option u32)) (case "none"))`, despecializing only
   the problematic outer `option`).
-* When coercing `ToWebAssemblyValue`, `own` and `borrow` handle types would
-  dynamically guard that the incoming JS value's dynamic type was compatible
-  with the imported resource type referenced by the handle type. For example,
-  if a component contains `(import "Object" (type $Object (sub resource)))` and
-  is instantiated with the JS `Object` constructor, then `(own $Object)` and
-  `(borrow $Object)` could accept JS `object` values.
+* When coercing `ToWebAssemblyValue`, handle types would dynamically guard that
+  the incoming JS value's dynamic type was compatible with the imported
+  resource type referenced by the handle type. For example, if a component
+  contains `(import "Object" (type $Object (sub resource)))` and is
+  instantiated with the JS `Object` constructor, then `(own $Object)` would
+  only accept objects.
 * When coercing `ToJSValue`, handle values would be wrapped with JS objects
   that are instances of the handles' resource type's exported constructor
   (described above). For `own` handles, a [`FinalizationRegistry`] would be
   used to drop the `own` handle (thereby calling the resource destructor) when
-  its wrapper object was unreachable from JS. For `borrow` handles, the wrapper
-  object would become dynamically invalid (throwing on any access) at the end
-  of the export call.
+  its wrapper object was unreachable from JS. For call- and resource-scoped
+  handles, the wrapper object would become dynamically invalid (throwing on any
+  access) when the scope ended.
 * The forthcoming addition of [future and stream types] would allow `Promise`
   and `ReadableStream` values to be passed directly to and from components
   without requiring handles or callbacks.
@@ -1761,6 +1770,7 @@ and will be added over the coming months to complete the MVP proposal:
 
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Canonical ABI]: CanonicalABI.md
+[HTTP Example]: examples/HTTPAndHandles.md
 [Shared-Nothing]: ../high-level/Choices.md
 [Use Cases]: ../high-level/UseCases.md
 [Host Embeddings]: ../high-level/UseCases.md#hosts-embedding-components

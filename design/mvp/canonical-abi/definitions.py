@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 import struct
 from dataclasses import dataclass
+from typing import Literal
 from typing import Optional
 from typing import Callable
 from typing import MutableMapping
@@ -71,6 +72,12 @@ class InstanceType(ExternType):
 class FuncType(ExternType):
   params: [typing.Tuple[str,ValType]]
   results: [ValType|typing.Tuple[str,ValType]]
+  def param_names(self):
+    if len(self.params) == 0:
+      return []
+    if isinstance(self.params[0], ValType):
+      return [str(i) for i in range(len(self.params))]
+    return [name for name,t in self.params]
   def param_types(self):
     return self.extract_types(self.params)
   def result_types(self):
@@ -159,7 +166,29 @@ class Flags(ValType):
   labels: [str]
 
 @dataclass
+class Parent:
+  param_name: str
+
+Scope = None | Literal['call'] | Parent
+
+@dataclass
+class Handle(ValType):
+  rt: ResourceType
+  own: bool
+  scope: Scope
+
+@dataclass
 class Own(ValType):
+  rt: ResourceType
+  scope: Scope = None
+
+@dataclass
+class Use(ValType):
+  rt: ResourceType
+  scope: Scope = None
+
+@dataclass
+class Consume(ValType):
   rt: ResourceType
 
 @dataclass
@@ -175,6 +204,10 @@ def despecialize(t):
     case Enum(labels)      : return Variant([ Case(l, None) for l in labels ])
     case Option(t)         : return Variant([ Case("none", None), Case("some", t) ])
     case Result(ok, error) : return Variant([ Case("ok", ok), Case("error", error) ])
+    case Own(rt, scope)    : return Handle(rt, True, scope)
+    case Use(rt, scope)    : return Handle(rt, False, scope)
+    case Consume(rt)       : return Handle(rt, True, 'call')
+    case Borrow(rt)        : return Handle(rt, False, 'call')
     case _                 : return t
 
 ### Alignment
@@ -193,7 +226,7 @@ def alignment(t):
     case Record(fields)     : return alignment_record(fields)
     case Variant(cases)     : return alignment_variant(cases)
     case Flags(labels)      : return alignment_flags(labels)
-    case Own(_) | Borrow(_) : return 4
+    case Handle()           : return 4
 
 def alignment_record(fields):
   a = 1
@@ -242,7 +275,7 @@ def size(t):
     case Record(fields)     : return size_record(fields)
     case Variant(cases)     : return size_variant(cases)
     case Flags(labels)      : return size_flags(labels)
-    case Own(_) | Borrow(_) : return 4
+    case Handle()           : return 4
 
 def size_record(fields):
   s = 0
@@ -279,30 +312,32 @@ def num_i32_flags(labels):
 class CallContext:
   opts: CanonicalOptions
   inst: ComponentInstance
-  lenders: [Handle]
-  borrow_count: int
+  keep_alive_handles: [HandleIndex]
+  call_scoped_handle_count: int
+  param_name_to_index: MutableMapping[str, HandleIndex]
 
   def __init__(self, opts, inst):
     self.opts = opts
     self.inst = inst
-    self.lenders = []
-    self.borrow_count = 0
+    self.keep_alive_handles = []
+    self.call_scoped_handle_count = 0
+    self.param_name_to_index = {}
 
-  def lift_borrow_from(self, lending_handle):
-    if lending_handle.own:
-      lending_handle.lend_count += 1
-      self.lenders.append(lending_handle)
+  def keep_alive_for_call(self, hi):
+    self.inst.handles[hi].pin_count += 1
+    self.keep_alive_handles.append(hi)
 
-  def add_borrow_to_table(self):
-    self.borrow_count += 1
+  def add_call_scoped_handle_to_table(self):
+    self.call_scoped_handle_count += 1
 
-  def remove_borrow_from_table(self):
-    self.borrow_count -= 1
+  def remove_call_scoped_handle_from_table(self):
+    self.call_scoped_handle_count -= 1
 
   def exit_call(self):
-    trap_if(self.borrow_count != 0)
-    for h in self.lenders:
-      h.lend_count -= 1
+    trap_if(self.call_scoped_handle_count != 0)
+    for hi in self.keep_alive_handles:
+      h = self.inst.handles[hi]
+      h.pin_count -= 1
 
 class CanonicalOptions:
   memory: bytearray
@@ -328,17 +363,57 @@ class ResourceType(Type):
     self.impl = impl
     self.dtor = dtor
 
-class HandleElem:
+class Resource:
   rep: int
-  own: bool
-  scope: Optional[CallContext]
-  lend_count: int
+  children: HandleIndex | Literal['end']
 
-  def __init__(self, rep, own, scope = None):
+  def __init__(self, rep):
     self.rep = rep
+    self.children = 'end'
+
+  def adopt(self, cx, hi):
+    h = cx.inst.handles[hi]
+    h.pin_count += 1
+    trap_if(h.next_child is not None)
+    h.next_child = self.children
+    self.children = hi
+
+  def destroy(self, inst, rt):
+    c = self.children
+    while c != 'end':
+      h = inst.handles[c]
+      h.pin_count -= 1
+      h.next_child = None
+      c = h.next_child
+    trap_if(inst is not rt.impl and not rt.impl.may_enter)
+    if rt.dtor:
+      rt.dtor(self.rep)
+
+class HandleElem:
+  r: Resource
+  own: bool
+  scope: None | CallContext | CallParam | HandleIndex
+  param_name: Optional[str]
+  pin_count: int
+  next_child: Optional[HandleIndex]
+
+  def __init__(self, r, own, scope = None, param_name = None):
+    self.r = r
     self.own = own
     self.scope = scope
-    self.lend_count = 0
+    self.param_name = param_name
+    self.pin_count = 0
+    self.next_child = None
+
+@dataclass
+class CallParam:
+  cx: CallContext
+  param_name: str
+
+@dataclass
+class HandleIndex:
+  rt: ResourceType
+  i: int
 
 class HandleTable:
   array: [Optional[HandleElem]]
@@ -353,7 +428,7 @@ class HandleTable:
     trap_if(self.array[i] is None)
     return self.array[i]
 
-  def add(self, h):
+  def add(self, inst, h):
     if self.free:
       i = self.free.pop()
       assert(self.array[i] is None)
@@ -361,17 +436,26 @@ class HandleTable:
     else:
       i = len(self.array)
       self.array.append(h)
-    if h.scope is not None:
-      h.scope.add_borrow_to_table()
+    match h.scope:
+      case None            : pass
+      case CallContext()   : h.scope.add_call_scoped_handle_to_table()
+      case CallParam(cx,_) : cx.add_call_scoped_handle_to_table()
+      case HandleIndex()   : inst.handles[h.scope].pin_count += 1
     return i
 
-  def remove(self, rt, i):
-    h = self.get(i)
-    trap_if(h.lend_count != 0)
+  def remove(self, inst, rt, i):
+    trap_if(i >= len(self.array))
+    trap_if(self.array[i] is None)
+    h = self.array[i]
+    trap_if(h.pin_count != 0)
+    assert(h.next_child is None)
     self.array[i] = None
     self.free.append(i)
-    if h.scope is not None:
-      h.scope.remove_borrow_from_table()
+    match h.scope:
+      case None            : pass
+      case CallContext()   : h.scope.remove_call_scoped_handle_from_table()
+      case CallParam(cx,_) : cx.remove_call_scoped_handle_from_table()
+      case HandleIndex()   : inst.handles[h.scope].pin_count -= 1
     return h
 
 class HandleTables:
@@ -387,17 +471,24 @@ class HandleTables:
 
   def get(self, rt, i):
     return self.table(rt).get(i)
-  def add(self, rt, h):
-    return self.table(rt).add(h)
-  def remove(self, rt, i):
-    return self.table(rt).remove(rt, i)
+  def add(self, inst, rt, h):
+    return self.table(rt).add(inst, h)
+  def remove(self, inst, rt, i):
+    return self.table(rt).remove(inst, rt, i)
+
+  def __getitem__(self, hi: HandleIndex):
+    assert(hi.rt in self.rt_to_table)
+    h = self.rt_to_table[hi.rt].array[hi.i]
+    assert(h is not None)
+    return h
 
 ### Loading
 
-def load(cx, ptr, t):
+def load(cx, ptr, t, param_name = None):
   assert(ptr == align_to(ptr, alignment(t)))
   assert(ptr + size(t) <= len(cx.opts.memory))
-  match despecialize(t):
+  t = despecialize(t)
+  match t:
     case Bool()         : return convert_int_to_bool(load_int(cx, ptr, 1))
     case U8()           : return load_int(cx, ptr, 1)
     case U16()          : return load_int(cx, ptr, 2)
@@ -415,8 +506,7 @@ def load(cx, ptr, t):
     case Record(fields) : return load_record(cx, ptr, fields)
     case Variant(cases) : return load_variant(cx, ptr, cases)
     case Flags(labels)  : return load_flags(cx, ptr, labels)
-    case Own()          : return lift_own(cx, load_int(opts, ptr, 4), t)
-    case Borrow()       : return lift_borrow(cx, load_int(opts, ptr, 4), t)
+    case Handle()       : return lift_handle(cx, load_int(opts, ptr, 4), t, param_name)
 
 def load_int(cx, ptr, nbytes, signed = False):
   return int.from_bytes(cx.opts.memory[ptr : ptr+nbytes], 'little', signed=signed)
@@ -542,21 +632,51 @@ def unpack_flags_from_int(i, labels):
     i >>= 1
   return record
 
-def lift_own(cx, i, t):
-  h = cx.inst.handles.remove(t.rt, i)
-  return h.rep
-
-def lift_borrow(cx, i, t):
-  h = cx.inst.handles.get(t.rt, i)
-  cx.lift_borrow_from(h)
-  return h.rep
+def lift_handle(cx, i, t, param_name):
+  hi = HandleIndex(t.rt, i)
+  if param_name is not None:
+    cx.param_name_to_index[param_name] = hi
+  if t.own:
+    h = cx.inst.handles.remove(cx.inst, t.rt, i)
+    trap_if(not h.own)
+  else:
+    h = cx.inst.handles.get(t.rt, i)
+    if h.own:
+      match t.scope:
+        case None:
+          h.pin_count += 1
+        case 'call':
+          cx.keep_alive_for_call(hi)
+        case Parent():
+          trap_if(cx.inst is not t.rt.impl)
+          parent = cx.inst.handles[cx.param_name_to_index[t.scope.param_name]]
+          parent.r.adopt(cx, hi)
+  match t.scope:
+    case None:
+      trap_if(h.scope is not None)
+    case 'call':
+      if isinstance(h.scope, HandleIndex):
+        cx.keep_alive_for_call(h.scope)
+    case Parent():
+      match h.scope:
+        case None:
+          pass
+        case CallContext():
+          trap()
+        case CallParam(other_cx, param_name):
+          trap_if(cx is not other_cx)
+          trap_if(param_name != t.scope.param_name)
+        case HandleIndex():
+          trap()
+  return h.r
 
 ### Storing
 
-def store(cx, v, t, ptr):
+def store(cx, v, t, ptr, param_name = None):
   assert(ptr == align_to(ptr, alignment(t)))
   assert(ptr + size(t) <= len(cx.opts.memory))
-  match despecialize(t):
+  t = despecialize(t)
+  match t:
     case Bool()         : store_int(cx, int(bool(v)), ptr, 1)
     case U8()           : store_int(cx, v, ptr, 1)
     case U16()          : store_int(cx, v, ptr, 2)
@@ -574,8 +694,7 @@ def store(cx, v, t, ptr):
     case Record(fields) : store_record(cx, v, ptr, fields)
     case Variant(cases) : store_variant(cx, v, ptr, cases)
     case Flags(labels)  : store_flags(cx, v, ptr, labels)
-    case Own()          : store_int(cx, lower_own(opts, v, t), ptr, 4)
-    case Borrow()       : store_int(cx, lower_borrow(opts, v, t), ptr, 4)
+    case Handle()       : store_int(cx, lower_handle(opts, v, t, param_name), ptr, 4)
 
 def store_int(cx, v, ptr, nbytes, signed = False):
   cx.opts.memory[ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed=signed)
@@ -786,15 +905,26 @@ def pack_flags_into_int(v, labels):
     shift += 1
   return i
 
-def lower_own(cx, rep, t):
-  h = HandleElem(rep, own=True)
-  return cx.inst.handles.add(t.rt, h)
-
-def lower_borrow(cx, rep, t):
-  if cx.inst is t.rt.impl:
-    return rep
-  h = HandleElem(rep, own=False, scope=cx)
-  return cx.inst.handles.add(t.rt, h)
+def lower_handle(cx, r, t, param_name):
+  assert(isinstance(r, Resource))
+  if not t.own and cx.inst is t.rt.impl:
+    return r.rep
+  if isinstance(t.scope, Parent):
+    parent_index = cx.param_name_to_index[t.scope.param_name]
+    parent = cx.inst.handles[parent_index]
+    if parent.own:
+      scope = parent_index
+    elif isinstance(parent.scope, CallContext):
+      scope = CallParam(parent.scope, parent.param_name)
+    else:
+      scope = parent.scope
+  else:
+    scope = t.scope
+  h = HandleElem(r, t.own, scope, param_name)
+  i = cx.inst.handles.add(cx.inst, t.rt, h)
+  if param_name is not None:
+    cx.param_name_to_index[param_name] = HandleIndex(t.rt, i)
+  return i
 
 ### Flattening
 
@@ -833,7 +963,7 @@ def flatten_type(t):
     case Record(fields)       : return flatten_record(fields)
     case Variant(cases)       : return flatten_variant(cases)
     case Flags(labels)        : return ['i32'] * num_i32_flags(labels)
-    case Own(_) | Borrow(_)   : return ['i32']
+    case Handle()             : return ['i32']
 
 def flatten_record(fields):
   flat = []
@@ -874,8 +1004,9 @@ class ValueIter:
     assert(v.t == t)
     return v.v
 
-def lift_flat(cx, vi, t):
-  match despecialize(t):
+def lift_flat(cx, vi, t, param_name = None):
+  t = despecialize(t)
+  match t:
     case Bool()         : return convert_int_to_bool(vi.next('i32'))
     case U8()           : return lift_flat_unsigned(vi, 32, 8)
     case U16()          : return lift_flat_unsigned(vi, 32, 16)
@@ -893,8 +1024,7 @@ def lift_flat(cx, vi, t):
     case Record(fields) : return lift_flat_record(cx, vi, fields)
     case Variant(cases) : return lift_flat_variant(cx, vi, cases)
     case Flags(labels)  : return lift_flat_flags(vi, labels)
-    case Own()          : return lift_own(cx, vi.next('i32'), t)
-    case Borrow()       : return lift_borrow(cx, vi.next('i32'), t)
+    case Handle()       : return lift_handle(cx, vi.next('i32'), t, param_name)
 
 def lift_flat_unsigned(vi, core_width, t_width):
   i = vi.next('i' + str(core_width))
@@ -963,8 +1093,9 @@ def lift_flat_flags(vi, labels):
 
 ### Flat Lowering
 
-def lower_flat(cx, v, t):
-  match despecialize(t):
+def lower_flat(cx, v, t, param_name = None):
+  t = despecialize(t)
+  match t:
     case Bool()         : return [Value('i32', int(v))]
     case U8()           : return [Value('i32', v)]
     case U16()          : return [Value('i32', v)]
@@ -982,8 +1113,7 @@ def lower_flat(cx, v, t):
     case Record(fields) : return lower_flat_record(cx, v, fields)
     case Variant(cases) : return lower_flat_variant(cx, v, cases)
     case Flags(labels)  : return lower_flat_flags(v, labels)
-    case Own()          : return [Value('i32', lower_own(cx, v, t))]
-    case Borrow()       : return [Value('i32', lower_borrow(cx, v, t))]
+    case Handle()       : return [Value('i32', lower_handle(cx, v, t, param_name))]
 
 def lower_flat_signed(i, core_bits):
   if i < 0:
@@ -1036,34 +1166,49 @@ def lower_flat_flags(v, labels):
 
 ### Lifting and Lowering Values
 
-def lift_values(cx, max_flat, vi, ts):
+def lift_values(cx, max_flat, vi, ts, param_names):
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
     ptr = vi.next('i32')
     tuple_type = Tuple(ts)
     trap_if(ptr != align_to(ptr, alignment(tuple_type)))
     trap_if(ptr + size(tuple_type) > len(cx.opts.memory))
-    return list(load(cx, ptr, tuple_type).values())
+    vals = []
+    for i,t in enumerate(ts):
+      pn = param_names[i] if param_names is not None else None
+      ptr = align_to(ptr, alignment(t))
+      vals.append(load(cx, ptr, t, pn))
+      ptr += size(t)
+    return vals
   else:
-    return [ lift_flat(cx, vi, t) for t in ts ]
+    vals = []
+    for i,t in enumerate(ts):
+      pn = param_names[i] if param_names is not None else None
+      vals.append(lift_flat(cx, vi, t, pn))
+    return vals
 
-def lower_values(cx, max_flat, vs, ts, out_param = None):
+def lower_values(cx, max_flat, vs, ts, param_names, out_param = None):
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
     tuple_type = Tuple(ts)
-    tuple_value = {str(i): v for i,v in enumerate(vs)}
     if out_param is None:
-      ptr = cx.opts.realloc(0, 0, alignment(tuple_type), size(tuple_type))
+      base = cx.opts.realloc(0, 0, alignment(tuple_type), size(tuple_type))
     else:
-      ptr = out_param.next('i32')
-    trap_if(ptr != align_to(ptr, alignment(tuple_type)))
-    trap_if(ptr + size(tuple_type) > len(cx.opts.memory))
-    store(cx, tuple_value, tuple_type, ptr)
-    return [ Value('i32', ptr) ]
+      base = out_param.next('i32')
+    trap_if(base != align_to(base, alignment(tuple_type)))
+    trap_if(base + size(tuple_type) > len(cx.opts.memory))
+    ptr = base
+    for i,(v,t) in enumerate(zip(vs,ts)):
+      pn = param_names[i] if param_names is not None else None
+      ptr = align_to(ptr, alignment(t))
+      store(cx, v, t, ptr, pn)
+      ptr += size(t)
+    return [ Value('i32', base) ]
   else:
     flat_vals = []
-    for i in range(len(vs)):
-      flat_vals += lower_flat(cx, vs[i], ts[i])
+    for i,(v,t) in enumerate(zip(vs,ts)):
+      pn = param_names[i] if param_names is not None else None
+      flat_vals += lower_flat(cx, v, t, pn)
     return flat_vals
 
 ### `canon lift`
@@ -1074,7 +1219,7 @@ def canon_lift(opts, inst, callee, ft, args):
 
   assert(inst.may_leave)
   inst.may_leave = False
-  flat_args = lower_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
+  flat_args = lower_values(cx, MAX_FLAT_PARAMS, args, ft.param_types(), ft.param_names())
   inst.may_leave = True
 
   try:
@@ -1082,7 +1227,7 @@ def canon_lift(opts, inst, callee, ft, args):
   except CoreWebAssemblyException:
     trap()
 
-  results = lift_values(cx, MAX_FLAT_RESULTS, ValueIter(flat_results), ft.result_types())
+  results = lift_values(cx, MAX_FLAT_RESULTS, ValueIter(flat_results), ft.result_types(), None)
 
   def post_return():
     if opts.post_return is not None:
@@ -1102,12 +1247,12 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
     inst.may_enter = False
 
   flat_args = ValueIter(flat_args)
-  args = lift_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
+  args = lift_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types(), ft.param_names())
 
   results, post_return = callee(args)
 
   inst.may_leave = False
-  flat_results = lower_values(cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
+  flat_results = lower_values(cx, MAX_FLAT_RESULTS, results, ft.result_types(), None, flat_args)
   inst.may_leave = True
 
   post_return()
@@ -1121,20 +1266,19 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
 ### `canon resource.new`
 
 def canon_resource_new(inst, rt, rep):
-  h = HandleElem(rep, own=True)
-  return inst.handles.add(rt, h)
+  r = Resource(rep)
+  h = HandleElem(r, own=True)
+  return inst.handles.add(inst, rt, h)
 
 ### `canon resource.drop`
 
 def canon_resource_drop(inst, rt, i):
-  h = inst.handles.remove(rt, i)
+  h = inst.handles.remove(inst, rt, i)
   if h.own:
-    trap_if(inst is not rt.impl and not rt.impl.may_enter)
-    if rt.dtor:
-      rt.dtor(h.rep)
+    h.r.destroy(inst, rt)
 
 ### `canon resource.rep`
 
 def canon_resource_rep(inst, rt, i):
   h = inst.handles.get(rt, i)
-  return h.rep
+  return h.r.rep
