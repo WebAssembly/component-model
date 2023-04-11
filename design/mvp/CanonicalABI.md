@@ -333,7 +333,7 @@ class HandleTable:
     return i
 ```
 The `HandleTable` class maintains a dense array of handles that can contain
-holes created by the `remove_or_drop` method (defined below). These holes are
+holes created by the `transfer_or_drop` method (defined below). These holes are
 kept in a separate Python list here, but an optimizing implementation could
 instead store the free list in the free elements of `array`. When adding a new
 handle, `HandleTable` first consults the `free` list, which is popped LIFO to
@@ -349,11 +349,11 @@ use-after-free:
     return self.array[i]
 ```
 
-The last method of `HandleTable`, `remove_or_drop`, is used to drop or transfer
-a handle out of the handle table. `remove_or_drop` adds the removed handle to
-the `free` list for later recycling by `add` (above).
+The last method of `HandleTable`, `transfer_or_drop`, is used to transfer or
+drop a handle out of the handle table. `transfer_or_drop` adds the removed
+handle to the `free` list for later recycling by `add` (above).
 ```python
-  def remove_or_drop(self, i, t, drop):
+  def transfer_or_drop(self, i, t, drop):
     h = self.get(i)
     trap_if(h.lend_count != 0)
     match t:
@@ -370,13 +370,13 @@ the `free` list for later recycling by `add` (above).
     return h
 ```
 The `lend_count` guard ensures that no dangling borrows are created when
-destroying a resource. Because `remove_or_drop` is used for cross-component
+destroying a resource. Because `transfer_or_drop` is used for cross-component
 transfer of `own` handles (via `lift_own` below), this `lend_count` guard
 ensures that when a component receives an `own`, it receives a unique reference
 to the resource and that there aren't any dangling borrows hanging around from
-the previous owner. The bookkeeping performed by `remove_or_drop` for borrowed
-handles records the fulfillment of the obligation of the borrower to drop the
-handle before the end of the call.
+the previous owner. The bookkeeping performed by `transfer_or_drop` for
+borrowed handles records the fulfillment of the obligation of the borrower to
+drop the handle before the end of the call.
 
 Finally, we can define `HandleTables` (plural) as simply a wrapper around
 a mutable mapping from `ResourceType` to `HandleTable`:
@@ -396,16 +396,16 @@ class HandleTables:
     return self.table(t.rt).add(h, t)
   def get(self, i, rt):
     return self.table(rt).get(i)
-  def remove(self, i, t):
-    return self.table(t.rt).remove_or_drop(i, t, drop = False)
+  def transfer(self, i, t):
+    return self.table(t.rt).transfer_or_drop(i, t, drop = False)
   def drop(self, i, t):
-    self.table(t.rt).remove_or_drop(i, t, drop = True)
+    self.table(t.rt).transfer_or_drop(i, t, drop = True)
 ```
 While this Python code performs a dynamic hash-table lookup on each handle
 table access, as we'll see below, the `rt` parameter is always statically
 known such that a normal implementation can statically enumerate all
 `HandleTable` objects at compile time and then route the calls to `add`,
-`get` and `remove_or_drop` to the correct `HandleTable` at the callsite. The
+`get` and `transfer_or_drop` to the correct `HandleTable` at the callsite. The
 net result is that each component instance will contain one handle table per
 resource type used by the component, with each compiled adapter function
 accessing the correct handle table as-if it were a global variable.
@@ -623,10 +623,10 @@ side will wrap this representation value in its own new `OwnHandle` in its on
 handle table.
 ```python
 def lift_own(cx, i, t):
-  h = cx.inst.handles.remove(i, t)
+  h = cx.inst.handles.transfer(i, t)
   return OwnHandle(h.rep, 0)
 ```
-Note that `t` refers to an `own` type and thus `HandleTable.remove` will, as
+Note that `t` refers to an `own` type and thus `HandleTable.transfer` will, as
 shown above, ensure that the handle at index `i` is an `OwnHandle`.
 
 Lastly, `borrow` handles are lifted by getting the handle out of the
@@ -1002,11 +1002,6 @@ type, the only thing the borrowed handle is good for is calling
 `resource.rep`, so lowering might as well avoid the overhead of creating an
 intermediate borrow handle.
 
-Note that the `rt` value that is stored in the runtime `Handle` captures what
-is statically known about the handle right before losing this information in
-the homogeneous `HandleTable`. Moreoever, as described above, distinct type
-imports are given distinct `rt` values so that handles produced by lowering
-different type imports are never interchangeable.
 
 ### Flattening
 

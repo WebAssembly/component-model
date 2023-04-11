@@ -369,7 +369,7 @@ class HandleTable:
 
 #
 
-  def remove_or_drop(self, i, t, drop):
+  def transfer_or_drop(self, i, t, drop):
     h = self.get(i)
     trap_if(h.lend_count != 0)
     match t:
@@ -402,10 +402,10 @@ class HandleTables:
     return self.table(t.rt).add(h, t)
   def get(self, i, rt):
     return self.table(rt).get(i)
-  def remove(self, i, t):
-    return self.table(t.rt).remove_or_drop(i, t, drop = False)
+  def transfer(self, i, t):
+    return self.table(t.rt).transfer_or_drop(i, t, drop = False)
   def drop(self, i, t):
-    self.table(t.rt).remove_or_drop(i, t, drop = True)
+    self.table(t.rt).transfer_or_drop(i, t, drop = True)
 
 ### Loading
 
@@ -576,7 +576,7 @@ def unpack_flags_from_int(i, labels):
 #
 
 def lift_own(cx, i, t):
-  h = cx.inst.handles.remove(i, t)
+  h = cx.inst.handles.transfer(i, t)
   return OwnHandle(h.rep, 0)
 
 #
