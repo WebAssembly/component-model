@@ -109,8 +109,10 @@ Notes:
   to the actual type.
 * The indices in `sortidx` are validated according to their `sort`'s index
   spaces, which are built incrementally as each definition is validated.
-* Validation requires that all annotated `name`s only occur on `func` `export`s
-  and that the `r` `label` matches the `name` of a preceding `resource` export.
+* Validation requires that annotated `name`s only occur on `func` imports or
+  exports and that the `r:<label>` matches the `name` of a preceding `resource`
+  import or export, respectively, in the same scope (component, component type
+  or instance type).
 * Validation of `[constructor]` names requires that the `func` returns a
   `(result (own $R))`, where `$R` is the resource labeled `r`.
 * Validation of `[method]` names requires the first parameter of the function
