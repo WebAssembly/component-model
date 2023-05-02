@@ -11,6 +11,7 @@ native JavaScript runtimes.
   * [Type definitions](#type-definitions)
     * [Type checking](#type-checking)
   * [Canonical definitions](#canonical-definitions)
+    * [Canonical ABI](#canonical-built-ins)
     * [Canonical built-ins](#canonical-built-ins)
   * [Start definitions](#start-definitions)
   * [Import and export definitions](#import-and-export-definitions)
@@ -1026,6 +1027,18 @@ isolation than otherwise achievable with a shared global namespace.
 
 ### Canonical Definitions
 
+From the perspective of Core WebAssembly running inside a component, the
+Component Model is an [Embedding]. As such, the Component Model defines the
+Core WebAssembly imports passed to [`module_instantiate`] and how Core
+WebAssembly exports are called via [`func_invoke`]. This allows the Component
+Model to specify how core modules are linked together (as shown above) but it
+also allows the Component Model to arbitrarily synthesize Core WebAssembly
+functions (via [`func_alloc`]) that are imported by Core WebAssembly. These
+synthetic core functions are created via one of several *canonical definitions*
+defined below.
+
+#### Canonical ABI
+
 To implement or call a component-level function, we need to cross a
 shared-nothing boundary. Traditionally, this problem is solved by defining a
 serialization format. The Component Model MVP uses roughly this same approach,
@@ -1790,6 +1803,11 @@ and will be added over the coming months to complete the MVP proposal:
 [`core:functype`]: https://webassembly.github.io/spec/core/text/types.html#function-types
 [func-import-abbrev]: https://webassembly.github.io/spec/core/text/modules.html#text-func-abbrev
 [`core:version`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-version
+
+[Embedding]: https://webassembly.github.io/spec/core/appendix/embedding.html
+[`module_instantiate`]: https://webassembly.github.io/spec/core/appendix/embedding.html#mathrm-module-instantiate-xref-exec-runtime-syntax-store-mathit-store-xref-syntax-modules-syntax-module-mathit-module-xref-exec-runtime-syntax-externval-mathit-externval-ast-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-moduleinst-mathit-moduleinst-xref-appendix-embedding-embed-error-mathit-error
+[`func_invoke`]: https://webassembly.github.io/spec/core/appendix/embedding.html#mathrm-func-invoke-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-funcaddr-mathit-funcaddr-xref-exec-runtime-syntax-val-mathit-val-ast-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-val-mathit-val-ast-xref-appendix-embedding-embed-error-mathit-error
+[`func_alloc`]: https://webassembly.github.io/spec/core/appendix/embedding.html#mathrm-func-alloc-xref-exec-runtime-syntax-store-mathit-store-xref-syntax-types-syntax-functype-mathit-functype-xref-exec-runtime-syntax-hostfunc-mathit-hostfunc-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-funcaddr-mathit-funcaddr
 
 [`WebAssembly.instantiate()`]: https://developer.mozilla.org/en-US/docs/WebAssembly/JavaScript_interface/instantiate
 [`FinalizationRegistry`]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry
