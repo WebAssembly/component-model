@@ -363,9 +363,9 @@ world my-world-1 {
 
 // my-world-2.wit
 world my-world-2 {
-    import a2: pkg.a
-    import b2: pkg.b
-    export c2: pkg.c
+    import a1: pkg.a
+    import b1: pkg.b
+    export c1: pkg.c
 }
 
 // union.wit
@@ -381,7 +381,29 @@ world union-my-world-4 {
 }
 ```
 
-As you can see, the names of the imports and exports in "union-my-world-4" are picking up the names from the first included world. This is because the second included world has structurally the same imports and exports and are deduplicated.
+Notice that if the two included worlds have different names for the same import or export, then it will be considered as an error, even if the interfaces are strcuturally the same. For example, the following worlds `my-world-1` and `my-world-2` are not structurally equivalent, but the `include` statement will report an error:
+
+```wit
+// my-world-1.wit
+world my-world-1 {
+    import a1: pkg.a
+    import b1: pkg.b
+    export c1: pkg.c
+}
+
+// my-world-2.wit
+world my-world-2 {
+    import a2: pkg.a
+    import b2: pkg.b
+    export c2: pkg.c
+}
+
+// union.wit
+world union-my-world-3 {
+    include pkg.my-world-1
+    include pkg.my-world-2
+}
+```
 
 ### De-duplication with `with`
 
@@ -420,9 +442,9 @@ world union-my-world-6 {
 
 ### A Note on SubTyping
 
-As of now, host bindings are required to implicitly interpret all exports as optional to make a component targeting an included World a subtype of the union World. This [comment](https://github.com/WebAssembly/component-model/issues/169#issuecomment-1446776193) describes the reasoning behind this decision.
-
 In the future, when `optional` export is supported, the world author may explicitly mark exports as optional to make a component targeting an included World a subtype of the union World.
+
+For now, we are not following the subtyping rules for the `include` statement. That is, the `include` statement does not imply any subtyping relationship between the included worlds and the union world.
 
 ## WIT Packages and `use`
 [use]: #wit-packages-and-use
