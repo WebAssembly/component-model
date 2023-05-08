@@ -281,10 +281,10 @@ The `include` statement also works with [WIT package](#wit-packages-and-use) def
 
 ```wit
 // b.wit
-interface b { ... }
+default interface b { ... }
 
 // a.wit
-interface a { ... }
+default interface a { ... }
 
 world my-world-1 {
     import a: self.a 
@@ -296,7 +296,7 @@ world my-world-1 {
 // union.wit
 
 world union-my-world-1 {
-    include pkg.my-world-1
+    include pkg.a.my-world-1
 }
 
 world union-my-world-2 {
