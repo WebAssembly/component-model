@@ -70,7 +70,7 @@ core:inlineexport   ::= n:<core:name> si:<core:sortidx>                    => (e
 instance            ::= ie:<instanceexpr>                                  => (instance ie)
 instanceexpr        ::= 0x00 c:<componentidx> arg*:vec(<instantiatearg>)   => (instantiate c arg*)
                       | 0x01 e*:vec(<inlineexport>)                        => e*
-instantiatearg      ::= n:<core:name> si:<sortidx>                         => (with n si)
+instantiatearg      ::= n:<string>  si:<sortidx>                           => (with n si)
 sortidx             ::= sort:<sort> idx:<u32>                              => (sort idx)
 sort                ::= 0x00 cs:<core:sort>                                => core cs
                       | 0x01                                               => func
@@ -79,6 +79,7 @@ sort                ::= 0x00 cs:<core:sort>                                => co
                       | 0x04                                               => component
                       | 0x05                                               => instance
 inlineexport        ::= n:<externname> si:<sortidx>                        => (export n si)
+string              ::= s:<core:name>                                      => s
 name                ::= len:<u32> n:<name-chars>                           => n (if len = |n|)
 name-chars          ::= l:<label>                                          => l
                       | '[constructor]' r:<label>                          => [constructor]r
@@ -126,7 +127,7 @@ Notes:
 (See [Alias Definitions](Explainer.md#alias-definitions) in the explainer.)
 ```
 alias       ::= s:<sort> t:<aliastarget>                => (alias t (s))
-aliastarget ::= 0x00 i:<instanceidx> n:<core:name>      => export i n
+aliastarget ::= 0x00 i:<instanceidx> n:<string>         => export i n
               | 0x01 i:<core:instanceidx> n:<core:name> => core export i n
               | 0x02 ct:<u32> idx:<u32>                 => outer ct idx
 ```
