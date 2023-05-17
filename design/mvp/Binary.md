@@ -331,7 +331,7 @@ import      ::= en:<externname> ed:<externdesc>                => (import en ed)
 export      ::= en:<externname> si:<sortidx> ed?:<externdesc>? => (export en si ed?)
 externname  ::= 0x00 n:<name>                                  => n
               | 0x01 n:<id>                                    => (interface n)
-id          ::= len:<u32> n:id-chars>                          => n (if len = |n|)
+id          ::= len:<u32> n:<id-chars>                         => n (if len = |n|)
 
 id-chars ::= ns:<label> ':' name:<label> '/' interface:<label> version:<version>
 version  ::= ε                                                 => no version
