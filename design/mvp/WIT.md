@@ -34,22 +34,28 @@ three components:
 
 * A namespace, for example `foo` in `foo:bar`. This namespace is intended to
   disambiguate between registries, top-level organizations, etc. For example
-  WASI interfaces use the `wasi:` namespace.
+  WASI interfaces use the `wasi` namespace.
 
-* A package name, for example `bar` in `foo:bar`. This provides a further
-  description of the contained functionality within the namespace. For example
-  `wasi:clocks` has the package name `clocks`.
+* A package name, for example `clocks` in `wasi:clocks`. A package name groups
+  together a set of interfaces and worlds that would otherwise be named with a
+  common prefix.
 
-* An optional version, specified as a major and minor number. Currently full
-  semver isn't allowed and instead only `1.0` is allowed, for example. Both
-  version numbers must be unsigned integers. Note that the version field is
-  optional, though.
+* An optional version, specified as a major and minor number. Because WIT
+  packages define *interfaces*, not *implementations*, there is not a patch
+  number, as in full semver. Both version numbers must be unsigned integers.
+  Note that the version field is optional, though.
 
 Package identifiers are specified at the top of a WIT file via a `package`
 declaration:
 
 ```wit
 package wasi:clocks
+```
+
+or
+
+```wit
+package wasi:clocks@1.2
 ```
 
 WIT packages can be defined in a collection of files and at least one of them
@@ -97,16 +103,17 @@ and [function][functions] definitions. For example:
 ```wit
 package wasi:filesystem
 
-interface filesystem {
-  use types.{errno}
+interface types {
+  use wasi:clocks.wall-clock.{datetime}
 
   record stat {
     ino: u64,
     size: u64,
+    mtime: datetime,
     // ...
   }
 
-  stat-file: func(path: string) -> result<stat, errno>
+  stat-file: func(path: string) -> result<stat>
 }
 ```
 
@@ -199,9 +206,8 @@ world your-world {
 ```
 
 The kebab name of the `import` or `export` is the name of the corresponding item
-in the final component. This can be different from the [`interface`][interfaces]
-name but must be a [valid identifier][identifiers]. Note that kebab names cannot
-overlap and must be unique, even between imports and exports.
+in the final component. Note that kebab names cannot overlap and must be unique,
+even between imports and exports.
 
 Note that in the component model imports to a component either use an ID or a
 kebab-name, and in WIT this is reflected in the syntax:
@@ -217,8 +223,8 @@ world command {
   // generates an import of the ID `wit:demo/my-interface`
   import my-interface
 
-  // generates an import of the ID `wasi:random/random`
-  import wasi:random/random
+  // generates an import of the ID `wasi:filesystem/types`
+  import wasi:filesystem/types
 
   // generates an import of the kebab-name `foo`
   import foo: func()
@@ -450,8 +456,8 @@ would generate this component:
 
 Here it can be seen that despite the `world` only listing `host` as an import
 the component additionally imports a `wit:demo/shared` interface. This is due
-to the fact that the `use { ... } from shared` implicitly requires that
-`shared` is imported into the component as well.
+to the fact that the `use shared.{ ... }` implicitly requires that `shared` is
+imported into the component as well.
 
 Note that the name `"wit:demo/shared"` here is derived from the name of the
 `interface` plus the package ID `wit:demo`.
