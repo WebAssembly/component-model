@@ -333,9 +333,9 @@ externname  ::= 0x00 n:<name>                                  => n
               | 0x01 n:<id>                                    => (interface n)
 id          ::= len:<u32> n:<id-chars>                         => n (if len = |n|)
 
-id-chars ::= ns:<label> ':' name:<label> '/' interface:<label> version:<version>
-version  ::= ε                                                 => no version
-           | '@' major*:[0x30-0x39] '.' minor*:[0x30-0x39]     => char(major)* '.' char(minor)*
+id-chars ::= ns:<label> ':' pkg:<label> '/' n:<label> v:<id-version>   => ns:pkg/nv
+id-version ::=                                                         => ϵ
+             | '@' major+:[0x30-0x39] '.' minor+:[0x30-0x39]           => char(major)+.char(minor)+
 ```
 
 Notes:
