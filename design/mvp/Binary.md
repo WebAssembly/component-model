@@ -70,7 +70,7 @@ core:inlineexport   ::= n:<core:name> si:<core:sortidx>                    => (e
 instance            ::= ie:<instanceexpr>                                  => (instance ie)
 instanceexpr        ::= 0x00 c:<componentidx> arg*:vec(<instantiatearg>)   => (instantiate c arg*)
                       | 0x01 e*:vec(<inlineexport>)                        => e*
-instantiatearg      ::= n:<name> si:<sortidx>                              => (with n si)
+instantiatearg      ::= n:<core:name> si:<sortidx>                         => (with n si)
 sortidx             ::= sort:<sort> idx:<u32>                              => (sort idx)
 sort                ::= 0x00 cs:<core:sort>                                => core cs
                       | 0x01                                               => func
@@ -78,7 +78,7 @@ sort                ::= 0x00 cs:<core:sort>                                => co
                       | 0x03                                               => type
                       | 0x04                                               => component
                       | 0x05                                               => instance
-inlineexport        ::= n:<name> si:<sortidx>                              => (export n si)
+inlineexport        ::= n:<externname> si:<sortidx>                        => (export n si)
 name                ::= len:<u32> n:<name-chars>                           => n (if len = |n|)
 name-chars          ::= l:<label>                                          => l
                       | '[constructor]' r:<label>                          => [constructor]r
@@ -126,7 +126,7 @@ Notes:
 (See [Alias Definitions](Explainer.md#alias-definitions) in the explainer.)
 ```
 alias       ::= s:<sort> t:<aliastarget>                => (alias t (s))
-aliastarget ::= 0x00 i:<instanceidx> n:<name>           => export i n
+aliastarget ::= 0x00 i:<instanceidx> n:<core:name>      => export i n
               | 0x01 i:<core:instanceidx> n:<core:name> => core export i n
               | 0x02 ct:<u32> idx:<u32>                 => outer ct idx
 ```
@@ -328,11 +328,15 @@ in the explainer.)
 ```
 import      ::= en:<externname> ed:<externdesc>                => (import en ed)
 export      ::= en:<externname> si:<sortidx> ed?:<externdesc>? => (export en si ed?)
-externname  ::= n:<name> ea:<externattrs>                      => n ea
-externattrs ::= 0x00                                           => ϵ
-              | 0x01 url:<URL>                                 => (id url)
-URL         ::= b*:vec(byte)                                   => char(b)*, if char(b)* parses as a URL
+externname  ::= 0x00 n:<name>                                  => n
+              | 0x01 n:<id>                                    => (interface n)
+id          ::= len:<u32> n:id-chars>                          => n (if len = |n|)
+
+id-chars ::= ns:<label> ':' name:<label> '/' interface:<label> version:<version>
+version  ::= ε                                                 => no version
+           | '@' major*:[0x30-0x39] '.' minor*:[0x30-0x39]     => char(major)* '.' char(minor)*
 ```
+
 Notes:
 * All exports (of all `sort`s) introduce a new index that aliases the exported
   definition and can be used by all subsequent definitions just like an alias.
