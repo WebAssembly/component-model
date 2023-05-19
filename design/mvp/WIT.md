@@ -77,7 +77,7 @@ belong to an interface.
 An example of an interface is:
 
 ```wit
-package wit:demo
+package local:demo
 
 interface host {
   log: func(msg: string)
@@ -90,7 +90,7 @@ would correspond to:
 
 ```wasm
 (component
-  (import (interface "wit:demo/host") (instance $host
+  (import (interface "local:demo/host") (instance $host
     (export "log" (func (param "msg" string)))
   ))
   ;; ...
@@ -138,7 +138,7 @@ equivalent of a `component` type in the component model. For example this
 world:
 
 ```wit
-package wit:demo
+package local:demo
 
 world my-world {
   import host: interface {
@@ -168,7 +168,7 @@ Worlds can contain any number of imports and exports, and can be either a
 function or an interface.
 
 ```wit
-package wit:demo
+package local:demo
 
 world command {
   import wasi:filesystem/filesystem
@@ -190,7 +190,7 @@ Additionally interfaces can be defined inline with an explicit kebab-name that
 avoids the need to have an out-of-line definition.
 
 ```wit
-package wit:demo
+package local:demo
 
 interface out-of-line {
   the-function: func()
@@ -213,14 +213,14 @@ Note that in the component model imports to a component either use an ID or a
 kebab-name, and in WIT this is reflected in the syntax:
 
 ```wit
-package wit:demo
+package local:demo
 
 interface my-interface {
   // ..
 }
 
 world command {
-  // generates an import of the ID `wit:demo/my-interface`
+  // generates an import of the ID `local:demo/my-interface`
   import my-interface
 
   // generates an import of the ID `wasi:filesystem/types`
@@ -255,7 +255,7 @@ and at the top-level of a WIT file.
 The `use` statement here can be used to import types between interfaces:
 
 ```wit
-package wit:demo
+package local:demo
 
 interface types {
   enum errno { /* ... */ }
@@ -277,7 +277,7 @@ Interfaces linked with `use` must be acyclic.
 Names imported via `use` can be renamed as they're imported as well:
 
 ```wit
-package wit:demo
+package local:demo
 
 interface my-host-functions {
   use types.{errno as my-errno}
@@ -299,7 +299,7 @@ interface types {
 }
 
 // host.wit
-package wit:demo
+package local:demo
 
 interface my-host-functions {
   use types.{errno, size}
@@ -314,7 +314,7 @@ the same syntax is used in `import` and `export` directives:
 
 ```wit
 // a.wit
-package wit:demo
+package local:demo
 
 world my-world {
   import host
@@ -336,7 +336,7 @@ When referring to an interface an ID form can additionally be used to refer to
 dependencies. For example above it was seen:
 
 ```wit
-package wit:demo
+package local:demo
 
 world my-world {
   import wasi:clocks/monotonic-clock
@@ -349,7 +349,7 @@ This is the package identified by `wasi:clocks` and the interface
 well:
 
 ```wit
-package wit:demo
+package local:demo
 
 interface my-interface {
   use wasi:http/types.{request, response}
@@ -362,7 +362,7 @@ If a package being referred to has a version number, then using the above syntax
 so far it can get a bit repetitive to be referred to:
 
 ```wit
-package wit:demo
+package local:demo
 
 interface my-interface {
   use wasi:http/types@1.0.{request, response}
@@ -380,7 +380,7 @@ interfaces within the scope of the file itself. For example the above could be
 rewritten as:
 
 ```wit
-package wit:demo
+package local:demo
 
 use wasi:http/types@1.0
 use wasi:http/handler@1.0
@@ -402,7 +402,7 @@ One possible use case for this is importing the same interface with different
 versions:
 
 ```wit
-package wit:demo
+package local:demo
 
 use wasi:http/types@1.0 as http-types1
 use wasi:http/types@2.0 as http-types2
@@ -421,7 +421,7 @@ component.
 For example this document:
 
 ```wit
-package wit:demo
+package local:demo
 
 interface shared {
   record metadata {
@@ -442,7 +442,7 @@ would generate this component:
 
 ```wasm
 (component
-  (import (interface "wit:demo/shared") (instance $shared
+  (import (interface "local:demo/shared") (instance $shared
     (type $metadata (record (; ... ;)))
     (export "metadata" (type (eq $metadata)))
   ))
@@ -455,12 +455,12 @@ would generate this component:
 ```
 
 Here it can be seen that despite the `world` only listing `host` as an import
-the component additionally imports a `wit:demo/shared` interface. This is due
+the component additionally imports a `local:demo/shared` interface. This is due
 to the fact that the `use shared.{ ... }` implicitly requires that `shared` is
 imported into the component as well.
 
-Note that the name `"wit:demo/shared"` here is derived from the name of the
-`interface` plus the package ID `wit:demo`.
+Note that the name `"local:demo/shared"` here is derived from the name of the
+`interface` plus the package ID `local:demo`.
 
 For `export`ed interfaces any transitively `use`d interface is assumed to be an
 import unless it's explicitly listed as an export.
@@ -478,7 +478,7 @@ Functions are defined in an [`interface`][interfaces] or are listed as an
 be named and have unique names:
 
 ```wit
-package wit:demo
+package local:demo
 
 interface foo {
   a1: func()
@@ -490,7 +490,7 @@ interface foo {
 Functions can return at most one unnamed type:
 
 ```wit
-package wit:demo
+package local:demo
 
 interface foo {
   a1: func() -> u32
@@ -501,7 +501,7 @@ interface foo {
 And functions can also return multiple types by naming them:
 
 ```wit
-package wit:demo
+package local:demo
 
 interface foo {
   a: func() -> (a: u32, b: float32)
@@ -520,7 +520,7 @@ time. The types supported in WIT is the same set of types supported in the
 component model itself:
 
 ```wit
-package wit:demo
+package local:demo
 
 interface foo {
   // "package of named fields"
@@ -1183,7 +1183,7 @@ An example of the binary format is that this document:
 
 ```wit
 // host.wit
-package wit:demo
+package local:demo
 
 interface console {
   log: func(arg: string)
@@ -1198,9 +1198,9 @@ would correspond to:
     (type $console (instance
       (export "log" (func (param "arg" string)))
     ))
-    (export (interface "wit:demo/console") (instance (type $console)))
+    (export (interface "local:demo/console") (instance (type $console)))
   ))
-  (export (interface "wit:demo/wit") (type $demo))
+  (export (interface "local:demo/wit") (type $demo))
 )
 ```
 
@@ -1211,7 +1211,7 @@ This is done to implement `use` statements:
 
 ```wit
 // host.wit
-package wit:demo
+package local:demo
 
 interface types {
   enum level {
@@ -1236,16 +1236,16 @@ would correspond to:
       (type $level (enum "info" "debug"))
       (export "level" (type (eq $level)))
     ))
-    (export $types (interface "wit:demo/types") (instance (type $types')))
+    (export $types (interface "local:demo/types") (instance (type $types')))
     (alias export $types "level" (type $level'))
     (type $console (instance
       (alias outer $demo $level' (type $level''))
       (export $level "level" (type (eq $level'')))
       (export "log" (func (param "level" $level) (param "msg" string)))
     ))
-    (export (interface "wit:demo/console") (instance (type $console)))
+    (export (interface "local:demo/console") (instance (type $console)))
   ))
-  (export (interface "wit:demo/wit") (type $demo))
+  (export (interface "local:demo/wit") (type $demo))
 )
 ```
 
@@ -1256,7 +1256,7 @@ A `world` is represented as a component type.
 
 ```wit
 // host.wit
-package wit:demo
+package local:demo
 
 world the-world {
   export test: func()
@@ -1273,9 +1273,9 @@ would correspond to:
       (export "test" (func))
       (export "run" (func))
     ))
-    (export (interface "wit:demo/the-world") (component (type $the-world)))
+    (export (interface "local:demo/the-world") (component (type $the-world)))
   ))
-  (export (interface "wit:demo/wit") (type $demo))
+  (export (interface "local:demo/wit") (type $demo))
 )
 ```
 
@@ -1286,7 +1286,7 @@ the parts needed, within the component:
 
 ```wit
 // host.wit
-package wit:demo
+package local:demo
 
 world the-world {
   import console
@@ -1305,16 +1305,16 @@ would correspond to:
     (type $console (instance
       (export "log" (func (param "arg" string)))
     ))
-    (export (interface "wit:demo/console") (instance (type $console)))
+    (export (interface "local:demo/console") (instance (type $console)))
     (type $the-world (component
       (type $console (instance
         (export "log" (func (param "arg" string)))
       ))
-      (import (interface "wit:demo/console") (instance (type $console)))
+      (import (interface "local:demo/console") (instance (type $console)))
     ))
-    (export (interface "wit:demo/the-world") (component (type $the-world)))
+    (export (interface "local:demo/the-world") (component (type $the-world)))
   ))
-  (export (interface "wit:demo/wit") (type $demo))
+  (export (interface "local:demo/wit") (type $demo))
 )
 ```
 
@@ -1323,7 +1323,7 @@ type as well.
 
 ```wit
 // foo.wit
-package wit:demo
+package local:demo
 
 interface foo {
   use wasi:http/types.{some-type}
@@ -1334,7 +1334,7 @@ would correspond to:
 
 ```wasm
 (component
-  (type (export (interface "wit:demo/wit")) (component
+  (type (export (interface "local:demo/wit")) (component
     (import (interface "wasi:http/types") (instance $types
       (type $some-type ...)
       (export "some-type" (type (eq $some-type)))
@@ -1343,7 +1343,7 @@ would correspond to:
     (type $foo (instance
       (export "some-type" (type (eq $some-type)))
     ))
-    (export (interface "wit:demo/foo") (instance (type $foo)))
+    (export (interface "local:demo/foo") (instance (type $foo)))
   ))
 )
 ```
