@@ -335,7 +335,15 @@ id          ::= len:<u32> n:<id-chars>                         => n (if len = |n
 
 id-chars ::= ns:<label> ':' pkg:<label> '/' n:<label> v:<id-version>   => ns:pkg/nv
 id-version ::=                                                         => ϵ
-             | '@' major+:[0x30-0x39] '.' minor+:[0x30-0x39]           => char(major)+.char(minor)+
+             | '@' version:<version> pre:<verpre> build:<verbuild>     => version pre build
+
+version ::= major:<num> '.' minor:<num> '.' patch:<num>                => major.minor.patch
+version-number ::= digit+:[0x30-0x39]                                  => char(digit)+
+
+verpre ::=                                                             => ϵ
+         | '-' (a:<label> '.') b:<label>                               => -(a.*)b
+verbuild ::=                                                           => ϵ
+           | '+' (a:<label> '.') b:<label>                             => +(a.*)b
 ```
 
 Notes:

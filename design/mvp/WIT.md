@@ -29,7 +29,7 @@ package suitable for distribution.
 
 ## Package identifiers
 
-All WIT packages are assigned an "ID". IDs look like `foo:bar@1.0` and have
+All WIT packages are assigned an "ID". IDs look like `foo:bar@1.0.0` and have
 three components:
 
 * A namespace, for example `foo` in `foo:bar`. This namespace is intended to
@@ -40,10 +40,7 @@ three components:
   together a set of interfaces and worlds that would otherwise be named with a
   common prefix.
 
-* An optional version, specified as a major and minor number. Because WIT
-  packages define *interfaces*, not *implementations*, there is not a patch
-  number, as in full semver. Both version numbers must be unsigned integers.
-  Note that the version field is optional, though.
+* An optional version, specified as [full semver](https://semver.org/).
 
 Package identifiers are specified at the top of a WIT file via a `package`
 declaration:
@@ -55,7 +52,7 @@ package wasi:clocks
 or
 
 ```wit
-package wasi:clocks@1.2
+package wasi:clocks@1.2.0
 ```
 
 WIT packages can be defined in a collection of files and at least one of them
@@ -369,12 +366,12 @@ so far it can get a bit repetitive to be referred to:
 package local:demo
 
 interface my-interface {
-  use wasi:http/types@1.0.{request, response}
+  use wasi:http/types@1.0.0.{request, response}
 }
 
 world my-world {
-  import wasi:http/handler@1.0
-  export wasi:http/handler@1.0
+  import wasi:http/handler@1.0.0
+  export wasi:http/handler@1.0.0
 }
 ```
 
@@ -386,8 +383,8 @@ rewritten as:
 ```wit
 package local:demo
 
-use wasi:http/types@1.0
-use wasi:http/handler@1.0
+use wasi:http/types@1.0.0
+use wasi:http/handler@1.0.0
 
 interface my-interface {
   use types.{request, response}
@@ -428,8 +425,8 @@ multiple versions and renaming as different identifiers.
 ```wit
 package local:demo
 
-use wasi:http/types@1.0 as http-types1
-use wasi:http/types@2.0 as http-types2
+use wasi:http/types@1.0.0 as http-types1
+use wasi:http/types@2.0.0 as http-types2
 
 // ...
 ```
@@ -731,7 +728,10 @@ WIT files optionally start with a package declaration which defines the ID of
 the package.
 
 ```ebnf
-package-decl ::= 'package' id ':' id ('@' integer '.' integer)?
+package-decl        ::= 'package' id ':' id ('@' version)?
+version             ::= integer '.' integer '.' integer version-pre-release? version-build?
+version-pre-release ::= '-' (id '.')* id
+version-build       ::= '+' (id '.')* id
 ```
 
 Note that the version, specified with `@`, is optional. Otherwise the first `id`
