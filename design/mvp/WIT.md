@@ -14,10 +14,10 @@ The Wasm Interface Type (WIT) format is an [IDL] to provide tooling for the
   on a WIT definition of a shared set of APIs between platforms.
 
 A WIT package is a collection of WIT [`interface`s][interfaces] and
-[`world`s][worlds] defined in files that that uses the file extension `wit`,
-for example `foo.wit`, and is encoded as valid utf-8 bytes. Types can be
-imported between interfaces within a package and additionally from other
-packages through IDs.
+[`world`s][worlds] defined in files in the same directory that that all use the
+file extension `wit`, for example `foo.wit`. Files are encoded as valid utf-8
+bytes. Types can be imported between interfaces within a package and
+additionally from other packages through IDs.
 
 This document will go through the purpose of the syntactic constructs of a WIT
 document, a pseudo-formal [grammar specification][lexical-structure], and
@@ -206,10 +206,9 @@ world your-world {
 ```
 
 The kebab name of the `import` or `export` is the name of the corresponding item
-in the final component. Note that kebab names cannot overlap and must be unique,
-even between imports and exports.
+in the final component.
 
-Note that in the component model imports to a component either use an ID or a
+In the component model imports to a component either use an ID or a
 kebab-name, and in WIT this is reflected in the syntax:
 
 ```wit
@@ -236,6 +235,10 @@ world command {
 }
 ```
 
+Kebab names cannot overlap and must be unique, even between imports and exports.
+IDs, however, can be both imported and exported. The same interface cannot be
+explicitly imported or exported twice.
+
 ## WIT Packages and `use`
 [use]: #wit-packages-and-use
 
@@ -252,7 +255,8 @@ and at the top-level of a WIT file.
 
 #### Interfaces, worlds, and `use`
 
-The `use` statement here can be used to import types between interfaces:
+A `use` statement inside of an `interface` or `world` block can be used to
+import types:
 
 ```wit
 package local:demo
@@ -269,9 +273,9 @@ interface my-host-functions {
 ```
 
 The `use` target, `types`, is resolved within the scope of the package to an
-`interface`, in this case defined prior. Afterwards a list of types are provided
+interface, in this case defined prior. Afterwards a list of types are provided
 as what's going to be imported with the `use` statement. The interface `types`
-may textually come either after or before the `use` directive's `interface`.
+may textually come either after or before the `use` directive's interface.
 Interfaces linked with `use` must be acyclic.
 
 Names imported via `use` can be renamed as they're imported as well:
@@ -398,8 +402,28 @@ world my-world {
 The meaning of this and the previous world are the same, and `use` is purely a
 developer convenience for providing smaller names if necessary.
 
-One possible use case for this is importing the same interface with different
-versions:
+The interface referred to by a `use` is the name that is defined in the current
+file's scope:
+
+```wit
+package local:demo
+
+use wasi:http/types   // defines the name `types`
+use wasi:http/handler // defines the name `handler`
+```
+
+Like with interface-level-`use` the `as` keyword can be used to rename the
+inferred name:
+
+```wit
+package local:demo
+
+use wasi:http/types as http-types
+use wasi:http/handler as http-handler
+```
+
+Note that these can all be combined to additionally import packages with
+multiple versions and renaming as different identifiers.
 
 ```wit
 package local:demo
@@ -446,10 +470,10 @@ would generate this component:
     (type $metadata (record (; ... ;)))
     (export "metadata" (type (eq $metadata)))
   ))
-  (alias export $shared "metadata" (type $metadata'))
+  (alias export $shared "metadata" (type $metadata_from_shared))
   (import "host" (instance $host
-    (export "metadata" (type $metadata (eq $metadata')))
-    (export "get" (func (result $metadata)))
+    (export $metadata_in_host "metadata" (type (eq $metadata_from_shared)))
+    (export "get" (func (result $metadata_in_host)))
   ))
 )
 ```
