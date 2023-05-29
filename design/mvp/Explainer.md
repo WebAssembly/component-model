@@ -755,9 +755,9 @@ example, in the following compound component:
   (component $B
     (type $ListString3 (list string))
     (type $ListListString3 (list $ListString3))
-    (type $ListString4 (alias outer $A $ListString))
+    (alias outer $A $ListString1 (type $ListString4))
     (type $ListListString4 (list $ListString4))
-    (type $ListListString5 (alias outer $A $ListString2))
+    (alias outer $A $ListListString2 (type $ListString5))
   )
 )
 ```
