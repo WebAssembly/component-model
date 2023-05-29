@@ -930,7 +930,7 @@ bind a fresh abstract type. For example, in the following component:
 all four types aliases in the outer component are unequal, reflecting the fact
 that each instance of `$C` generates two fresh resource types.
 
-If a single resource type definition is exported greater than once, the exports
+If a single resource type definition is exported more than once, the exports
 after the first are equality-bound to the first export. For example, the
 following component:
 ```wasm
