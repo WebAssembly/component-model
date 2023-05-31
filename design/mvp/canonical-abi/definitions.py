@@ -160,11 +160,7 @@ class Flags(ValType):
   labels: [str]
 
 @dataclass
-class Own(ValType):
-  rt: ResourceType
-
-@dataclass
-class Borrow(ValType):
+class Rc(ValType):
   rt: ResourceType
 
 ### Despecialization
@@ -194,7 +190,7 @@ def alignment(t):
     case Record(fields)     : return alignment_record(fields)
     case Variant(cases)     : return alignment_variant(cases)
     case Flags(labels)      : return alignment_flags(labels)
-    case Own(_) | Borrow(_) : return 4
+    case Rc()               : return 4
 
 #
 
@@ -249,7 +245,7 @@ def size(t):
     case Record(fields)     : return size_record(fields)
     case Variant(cases)     : return size_variant(cases)
     case Flags(labels)      : return size_flags(labels)
-    case Own(_) | Borrow(_) : return 4
+    case Rc()               : return 4
 
 def size_record(fields):
   s = 0
@@ -286,14 +282,10 @@ def num_i32_flags(labels):
 class Context:
   opts: CanonicalOptions
   inst: ComponentInstance
-  lenders: [Handle]
-  borrow_count: int
 
   def __init__(self, opts, inst):
     self.opts = opts
     self.inst = inst
-    self.lenders = []
-    self.borrow_count = 0
 
 #
 
@@ -317,37 +309,57 @@ class ComponentInstance:
 
 #
 
-@dataclass
-class ResourceType(Type):
+class ResourceType:
   impl: ComponentInstance
   dtor: Optional[Callable[[int],None]]
 
 #
 
-@dataclass
-class Handle:
+class Resource:
   rep: int
-  lend_count: int
+  ct: int
 
-@dataclass
-class OwnHandle(Handle):
-  pass
+  def __init__(self, rep):
+    self.rep = rep
+    self.ct = 0
 
-@dataclass
-class BorrowHandle(Handle):
-  cx: Optional[Context]
+  def inc(self):
+    self.ct += 1
+
+  def dec(self, inst, rt):
+    assert(self.ct > 0)
+    self.ct -= 1
+    if self.ct != 0:
+      return;
+    trap_if(inst is not rt.impl and not rt.impl.may_enter)
+    if rt.dtor:
+      rt.dtor(self.rep)
 
 #
 
+class HandleElem:
+  res: Resource
+  dup_count: int
+
+  def __init__(self, res):
+    self.res = res
+    self.dup_count = 0
+
 class HandleTable:
-  array: [Optional[Handle]]
+  array: [Optional[HandleElem]]
   free: [int]
+  deduped: MutableMapping[Resource, int]
 
   def __init__(self):
     self.array = []
     self.free = []
+    self.deduped = {}
 
-  def add(self, h, t):
+  def add(self, h):
+    if h.res in self.deduped:
+      i = self.deduped[h.res]
+      self.array[i].dup_count += 1
+      return i
     if self.free:
       i = self.free.pop()
       assert(self.array[i] is None)
@@ -355,9 +367,8 @@ class HandleTable:
     else:
       i = len(self.array)
       self.array.append(h)
-    match t:
-      case Borrow():
-        h.cx.borrow_count += 1
+    self.deduped[h.res] = i
+    h.res.inc()
     return i
 
 #
@@ -369,21 +380,15 @@ class HandleTable:
 
 #
 
-  def transfer_or_drop(self, i, t, drop):
+  def drop(self, inst, rt, i):
     h = self.get(i)
-    trap_if(h.lend_count != 0)
-    match t:
-      case Own():
-        trap_if(not isinstance(h, OwnHandle))
-        if drop and t.rt.dtor:
-          trap_if(not t.rt.impl.may_enter)
-          t.rt.dtor(h.rep)
-      case Borrow():
-        trap_if(not isinstance(h, BorrowHandle))
-        h.cx.borrow_count -= 1
+    if h.dup_count > 0:
+      h.dup_count -= 1
+      return
     self.array[i] = None
     self.free.append(i)
-    return h
+    del self.deduped[h.res]
+    h.res.dec(inst, rt)
 
 #
 
@@ -394,18 +399,16 @@ class HandleTables:
     self.rt_to_table = dict()
 
   def table(self, rt):
-    if id(rt) not in self.rt_to_table:
-      self.rt_to_table[id(rt)] = HandleTable()
-    return self.rt_to_table[id(rt)]
+    if rt not in self.rt_to_table:
+      self.rt_to_table[rt] = HandleTable()
+    return self.rt_to_table[rt]
 
-  def add(self, h, t):
-    return self.table(t.rt).add(h, t)
-  def get(self, i, rt):
+  def add(self, rt, h):
+    return self.table(rt).add(h)
+  def get(self, rt, i):
     return self.table(rt).get(i)
-  def transfer(self, i, t):
-    return self.table(t.rt).transfer_or_drop(i, t, drop = False)
-  def drop(self, i, t):
-    self.table(t.rt).transfer_or_drop(i, t, drop = True)
+  def drop(self, inst, rt, i):
+    self.table(rt).drop(inst, rt, i)
 
 ### Loading
 
@@ -430,8 +433,7 @@ def load(cx, ptr, t):
     case Record(fields) : return load_record(cx, ptr, fields)
     case Variant(cases) : return load_variant(cx, ptr, cases)
     case Flags(labels)  : return load_flags(cx, ptr, labels)
-    case Own()          : return lift_own(cx, load_int(opts, ptr, 4), t)
-    case Borrow()       : return lift_borrow(cx, load_int(opts, ptr, 4), t)
+    case Rc()           : return lift_handle(cx, load_int(opts, ptr, 4), t)
 
 #
 
@@ -575,16 +577,8 @@ def unpack_flags_from_int(i, labels):
 
 #
 
-def lift_own(cx, i, t):
-  return cx.inst.handles.transfer(i, t)
-
-#
-
-def lift_borrow(cx, i, t):
-  h = cx.inst.handles.get(i, t.rt)
-  h.lend_count += 1
-  cx.lenders.append(h)
-  return BorrowHandle(h.rep, 0, None)
+def lift_handle(cx, i, t):
+  return cx.inst.handles.get(t.rt, i).res
 
 ### Storing
 
@@ -609,8 +603,7 @@ def store(cx, v, t, ptr):
     case Record(fields) : store_record(cx, v, ptr, fields)
     case Variant(cases) : store_variant(cx, v, ptr, cases)
     case Flags(labels)  : store_flags(cx, v, ptr, labels)
-    case Own()          : store_int(cx, lower_own(opts, v, t), ptr, 4)
-    case Borrow()       : store_int(cx, lower_borrow(opts, v, t), ptr, 4)
+    case Rc()           : store_int(cx, lower_handle(opts, v, t), ptr, 4)
 
 #
 
@@ -847,16 +840,9 @@ def pack_flags_into_int(v, labels):
 
 #
 
-def lower_own(cx, h, t):
-  assert(isinstance(h, OwnHandle))
-  return cx.inst.handles.add(h, t)
-
-def lower_borrow(cx, h, t):
-  assert(isinstance(h, BorrowHandle))
-  if cx.inst is t.rt.impl:
-    return h.rep
-  h.cx = cx
-  return cx.inst.handles.add(h, t)
+def lower_handle(cx, res, ht):
+  assert(isinstance(res, Resource))
+  return cx.inst.handles.add(ht.rt, HandleElem(res))
 
 ### Flattening
 
@@ -897,7 +883,7 @@ def flatten_type(t):
     case Record(fields)       : return flatten_record(fields)
     case Variant(cases)       : return flatten_variant(cases)
     case Flags(labels)        : return ['i32'] * num_i32_flags(labels)
-    case Own(_) | Borrow(_)   : return ['i32']
+    case Rc()                 : return ['i32']
 
 #
 
@@ -961,8 +947,7 @@ def lift_flat(cx, vi, t):
     case Record(fields) : return lift_flat_record(cx, vi, fields)
     case Variant(cases) : return lift_flat_variant(cx, vi, cases)
     case Flags(labels)  : return lift_flat_flags(vi, labels)
-    case Own()          : return lift_own(cx, vi.next('i32'), t)
-    case Borrow()       : return lift_borrow(cx, vi.next('i32'), t)
+    case Rc()           : return lift_handle(cx, vi.next('i32'), t)
 
 #
 
@@ -1060,8 +1045,7 @@ def lower_flat(cx, v, t):
     case Record(fields) : return lower_flat_record(cx, v, fields)
     case Variant(cases) : return lower_flat_variant(cx, v, cases)
     case Flags(labels)  : return lower_flat_flags(v, labels)
-    case Own()          : return [Value('i32', lower_own(cx, v, t))]
-    case Borrow()       : return [Value('i32', lower_borrow(cx, v, t))]
+    case Rc()           : return [Value('i32', lower_handle(cx, v, t))]
 
 #
 
@@ -1156,7 +1140,7 @@ def lower_values(cx, max_flat, vs, ts, out_param = None):
       flat_vals += lower_flat(cx, vs[i], ts[i])
     return flat_vals
 
-### `lift`
+### `canon lift`
 
 def canon_lift(opts, inst, callee, ft, args):
   cx = Context(opts, inst)
@@ -1177,11 +1161,10 @@ def canon_lift(opts, inst, callee, ft, args):
   def post_return():
     if opts.post_return is not None:
       opts.post_return(flat_results)
-    trap_if(cx.borrow_count != 0)
 
   return (results, post_return)
 
-### `lower`
+### `canon lower`
 
 def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
   cx = Context(opts, inst)
@@ -1202,27 +1185,23 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
 
   post_return()
 
-  for h in cx.lenders:
-    h.lend_count -= 1
-
   if calling_import:
     inst.may_enter = True
 
   return flat_results
 
-### `resource.new`
+### `canon resource.new`
 
 def canon_resource_new(inst, rt, rep):
-  h = OwnHandle(rep, 0)
-  return inst.handles.add(h, Own(rt))
+  res = Resource(rep)
+  return inst.handles.add(rt, HandleElem(res))
 
-### `resource.drop`
+### `canon resource.drop`
 
-def canon_resource_drop(inst, t, i):
-  inst.handles.drop(i, t)
+def canon_resource_drop(inst, rt, i):
+  inst.handles.drop(inst, rt, i)
 
-### `resource.rep`
+### `canon resource.rep`
 
 def canon_resource_rep(inst, rt, i):
-  h = inst.handles.get(i, rt)
-  return h.rep
+  return inst.handles.get(rt, i).res.rep

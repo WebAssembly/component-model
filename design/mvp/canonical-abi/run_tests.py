@@ -44,6 +44,12 @@ def mk_cx(memory = bytearray(), encoding = 'utf8', realloc = None, post_return =
   opts = mk_opts(memory, encoding, realloc, post_return)
   return Context(opts, ComponentInstance())
 
+def mk_rt(impl, dtor):
+  rt = ResourceType()
+  rt.impl = impl
+  rt.dtor = dtor
+  return rt
+
 def mk_str(s):
   return (s, 'utf8', len(s.encode('utf-8')))
 
@@ -384,92 +390,94 @@ def test_handles():
     nonlocal dtor_value
     dtor_value = x
 
-  rt = ResourceType(ComponentInstance(), dtor) # usable in imports and exports
+  rt = mk_rt(ComponentInstance(), dtor)
 
   inst = ComponentInstance()
-  rt2 = ResourceType(inst, dtor) # only usable in exports
   opts = mk_opts()
 
   def host_import(args):
     assert(len(args) == 2)
     assert(args[0].rep == 42)
-    assert(args[1].rep == 44)
-    return ([OwnHandle(45, 0)], lambda:())
+    assert(args[1].rep == 43)
+    return ([Resource(44), args[1]], lambda:())
 
   def core_wasm(args):
     nonlocal dtor_value
 
-    assert(len(args) == 4)
+    assert(len(args) == 3)
     assert(args[0].t == 'i32' and args[0].v == 0)
     assert(args[1].t == 'i32' and args[1].v == 1)
-    assert(args[2].t == 'i32' and args[2].v == 2)
-    assert(args[3].t == 'i32' and args[3].v == 13)
+    assert(args[2].t == 'i32' and args[2].v == 0)
+    assert(len(inst.handles.table(rt).array) == 2)
     assert(canon_resource_rep(inst, rt, 0) == 42)
     assert(canon_resource_rep(inst, rt, 1) == 43)
-    assert(canon_resource_rep(inst, rt, 2) == 44)
 
     host_ft = FuncType([
-      Borrow(rt),
-      Borrow(rt)
+      Rc(rt),
+      Rc(rt)
     ],[
-      Own(rt)
+      Rc(rt),
+      Rc(rt)
     ])
     args = [
       Value('i32',0),
-      Value('i32',2)
+      Value('i32',1)
     ]
     results = canon_lower(opts, inst, host_import, True, host_ft, args)
-    assert(len(results) == 1)
-    assert(results[0].t == 'i32' and results[0].v == 3)
-    assert(canon_resource_rep(inst, rt, 3) == 45)
+    assert(len(results) == 2)
+    assert(results[0].t == 'i32' and results[0].v == 2)
+    assert(results[1].t == 'i32' and results[1].v == 1)
+    assert(len(inst.handles.table(rt).array) == 3)
+    assert(canon_resource_rep(inst, rt, 2) == 44)
+    assert(canon_resource_rep(inst, rt, 1) == 43)
 
     dtor_value = None
-    canon_resource_drop(inst, Own(rt), 0)
+    canon_resource_drop(inst, rt, 0)
+    assert(dtor_value is None)
+    assert(len(inst.handles.table(rt).free) == 0)
+    assert(inst.handles.table(rt).array[0] is not None)
+    canon_resource_drop(inst, rt, 0)
     assert(dtor_value == 42)
-    assert(len(inst.handles.table(rt).array) == 4)
-    assert(inst.handles.table(rt).array[0] is None)
     assert(len(inst.handles.table(rt).free) == 1)
+    assert(inst.handles.table(rt).array[0] is None)
 
-    h = canon_resource_new(inst, rt, 46)
+    h = canon_resource_new(inst, rt, 45)
     assert(h == 0)
-    assert(len(inst.handles.table(rt).array) == 4)
+    assert(len(inst.handles.table(rt).array) == 3)
     assert(inst.handles.table(rt).array[0] is not None)
     assert(len(inst.handles.table(rt).free) == 0)
 
     dtor_value = None
-    canon_resource_drop(inst, Borrow(rt), 2)
-    assert(dtor_value is None)
-    assert(len(inst.handles.table(rt).array) == 4)
-    assert(inst.handles.table(rt).array[2] is None)
+    canon_resource_drop(inst, rt, 0)
+    assert(dtor_value == 45)
+    assert(len(inst.handles.table(rt).array) == 3)
+    assert(inst.handles.table(rt).array[0] is None)
     assert(len(inst.handles.table(rt).free) == 1)
 
-    return [Value('i32', 0), Value('i32', 1), Value('i32', 3)]
+    return [Value('i32', 1), Value('i32', 2)]
 
   ft = FuncType([
-    Own(rt),
-    Own(rt),
-    Borrow(rt),
-    Borrow(rt2)
+    Rc(rt),
+    Rc(rt),
+    Rc(rt),
   ],[
-    Own(rt),
-    Own(rt),
-    Own(rt)
+    Rc(rt),
+    Rc(rt)
   ])
+  r1 = Resource(42)
+  r2 = Resource(43)
   args = [
-    OwnHandle(42, 0),
-    OwnHandle(43, 0),
-    BorrowHandle(44, 0, None),
-    BorrowHandle(13, 0, None)
+    r1,
+    r2,
+    r1
   ]
   got,post_return = canon_lift(opts, inst, core_wasm, ft, args)
 
-  assert(len(got) == 3)
-  assert(got[0].rep == 46)
-  assert(got[1].rep == 43)
-  assert(got[2].rep == 45)
-  assert(len(inst.handles.table(rt).array) == 4)
-  assert(all(inst.handles.table(rt).array[i] is None for i in range(3)))
-  assert(len(inst.handles.table(rt).free) == 4)
+  assert(len(got) == 2)
+  assert(got[0].rep == 43)
+  assert(got[1].rep == 44)
+  assert(len(inst.handles.table(rt).array) == 3)
+  assert(len(inst.handles.table(rt).free) == 1)
   definitions.MAX_FLAT_RESULTS = before
 
 test_handles()

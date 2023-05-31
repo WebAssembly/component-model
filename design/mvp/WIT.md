@@ -900,6 +900,62 @@ union-cases ::= ty
               | ty ',' union-cases?
 ```
 
+### Item: `resource`
+
+A `resource` statement defines a new abstract type for a *resource*, which is
+an entity with a lifetime that can only be passed around indirectly via [handle
+values](#handles). Resource types are used in interfaces to describe things
+that can't or shouldn't be copied by value.
+
+For example, the following Wit defines a resource type and a function that
+takes and returns a handle (`rc<blob>`) to resources of this type:
+```wit
+resource blob
+transform: func(rc<blob>) -> rc<blob>
+```
+
+As syntactic sugar, resource statements can also declare any number of
+*methods*, which are functions that implicitly takes a `self` handle parameter.
+A resource statement can also contain any number of *static functions*, which
+do not have an implicit `self` parameter but are meant to be lexically nested
+in the scope of the resource type. Lastly, a resource statement can contain at
+most one *constructor* function, which is syntactic sugar for a function
+returning a handle of the containing resource type.
+
+For example, the following resource definition:
+```wit
+resource blob {
+    constructor(init: list<u8>)
+    write: func(bytes: list<u8>)
+    read: func(n: u32) -> list<u8>
+    merge: static func(lhs: rc<blob>, rhs: rc<blob>) -> rc<blob>
+}
+```
+desugars into:
+```wit
+resource blob
+%[constructor]blob: func(self: rc<blob>, bytes: list<u8>)
+%[method]blob.write: func(self: rc<blob>, bytes: list<u8>)
+%[method]blob.read: func(self: rc<blob>, n: u32) -> list<u8>
+%[static]blob.merge: func(lhs: rc<blob>, rhs: rc<blob>) -> rc<blob>
+```
+These `%`-prefixed [`name`s](Explainer.md) embed the resource type name so that
+bindings generators can generate idiomatic syntax for the target language or
+(for languages like C) fall back to an appropriately-prefixed free function
+name.
+
+Specifically, the syntax for a `resource` definition is:
+```ebnf
+resource-item ::= 'resource' id resource-methods?
+
+resource-methods ::= '{' resource-method* '}'
+
+resource-method ::= func-item
+                  | id ':' 'static' func-type
+                  | 'constructor' param-list
+```
+
+
 ## Types
 
 As mentioned previously the intention of `wit` is to allow defining types
@@ -971,37 +1027,25 @@ through a `use` statement or they can be defined locally.
 
 ## Handles
 
-There are two types of handles in Wit: "owned" handles and "borrowed" handles.
-Owned handles represent the passing of unique ownership of a resource between
-two components. When the owner of an owned handle drops that handle, the
-resource is destroyed. In contrast, a borrowed handle represents a temporary
-loan of a handle from the caller to the callee for the duration of the call.
-
 The syntax for handles is:
 ```ebnf
-handle ::= id
-         | 'borrow' '<' id '>'
+handle ::= 'rc' '<' id '>'
+```
+(Other handle types are expected to be added in the future.)
+
+`rc` stands for a non-exclusive, reference-counted handle that keeps the
+pointed-to resource alive until the last handle is dropped. In languages with
+garbage collection or [RAII] idioms, bindings generators would automatically
+take care of dropping the `rc` handle using finalizers or destructors.
+
+For example:
+```wit
+resource region
+merge: func(first: rc<region>, second: rc<region>) -> rc<region>
 ```
 
-The `id` case denotes an owned handle, where `id` is the name of a preceding
-`resource` item. Thus, the "default" way that resources are passed between
-components is via transfer of unique ownership.
 
-The resource method syntax defined above is syntactic sugar that expands into
-separate function items that take a first parameter named `self` of type
-`borrow`. For example, the compound definition:
-```
-resource file {
-    read: func(n: u32) -> list<u8>
-}
-```
-is expanded into:
-```
-resource file
-%[method]file.read: func(self: borrow<file>, n: u32) -> list<u8>
-```
-where `%[method]file.read` is the desugared name of a method according to the
-Component Model's definition of [`name`](Explainer.md).
+[RAII]: https://en.wikipedia.org/wiki/Resource_acquisition_is_initialization
 
 
 ## Identifiers

@@ -495,8 +495,7 @@ defvaltype    ::= bool
                 | (union <valtype>+)
                 | (option <valtype>)
                 | (result <valtype>? (error <valtype>)?)
-                | (own <typeidx>)
-                | (borrow <typeidx>)
+                | (rc <typeidx>)
 valtype       ::= <typeidx>
                 | <defvaltype>
 resourcetype  ::= (resource (rep i32) (dtor <funcidx>)?)
@@ -540,8 +539,7 @@ sets of abstract values:
 | `record`                  | heterogeneous [tuples] of named values |
 | `variant`                 | heterogeneous [tagged unions] of named values |
 | `list`                    | homogeneous, variable-length [sequences] of values |
-| `own`                     | a unique, opaque address of a resource that will be destroyed when this value is dropped |
-| `borrow`                  | an opaque address of a resource that must be dropped before the current export call returns |
+| `rc`                      | a unique, opaque address of a resource that will be destroyed when the last handle is dropped |
 
 How these abstract values are produced and consumed from Core WebAssembly
 values and linear memory is configured by the component via *canonical lifting
@@ -559,19 +557,22 @@ value so that:
    assumptions that NaN payload bits are preserved by the other side (since
    they often aren't).
 
-The `own` and `borrow` value types are both *handle types*. Handles logically
-contain the opaque address of a resource and avoid copying the resource when
-passed across component boundaries. By way of metaphor to operating systems,
-handles are analogous to file descriptors, which are stored in a table and may
-only be used indirectly by untrusted user-mode processes via their integer
-index in the table. In the Component Model, handles are lifted-from and
-lowered-into `i32` values that index an encapsulated per-component-instance
-*handle table* that is maintained by the canonical function definitions
-described [below](#canonical-definitions). The uniqueness and dropping
-conditions mentioned above are enforced at runtime by the Component Model
-through these canonical definitions. The `typeidx` immediate of a handle type
-must refer to a `resource` type (described below) that statically classifies
-the particular kinds of resources the handle can point to.
+The `rc` value type is a *handle type*, where `rc` stands for "reference
+counted". (In the future, other handle types are expected to be added.) Handles
+logically contain the address of a resource and avoid copying the resource when
+the handle is passed across a component boundary. By way of metaphor to
+operating systems, handles are analogous to file descriptors, which are stored
+in a table and may only be used indirectly by untrusted user-mode processes via
+their integer index in the table. In the Component Model, handles are
+lifted-from and lowered-into `i32` values that index an encapsulated
+per-component-instance *handle table* that is maintained by the canonical
+function definitions described [below](#canonical-definitions). Handles are
+deduplicated upon lowering such that two `rc` handles containing the same
+resource address are given the same `i32` handle index. Thus, an `i32` handle
+index can be used as a component-local identity for purposes of equality and
+hashing. The `typeidx` immediate of a handle type must refer to a `resource`
+type (described below) that statically classifies the particular kinds of
+resources the handle can point to.
 
 The [subtyping] between all these types is described in a separate
 [subtyping explainer](Subtyping.md). Of note here, though: the optional
@@ -611,14 +612,14 @@ wrapping it in any containing record/object/struct.
 The `resource` type constructor creates a fresh type for each instance of the
 containing component (with "freshness" and its interaction with general
 type-checking described in more detail [below](#type-checking)). Resource types
-can be referred to by handle types (such as `own` and `borrow`) as well as the
-canonical built-ins described [below](#canonical-built-ins). The `rep`
-immediate of a `resource` type specifies its *core representation type*, which
-is currently fixed to `i32`, but will be relaxed in the future (to at least
-include `i64`, but also potentially other types). When the last handle to a
-resource is dropped, the resource's `dtor` function will be called (if
-present), allowing the implementing component to perform clean-up like freeing
-linear memory allocations.
+can be referred to by `rc` handle types as well as the canonical built-ins
+described [below](#canonical-built-ins). The `rep` immediate of a `resource`
+type specifies its *core representation type*, which is currently fixed to
+`i32`, but will be relaxed in the future (to at least include `i64`, but also
+potentially other types). When the last handle to a resource is dropped, the
+resource's `dtor` function will be called (if present), allowing the
+implementing component to perform clean-up like freeing linear memory
+allocations.
 
 The `instance` type constructor describes a list of named, typed definitions
 that can be imported or exported by a component. Informally, instance types
@@ -688,7 +689,7 @@ declarators to be used by subsequent declarators in the type:
       ;; ...
     ))
     (alias export $fs "file" (type $file))
-    (export "fancy-op" (func (param "f" (borrow $file))))
+    (export "fancy-op" (func (param "f" (rc $file))))
   ))
 )
 ```
@@ -712,10 +713,10 @@ definitions:
     (export "g2" (func (type $G)))
     (export "h" (func (result $U)))
     (import "T" (type $T (sub resource)))
-    (import "i" (func (param "x" (list (own $T)))))
+    (import "i" (func (param "x" (list (rc $T)))))
     (export $T' "T2" (type (eq $T)))
     (export $U' "U" (type (sub resource)))
-    (export "j" (func (param "x" (borrow $T')) (result (own $U'))))
+    (export "j" (func (param "x" (rc $T')) (result (rc $U'))))
   ))
 )
 ```
@@ -831,41 +832,33 @@ the following component:
   (import "T1" (type $T1 (sub resource)))
   (import "T2" (type $T2 (sub resource)))
   (import "T3" (type $T3 (eq $T2)))
-  (type $ListT1 (list (own $T1)))
-  (type $ListT2 (list (own $T2)))
-  (type $ListT3 (list (own $T3)))
+  (type $ListT1 (list (rc $T1)))
+  (type $ListT2 (list (rc $T2)))
+  (type $ListT3 (list (rc $T3)))
 )
 ```
 the types `$T2` and `$T3` are equal to each other but not to `$T1`. By the
 above transitive structural equality rules, the types `$List2` and `$List3` are
 equal to each other but not to `$List1`.
 
-Handle types (`own` and `borrow`) are structural types (like `list`) but, since
+Handle types (e.g., `(rc $R)`) are structural types (like `list`) but, since
 they refer to resource types, transitively "inherit" the freshness of abstract
 resource types. For example, in the following component:
 ```wasm
 (component
   (import "T" (type $T (sub resource)))
   (import "U" (type $U (sub resource)))
-  (type $Own1 (own $T))
-  (type $Own2 (own $T))
-  (type $Own3 (own $U))
-  (type $ListOwn1 (list $Own1))
-  (type $ListOwn2 (list $Own2))
-  (type $ListOwn3 (list $Own3))
-  (type $Borrow1 (borrow $T))
-  (type $Borrow2 (borrow $T))
-  (type $Borrow3 (borrow $U))
-  (type $ListBorrow1 (list $Borrow1))
-  (type $ListBorrow2 (list $Borrow2))
-  (type $ListBorrow3 (list $Borrow3))
+  (type $Rc1 (rc $T))
+  (type $Rc2 (rc $T))
+  (type $Rc3 (rc $U))
+  (type $ListRc1 (list $Rc1))
+  (type $ListRc2 (list $Rc2))
+  (type $ListRc3 (list $Rc3))
 )
 ```
-the types `$Own1` and `$Own2` are equal to each other but not to `$Own3` or
-any of the `$Borrow*`.  Similarly, `$Borrow1` and `$Borrow2` are equal to
-each other but not `$Borrow3`. Transitively, the types `$ListOwn1` and
-`$ListOwn2` are equal to each other but not `$ListOwn3` or any of the
-`$ListBorrow*`. These type-checking rules for type imports mirror the
+the types `$Rc1` and `$Rc2` are equal to each other but not to `$Rc3`.
+Transitively, the types `$ListRc1` and `$ListRc2` are equal to each other but
+not `$ListRc3`. These type-checking rules for type imports mirror the
 *introduction* rule of [universal types]  (∀T).
 
 The above examples all show abstract types in terms of *imports*, but the same
@@ -903,8 +896,8 @@ For example, in the following example component:
 (component
   (type $R1 (resource (rep i32)))
   (type $R2 (resource (rep i32)))
-  (func $f1 (result (own $R1)) (canon lift ...))
-  (func $f2 (param (own $R2)) (canon lift ...))
+  (func $f1 (result (rc $R1)) (canon lift ...))
+  (func $f2 (param (rc $R2)) (canon lift ...))
 )
 ```
 the types `$R1` and `$R2` are unequal and thus the return type of `$f1`
@@ -980,11 +973,11 @@ When supplying a resource type (imported *or* defined) to a type import via
 (component $P
   (import "C1" (component $C1
     (import "T" (type $T (sub resource)))
-    (export "foo" (func (param (own $T))))
+    (export "foo" (func (param (rc $T))))
   ))
   (import "C2" (component $C2
     (import "T" (type $T (sub resource)))
-    (import "foo" (func (param (own $T))))
+    (import "foo" (func (param (rc $T))))
   ))
   (type $R (resource (rep i32)))
   (instance $c1 (instantiate $C1 (with "T" (type $R))))
@@ -1189,37 +1182,38 @@ async is added to the proposal, [tasks][Future and Stream Types]).
 ```
 canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
-        | (canon resource.drop <valtype> (core func <id>?))
+        | (canon resource.drop <typeidx> (core func <id>?))
         | (canon resource.rep <typeidx> (core func <id>?))
 ```
 The `resource.new` built-in requires that the given `typeidx` refers to a
 `resource` `deftype` (a resource defined within this component). The parameters
 of `resource.new` are the value types from the `(rep <valtype>)` immediate of
 the resource type. The return value of `resource.new` is an `i32` index
-referring to an `own` handle in the current component instance's handle table.
-Because resource type representations are currently fixed to be `i32`, the core
-function signature of `resource.new` is currently always `[i32] -> [i32]`.
+referring to an `(rc $R)` handle in the current component instance's handle
+table for `$R`. Because resource type representations are currently fixed to be
+`i32`, the core function signature of `resource.new` is currently always
+`[i32] -> [i32]`.
 
 The `resource.drop` built-in has core function signature `[i32] -> []` and
-drops the handle at the given index from the handle table. The `valtype`
-immediate must either be an `own` or `borrow` handle type. If `own`, the
-resource type's `dtor` function is called synchronously, if present.
+drops the handle at the given index from the handle table. If this is the last
+`rc` handle for a given resource, that resource's `dtor` function is called
+synchronously, passing it the resource's `rep`.
 
-In-between `resource.new` and `resource.drop`, `own` handles can be passed
-between components via import and export calls using `own` and `borrow` handle
-types in parameters and results. The Canonical ABI specifies that `own` handles
-are *transferred* from the producer component instance's handle table into the
-consumer component instance's handle table. In contrast, `borrow` handles are
-*copied* into the callee component instance's handle table, but with runtime
-(trapping) guards to ensure that the callee calls `resource.drop` on the
-borrowed handle before the end of the call and that the owner of the resource
-does not destroy the resource for the duration of the call.
+In-between `resource.new` and `resource.drop`, `rc` handles can be passed
+between components via import and export calls via parameters and results. The
+Canonical ABI specifies that `rc` handles are copied from one component
+instance's handle table into another's. If the receiving component instance
+already contains an `rc` handle for the same resource, the existing `rc`
+handle's index is returned and a duplicate-count is incremented *on the
+handle*. When `resource.drop` is called on a handle with a duplicate-count
+greater than zero, the count is decremented instead of removing the handle from
+the handle table. This allows each lowered handle to be managed and dropped
+separately, without worrying whether the handle was de-duplicated or not.
 
-Lastly, given the `i32` index of an `own` or `borrow` handle, the component
-that defined a resource type (and only that component) can call the
-`resource.rep` built-in to access the `rep` value. (In the future a
-`resource.set` could potentially be added, if needed.) Because of the fixed
-`(rep i32)`, the core signature of `resource.rep` is `[i32] -> [i32]`.
+Lastly, given the `i32` index of an `rc` handle, the component that defined a
+resource type (and only that component) can call the `resource.rep` built-in to
+access the `rep` value. Because of the fixed `(rep i32)`, the core signature of
+`resource.rep` is `[i32] -> [i32]`.
 
 As an example, the following component imports the `resource.new` built-in,
 allowing it to create and return new resources to its client:
@@ -1241,7 +1235,7 @@ allowing it to create and return new resources to its client:
     (with "canon" (instance (export "R_new" (func $R_new))))
   ))
   (export $R' "r" (type $R))
-  (func (export "make-r") (param ...) (result (own $R'))
+  (func (export "make-r") (param ...) (result (rc $R'))
     (canon lift (core func $main "make_R"))
   )
 )
@@ -1338,12 +1332,12 @@ For example, in the following component:
   (import "R1" (type $R1 (sub resource)))
   (type $R2 (resource (rep i32)))
   (export $R2' "R2" (type $R2))
-  (func $f1 (result (own $R1)) (canon lift ...))
-  (func $f2 (result (own $R2)) (canon lift ...))
-  (func $f2' (result (own $R2')) (canon lift ...))
+  (func $f1 (result (rc $R1)) (canon lift ...))
+  (func $f2 (result (rc $R2)) (canon lift ...))
+  (func $f2' (result (rc $R2')) (canon lift ...))
   (export "f1" (func $f1))
   ;; (export "f2" (func $f2)) -- invalid
-  (export "f2" (func $f2) (func (result (own $R2'))))
+  (export "f2" (func $f2) (func (result (rc $R2'))))
   (export "f2" (func $f2'))
 )
 ```
@@ -1662,7 +1656,7 @@ At a high level, the additional coercions would be:
 | `option` | same as [`T?`] | same as [`T?`] |
 | `union` | same as [`union`] | same as [`union`] |
 | `result` | same as `variant`, but coerce a top-level `error` return value to a thrown exception | same as `variant`, but coerce uncaught exceptions to top-level `error` return values |
-| `own`, `borrow` | see below | see below |
+| `rc` | see below | see below |
 
 Notes:
 * Function parameter names are ignored since JavaScript doesn't have named
@@ -1681,19 +1675,16 @@ Notes:
   the JS API of the unspecialized `variant` (e.g.,
   `(variant (case "some" (option u32)) (case "none"))`, despecializing only
   the problematic outer `option`).
-* When coercing `ToWebAssemblyValue`, `own` and `borrow` handle types would
-  dynamically guard that the incoming JS value's dynamic type was compatible
-  with the imported resource type referenced by the handle type. For example,
-  if a component contains `(import "Object" (type $Object (sub resource)))` and
-  is instantiated with the JS `Object` constructor, then `(own $Object)` and
-  `(borrow $Object)` could accept JS `object` values.
-* When coercing `ToJSValue`, handle values would be wrapped with JS objects
+* When coercing `ToWebAssemblyValue`, `rc` handle types would dynamically guard
+  that the incoming JS value's dynamic type was compatible with the imported
+  resource type referenced by the handle type. For example, if a component
+  contains `(import "Object" (type $Object (sub resource)))` and is
+  instantiated with the JS `Object` constructor, then `(rc $Object)` could
+  accept JS `object` values.
+* When coercing `ToJSValue`, `rc handle values would be wrapped with JS objects
   that are instances of the handles' resource type's exported constructor
-  (described above). For `own` handles, a [`FinalizationRegistry`] would be
-  used to drop the `own` handle (thereby calling the resource destructor) when
-  its wrapper object was unreachable from JS. For `borrow` handles, the wrapper
-  object would become dynamically invalid (throwing on any access) at the end
-  of the export call.
+  (described above). A [`FinalizationRegistry`] would be used to drop the
+  handle when the wrapper object became unreachable from JS.
 * The forthcoming addition of [future and stream types] would allow `Promise`
   and `ReadableStream` values to be passed directly to and from components
   without requiring handles or callbacks.
@@ -1779,6 +1770,7 @@ For some use-case-focused, worked examples, see:
 
 The following features are needed to address the [MVP Use Cases](../high-level/UseCases.md)
 and will be added over the coming months to complete the MVP proposal:
+* add additional handle types with better contractual invariants than `rc` (including exclusive ownership)
 * concurrency support ([slides][Future And Stream Types])
 * optional imports, definitions and exports (subsuming
   [WASI Optional Imports](https://github.com/WebAssembly/WASI/blob/main/legacy/optional-imports.md)
