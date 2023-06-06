@@ -982,8 +982,6 @@ def lower_handle(cx, res, ht):
   assert(isinstance(res, Resource))
   return cx.inst.handles.add(ht.rt, HandleElem(res))
 ```
-The `add` method (defined above) performs deduplication and reference-counting
-of the resource.
 
 
 ### Flattening
