@@ -1711,10 +1711,8 @@ the same places where modules can be loaded today, branching on the `layer`
 field in the binary format to determine whether to decode as a module or a
 component.
 
-When the `URL` field of an imported `externname` is present, the `URL` is
-used as the module specifier, using the same resolution path as JS module.
-Otherwise, the `name` field is used as the module specifier, which requires
-[Import Maps] support to resolve to a `URL`.
+ESM-integration-compatible components are those which do not use the interface
+form of `externname` in imports and exports.
 
 The main question is how to deal with component imports having a
 single string as well as the new importable component, module and instance
