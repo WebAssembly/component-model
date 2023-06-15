@@ -13,12 +13,11 @@ The Wasm Interface Type (WIT) format is an [IDL] to provide tooling for the
   component, publish a WIT package representing a host embedding, or collaborate
   on a WIT definition of a shared set of APIs between platforms.
 
-A WIT package is a collection of WIT documents. Each WIT document is defined in
-a file that uses the file extension `wit`, for example `foo.wit`, and is encoded
-as valid utf-8 bytes. Each WIT document contains a collection of
-[`interface`s][interfaces] and [`world`s][worlds]. Types can be imported from
-sibling documents (files) within a package and additionally from other packages
-through a URLs.
+A WIT package is a collection of WIT [`interface`s][interfaces] and
+[`world`s][worlds] defined in files in the same directory that that all use the
+file extension `wit`, for example `foo.wit`. Files are encoded as valid utf-8
+bytes. Types can be imported between interfaces within a package and
+additionally from other packages through IDs.
 
 This document will go through the purpose of the syntactic constructs of a WIT
 document, a pseudo-formal [grammar specification][lexical-structure], and
@@ -27,6 +26,41 @@ package suitable for distribution.
 
 [IDL]: https://en.wikipedia.org/wiki/Interface_description_language
 [components]: https://github.com/webassembly/component-model
+
+## Package identifiers
+
+All WIT packages are assigned an "ID". IDs look like `foo:bar@1.0.0` and have
+three components:
+
+* A namespace, for example `foo` in `foo:bar`. This namespace is intended to
+  disambiguate between registries, top-level organizations, etc. For example
+  WASI interfaces use the `wasi` namespace.
+
+* A package name, for example `clocks` in `wasi:clocks`. A package name groups
+  together a set of interfaces and worlds that would otherwise be named with a
+  common prefix.
+
+* An optional version, specified as [full semver](https://semver.org/).
+
+Package identifiers are specified at the top of a WIT file via a `package`
+declaration:
+
+```wit
+package wasi:clocks
+```
+
+or
+
+```wit
+package wasi:clocks@1.2.0
+```
+
+WIT packages can be defined in a collection of files and at least one of them
+must specify a `package` identifier. Multiple files can specify a `package` and
+they must all agree on what the identifier is.
+
+Package identifiers are used to generate IDs in the component model binary
+format for [`interface`s][interfaces] and [`world`s][worlds].
 
 ## WIT Interfaces
 [interfaces]: #wit-interfaces
@@ -40,6 +74,8 @@ belong to an interface.
 An example of an interface is:
 
 ```wit
+package local:demo
+
 interface host {
   log: func(msg: string)
 }
@@ -51,7 +87,7 @@ would correspond to:
 
 ```wasm
 (component
-  (import "host" (instance $host
+  (import (interface "local:demo/host") (instance $host
     (export "log" (func (param "msg" string)))
   ))
   ;; ...
@@ -62,16 +98,19 @@ An `interface` can contain [`use`][use] statements, [type][types] definitions,
 and [function][functions] definitions. For example:
 
 ```wit
-interface wasi-fs {
-  use pkg.types.{errno}
+package wasi:filesystem
+
+interface types {
+  use wasi:clocks.wall-clock.{datetime}
 
   record stat {
     ino: u64,
     size: u64,
+    mtime: datetime,
     // ...
   }
 
-  stat-file: func(path: string) -> result<stat, errno>
+  stat-file: func(path: string) -> result<stat>
 }
 ```
 
@@ -82,33 +121,22 @@ the interface. This means that types can further be used from the interface by
 other interfaces. An interface has a single namespace which means that none of
 the defined names can collide.
 
-A WIT document can contain any number of interfaces listed at the top-level and
+A WIT package can contain any number of interfaces listed at the top-level and
 in any order. The WIT validator will ensure that all references between
 interfaces are well-formed and acyclic.
-
-An interface may optionally be listed as the `default` of a document. For
-example:
-
-```wit
-default interface types {
-  // ...
-}
-```
-
-This will come up later when describing [`use` statements][use] and indicates
-that when a document is imported from the `types` name here, for example, does
-not need to be specified as it's the `default`.
 
 ## WIT Worlds
 [worlds]: #wit-worlds
 
-WIT documents can contain a `world` definition at the top-level in addition to
+WIT packages can contain `world` definitions at the top-level in addition to
 [`interface`][interfaces] definitions. A world is a complete description of
 both imports and exports of a component. A world can be thought of as an
 equivalent of a `component` type in the component model. For example this
 world:
 
 ```wit
+package local:demo
+
 world my-world {
   import host: interface {
     log: func(param: string)
@@ -137,67 +165,99 @@ Worlds can contain any number of imports and exports, and can be either a
 function or an interface.
 
 ```wit
+package local:demo
+
 world command {
-  import fs: wasi-fs.fs
-  import random: wasi-random.random
-  import clock: wasi-clock.clock
+  import wasi:filesystem/filesystem
+  import wasi:random/random
+  import wasi:clocks/monotonic-clock
   // ...
 
   export main: func(args: list<string>)
 }
 ```
 
+More information about the `wasi:random/random` syntax is available below in the
+description of [`use`][use].
+
 An imported or exported interface corresponds to an imported or exported
 instance in the component model. Functions are equivalent to bare component
 functions.
-
-Additionally interfaces can be defined "inline" as a form of sugar for defining
-it at the top-level
+Additionally interfaces can be defined inline with an explicit kebab-name that
+avoids the need to have an out-of-line definition.
 
 ```wit
+package local:demo
+
 interface out-of-line {
   the-function: func()
 }
 
 world your-world {
-  import out-of-line: self.out-of-line
+  import out-of-line
   // ... is roughly equivalent to ...
-  import out-of-line2: interface {
+  import out-of-line: interface {
     the-function: func()
   }
 }
 ```
 
-The name of the `import` or `export` is the name of the corresponding item in
-the final component. This can be different from the [`interface`][interfaces]
-name but must be a [valid identifier][identifiers].
+The kebab name of the `import` or `export` is the name of the corresponding item
+in the final component.
 
-There can be multiple `world` descriptions in a single WIT document. When
-generating bindings from a WIT document one world must be marked as `default` or
-an explicitly named world must be chosen:
+In the component model imports to a component either use an ID or a
+kebab-name, and in WIT this is reflected in the syntax:
 
 ```wit
-default world my-world {
-  // ...
+package local:demo
+
+interface my-interface {
+  // ..
+}
+
+world command {
+  // generates an import of the ID `local:demo/my-interface`
+  import my-interface
+
+  // generates an import of the ID `wasi:filesystem/types`
+  import wasi:filesystem/types
+
+  // generates an import of the kebab-name `foo`
+  import foo: func()
+
+  // generates an import of the kebab-name `bar`
+  import bar: interface {
+    // ...
+  }
 }
 ```
 
-If no `default` world is specified in the WIT document and no named world is
-explicitly chosen then bindings cannot be generated.
+Kebab names cannot overlap and must be unique, even between imports and exports.
+IDs, however, can be both imported and exported. The same interface cannot be
+explicitly imported or exported twice.
 
 ## WIT Packages and `use`
 [use]: #wit-packages-and-use
 
 A WIT package represents a unit of distribution that can be published to a
-registry, for example, and used by other WIT packages and documents. WIT
-packages are a flat list of documents, defined in `*.wit` files. The current
-thinking for a convention is that projects will have a `wit` folder where all
-`wit/*.wit` files within are members of a WIT package.
+registry, for example, and used by other WIT packages. WIT packages are a flat
+list of interfaces and worlds defined in `*.wit` files. The current thinking
+for a convention is that projects will have a `wit` folder where all
+`wit/*.wit` files within describe a single package.
 
-Within a single WIT document (file) a `use` statement can be used to import
-between interfaces, for example:
+The purpose of the `use` statement is to enable sharing types between
+interfaces, even if they're defined outside of the current package in a
+dependency. The `use` statement can be used both within interfaces and worlds
+and at the top-level of a WIT file.
+
+#### Interfaces, worlds, and `use`
+
+A `use` statement inside of an `interface` or `world` block can be used to
+import types:
 
 ```wit
+package local:demo
+
 interface types {
   enum errno { /* ... */ }
 
@@ -205,149 +265,171 @@ interface types {
 }
 
 interface my-host-functions {
-  use self.types.{errno, size}
+  use types.{errno, size}
 }
 ```
 
-Here the `use` starts with `self` which indicates that something from the
-current document is being used. Then the interface named `types` is listed,
-followed by a list of type names to use from the interface. The interface
-`types` may textually come either after or before the `use` directive's
-`interface`.  Interfaces linked with `use` are not allowed to be cyclic.
+The `use` target, `types`, is resolved within the scope of the package to an
+interface, in this case defined prior. Afterwards a list of types are provided
+as what's going to be imported with the `use` statement. The interface `types`
+may textually come either after or before the `use` directive's interface.
+Interfaces linked with `use` must be acyclic.
 
 Names imported via `use` can be renamed as they're imported as well:
 
 ```wit
+package local:demo
+
 interface my-host-functions {
-  use self.types.{errno as my-errno}
+  use types.{errno as my-errno}
 }
 ```
 
-Documents in a WIT package may also import from each other, for example the
-above can be rewritten as:
+This form of `use` is using a single identifier as the target of what's being
+imported, in this case `types`. The name `types` is first looked up within the
+scope of the current file, but it will additionally consult the package's
+namespace as well. This means that the above syntax still works if the
+interfaces are defined in sibling files:
 
 ```wit
 // types.wit
-default interface types {
+interface types {
   enum errno { /* ... */ }
 
   type size = u32
 }
 
 // host.wit
+package local:demo
+
 interface my-host-functions {
-  use pkg.types.{errno, size}
+  use types.{errno, size}
 }
 ```
 
-The `pkg` keyword indicates that the `use` statement starts at the package root,
-as opposed to the `self` keyword described above starting in the local document.
-Additionally note the usage of `default interface` in the `types.wit` file which
-simplifies the `use`. WIT documents can also import from any interface defined
-within another document, however:
-
-```wit
-// types.wit
-default interface types { /* .. */ }
-
-interface more-types {
-  type another-type = string
-}
-
-// host.wit
-interface my-host-functions {
-  use pkg.types.more-types.{another-type}
-}
-```
-
-Here `more-types` in the `use` path indicates that it's the specific interface
-being referenced. Documents in a WIT package must be named after a [valid
-identifier][identifiers] and be unique within the package. Documents cannot
-contain cycles between them as well with `use` statements.
+Here the `types` interface is not defined in `host.wit` but lookup will find it
+as it's defined in the same package, just instead in a different file.
 
 When importing or exporting an [interface][interfaces] in a [world][worlds]
-the same syntax is used after the `:` as `use`:
+the same syntax is used in `import` and `export` directives:
 
 ```wit
+// a.wit
+package local:demo
+
 world my-world {
-  import host: self.host
-  import other-functionality: pkg.sibling-file
-  import more-functionality: pkg.sibling-file.specific-interface
+  import host
+
+  export another-interface
 }
 
 interface host {
   // ...
 }
-```
 
-The `use` statement so far has always started with `self` or `pkg`, but it may
-also start with any valid identifier:
-
-```wit
-interface foo {
-  use package.other-document.{some-type}
+// b.wit
+interface another-interface {
+  // ...
 }
 ```
 
-This form indicates that the identifier `package` corresponds to some externally
-specified package. Resolution of this WIT document requires the name `package`
-to be provided via external configuration. For example a registry might indicate
-that `package` was downloaded to a particular path at a particular version. The
-name `package` could also perhaps be another package defined in the local
-project which is configured via bindings generation.
+When referring to an interface an ID form can additionally be used to refer to
+dependencies. For example above it was seen:
 
-This syntax allows `use` paths starting with any identifier other than `self`
-and `pkg` to create a set of names that the document needs to be resolved
-correctly. These names are considered the dependency packages of the current
-package being parsed. Note that the set of names here are local to this package
-do not need to conflict with dependency names in other packages. This enables
-each package to be resolved entirely separately and, if necessary, the name
-`foo` could mean different things to different packages.
+```wit
+package local:demo
 
-> **Note**: The tooling for and mechanism for precisely how these external names
-> are defined is not specified here. This is something that will be iterated on
-> to create documentation of the tooling in question and community standards
-> about how best to do this.
->
-> As an example, however, imagine a CLI tool to generate C bindings for creating
-> a component that takes, as input, the world to generate.
->
->   generate-c-bindings pkg.my-component
->
-> The specification of `pkg` here indicates that a locally-written WIT file
-> is being consumed. This could look inside of a `wit` folder in the current
-> directory for a package to parse as a set of WIT files. Inside this package
-> the `my-component` document would be selected and it would be expected to have
-> a `default world`.
->
-> Similarly an invocation such as:
->
->   generate-c-bindings pkg.my-component --extern wasi=./wit/wasi
->
-> Could indicate that the identifier `wasi` within `my-component` would be
-> resolved to a WIT package located in the `./wit/wasi` folder. Instead of
-> `./wit/wasi` it could even pass `./wit/wasi.wasm` which would be the binary
-> encoding of the `wasi` package. This sort of filesystem-based heuristic could
-> be applied by the `generate-c-bindings` tool as well.
->
-> Alternatively there could also be a tool which takes a configuration file:
->
-> ```toml
-> [wit-dependencies]
-> wasi = "1.0"
-> ```
->
-> Where running `wit-registry` (a hypothetical CLI command) would parse this
-> file, resolve it fully, and download the `wasi` package and place it somewhere
-> along with perhaps a `resolve.json` file. This `resolve.json` could then be
-> consumed by `generate-c-bindings` as an additional method for defining the
-> dependency graph of components.
->
-> Note that these scenarios are all hypothetical at this time and are the rough
-> direction that tooling is expected to go in. This will evolve over time but is
-> intended to set the stage for "what actually happens when I refer to a
-> dependency package" where the high-level idea is that it's a concern external
-> to the WIT package itself and resolved by higher-level tooling.
+world my-world {
+  import wasi:clocks/monotonic-clock
+}
+```
+
+Here the interface being referred to is the ID `wasi:clocks/monotonic-clock`.
+This is the package identified by `wasi:clocks` and the interface
+`monotonic-clock` within that package. This same syntax can be used in `use` as
+well:
+
+```wit
+package local:demo
+
+interface my-interface {
+  use wasi:http/types.{request, response}
+}
+```
+
+#### Top-level `use`
+
+If a package being referred to has a version number, then using the above syntax
+so far it can get a bit repetitive to be referred to:
+
+```wit
+package local:demo
+
+interface my-interface {
+  use wasi:http/types@1.0.0.{request, response}
+}
+
+world my-world {
+  import wasi:http/handler@1.0.0
+  export wasi:http/handler@1.0.0
+}
+```
+
+To reduce repetition and to possibly help avoid naming conflicts the `use`
+statement can additionally be used at the top-level of a file to rename
+interfaces within the scope of the file itself. For example the above could be
+rewritten as:
+
+```wit
+package local:demo
+
+use wasi:http/types@1.0.0
+use wasi:http/handler@1.0.0
+
+interface my-interface {
+  use types.{request, response}
+}
+
+world my-world {
+  import handler
+  export handler
+}
+```
+
+The meaning of this and the previous world are the same, and `use` is purely a
+developer convenience for providing smaller names if necessary.
+
+The interface referred to by a `use` is the name that is defined in the current
+file's scope:
+
+```wit
+package local:demo
+
+use wasi:http/types   // defines the name `types`
+use wasi:http/handler // defines the name `handler`
+```
+
+Like with interface-level-`use` the `as` keyword can be used to rename the
+inferred name:
+
+```wit
+package local:demo
+
+use wasi:http/types as http-types
+use wasi:http/handler as http-handler
+```
+
+Note that these can all be combined to additionally import packages with
+multiple versions and renaming as different identifiers.
+
+```wit
+package local:demo
+
+use wasi:http/types@1.0.0 as http-types1
+use wasi:http/types@2.0.0 as http-types2
+
+// ...
+```
 
 ### Transitive imports and worlds
 
@@ -360,6 +442,8 @@ component.
 For example this document:
 
 ```wit
+package local:demo
+
 interface shared {
   record metadata {
     // ...
@@ -368,7 +452,7 @@ interface shared {
 
 world my-world {
   import host: interface {
-    use self.shared.{metadata}
+    use shared.{metadata}
 
     get: func() -> metadata
   }
@@ -379,59 +463,25 @@ would generate this component:
 
 ```wasm
 (component
-  (import "shared" (instance $shared
+  (import (interface "local:demo/shared") (instance $shared
     (type $metadata (record (; ... ;)))
     (export "metadata" (type (eq $metadata)))
   ))
-  (alias export $shared "metadata" (type $metadata))
+  (alias export $shared "metadata" (type $metadata_from_shared))
   (import "host" (instance $host
-    (export "get" (func (result $metadata)))
+    (export $metadata_in_host "metadata" (type (eq $metadata_from_shared)))
+    (export "get" (func (result $metadata_in_host)))
   ))
 )
 ```
 
 Here it can be seen that despite the `world` only listing `host` as an import
-the component additionally imports a `shared` instance. This is due to the fact
-that the `use { ... } from shared` implicitly requires that `shared` is imported
-into the component as well.
+the component additionally imports a `local:demo/shared` interface. This is due
+to the fact that the `use shared.{ ... }` implicitly requires that `shared` is
+imported into the component as well.
 
-Note that the name `"shared"` here is derived from the name of the `interface`
-which can also lead to conflicts:
-
-```wit
-// shared1.wit
-default interface shared { /* ... */ }
-
-// shared2.wit
-default interface shared { /* ... */ }
-
-// world.wit
-world my-world {
-  import foo: interface {
-    use pkg.shared1.{a-type}
-  }
-  import bar: interface {
-    use pkg.shared2.{other-type}
-  }
-}
-```
-
-This is an invalid WIT document because `my-world` needs to import two
-unique interfaces called `shared`. To disambiguate a manual import is required:
-
-```
-world my-world {
-  import shared1: pkg.shared1
-  import shared2: pkg.shared2
-
-  import foo: interface {
-    use pkg.shared1.{a-type}
-  }
-  import bar: interface {
-    use pkg.shared2.{other-type}
-  }
-}
-```
+Note that the name `"local:demo/shared"` here is derived from the name of the
+`interface` plus the package ID `local:demo`.
 
 For `export`ed interfaces any transitively `use`d interface is assumed to be an
 import unless it's explicitly listed as an export.
@@ -449,6 +499,8 @@ Functions are defined in an [`interface`][interfaces] or are listed as an
 be named and have unique names:
 
 ```wit
+package local:demo
+
 interface foo {
   a1: func()
   a2: func(x: u32)
@@ -459,6 +511,8 @@ interface foo {
 Functions can return at most one unnamed type:
 
 ```wit
+package local:demo
+
 interface foo {
   a1: func() -> u32
   a2: func() -> string
@@ -468,6 +522,8 @@ interface foo {
 And functions can also return multiple types by naming them:
 
 ```wit
+package local:demo
+
 interface foo {
   a: func() -> (a: u32, b: float32)
 }
@@ -485,6 +541,8 @@ time. The types supported in WIT is the same set of types supported in the
 component model itself:
 
 ```wit
+package local:demo
+
 interface foo {
   // "package of named fields"
   record r {
@@ -570,6 +628,7 @@ The current structure of tokens are:
 token ::= whitespace
         | operator
         | keyword
+        | integer
         | identifier
 ```
 
@@ -615,7 +674,7 @@ various constructs. Note that delimiters such as `{` and `(` must all be
 balanced.
 
 ```ebnf
-operator ::= '=' | ',' | ':' | ';' | '(' | ')' | '{' | '}' | '<' | '>' | '*' | '->'
+operator ::= '=' | ',' | ':' | ';' | '(' | ')' | '{' | '}' | '<' | '>' | '*' | '->' | '/' | '.' | '@'
 ```
 
 ### Keywords
@@ -639,7 +698,16 @@ keyword ::= 'use'
           | 'world'
           | 'import'
           | 'export'
-          | 'default'
+          | 'package'
+```
+
+### Integers
+
+Integers are currently only used for package versions and are a contiguous
+sequence of digits:
+
+```ebnf
+integer ::= [0-9]+
 ```
 
 ## Top-level items
@@ -648,10 +716,46 @@ A `wit` document is a sequence of items specified at the top level. These items
 come one after another and it's recommended to separate them with newlines for
 readability but this isn't required.
 
-Concretely, the structure of a `wit` document is:
+Concretely, the structure of a `wit` file is:
+
 ```ebnf
-wit-document ::= (interface-item | world-item)*
+wit-file ::= package-decl? (toplevel-use-item | interface-item | world-item)*
 ```
+
+## Package declaration
+
+WIT files optionally start with a package declaration which defines the ID of
+the package.
+
+```ebnf
+package-decl        ::= 'package' id ':' id ('@' version)?
+version             ::= integer '.' integer '.' integer version-pre-release? version-build?
+version-pre-release ::= '-' (id '.')* id
+version-build       ::= '+' (id '.')* id
+```
+
+Note that the version, specified with `@`, is optional. Otherwise the first `id`
+is the namespace and the second `id` is the package name.
+
+## Item: `toplevel-use`
+
+A `use` statement at the top-level of a file can be used to bring interfaces
+into the scope of the current file and/or rename interfaces locally for
+convenience:
+
+```ebnf
+toplevel-use-item ::= 'use' interface ('as' id)?
+
+interface ::= id
+            | id ':' id '/' id ('@' integer '.' integer)
+```
+
+Here `interface` is the ID used to refer to interfaces. The bare form `id`
+refers to interfaces defined within the current package, and the full form
+refers to interfaces in package dependencies.
+
+The `as` syntax can be optionally used to specify a name that should be assigned
+to the interface. Otherwise the name is inferred from `interface`.
 
 ## Item: `world`
 
@@ -660,25 +764,26 @@ Worlds define a [componenttype](https://github.com/WebAssembly/component-model/b
 Concretely, the structure of a world is:
 
 ```ebnf
-world-item ::= 'default'? 'world' id '{' world-items* '}'
+world-item ::= 'world' id '{' world-items* '}'
 
 world-items ::= export-item | import-item | use-item | typedef-item
 
 export-item ::= 'export' id ':' extern-type
+              | 'export' interface
 import-item ::= 'import' id ':' extern-type
+              | 'import' interface
 
-extern-type ::= func-type | interface-type
-
-interface-type ::= 'interface' '{' interface-items* '}'
-                 | use-path
+extern-type ::= func-type | 'interface' '{' interface-items* '}'
 ```
 
 Note that worlds can import types and define their own types to be exported
 from the root of a component and used within functions imported and exported.
+The `interface` item here additionally defines the grammar for IDs used to refer
+to `interface` items.
 
 ## Item: `interface`
 
-Interfaces can be defined in a `wit` document. Interfaces have a name and a
+Interfaces can be defined in a `wit` file. Interfaces have a name and a
 sequence of items and functions.
 
 Specifically interfaces have the structure:
@@ -686,7 +791,7 @@ Specifically interfaces have the structure:
 > **Note**: The symbol `ε`, also known as Epsilon, denotes an empty string.
 
 ```ebnf
-interface-item ::= 'default'? 'interface' id '{' interface-items* '}'
+interface-item ::= 'interface' id '{' interface-items* '}'
 
 interface-items ::= typedef-item
                   | use-item
@@ -719,35 +824,32 @@ named-type ::= id ':' ty
 ## Item: `use`
 
 A `use` statement enables importing type or resource definitions from other
-wit documents. The structure of a use statement is:
+wit packages or interfaces. The structure of a use statement is:
 
 ```wit
-use self.interface.{a, list, of, names}
-use pkg.document.some-type
-use my-dependency.document.other-type
+use an-interface.{a, list, of, names}
+use my:dependency/the-interface.{more, names as foo}
 ```
 
 Specifically the structure of this is:
 
 ```ebnf
-use-item ::= 'use' use-path '.' '{' use-names-list '}'
+use-item ::= 'use' interface '.' '{' use-names-list '}'
 
 use-names-list ::= use-names-item
                  | use-names-item ',' use-names-list?
 
 use-names-item ::= id
                  | id 'as' id
-
-use-path ::= id ('.' id)*
 ```
 
 Note: Here `use-names-list?` means at least one `use-name-list` term.
 
 ## Items: type
 
-There are a number of methods of defining types in a `wit` document, and all of
+There are a number of methods of defining types in a `wit` package, and all of
 the types that can be defined in `wit` are intended to map directly to types in
-the [interface types specification](https://github.com/WebAssembly/interface-types).
+the [component model](https://github.com/WebAssembly/component-model).
 
 ### Item: `type` (alias)
 
@@ -1105,6 +1207,8 @@ An example of the binary format is that this document:
 
 ```wit
 // host.wit
+package local:demo
+
 interface console {
   log: func(arg: string)
 }
@@ -1114,22 +1218,25 @@ would correspond to:
 
 ```wasm
 (component
-  (type (export "host") (component
+  (type $demo (component
     (type $console (instance
       (export "log" (func (param "arg" string)))
     ))
-    (export "console" (instance (type $console)))
+    (export (interface "local:demo/console") (instance (type $console)))
   ))
+  (export (interface "local:demo/wit") (type $demo))
 )
 ```
 
 Here it can be seen how an `interface` corresponds to an `instance` in the
-component model. Note that the WIT document is encoded entirely within the type
+component model. Note that the WIT package is encoded entirely within the type
 section of a component and does not actually represent any concrete instances.
 This is done to implement `use` statements:
 
 ```wit
 // host.wit
+package local:demo
+
 interface types {
   enum level {
     info,
@@ -1138,7 +1245,8 @@ interface types {
 }
 
 interface console {
-  use self.types.{level}
+  use types.{level}
+
   log: func(level: level, msg: string)
 }
 ```
@@ -1147,19 +1255,21 @@ would correspond to:
 
 ```wasm
 (component
-  (type (export "host") (component
-    (type $types (instance
+  (type $demo (component
+    (type $types' (instance
       (type $level (enum "info" "debug"))
       (export "level" (type (eq $level)))
     ))
-    (export $types "types" (instance (type $types)))
-    (alias export $types "level" (type $level))
+    (export $types (interface "local:demo/types") (instance (type $types')))
+    (alias export $types "level" (type $level'))
     (type $console (instance
-      (export $level' "level" (type (eq $level)))
-      (export "log" (func (param "level" $level') (param "msg" string)))
+      (alias outer $demo $level' (type $level''))
+      (export $level "level" (type (eq $level'')))
+      (export "log" (func (param "level" $level) (param "msg" string)))
     ))
-    (export "console" (instance (type $console)))
+    (export (interface "local:demo/console") (instance (type $console)))
   ))
+  (export (interface "local:demo/wit") (type $demo))
 )
 ```
 
@@ -1170,6 +1280,8 @@ A `world` is represented as a component type.
 
 ```wit
 // host.wit
+package local:demo
+
 world the-world {
   export test: func()
   export run: func()
@@ -1180,12 +1292,14 @@ would correspond to:
 
 ```wasm
 (component
-  (type (export "host") (component
-    (export "the-world" (component
+  (type $demo (component
+    (type $the-world (component
       (export "test" (func))
       (export "run" (func))
     ))
+    (export (interface "local:demo/the-world") (component (type $the-world)))
   ))
+  (export (interface "local:demo/wit") (type $demo))
 )
 ```
 
@@ -1196,8 +1310,10 @@ the parts needed, within the component:
 
 ```wit
 // host.wit
+package local:demo
+
 world the-world {
-  import console: console
+  import console
 }
 
 interface console {
@@ -1209,44 +1325,20 @@ would correspond to:
 
 ```wasm
 (component
-  (type (export "host") (component
+  (type $demo (component
     (type $console (instance
       (export "log" (func (param "arg" string)))
     ))
-    (export "console" (instance (type $console)))
-    (export "the-world" (component
-      (import "console" (instance
+    (export (interface "local:demo/console") (instance (type $console)))
+    (type $the-world (component
+      (type $console (instance
         (export "log" (func (param "arg" string)))
       ))
+      (import (interface "local:demo/console") (instance (type $console)))
     ))
+    (export (interface "local:demo/the-world") (component (type $the-world)))
   ))
-)
-```
-
-Each WIT document in a package becomes a top-level export of the component:
-
-```wit
-// foo.wit
-interface foo {}
-
-// bar.wit
-interface bar {}
-```
-
-would correspond to:
-
-```wasm
-(component
-  (type (export "foo") (component
-    (type $foo (instance
-    ))
-    (export "foo" (instance (type $foo)))
-  ))
-  (type (export "bar") (component
-    (type $bar (instance
-    ))
-    (export "bar" (instance (type $bar)))
-  ))
+  (export (interface "local:demo/wit") (type $demo))
 )
 ```
 
@@ -1255,8 +1347,10 @@ type as well.
 
 ```wit
 // foo.wit
+package local:demo
+
 interface foo {
-  use registry-package.types.{some-type}
+  use wasi:http/types.{some-type}
 }
 ```
 
@@ -1264,8 +1358,8 @@ would correspond to:
 
 ```wasm
 (component
-  (type (export "foo") (component
-    (import "types" "URL" (instance $types
+  (type (export (interface "local:demo/wit")) (component
+    (import (interface "wasi:http/types") (instance $types
       (type $some-type ...)
       (export "some-type" (type (eq $some-type)))
     ))
@@ -1273,13 +1367,10 @@ would correspond to:
     (type $foo (instance
       (export "some-type" (type (eq $some-type)))
     ))
-    (export "foo" (instance (type $foo)))
+    (export (interface "local:demo/foo") (instance (type $foo)))
   ))
 )
 ```
-
-Note that `URL` would be provided by external tooling providing the definition
-of `registry-package` here as well.
 
 Putting all of this together an example of development of the `wasi-http`
 package would be:
@@ -1288,22 +1379,24 @@ package would be:
 // wasi-http repo
 
 // wit/types.wit
-default interface types {
+interface types {
   resource request { ... }
   resource response { ... }
 }
 
 // wit/handler.wit
-default interface handler {
-  use pkg.types.{request, response}
+interface handler {
+  use types.{request, response}
   handle: func(request) -> response
 }
 
 // wit/proxy.wit
-default world proxy {
-  import console: wasi-logging.backend
-  import origin: pkg.handler
-  export handler: pkg.handler
+package wasi:http
+
+world proxy {
+  import wasi:logging/backend
+  import handler
+  export handler
 }
 ```
 
@@ -1311,65 +1404,58 @@ and its corresponding binary encoding would be:
 
 ```wasm
 (component
-  ;; corresponds to `wit/types.wit`
-  (type (export "types") (component
-    (export "types" (instance
+  (type $http (component
+    ;; interface types
+    (type $types (instance
       (type $request (record))
       (type $response (record))
       (export "request" (type (eq $request)))
       (export "response" (type (eq $response)))
     ))
-  ))
-  ;; corresponds to `wit/handler.wit`
-  (type (export "handler") (component
-    ;; interfaces not required in a document are imported here. The name "types"
-    ;; with no URL refers to the `types` document in this package.
-    (import "types" "pkg:/types/types" (instance $types
-      (type $request (record))
-      (type $response (record))
-      (export "request" (type (eq $request)))
-      (export "response" (type (eq $response)))
-    ))
+    (export $types (interface "wasi:http/types") (instance (type $types)))
+    (alias export $types "request" (type $request'))
+    (alias export $types "response" (type $response'))
 
-    ;; aliases represent `use` from the imported document
-    (alias export $types "request" (type $request))
-    (alias export $types "response" (type $response))
-    (export "handler" (instance
-      (export $request' "request" (type (eq $request)))
-      (export $response' "response" (type (eq $response)))
-      (export "handle" (func (param "request" $request') (result $response')))
+    ;; interface handler
+    (type $handler (instance
+      (export $request "request" (type (eq $request')))
+      (export $response "response" (type (eq $response')))
+      (export "handle" (func (param "request" $request) (result $response)))
     ))
-  ))
-  ;; corresponds to `wit/proxy.wit`
-  (type (export "proxy") (component
-    (export "proxy" (component
-      ;; This world transitively depends on "types" so it's listed as an
-      ;; import.
-      (import "types" "pkg:/types/types" (instance $types
+    (export (interface "wasi:http/handler") (instance (type $handler)))
+
+    ;; world proxy
+    (type $proxy (component
+      ;; import of `wasi:logging/backend`
+      (type $backend
+        (instance)
+      )
+      (import (interface "wasi:logging/backend") (instance (type $backend)))
+
+      ;; transitive import of `wasi:http/types`
+      (type $types (instance
         (type $request (record))
         (type $response (record))
         (export "request" (type (eq $request)))
         (export "response" (type (eq $response)))
       ))
-      (alias export $types "request" (type $request))
-      (alias export $types "response" (type $response))
+      (import (interface "wasi:http/types") (instance $types (type $types)))
+      (alias export $types "request" (type $request'))
+      (alias export $types "response" (type $response'))
 
-      ;; This is filled in with the contents of what `wasi-logging.backend`
-      ;; resolved to
-      (import "console" "dep:/foo/bar/baz" (instance
-        ;; ...
+      ;; import of `wasi:http/handler`
+      (type $handler (instance
+        (export $request "request" (type (eq $request')))
+        (export $response "response" (type (eq $response')))
+        (export "handle" (func (param "request" $request) (result $response)))
       ))
-      (import "origin" "pkg:/handler/handler" (instance
-        (export $request' "request" (type (eq $request)))
-        (export $response' "response" (type (eq $response)))
-        (export "handle" (func (param "request" $request') (result $response')))
-      ))
-      (export "handler" "pkg:/handler/handler" (instance
-        (export $request' "request" (type (eq $request)))
-        (export $response' "response" (type (eq $response)))
-        (export "handle" (func (param "request" $request') (result $response')))
-      ))
+      (import (interface "wasi:http/handler") (instance (type $handler)))
+
+      ;; import of `wasi:http/handler`
+      (export (interface "wasi:http/handler") (instance (type $handler)))
     ))
+    (export (interface "wasi:http/proxy") (component (type $proxy)))
   ))
+  (export (interface "wasi:http/wit") (type $http))
 )
 ```
