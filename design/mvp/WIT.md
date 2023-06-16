@@ -728,14 +728,11 @@ WIT files optionally start with a package declaration which defines the ID of
 the package.
 
 ```ebnf
-package-decl        ::= 'package' id ':' id ('@' version)?
-version             ::= integer '.' integer '.' integer version-pre-release? version-build?
-version-pre-release ::= '-' (id '.')* id
-version-build       ::= '+' (id '.')* id
+package-decl        ::= 'package' id ':' id ('@' valid-semver)?
 ```
 
-Note that the version, specified with `@`, is optional. Otherwise the first `id`
-is the namespace and the second `id` is the package name.
+The production `valid-semver` is as defined by
+[Semantic Versioning 2.0](https://semver.org/) and optional.
 
 ## Item: `toplevel-use`
 

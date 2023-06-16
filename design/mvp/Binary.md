@@ -102,8 +102,9 @@ Notes:
   for aliases (below).
 * Validation of `core:instantiatearg` initially only allows the `instance`
   sort, but would be extended to accept other sorts as core wasm is extended.
-* Validation of `instantiate` requires that `name` is present in an
-  `externname` of `c` (with a matching type).
+* Validation of `instantiate` requires that each `<name>` or `<iid>` in an
+  imported `externname` in `c` matches a `string` in a `with` argument and that
+  the argument's type matches the import's type.
 * When validating `instantiate`, after each individual type-import is supplied
   via `with`, the actual type supplied is immediately substituted for all uses
   of the import, so that subsequent imports and all exports are now specialized
@@ -327,23 +328,14 @@ flags are set.
 (See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
 in the explainer.)
 ```
-import      ::= en:<externname> ed:<externdesc>                => (import en ed)
-export      ::= en:<externname> si:<sortidx> ed?:<externdesc>? => (export en si ed?)
-externname  ::= 0x00 n:<name>                                  => n
-              | 0x01 n:<id>                                    => (interface n)
-id          ::= len:<u32> n:<id-chars>                         => n (if len = |n|)
-
-id-chars ::= ns:<label> ':' pkg:<label> '/' n:<label> v:<id-version>   => ns:pkg/nv
-id-version ::=                                                         => ϵ
-             | '@' version:<version> pre:<verpre> build:<verbuild>     => version pre build
-
-version ::= major:<num> '.' minor:<num> '.' patch:<num>                => major.minor.patch
-version-number ::= digit+:[0x30-0x39]                                  => char(digit)+
-
-verpre ::=                                                             => ϵ
-         | '-' (a:<label> '.') b:<label>                               => -(a.*)b
-verbuild ::=                                                           => ϵ
-           | '+' (a:<label> '.') b:<label>                             => +(a.*)b
+import      ::= en:<externname> ed:<externdesc>                      => (import en ed)
+export      ::= en:<externname> si:<sortidx> ed?:<externdesc>?       => (export en si ed?)
+externname  ::= 0x00 n:<name>                                        => n
+              | 0x01 iid:<iid>                                       => (interface iid)
+iid         ::= len:<u32> c:<iid-chars>                              => c (if len = |c|)
+iid-chars   ::= ns:<label> ':' pkg:<label> '/' n:<label> v:<version> => ns:pkg/nv
+version     ::=                                                      => ϵ
+              | '@' v:<valid semver>                                 => @v
 ```
 
 Notes:
@@ -351,9 +343,6 @@ Notes:
   definition and can be used by all subsequent definitions just like an alias.
 * Validation requires that all resource types transitively used in the type of an
   export are introduced by a preceding `importdecl` or `exportdecl`.
-* The "parses as a URL" condition is defined by executing the [basic URL
-  parser] with `char(b)*` as *input*, no optional parameters and non-fatal
-  validation errors (which coincides with definition of `URL` in JS and `rust-url`).
 * Validation requires any exported `sortidx` to have a valid `externdesc`
   (which disallows core sorts other than `core module`). When the optional
   `externdesc` immediate is present, validation requires it to be a supertype
@@ -364,7 +353,7 @@ Notes:
 * The `id` fields of `externname` (that are present) must independently be
   unique among imports and exports, respectively. (An import and export *may*
   have the same `id`.)
-* URLs are compared for equality by plain byte identity.
+* `<valid semver>` is as defined by [https://semver.org](https://semver.org/)
 
 ## Name Section
 
@@ -407,5 +396,3 @@ named once.
 
 [type-imports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
 [module-linking]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md
-
-[Basic URL Parser]: https://url.spec.whatwg.org/#concept-basic-url-parser
