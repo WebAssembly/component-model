@@ -289,8 +289,9 @@ class CallContext:
     self.borrow_count = 0
 
   def lift_borrow_from(self, lending_handle):
-    lending_handle.lend_count += 1
-    self.lenders.append(lending_handle)
+    if lending_handle.own:
+      lending_handle.lend_count += 1
+      self.lenders.append(lending_handle)
 
   def add_borrow_to_table(self):
     self.borrow_count += 1

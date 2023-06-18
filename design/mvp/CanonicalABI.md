@@ -244,8 +244,9 @@ that `own` handles are not dropped while they have been `borrow`ed and that all
 `borrow` handles created for a call are dropped before the end of the call.
 ```python
   def lift_borrow_from(self, lending_handle):
-    lending_handle.lend_count += 1
-    self.lenders.append(lending_handle)
+    if lending_handle.own:
+      lending_handle.lend_count += 1
+      self.lenders.append(lending_handle)
 
   def add_borrow_to_table(self):
     self.borrow_count += 1
@@ -334,14 +335,15 @@ one `CallContext` alive for a given component at a time and thus this field
 does not actually need to be stored per `HandleElem`.
 
 The `lend_count` field maintains a conservative approximation of the number of
-live handles that were lent from this handle (by calls to `borrow`-taking
+live handles that were lent from this `own` handle (by calls to `borrow`-taking
 functions). This count is maintained by the `CallContext` bookkeeping functions
-(above) and is ensured to be zero when a handle is dropped.
+(above) and is ensured to be zero when an `own` handle is dropped.
 
 An optimizing implementation can enumerate the canonical definitions present
 in a component to statically determine that a given resource type's handle
 table only contains `own` or `borrow` handles and then, based on this,
-statically eliminate the `own` and possibly `scope` fields, and guards thereof.
+statically eliminate the `own` and the `lend_count` xor `scope` fields,
+and guards thereof.
 
 `HandleTable` (singular) encapsulates a single mutable, growable array
 of handles that all share the same `ResourceType`. Defining `HandleTable` in
