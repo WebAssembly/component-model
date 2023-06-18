@@ -424,7 +424,7 @@ def test_handles():
     assert(canon_resource_rep(inst, rt, 3) == 45)
 
     dtor_value = None
-    canon_resource_drop(inst, Own(rt), 0)
+    canon_resource_drop(inst, rt, 0)
     assert(dtor_value == 42)
     assert(len(inst.handles.table(rt).array) == 4)
     assert(inst.handles.table(rt).array[0] is None)
@@ -437,7 +437,7 @@ def test_handles():
     assert(len(inst.handles.table(rt).free) == 0)
 
     dtor_value = None
-    canon_resource_drop(inst, Borrow(rt), 2)
+    canon_resource_drop(inst, rt, 2)
     assert(dtor_value is None)
     assert(len(inst.handles.table(rt).array) == 4)
     assert(inst.handles.table(rt).array[2] is None)

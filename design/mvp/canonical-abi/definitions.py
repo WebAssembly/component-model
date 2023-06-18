@@ -1126,14 +1126,12 @@ def canon_resource_new(inst, rt, rep):
 
 ### `canon resource.drop`
 
-def canon_resource_drop(inst, t, i):
-  h = inst.handles.remove(t.rt, i)
-  trap_if(isinstance(t, Own) and not h.own)
-  trap_if(isinstance(t, Borrow) and h.own)
+def canon_resource_drop(inst, rt, i):
+  h = inst.handles.remove(rt, i)
   if h.own:
-    trap_if(inst is not t.rt.impl and not t.rt.impl.may_enter)
-    if t.rt.dtor:
-      t.rt.dtor(h.rep)
+    trap_if(inst is not rt.impl and not rt.impl.may_enter)
+    if rt.dtor:
+      rt.dtor(h.rep)
 
 ### `canon resource.rep`
 

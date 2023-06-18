@@ -1596,24 +1596,22 @@ def canon_resource_new(inst, rt, rep):
 
 For a canonical definition:
 ```
-(canon resource.drop $t (core func $f))
+(canon resource.drop $rt (core func $f))
 ```
 validation specifies:
-* `$t` must refer to a handle type `(own $rt)` or `(borrow $rt)`
+* `$rt` must refer to resource type
 * `$f` is given type `(func (param i32))`
 
 Calling `$f` invokes the following function, which removes the handle from the
 current component instance's handle table and, if the handle was owning, calls
 the resource's destructor.
 ```python
-def canon_resource_drop(inst, t, i):
-  h = inst.handles.remove(t.rt, i)
-  trap_if(isinstance(t, Own) and not h.own)
-  trap_if(isinstance(t, Borrow) and h.own)
+def canon_resource_drop(inst, rt, i):
+  h = inst.handles.remove(rt, i)
   if h.own:
-    trap_if(inst is not t.rt.impl and not t.rt.impl.may_enter)
-    if t.rt.dtor:
-      t.rt.dtor(h.rep)
+    trap_if(inst is not rt.impl and not rt.impl.may_enter)
+    if rt.dtor:
+      rt.dtor(h.rep)
 ```
 The `may_enter` guard ensures the non-reentrance [component invariant], since
 a destructor call is analogous to a call to an export.

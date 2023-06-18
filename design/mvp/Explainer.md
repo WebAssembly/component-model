@@ -1189,7 +1189,7 @@ async is added to the proposal, [tasks][Future and Stream Types]).
 ```
 canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
-        | (canon resource.drop <valtype> (core func <id>?))
+        | (canon resource.drop <typeidx> (core func <id>?))
         | (canon resource.rep <typeidx> (core func <id>?))
 ```
 The `resource.new` built-in has type `[i32] -> [i32]` and creates a new
@@ -1198,9 +1198,8 @@ representation and returning the `i32` index of a new handle pointing to this
 resource.
 
 The `resource.drop` built-in has type `[i32] -> []` and drops a resource handle
-(of type `valtype`, which must be `own` or `borrow`) at the given `i32` index.
-If the dropped handle owns the resource, the resource's `dtor` is called, if
-present.
+(with resource type `typeidx`) at the given `i32` index. If the dropped handle
+owns the resource, the resource's `dtor` is called, if present.
 
 The `resource.rep` built-in has type `[i32] -> [i32]` and returns the `i32`
 representation of the resource (with resource type `typeidx`) pointed to by the
