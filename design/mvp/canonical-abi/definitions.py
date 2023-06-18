@@ -8,7 +8,6 @@ from __future__ import annotations
 import math
 import struct
 from dataclasses import dataclass
-import typing
 from typing import Optional
 from typing import Callable
 from typing import MutableMapping
@@ -196,15 +195,11 @@ def alignment(t):
     case Flags(labels)      : return alignment_flags(labels)
     case Own(_) | Borrow(_) : return 4
 
-#
-
 def alignment_record(fields):
   a = 1
   for f in fields:
     a = max(a, alignment(f.t))
   return a
-
-#
 
 def alignment_variant(cases):
   return max(alignment(discriminant_type(cases)), max_case_alignment(cases))
@@ -224,8 +219,6 @@ def max_case_alignment(cases):
     if c.t is not None:
       a = max(a, alignment(c.t))
   return a
-
-#
 
 def alignment_flags(labels):
   n = len(labels)
@@ -281,9 +274,9 @@ def size_flags(labels):
 def num_i32_flags(labels):
   return math.ceil(len(labels) / 32)
 
-### Context
+### Runtime State
 
-class Context:
+class CallContext:
   opts: CanonicalOptions
   inst: ComponentInstance
   lenders: [Handle]
@@ -295,15 +288,26 @@ class Context:
     self.lenders = []
     self.borrow_count = 0
 
-#
+  def lift_borrow_from(self, lending_handle):
+    lending_handle.lend_count += 1
+    self.lenders.append(lending_handle)
+
+  def add_borrow_to_table(self):
+    self.borrow_count += 1
+
+  def remove_borrow_from_table(self):
+    self.borrow_count -= 1
+
+  def exit_call(self):
+    trap_if(self.borrow_count != 0)
+    for h in self.lenders:
+      h.lend_count -= 1
 
 class CanonicalOptions:
   memory: bytearray
   string_encoding: str
   realloc: Callable[[int,int,int,int],int]
   post_return: Callable[[],None]
-
-#
 
 class ComponentInstance:
   may_leave: bool
@@ -315,39 +319,40 @@ class ComponentInstance:
     self.may_enter = True
     self.handles = HandleTables()
 
-#
-
-@dataclass
 class ResourceType(Type):
   impl: ComponentInstance
   dtor: Optional[Callable[[int],None]]
 
-#
+  def __init__(self, impl, dtor = None):
+    self.impl = impl
+    self.dtor = dtor
 
-@dataclass
-class Handle:
+class HandleElem:
   rep: int
+  own: bool
+  scope: Optional[CallContext]
   lend_count: int
 
-@dataclass
-class OwnHandle(Handle):
-  pass
-
-@dataclass
-class BorrowHandle(Handle):
-  cx: Optional[Context]
-
-#
+  def __init__(self, rep, own, scope = None):
+    self.rep = rep
+    self.own = own
+    self.scope = scope
+    self.lend_count = 0
 
 class HandleTable:
-  array: [Optional[Handle]]
+  array: [Optional[HandleElem]]
   free: [int]
 
   def __init__(self):
     self.array = []
     self.free = []
 
-  def add(self, h, t):
+  def get(self, i):
+    trap_if(i >= len(self.array))
+    trap_if(self.array[i] is None)
+    return self.array[i]
+
+  def add(self, h):
     if self.free:
       i = self.free.pop()
       assert(self.array[i] is None)
@@ -355,37 +360,18 @@ class HandleTable:
     else:
       i = len(self.array)
       self.array.append(h)
-    match t:
-      case Borrow():
-        h.cx.borrow_count += 1
+    if h.scope is not None:
+      h.scope.add_borrow_to_table()
     return i
 
-#
-
-  def get(self, i):
-    trap_if(i >= len(self.array))
-    trap_if(self.array[i] is None)
-    return self.array[i]
-
-#
-
-  def transfer_or_drop(self, i, t, drop):
+  def remove(self, rt, i):
     h = self.get(i)
     trap_if(h.lend_count != 0)
-    match t:
-      case Own():
-        trap_if(not isinstance(h, OwnHandle))
-        if drop and t.rt.dtor:
-          trap_if(not t.rt.impl.may_enter)
-          t.rt.dtor(h.rep)
-      case Borrow():
-        trap_if(not isinstance(h, BorrowHandle))
-        h.cx.borrow_count -= 1
     self.array[i] = None
     self.free.append(i)
+    if h.scope is not None:
+      h.scope.remove_borrow_from_table()
     return h
-
-#
 
 class HandleTables:
   rt_to_table: MutableMapping[ResourceType, HandleTable]
@@ -394,18 +380,16 @@ class HandleTables:
     self.rt_to_table = dict()
 
   def table(self, rt):
-    if id(rt) not in self.rt_to_table:
-      self.rt_to_table[id(rt)] = HandleTable()
-    return self.rt_to_table[id(rt)]
+    if rt not in self.rt_to_table:
+      self.rt_to_table[rt] = HandleTable()
+    return self.rt_to_table[rt]
 
-  def add(self, h, t):
-    return self.table(t.rt).add(h, t)
-  def get(self, i, rt):
+  def get(self, rt, i):
     return self.table(rt).get(i)
-  def transfer(self, i, t):
-    return self.table(t.rt).transfer_or_drop(i, t, drop = False)
-  def drop(self, i, t):
-    self.table(t.rt).transfer_or_drop(i, t, drop = True)
+  def add(self, rt, h):
+    return self.table(rt).add(h)
+  def remove(self, rt, i):
+    return self.table(rt).remove(rt, i)
 
 ### Loading
 
@@ -433,18 +417,12 @@ def load(cx, ptr, t):
     case Own()          : return lift_own(cx, load_int(opts, ptr, 4), t)
     case Borrow()       : return lift_borrow(cx, load_int(opts, ptr, 4), t)
 
-#
-
 def load_int(cx, ptr, nbytes, signed = False):
   return int.from_bytes(cx.opts.memory[ptr : ptr+nbytes], 'little', signed=signed)
-
-#
 
 def convert_int_to_bool(i):
   assert(i >= 0)
   return bool(i)
-
-#
 
 def reinterpret_i32_as_float(i):
   return struct.unpack('!f', struct.pack('!I', i))[0] # f32.reinterpret_i32
@@ -465,14 +443,10 @@ def canonicalize64(f):
     return reinterpret_i64_as_float(CANONICAL_FLOAT64_NAN)
   return f
 
-#
-
 def convert_i32_to_char(cx, i):
   trap_if(i >= 0x110000)
   trap_if(0xD800 <= i <= 0xDFFF)
   return chr(i)
-
-#
 
 def load_string(cx, ptr):
   begin = load_int(cx, ptr, 4)
@@ -509,8 +483,6 @@ def load_string_from_range(cx, ptr, tagged_code_units):
 
   return (s, cx.opts.string_encoding, tagged_code_units)
 
-#
-
 def load_list(cx, ptr, elem_type):
   begin = load_int(cx, ptr, 4)
   length = load_int(cx, ptr + 4, 4)
@@ -531,8 +503,6 @@ def load_record(cx, ptr, fields):
     record[field.label] = load(cx, ptr, field.t)
     ptr += size(field.t)
   return record
-
-#
 
 def load_variant(cx, ptr, cases):
   disc_size = size(discriminant_type(cases))
@@ -560,8 +530,6 @@ def find_case(label, cases):
     return matches[0]
   return -1
 
-#
-
 def load_flags(cx, ptr, labels):
   i = load_int(cx, ptr, size_flags(labels))
   return unpack_flags_from_int(i, labels)
@@ -573,18 +541,14 @@ def unpack_flags_from_int(i, labels):
     i >>= 1
   return record
 
-#
-
 def lift_own(cx, i, t):
-  return cx.inst.handles.transfer(i, t)
-
-#
+  h = cx.inst.handles.remove(t.rt, i)
+  return h.rep
 
 def lift_borrow(cx, i, t):
-  h = cx.inst.handles.get(i, t.rt)
-  h.lend_count += 1
-  cx.lenders.append(h)
-  return BorrowHandle(h.rep, 0, None)
+  h = cx.inst.handles.get(t.rt, i)
+  cx.lift_borrow_from(h)
+  return h.rep
 
 ### Storing
 
@@ -612,12 +576,8 @@ def store(cx, v, t, ptr):
     case Own()          : store_int(cx, lower_own(opts, v, t), ptr, 4)
     case Borrow()       : store_int(cx, lower_borrow(opts, v, t), ptr, 4)
 
-#
-
 def store_int(cx, v, ptr, nbytes, signed = False):
   cx.opts.memory[ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed=signed)
-
-#
 
 def reinterpret_float_as_i32(f):
   return struct.unpack('!I', struct.pack('!f', f))[0] # i32.reinterpret_f32
@@ -625,14 +585,10 @@ def reinterpret_float_as_i32(f):
 def reinterpret_float_as_i64(f):
   return struct.unpack('!Q', struct.pack('!d', f))[0] # i64.reinterpret_f64
 
-#
-
 def char_to_i32(c):
   i = ord(c)
   assert(0 <= i <= 0xD7FF or 0xD800 <= i <= 0x10FFFF)
   return i
-
-#
 
 def store_string(cx, v, ptr):
   begin, tagged_code_units = store_string_into_range(cx, v)
@@ -673,8 +629,6 @@ def store_string_into_range(cx, v):
             case 'latin1'   : return store_string_copy(cx, src, src_code_units, 1, 2, 'latin-1')
             case 'utf16'    : return store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units)
 
-#
-
 MAX_STRING_BYTE_LENGTH = (1 << 31) - 1
 
 def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment, dst_encoding):
@@ -687,8 +641,6 @@ def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment
   assert(dst_byte_length == len(encoded))
   cx.opts.memory[ptr : ptr+len(encoded)] = encoded
   return (ptr, src_code_units)
-
-#
 
 def store_utf16_to_utf8(cx, src, src_code_units):
   worst_case_size = src_code_units * 3
@@ -715,8 +667,6 @@ def store_string_to_utf8(cx, src, src_code_units, worst_case_size):
       trap_if(ptr + len(encoded) > len(cx.opts.memory))
   return (ptr, len(encoded))
 
-#
-
 def store_utf8_to_utf16(cx, src, src_code_units):
   worst_case_size = 2 * src_code_units
   trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
@@ -731,8 +681,6 @@ def store_utf8_to_utf16(cx, src, src_code_units):
     trap_if(ptr + len(encoded) > len(cx.opts.memory))
   code_units = int(len(encoded) / 2)
   return (ptr, code_units)
-
-#
 
 def store_string_to_latin1_or_utf16(cx, src, src_code_units):
   assert(src_code_units <= MAX_STRING_BYTE_LENGTH)
@@ -767,8 +715,6 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
     trap_if(ptr + dst_byte_length > len(cx.opts.memory))
   return (ptr, dst_byte_length)
 
-#
-
 def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   src_byte_length = 2 * src_code_units
   trap_if(src_byte_length > MAX_STRING_BYTE_LENGTH)
@@ -786,8 +732,6 @@ def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   ptr = cx.opts.realloc(ptr, src_byte_length, 1, latin1_size)
   trap_if(ptr + latin1_size > len(cx.opts.memory))
   return (ptr, latin1_size)
-
-#
 
 def store_list(cx, v, ptr, elem_type):
   begin, length = store_list_into_range(cx, v, elem_type)
@@ -810,8 +754,6 @@ def store_record(cx, v, ptr, fields):
     store(cx, v[f.label], f.t, ptr)
     ptr += size(f.t)
 
-#
-
 def store_variant(cx, v, ptr, cases):
   case_index, case_value = match_case(v, cases)
   disc_size = size(discriminant_type(cases))
@@ -831,8 +773,6 @@ def match_case(v, cases):
     if case_index != -1:
       return (case_index, value)
 
-#
-
 def store_flags(cx, v, ptr, labels):
   i = pack_flags_into_int(v, labels)
   store_int(cx, i, ptr, size_flags(labels))
@@ -845,18 +785,15 @@ def pack_flags_into_int(v, labels):
     shift += 1
   return i
 
-#
+def lower_own(cx, rep, t):
+  h = HandleElem(rep, own=True)
+  return cx.inst.handles.add(t.rt, h)
 
-def lower_own(cx, h, t):
-  assert(isinstance(h, OwnHandle))
-  return cx.inst.handles.add(h, t)
-
-def lower_borrow(cx, h, t):
-  assert(isinstance(h, BorrowHandle))
+def lower_borrow(cx, rep, t):
   if cx.inst is t.rt.impl:
-    return h.rep
-  h.cx = cx
-  return cx.inst.handles.add(h, t)
+    return rep
+  h = HandleElem(rep, own=False, scope=cx)
+  return cx.inst.handles.add(t.rt, h)
 
 ### Flattening
 
@@ -882,8 +819,6 @@ def flatten_functype(ft, context):
 def flatten_types(ts):
   return [ft for t in ts for ft in flatten_type(t)]
 
-#
-
 def flatten_type(t):
   match despecialize(t):
     case Bool()               : return ['i32']
@@ -899,15 +834,11 @@ def flatten_type(t):
     case Flags(labels)        : return ['i32'] * num_i32_flags(labels)
     case Own(_) | Borrow(_)   : return ['i32']
 
-#
-
 def flatten_record(fields):
   flat = []
   for f in fields:
     flat += flatten_type(f.t)
   return flat
-
-#
 
 def flatten_variant(cases):
   flat = []
@@ -964,8 +895,6 @@ def lift_flat(cx, vi, t):
     case Own()          : return lift_own(cx, vi.next('i32'), t)
     case Borrow()       : return lift_borrow(cx, vi.next('i32'), t)
 
-#
-
 def lift_flat_unsigned(vi, core_width, t_width):
   i = vi.next('i' + str(core_width))
   assert(0 <= i < (1 << core_width))
@@ -979,8 +908,6 @@ def lift_flat_signed(vi, core_width, t_width):
     return i - (1 << t_width)
   return i
 
-#
-
 def lift_flat_string(cx, vi):
   ptr = vi.next('i32')
   packed_length = vi.next('i32')
@@ -991,15 +918,11 @@ def lift_flat_list(cx, vi, elem_type):
   length = vi.next('i32')
   return load_list_from_range(cx, ptr, length, elem_type)
 
-#
-
 def lift_flat_record(cx, vi, fields):
   record = {}
   for f in fields:
     record[f.label] = lift_flat(cx, vi, f.t)
   return record
-
-#
 
 def lift_flat_variant(cx, vi, cases):
   flat_types = flatten_variant(cases)
@@ -1028,8 +951,6 @@ def lift_flat_variant(cx, vi, cases):
 def wrap_i64_to_i32(i):
   assert(0 <= i < (1 << 64))
   return i % (1 << 32)
-
-#
 
 def lift_flat_flags(vi, labels):
   i = 0
@@ -1063,14 +984,10 @@ def lower_flat(cx, v, t):
     case Own()          : return [Value('i32', lower_own(cx, v, t))]
     case Borrow()       : return [Value('i32', lower_borrow(cx, v, t))]
 
-#
-
 def lower_flat_signed(i, core_bits):
   if i < 0:
     i += (1 << core_bits)
   return [Value('i' + str(core_bits), i)]
-
-#
 
 def lower_flat_string(cx, v):
   ptr, packed_length = store_string_into_range(cx, v)
@@ -1080,15 +997,11 @@ def lower_flat_list(cx, v, elem_type):
   (ptr, length) = store_list_into_range(cx, v, elem_type)
   return [Value('i32', ptr), Value('i32', length)]
 
-#
-
 def lower_flat_record(cx, v, fields):
   flat = []
   for f in fields:
     flat += lower_flat(cx, v[f.label], f.t)
   return flat
-
-#
 
 def lower_flat_variant(cx, v, cases):
   case_index, case_value = match_case(v, cases)
@@ -1110,8 +1023,6 @@ def lower_flat_variant(cx, v, cases):
   for want in flat_types:
     payload.append(Value(want, 0))
   return [Value('i32', case_index)] + payload
-
-#
 
 def lower_flat_flags(v, labels):
   i = pack_flags_into_int(v, labels)
@@ -1135,8 +1046,6 @@ def lift_values(cx, max_flat, vi, ts):
   else:
     return [ lift_flat(cx, vi, t) for t in ts ]
 
-#
-
 def lower_values(cx, max_flat, vs, ts, out_param = None):
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
@@ -1156,10 +1065,10 @@ def lower_values(cx, max_flat, vs, ts, out_param = None):
       flat_vals += lower_flat(cx, vs[i], ts[i])
     return flat_vals
 
-### `lift`
+### `canon lift`
 
 def canon_lift(opts, inst, callee, ft, args):
-  cx = Context(opts, inst)
+  cx = CallContext(opts, inst)
   trap_if(not inst.may_enter)
 
   assert(inst.may_leave)
@@ -1177,14 +1086,14 @@ def canon_lift(opts, inst, callee, ft, args):
   def post_return():
     if opts.post_return is not None:
       opts.post_return(flat_results)
-    trap_if(cx.borrow_count != 0)
+    cx.exit_call()
 
   return (results, post_return)
 
-### `lower`
+### `canon lower`
 
 def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
-  cx = Context(opts, inst)
+  cx = CallContext(opts, inst)
   trap_if(not inst.may_leave)
 
   assert(inst.may_enter)
@@ -1201,28 +1110,31 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
   inst.may_leave = True
 
   post_return()
-
-  for h in cx.lenders:
-    h.lend_count -= 1
+  cx.exit_call()
 
   if calling_import:
     inst.may_enter = True
 
   return flat_results
 
-### `resource.new`
+### `canon resource.new`
 
 def canon_resource_new(inst, rt, rep):
-  h = OwnHandle(rep, 0)
-  return inst.handles.add(h, Own(rt))
+  h = HandleElem(rep, own=True)
+  return inst.handles.add(rt, h)
 
-### `resource.drop`
+### `canon resource.drop`
 
 def canon_resource_drop(inst, t, i):
-  inst.handles.drop(i, t)
+  h = inst.handles.remove(t.rt, i)
+  trap_if(isinstance(t, Own) and not h.own)
+  trap_if(isinstance(t, Borrow) and h.own)
+  if h.own and t.rt.dtor:
+    trap_if(not t.rt.impl.may_enter)
+    t.rt.dtor(h.rep)
 
-### `resource.rep`
+### `canon resource.rep`
 
 def canon_resource_rep(inst, rt, i):
-  h = inst.handles.get(i, rt)
+  h = inst.handles.get(rt, i)
   return h.rep
