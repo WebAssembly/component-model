@@ -1017,8 +1017,8 @@ transform: func(blob) -> blob
 ```
 
 As syntactic sugar, resource statements can also declare any number of
-*methods*, which are functions that implicitly takes a `self` borrowed handle
-parameter. A resource statement can also contain any number of *static
+*methods*, which are functions that implicitly take a `self` parameter that is
+a handle. A resource statement can also contain any number of *static
 functions*, which do not have an implicit `self` parameter but are meant to be
 lexically nested in the scope of the resource type. Lastly, a resource
 statement can contain at most one *constructor* function, which is syntactic
@@ -1046,6 +1046,14 @@ bindings generators can generate idiomatic syntax for the target language or
 (for languages like C) fall back to an appropriately-prefixed free function
 name.
 
+When a resource type name is used directly (e.g. when `blob` is used as the
+return value of the constructor above), it stands for an "owning" handle
+that will call the resource's destructor when dropped. When a resource
+type name is wrapped with `borrow<...>`, it stands for a "borrowed" handle
+that will *not* call the destructor when dropped. As shown above, methods
+always desugar to a borrowed self parameter whereas constructors always
+desugar to an owned return value.
+
 Specifically, the syntax for a `resource` definition is:
 ```ebnf
 resource-item ::= 'resource' id resource-methods?
@@ -1054,6 +1062,8 @@ resource-method ::= func-item
                   | id ':' 'static' func-type
                   | 'constructor' param-list
 ```
+
+The syntax for handle types is presented [below](#handles).
 
 ## Types
 
