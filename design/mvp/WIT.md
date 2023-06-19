@@ -1002,6 +1002,69 @@ union-cases ::= ty
               | ty ',' union-cases?
 ```
 
+### Item: `resource`
+
+A `resource` statement defines a new abstract type for a *resource*, which is
+an entity with a lifetime that can only be passed around indirectly via [handle
+values](#handles). Resource types are used in interfaces to describe things
+that can't or shouldn't be copied by value.
+
+For example, the following Wit defines a resource type and a function that
+takes and returns a handle to a `blob`:
+```wit
+resource blob
+transform: func(blob) -> blob
+```
+
+As syntactic sugar, resource statements can also declare any number of
+*methods*, which are functions that implicitly take a `self` parameter that is
+a handle. A resource statement can also contain any number of *static
+functions*, which do not have an implicit `self` parameter but are meant to be
+lexically nested in the scope of the resource type. Lastly, a resource
+statement can contain at most one *constructor* function, which is syntactic
+sugar for a function returning a handle of the containing resource type.
+
+For example, the following resource definition:
+```wit
+resource blob {
+    constructor(init: list<u8>)
+    write: func(bytes: list<u8>)
+    read: func(n: u32) -> list<u8>
+    merge: static func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob
+}
+```
+desugars into:
+```wit
+resource blob
+%[constructor]blob: func(self: borrow<blob>, bytes: list<u8>) -> blob
+%[method]blob.write: func(self: borrow<blob>, bytes: list<u8>)
+%[method]blob.read: func(self: borrow<blob>, n: u32) -> list<u8>
+%[static]blob.merge: func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob
+```
+These `%`-prefixed [`name`s](Explainer.md) embed the resource type name so that
+bindings generators can generate idiomatic syntax for the target language or
+(for languages like C) fall back to an appropriately-prefixed free function
+name.
+
+When a resource type name is used directly (e.g. when `blob` is used as the
+return value of the constructor above), it stands for an "owning" handle
+that will call the resource's destructor when dropped. When a resource
+type name is wrapped with `borrow<...>`, it stands for a "borrowed" handle
+that will *not* call the destructor when dropped. As shown above, methods
+always desugar to a borrowed self parameter whereas constructors always
+desugar to an owned return value.
+
+Specifically, the syntax for a `resource` definition is:
+```ebnf
+resource-item ::= 'resource' id resource-methods?
+resource-methods ::= '{' resource-method* '}'
+resource-method ::= func-item
+                  | id ':' 'static' func-type
+                  | 'constructor' param-list
+```
+
+The syntax for handle types is presented [below](#handles).
+
 ## Types
 
 As mentioned previously the intention of `wit` is to allow defining types
