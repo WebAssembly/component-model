@@ -1189,37 +1189,21 @@ async is added to the proposal, [tasks][Future and Stream Types]).
 ```
 canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
-        | (canon resource.drop <valtype> (core func <id>?))
+        | (canon resource.drop <typeidx> (core func <id>?))
         | (canon resource.rep <typeidx> (core func <id>?))
 ```
-The `resource.new` built-in requires that the given `typeidx` refers to a
-`resource` `deftype` (a resource defined within this component). The parameters
-of `resource.new` are the value types from the `(rep <valtype>)` immediate of
-the resource type. The return value of `resource.new` is an `i32` index
-referring to an `own` handle in the current component instance's handle table.
-Because resource type representations are currently fixed to be `i32`, the core
-function signature of `resource.new` is currently always `[i32] -> [i32]`.
+The `resource.new` built-in has type `[i32] -> [i32]` and creates a new
+resource (with resource type `typeidx`) with the given `i32` value as its
+representation and returning the `i32` index of a new handle pointing to this
+resource.
 
-The `resource.drop` built-in has core function signature `[i32] -> []` and
-drops the handle at the given index from the handle table. The `valtype`
-immediate must either be an `own` or `borrow` handle type. If `own`, the
-resource type's `dtor` function is called synchronously, if present.
+The `resource.drop` built-in has type `[i32] -> []` and drops a resource handle
+(with resource type `typeidx`) at the given `i32` index. If the dropped handle
+owns the resource, the resource's `dtor` is called, if present.
 
-In-between `resource.new` and `resource.drop`, `own` handles can be passed
-between components via import and export calls using `own` and `borrow` handle
-types in parameters and results. The Canonical ABI specifies that `own` handles
-are *transferred* from the producer component instance's handle table into the
-consumer component instance's handle table. In contrast, `borrow` handles are
-*copied* into the callee component instance's handle table, but with runtime
-(trapping) guards to ensure that the callee calls `resource.drop` on the
-borrowed handle before the end of the call and that the owner of the resource
-does not destroy the resource for the duration of the call.
-
-Lastly, given the `i32` index of an `own` or `borrow` handle, the component
-that defined a resource type (and only that component) can call the
-`resource.rep` built-in to access the `rep` value. (In the future a
-`resource.set` could potentially be added, if needed.) Because of the fixed
-`(rep i32)`, the core signature of `resource.rep` is `[i32] -> [i32]`.
+The `resource.rep` built-in has type `[i32] -> [i32]` and returns the `i32`
+representation of the resource (with resource type `typeidx`) pointed to by the
+handle at the given `i32` index.
 
 As an example, the following component imports the `resource.new` built-in,
 allowing it to create and return new resources to its client:
