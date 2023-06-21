@@ -1751,7 +1751,7 @@ and will be added over the coming months to complete the MVP proposal:
 [Avoidance Problem]: https://counterexamples.org/avoidance.html
 [Non-Parametric Parametricity]: https://people.mpi-sws.org/~dreyer/papers/npp/main.pdf
 
-[module-linking]: https://github.com/WebAssembly/module-linking/blob/main/design/proposals/module-linking/Explainer.md
+[module-linking]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md
 [interface-types]: https://github.com/WebAssembly/interface-types/blob/main/proposals/interface-types/Explainer.md
 [type-imports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
 [exception-handling]: https://github.com/WebAssembly/exception-handling/blob/main/proposals/exception-handling/Exceptions.md
