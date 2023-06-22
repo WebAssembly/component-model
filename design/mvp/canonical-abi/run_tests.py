@@ -42,7 +42,7 @@ def mk_opts(memory = bytearray(), encoding = 'utf8', realloc = None, post_return
 
 def mk_cx(memory = bytearray(), encoding = 'utf8', realloc = None, post_return = None):
   opts = mk_opts(memory, encoding, realloc, post_return)
-  return Context(opts, ComponentInstance())
+  return CallContext(opts, ComponentInstance())
 
 def mk_str(s):
   return (s, 'utf8', len(s.encode('utf-8')))
@@ -356,7 +356,7 @@ def test_roundtrip(t, v):
   caller_heap = Heap(1000)
   caller_opts = mk_opts(caller_heap.memory, 'utf8', caller_heap.realloc)
   caller_inst = ComponentInstance()
-  caller_cx = Context(caller_opts, caller_inst)
+  caller_cx = CallContext(caller_opts, caller_inst)
 
   flat_args = lower_flat(caller_cx, v, t)
   flat_results = canon_lower(caller_opts, caller_inst, lifted_callee, True, ft, flat_args)
@@ -392,9 +392,9 @@ def test_handles():
 
   def host_import(args):
     assert(len(args) == 2)
-    assert(args[0].rep == 42)
-    assert(args[1].rep == 44)
-    return ([OwnHandle(45, 0)], lambda:())
+    assert(args[0] == 42)
+    assert(args[1] == 44)
+    return ([45], lambda:())
 
   def core_wasm(args):
     nonlocal dtor_value
@@ -424,7 +424,7 @@ def test_handles():
     assert(canon_resource_rep(inst, rt, 3) == 45)
 
     dtor_value = None
-    canon_resource_drop(inst, Own(rt), 0)
+    canon_resource_drop(inst, rt, 0)
     assert(dtor_value == 42)
     assert(len(inst.handles.table(rt).array) == 4)
     assert(inst.handles.table(rt).array[0] is None)
@@ -437,7 +437,7 @@ def test_handles():
     assert(len(inst.handles.table(rt).free) == 0)
 
     dtor_value = None
-    canon_resource_drop(inst, Borrow(rt), 2)
+    canon_resource_drop(inst, rt, 2)
     assert(dtor_value is None)
     assert(len(inst.handles.table(rt).array) == 4)
     assert(inst.handles.table(rt).array[2] is None)
@@ -456,17 +456,17 @@ def test_handles():
     Own(rt)
   ])
   args = [
-    OwnHandle(42, 0),
-    OwnHandle(43, 0),
-    BorrowHandle(44, 0, None),
-    BorrowHandle(13, 0, None)
+    42,
+    43,
+    44,
+    13
   ]
   got,post_return = canon_lift(opts, inst, core_wasm, ft, args)
 
   assert(len(got) == 3)
-  assert(got[0].rep == 46)
-  assert(got[1].rep == 43)
-  assert(got[2].rep == 45)
+  assert(got[0] == 46)
+  assert(got[1] == 43)
+  assert(got[2] == 45)
   assert(len(inst.handles.table(rt).array) == 4)
   assert(all(inst.handles.table(rt).array[i] is None for i in range(3)))
   assert(len(inst.handles.table(rt).free) == 4)

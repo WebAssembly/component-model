@@ -191,8 +191,8 @@ more restricted version of `name`:
 instance       ::= (instance <id>? <instanceexpr>)
 instanceexpr   ::= (instantiate <componentidx> <instantiatearg>*)
                  | <inlineexport>*
-instantiatearg ::= (with <name> <sortidx>)
-                 | (with <name> (instance <inlineexport>*))
+instantiatearg ::= (with <string> <sortidx>)
+                 | (with <string> (instance <inlineexport>*))
 sortidx        ::= (<sort> <u32>)
 sort           ::= core <core:sort>
                  | func
@@ -200,7 +200,8 @@ sort           ::= core <core:sort>
                  | type
                  | component
                  | instance
-inlineexport   ::= (export <name> <sortidx>)
+inlineexport   ::= (export <externname> <sortidx>)
+string         ::= <core:name>
 name           ::= <label>
                  | [constructor]<label>
                  | [method]<label>.<label>
@@ -267,14 +268,14 @@ instance, the `core export` of a core module instance and a definition of an
 `outer` component (containing the current component):
 ```
 alias            ::= (alias <aliastarget> (<sort> <id>?))
-aliastarget      ::= export <instanceidx> <name>
+aliastarget      ::= export <instanceidx> <string>
                    | core export <core:instanceidx> <core:name>
                    | outer <u32> <u32>
 ```
 If present, the `id` of the alias is bound to the new index added by the alias
 and can be used anywhere a normal `id` can be used.
 
-In the case of `export` aliases, validation ensures `name` is an export in the
+In the case of `export` aliases, validation ensures `string` is an export in the
 target instance and has a matching sort.
 
 In the case of `outer` aliases, the `u32` pair serves as a [de Bruijn
@@ -1139,7 +1140,7 @@ Using canonical function definitions, we can finally write a non-trivial
 component that takes a string, does some logging, then returns a string.
 ```wasm
 (component
-  (import "logging" (id "wasi:logging") (instance $logging
+  (import "logging" (instance $logging
     (export "log" (func (param string)))
   ))
   (import "libc" (core module $Libc
@@ -1154,14 +1155,14 @@ component that takes a string, does some logging, then returns a string.
   (core module $Main
     (import "libc" "memory" (memory 1))
     (import "libc" "realloc" (func (param i32 i32) (result i32)))
-    (import "wasi:logging" "log" (func $log (param i32 i32)))
+    (import "logging" "log" (func $log (param i32 i32)))
     (func (export "run") (param i32 i32) (result i32)
       ... (call $log) ...
     )
   )
   (core instance $main (instantiate $Main
     (with "libc" (instance $libc))
-    (with "wasi:logging" (instance (export "log" (func $log))))
+    (with "logging" (instance (export "log" (func $log))))
   ))
   (func $run (param string) (result string) (canon lift
     (core func $main "run")
@@ -1189,37 +1190,21 @@ async is added to the proposal, [tasks][Future and Stream Types]).
 ```
 canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
-        | (canon resource.drop <valtype> (core func <id>?))
+        | (canon resource.drop <typeidx> (core func <id>?))
         | (canon resource.rep <typeidx> (core func <id>?))
 ```
-The `resource.new` built-in requires that the given `typeidx` refers to a
-`resource` `deftype` (a resource defined within this component). The parameters
-of `resource.new` are the value types from the `(rep <valtype>)` immediate of
-the resource type. The return value of `resource.new` is an `i32` index
-referring to an `own` handle in the current component instance's handle table.
-Because resource type representations are currently fixed to be `i32`, the core
-function signature of `resource.new` is currently always `[i32] -> [i32]`.
+The `resource.new` built-in has type `[i32] -> [i32]` and creates a new
+resource (with resource type `typeidx`) with the given `i32` value as its
+representation and returning the `i32` index of a new handle pointing to this
+resource.
 
-The `resource.drop` built-in has core function signature `[i32] -> []` and
-drops the handle at the given index from the handle table. The `valtype`
-immediate must either be an `own` or `borrow` handle type. If `own`, the
-resource type's `dtor` function is called synchronously, if present.
+The `resource.drop` built-in has type `[i32] -> []` and drops a resource handle
+(with resource type `typeidx`) at the given `i32` index. If the dropped handle
+owns the resource, the resource's `dtor` is called, if present.
 
-In-between `resource.new` and `resource.drop`, `own` handles can be passed
-between components via import and export calls using `own` and `borrow` handle
-types in parameters and results. The Canonical ABI specifies that `own` handles
-are *transferred* from the producer component instance's handle table into the
-consumer component instance's handle table. In contrast, `borrow` handles are
-*copied* into the callee component instance's handle table, but with runtime
-(trapping) guards to ensure that the callee calls `resource.drop` on the
-borrowed handle before the end of the call and that the owner of the resource
-does not destroy the resource for the duration of the call.
-
-Lastly, given the `i32` index of an `own` or `borrow` handle, the component
-that defined a resource type (and only that component) can call the
-`resource.rep` built-in to access the `rep` value. (In the future a
-`resource.set` could potentially be added, if needed.) Because of the fixed
-`(rep i32)`, the core signature of `resource.rep` is `[i32] -> [i32]`.
+The `resource.rep` built-in has type `[i32] -> [i32]` and returns the `i32`
+representation of the resource (with resource type `typeidx`) pointed to by the
+handle at the given `i32` index.
 
 As an example, the following component imports the `resource.new` built-in,
 allowing it to create and return new resources to its client:
@@ -1314,7 +1299,9 @@ Lastly, imports and exports are defined as:
 ```
 import     ::= (import <externname> bind-id(<externdesc>))
 export     ::= (export <id>? <externname> <sortidx> <externdesc>?)
-externname ::= <name> (id <URL>)?
+externname ::= <name>
+             | (interface "<iid>")
+iid        ::= <label>:<label>/<label>(@<valid semver>)?
 ```
 Both import and export definitions append a new element to the index space of
 the imported/exported `sort` which can be optionally bound to an identifier in
@@ -1353,142 +1340,53 @@ the standard [avoidance problem] that appears in module systems with abstract
 types. In particular, it ensures that a client of a component is able to
 externally define a type compatible with the exports of the component.
 
-Components split the single externally-visible name of imports and exports into
-two sub-fields: a kebab-case `name` (as defined [above](#instance-definitions))
-and an `id` field that contains a URL (as defined by the [URL Standard], noting
-that, in this URL Standard, the term "URL" subsumes what has historically been
-called a [URI], including URLs that "identify" as opposed to "locate"). This
-subdivision of external names allows component producers to represent a variety
-of intentions for how a component is to be instantiated and executed so that a
-variety of hosts can portably execute the component.
+Components provide two options for externally naming imports and exports:
+* a kebab-name, defined [above](#instance-definitions)
+* an *interface identifier*, defined to be a tuple of namespace name, package
+  name, interface name and, optionally, a semantic version.
 
-The `name` field of `externname` is required to be unique between all the imports
-and exports of a component definition, component type or instance type. Thus, a
-single `name` can be used to unambiguously select any import or export. Based on
-this, `with` and `alias` can use a `name` (not `externname`) to select an
-import or export. The uniqueness between imports and exports ensures that Wit
-and language bindings don't have to worry about separately namespacing imports
-and exports.
+The kebab-name option is meant to be used when the meaning of the import or
+export is specific and unique to the containing component. Kebab-named exports
+are expected to be explicitly invoked by a client who has read the
+documentation to know what the export does and how to invoke it. This matches
+the normal situation for reusable packages published in a registry. Similarly,
+kebab-named imports represent component-specific callbacks, hooks or
+configuration that are meant to be explicitly supplied by a client who has read
+the documentation to know what they mean.
 
-In guest source-code bindings, the `name` is meant to be translated to
-source-language identifiers (applying case-conversion, as described
-[above](#instance-definitions)) attached to whatever source-language constructs
-represent the imports and exports (functions, globals, types, classes, etc).
-For example, given an import in a component type:
-```
-(import "one-two" (instance
-  (export "three-four" (func (param string) (result string)))
-))
-```
-a Rust bindings generator for a component targeting this type could produce an
-`extern crate one_two` containing the function `three_four`. Similarly, a
-[JS Embedding](#js-embedding) could allow `import {threeFour} from 'one-two'`
-to resolve to the imported function. Conversely, given an export in a component
-type:
-```
-(export "one-two" (instance
-  (export "three-four" (func (param string) (result string)))
-))
-```
-a Rust bindings generator for a component with this export could produce a
-trait `OneTwo` requiring a function `three_four` while the JS Embedding would
-expect the JS module implementing this component type to export a variable
-`oneTwo` containing an object with a field `threeFour` containing a function.
+In contrast, the interface identifier option allows a component to refer to an
+externally-specified interface so that hosts or tooling can automatically know
+what the component wants to import or how the component wants to be called
+without requiring any manual developer intervention. For example, a component
+could import `(interface "wasi:filesystem/types")` to request an implementation
+of a WASI-standardized filesystem. Or, a component could export
+`(interface "wasi:http/handler")` to tell the host to invoke the component in
+response to arriving HTTP requests.
 
-The `name` field can also be used by *host* source-code bindings, defining the
-source-language identifiers that are to be used when instantiating a component
-and accessing its exports. For example, the [JS API]'s
-[`WebAssembly.instantiate()`] would use import `name`s in the [*read the
-imports*] step and use export `name`s in the [*create an exports object*] step.
+The namespace, package and interface name subfields of the interface identifier
+are meant to be resolved by some external mechanism such as a directory
+structure or a registry. However done, the identifier is expected to resolve to
+an [Wit-encoded type](WIT.md#binary-format) that must be [compatible](Subtyping.md)
+with the type of the import or export declared inside the component. Since this
+compatibility is relative to the name resolution context, compatibility
+checking is not included in basic component validation but, rather, is expected
+to be part of higher-level workflows (such as publication of a component to a
+registry), once the name-resolution context is fixed. Importantly, interface
+identifiers resolve to *types*, not *implementations*. Independently, a host or
+composition tool gets to select the specific implementation and the component
+importing or exporting the interface has no say in what that implementation is
+or whether the implementation is native host code or another component.
 
-The optional `id` field of `externname` allows a component author to refer to
-an *externally-defined* specification of what an import "wants" or what an
-export has "implemented". One example is a URL naming a standard interface such
-as `wasi:filesystem` (assuming that WASI registered the `wasi:` URI scheme with
-IANA). Pre-standard, non-standard or proprietary interfaces could be referred
-to by an `https:` URL in an interface registry. For imports, a URL could
-alternatively refer to a *particular implementation* (e.g., at a hosted storage
-location) or a *query* for a *set of possible implementations* (e.g., using the
-query API of a public registry). Because of the wide variety of hosts executing
-components, the Component Model doesn't specify how URLs are to be interpreted,
-just that they are grammatically URLs. Even `https:` URLs may or may not be
-literally fetched by the host (c.f. [import maps]).
-
-The URLs of present `id` fields must *also* be unique (*in addition* the
-abovementioned uniqueness of `name`s). Thus, a URL can *also* be used to
-uniquely identify the subset of imports or exports that have URLs.
-
-While the `name` field is meant for source-code bindings generators, the `id`
-field is meant for automated interpretation by hosts and toolchains. In
-particular, hosts are expected to identify their host-implemented imports and
-host-called exports by URL, not `name`. This allows hosts to implement a
-wide collection of independently-developed interfaces where `name`s are chosen
-for developer ergonomics (and name collisions are handled independently in
-the binding generators, which is needed in any case) and URLs to serve as
-the invariant identifier that concretely links the guest to host. If there was
-only a `name`, interface authors would be forced to implicitly coordinate
-across the ecosystem to avoid collisions (which in general, isn't possible)
-while if there was only a URL, the developer-friendly identifiers would have
-to be specified manually by every developer or derived in an ad hoc fashion
-from the URL, whose contents may vary widely. This dual-name scheme is thus
-proposed to resolve these competing requirements.
-
-Inside the component model, this dual-name scheme shows up in [subtyping](#Subtyping.md),
-where the component subtyping simply ignores the `name` field when the `id`
-field is present. For example, the component:
-```
-(component
-  (import "fs" (id "wasi:filesystem") ...)
-)
-```
-can be supplied for the `x` import of the component:
-```
-(component
-  (import "x" (component
-    (import "filesystem" (id "wasi:filesystem") ...)
-  ))
-)
-```
-because the `name`s are ignored and the `id`s match. This subtyping is
-symmetric to what was described above for hosts, allowing components to
-serve as the "host" of other components, enabling [virtualization](examples/LinkTimeVirtualization.md).
-
-Since the concrete artifacts defining the host/guest interface is a collection
-of [Wit files](WIT.md), Wit must naturally allow interface authors to specify
-both the `name` and `id` of component imports and exports. While the syntax is
-still very much [in flux](https://github.com/WebAssembly/component-model/pull/83),
-a hypothetical simplified interface between a guest and host might look like:
-```
-// wasi:cli/Command
-default world Command {
-  import fs: "wasi:filesystem"
-  import console: "wasi:cli/console"
-  export main: "wasi:cli/main"
-}
-```
-where `wasi:filesystem`, `wasi:cli/console` and `wasi:cli/main` are separately
-defined interfaces that map to instance types. This "World" definition then
-maps to the following component type:
-```
-(component $Command
-  (import "fs" (id "wasi:filesystem") (instance ... filesystem function exports ...))
-  (import "console" (id "wasi:cli/console") (instance ... log function exports ...))
-  (export "main" (id "wasi:cli/main") (instance (export "main" (func ...))))
-)
-```
-A component *targeting* `wasi:cli/Command` would thus need to be a *subtype* of
-`$Command` (importing a subset of these imports and exporting a superset of
-these exports) while a host *supporting* `wasi:cli/Command` would need to be
-a *supertype* of `$Command` (offering a superset of these imports and expecting
-to call a subset of these exports).
-
-Importantly, this `wasi:cli/Command` World has been able to define the short
-developer-facing names like `fs` and `console` without worrying if there are
-any other Worlds that conflict with these names. If a host wants to implement
-`wasi:cli/command` and some other World that also happens to pick `fs`, either
-the `id` fields are the same, and so the two imports can be unified, or the
-`id` fields are different, and the host supplies two distinct imports,
-identified by URL.
+Kebab names are required to be unique between all the imports and exports in a
+single component definition, component type or instance type, so that a single
+kebab-name uniquely identifies one import or export. Interface identifiers are
+also required to be unique, but only between imports or exports separately
+(i.e., a single interface identifier can be both imported and exported, while a
+single kebab name can't). Because interface identifiers always contain a colon
+(`:`), kebab-names and interface identifiers form a disjoint set of strings and
+thus the `string` literal of a `with` argument always matches at most one
+import and the `string` literal of an `alias export` always matches at most one
+export.
 
 
 ## Component Invariants
@@ -1558,15 +1456,12 @@ instantiated module, `WebAssembly.instantiate` would always produce a
 `WebAssembly.Instance` object for both module and component arguments
 (again, with kebab-case component export names converted to lowerCamelCase).
 
-Since the JavaScript embedding is generic, loading all component types, it
-needs to allow the JS client to refer to either of the `name` or `URL` fields
-of component `externname`s. On the import side, this means that, when a `URL`
-is present, *read the imports* will first attempt to [`Get`] the `URL` and, on
-failure, `Get` the `name`. On the export side, this means that *both* the
-`name` and `URL` are exposed as exports in the export object (both holding the
-same value). Since `name` and `URL` are necessarily disjoint sets of strings
-(in particular, `URL`s must contain a `:`, `name` must not), there should not
-be any conflicts in either of these cases.
+When `interface` imports or exports are used, the `iid` string is used in place
+of the kebab-name. Core WebAssembly modules allow arbitrary UTF-8 in
+import/export strings, so the union of kebab-names and interface identifiers
+(which is disjoint) allow components to express a subset of the possible Core
+WebAssembly import/export strings, which means that all component import/export
+names can be instantiated and called using the existing JS API.
 
 Types are a new sort of definition that are not ([yet][type-imports]) present
 in Core WebAssembly and so the [*read the imports*] and [*create an exports
@@ -1711,10 +1606,8 @@ the same places where modules can be loaded today, branching on the `layer`
 field in the binary format to determine whether to decode as a module or a
 component.
 
-When the `URL` field of an imported `externname` is present, the `URL` is
-used as the module specifier, using the same resolution path as JS module.
-Otherwise, the `name` field is used as the module specifier, which requires
-[Import Maps] support to resolve to a `URL`.
+TODO: ESM-integration for `interface` imports and exports is still being
+worked out in detail.
 
 The main question is how to deal with component imports having a
 single string as well as the new importable component, module and instance
@@ -1858,11 +1751,7 @@ and will be added over the coming months to complete the MVP proposal:
 [Avoidance Problem]: https://counterexamples.org/avoidance.html
 [Non-Parametric Parametricity]: https://people.mpi-sws.org/~dreyer/papers/npp/main.pdf
 
-[URL Standard]: https://url.spec.whatwg.org
-[URI]: https://en.wikipedia.org/wiki/Uniform_Resource_Identifier
-[Import Maps]: https://wicg.github.io/import-maps/
-
-[module-linking]: https://github.com/WebAssembly/module-linking/blob/main/design/proposals/module-linking/Explainer.md
+[module-linking]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md
 [interface-types]: https://github.com/WebAssembly/interface-types/blob/main/proposals/interface-types/Explainer.md
 [type-imports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
 [exception-handling]: https://github.com/WebAssembly/exception-handling/blob/main/proposals/exception-handling/Exceptions.md
