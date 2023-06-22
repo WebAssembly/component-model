@@ -744,7 +744,7 @@ convenience:
 toplevel-use-item ::= 'use' interface ('as' id)?
 
 interface ::= id
-            | id ':' id '/' id ('@' integer '.' integer)
+            | id ':' id '/' id ('@' valid-semver)?
 ```
 
 Here `interface` is the ID used to refer to interfaces. The bare form `id`
