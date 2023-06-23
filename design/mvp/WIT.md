@@ -287,7 +287,7 @@ The `include` statement also works with [WIT package](#wit-packages-and-use) def
 interface b { ... }
 
 // a.wit
-interface a {}
+interface a { ... }
 
 world my-world-a {
     import a
