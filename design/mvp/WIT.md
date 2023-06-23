@@ -338,10 +338,7 @@ world union-my-world-b {
 
 ### Name Conflicts and `with`
 
-When two or more included Worlds have the same name for an import or export, the name is considered to be in conflict. The conflict needs to be explicitly resolved by the world author using the `with` keyword. `with` allows the world author to rename the import or export to a different name.
-
-Notice that when import or export names are IDs and since IDs are unique, there is no need to resolve name conflicts. Thus the `with` syntax is invalid when used with `include <ID>`. Only when import or export names are kebab names, name conflicts need to be resolved.
-
+When two or more included Worlds have the same name for an import or export that does *not* have an ID, automatic de-duplication cannot be used (because the two same-named imports/exports might have different meanings in the different worlds) and thus the conflict has to be resolved manually using the `with` keyword:
 The following example shows how to resolve name conflicts where `union-my-world-a` and `union-my-world-b` are equivalent:
 
 ```wit
