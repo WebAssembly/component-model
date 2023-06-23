@@ -243,22 +243,25 @@ A World can be created by taking the union of two or more worlds. This operation
 Below is a simple example of a world that includes two other worlds.
 
 ```wit
-// worlds.wit
-world my-world-1 {
-    import a: self.a
-    import b: self.b
-    export c: self.c
+package local:demo
+
+// definitions of a, b, c, foo, bar, baz are omitted
+
+world my-world-a {
+    import a
+    import b
+    export c
 }
 
-world my-world-2 {
-    import foo: self.foo
-    import bar: self.bar
-    export baz: self.baz
+world my-world-b {
+    import foo
+    import bar
+    export baz
 }
 
 world union-my-world {
-     include self.my-world-1
-     include self.my-world-2
+     include my-world-a
+     include my-world-b
 }
 ```
 
@@ -268,176 +271,96 @@ The `union-my-world` World defined above is equivalent to the following World:
 
 ```wit
 world union-my-world {
-    import a: self.a
-    import b: self.b
-    export c: self.c
-    import foo: self.foo
-    import bar: self.bar
-    export baz: self.baz
+    import a
+    import b
+    export c
+    import foo
+    import bar
+    export baz
 }
 ```
 
-The `include` statement also works with [WIT package](#wit-packages-and-use) defined below with the same semantics. For example, the following World `union-my-world-1` is equivalent to `union-my-world-2`:
+The `include` statement also works with [WIT package](#wit-packages-and-use) defined below with the same semantics. For example, the following World `union-my-world-a` is equivalent to `union-my-world-b`:
 
 ```wit
 // b.wit
-default interface b { ... }
+interface b { ... }
 
 // a.wit
-default interface a { ... }
+interface a {}
 
-world my-world-1 {
-    import a: self.a 
-    import b: pkg.b
-    import c: io.c // external package
-    export d: interface exp { ... }
+world my-world-a {
+    import a
+    import b
+    import wasi:io/c
+    export d: interface { ... }
 }
 
 // union.wit
+package local:demo
 
-world union-my-world-1 {
-    include pkg.a.my-world-1
+world union-my-world-a {
+    include my-world-a
 }
 
-world union-my-world-2 {
-    import a: pkg.a
-    import b: pkg.b
-    import c: io.c
-    export d: interface exp { ... }
+world union-my-world-b {
+    import a
+    import b
+    import wasi:io/c
+
+    export d: interface { ... }
 }
 ```
 
 ### Name Conflicts
 
-When two or more included Worlds have the same name for an import or export, the name is considered to be in conflict. The conflict needs to be explicitly resolved by the world author using the `with` keyword.
+When two or more included Worlds have the same name for an import or export, the name is considered to be in conflict. The conflict needs to be explicitly resolved by the world author using the `with` keyword. `with` allows the world author to rename the import or export to a different name.
 
-`with` allows the world author to rename the import or export to a different name. For all the imports and exports that are not explicitly renamed, the name of the import or export from the included world is used.
-
-The following example shows how to resolve name conflicts where `union-my-world-1` and `union-my-world-2` are equivalent:
+The following example shows how to resolve name conflicts where `union-my-world-a` and `union-my-world-b` are equivalent:
 
 ```wit
-// my-world-1.wit
-world my-world-1 {
-    import a: self.a1
-    import b: self.b1
-    export d: self.d
+package local:demo
+
+world world-one { import a: func() }
+world world-two { import a: func() }
+
+world union-my-world-a { 
+    include foo
+    include bar with { a as b }
 }
 
-// my-world-2.wit
-world my-world-2 {
-    import a: self.a2
-    import b: self.b2
-    export c: self.c
-}
-
-// union.wit
-world union-my-world-1 {
-    include pkg.my-world-1 with { a as a1, b as b1 }
-    include pkg.my-world-2
-}
-
-world union-my-world-2 {
-    // resolve conflicts
-    import a1: pkg.my-world-1.a1
-    import b1: pkg.my-world-1.b1
-    export d: pkg.my-world-1.d
-
-    import a: pkg.my-world-2.a2
-    import b: pkg.my-world-2.b2
-    export c: pkg.my-world-2.c
+world union-my-world-b {
+  import a: func()
+  import b: func()
 }
 ```
 
 ### De-duplication
 
-If two interfaces have the same structure, then these two interfaces are considered to be structurally equivalent. The `include` statement can
-deduplicate the imports and exports of the included worlds if the they are structurally equivalent following the [Subtyping](Subtyping.md) rules. For example, the following world `union-my-world-3` is equivalent to `union-my-world-4`:
+If two worlds shared the same set of imports and exports, then the union of the two worlds will only contain one copy of the set of shared imports and exports. For example, the following two worlds `union-my-world-a` and `union-my-world-b` are equivalent:
 
 ```wit
-// my-world-1.wit
-world my-world-1 {
-    import a1: pkg.a
-    import b1: pkg.b
-    export c1: pkg.c
+package local:demo
+
+world my-world-a {
+    import a1
+    import b1
 }
 
-// my-world-2.wit
-world my-world-2 {
-    import a1: pkg.a
-    import b1: pkg.b
-    export c1: pkg.c
+world my-world-b {
+    import a1
+    import b1
 }
 
-// union.wit
-world union-my-world-3 {
-    include pkg.my-world-1
-    include pkg.my-world-2
+world union-my-world-a {
+    include my-world-a
+    include my-world-b
 }
 
-world union-my-world-4 {
-    import a1: pkg.a
-    import b1: pkg.b
-    export c1: pkg.c
+world union-my-world-b {
+    import a1
+    import b1
 }
-```
-
-Notice that if the two included worlds have different names for the same import or export, then it will be considered as an error, even if the interfaces are strcuturally the same. For example, the following worlds `my-world-1` and `my-world-2` are not structurally equivalent, but the `include` statement will report an error:
-
-```wit
-// my-world-1.wit
-world my-world-1 {
-    import a1: pkg.a
-    import b1: pkg.b
-    export c1: pkg.c
-}
-
-// my-world-2.wit
-world my-world-2 {
-    import a2: pkg.a
-    import b2: pkg.b
-    export c2: pkg.c
-}
-
-// union.wit
-world union-my-world-3 {
-    include pkg.my-world-1
-    include pkg.my-world-2
-}
-```
-
-### De-duplication with `with`
-
-When two worlds have both name conflicts and structurally equivalent imports and exports, the semantics of `include` will do deduplication first and then resolve the name conflicts with `with` statements. For example, the following world `union-my-world-5` is equivalent to `union-my-world-6`:
-
-```wit
-
-// my-world-1.wit
-world my-world-1 {
-    import a1: pkg.a
-    import b1: pkg.b
-    export c: pkg.c
-}
-
-// my-world-2.wit
-world my-world-2 {
-    import a1: pkg.a
-    import b1: pkg.b
-    export c: pkg.d
-}
-
-// union
-world union-my-world-5 {
-    include pkg.my-world-1 with { c as c1 }
-    include pkg.my-world-2
-}
-
-world union-my-world-6 {
-    import a1: pkg.a
-    import b1: pkg.b
-    export c1: pkg.c
-    export c: pkg.d
-}
-
 ```
 
 ### A Note on SubTyping
