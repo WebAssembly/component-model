@@ -283,10 +283,9 @@ world union-my-world {
 The `include` statement also works with [WIT package](#wit-packages-and-use) defined below with the same semantics. For example, the following World `union-my-world-a` is equivalent to `union-my-world-b`:
 
 ```wit
-// b.wit
-interface b { ... }
+package local:demo
 
-// a.wit
+interface b { ... }
 interface a { ... }
 
 world my-world-a {
@@ -295,9 +294,6 @@ world my-world-a {
     import wasi:io/c
     export d: interface { ... }
 }
-
-// union.wit
-package local:demo
 
 world union-my-world-a {
     include my-world-a
@@ -344,7 +340,7 @@ world union-my-world-b {
 
 When two or more included Worlds have the same name for an import or export, the name is considered to be in conflict. The conflict needs to be explicitly resolved by the world author using the `with` keyword. `with` allows the world author to rename the import or export to a different name.
 
-Notice that when import or export names are IDs and since IDs are unique, there is no need to resolve name conflicts. Thus the `with` syntax is a no-op in this case. Only when import or export names are kebab names, name conflicts need to be resolved.
+Notice that when import or export names are IDs and since IDs are unique, there is no need to resolve name conflicts. Thus the `with` syntax is invalid when used with `include <ID>`. Only when import or export names are kebab names, name conflicts need to be resolved.
 
 The following example shows how to resolve name conflicts where `union-my-world-a` and `union-my-world-b` are equivalent:
 
@@ -365,9 +361,9 @@ world union-my-world-b {
 }
 ```
 
-The following example shows that `with` is a no-op when the import or export name is an ID:
+The following example shows an invalid example that `with` is used when the import or export name is an ID:
 
-```wit
+```wi
 package local:demo
 
 world my-world-a {
@@ -383,11 +379,6 @@ world my-world-b {
 world union-my-world-a {
     include my-world-a with { a1 as a3 }
     include my-world-b with { a1 as a2 }
-}
-
-world union-my-world-a {    
-  import a1
-  import b1
 }
 ```
 
