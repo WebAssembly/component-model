@@ -358,26 +358,21 @@ world union-my-world-b {
 }
 ```
 
-The following example shows an invalid example that `with` is used when the import or export name is an ID:
-
-```wi
+`with` cannot be used to rename IDs, however, so the following world would be invalid:
+```wit
 package local:demo
 
-world my-world-a {
-    import a1
-    import b1
+interface a {
+    foo: func()
 }
 
-world my-world-b {
-    import a1
-    import b1
+world world-using-a {
+    import a
 }
 
-world union-my-world-a {
-    include my-world-a with { a1 as a3 }
-    include my-world-b with { a1 as a2 }
+world invalid-union-world {
+    include my-using-a with { a as b }  // invalid: 'a', which is short for 'local:demo/a', is an ID
 }
-```
 
 ### A Note on SubTyping
 
