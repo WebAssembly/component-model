@@ -2,9 +2,10 @@
 
 The idea with **link-time virtualization** use cases is to take the static
 dependency graph on the left (where all 3 components import the
-`wasi:filesystem` interface) and produce the runtime instance graph on the
-right, where the `parent` instance has created a `virtualized` instance and
-supplied it to a new `child` instance as the `wasi:filesystem` implementation.
+`wasi:filesystem/types` interface) and produce the runtime instance graph on
+the right, where the `parent` instance has created a `virtualized` instance and
+supplied it to a new `child` instance as the `wasi:filesystem/types`
+implementation.
 
 <p align="center"><img src="./images/link-time-virtualization.svg" width="500"></p>
 
@@ -16,7 +17,7 @@ without regard to `parent.wasm`:
 ```wasm
 ;; child.wat
 (component
-  (import "wasi:filesystem" (instance
+  (import (interface "wasi:filesystem/types") (instance
     (export "read" (func ...))
     (export "write" (func ...))
   ))
@@ -30,7 +31,7 @@ out and reused as a separate component:
 ```wasm
 ;; virtualize.wat
 (component
-  (import "wasi:filesystem" (instance $fs
+  (import (interface "wasi:filesystem/types") (instance $fs
     (export "read" (func ...))
     (export "write" (func ...))
   ))
@@ -48,14 +49,14 @@ We now write the parent component by composing `child.wasm` with
 ```wasm
 ;; parent.wat
 (component
-  (import "wasi:filesystem" (instance $real-fs ...))
+  (import (interface "wasi:filesystem/types") (instance $real-fs ...))
   (import "./virtualize.wasm" (component $Virtualize ...))
   (import "./child.wasm" (component $Child ...))
   (instance $virtual-fs (instantiate (component $Virtualize)
-    (with "wasi:filesystem" (instance $real-fs))
+    (with "wasi:filesystem/types" (instance $real-fs))
   ))
   (instance $child (instantiate (component $Child)
-    (with "wasi:filesystem" (instance $virtual-fs))
+    (with "wasi:filesystem/types" (instance $virtual-fs))
   ))
 )
 ```
@@ -65,14 +66,14 @@ definitions in place of imports:
 ```wasm
 ;; parent.wat
 (component
-  (import "wasi:filesystem" (instance $real-fs ...))
+  (import (interface "wasi:filesystem/types") (instance $real-fs ...))
   (component $Virtualize ... copied inline ...)
   (component $Child ... copied inline ...)
   (instance $virtual-fs (instantiate (component $Virtualize)
-    (with "wasi:filesystem" (instance $real-fs))
+    (with "wasi:filesystem/types" (instance $real-fs))
   ))
   (instance $child (instantiate (component $Child)
-    (with "wasi:filesystem" (instance $virtual-fs))
+    (with "wasi:filesystem/types" (instance $virtual-fs))
   ))
 )
 ```

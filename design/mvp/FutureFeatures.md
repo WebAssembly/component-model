@@ -70,7 +70,7 @@ as originally proposed.
 
 
 [Interface Types Proposal]: https://github.com/WebAssembly/interface-types/blob/main/proposals/interface-types/Explainer.md
-[Module Linking Proposal]: https://github.com/WebAssembly/module-linking/blob/main/design/proposals/module-linking/Explainer.md
+[Module Linking Proposal]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md
 [Adapter Functions]: https://github.com/WebAssembly/interface-types/blob/main/proposals/interface-types/Explainer.md#adapter-functions
 [Scoping and Layering Proposal]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8
 [`list.lift_canon` and `list.lower_canon`]: https://github.com/WebAssembly/interface-types/blob/main/proposals/interface-types/Explainer.md#optimization-canonical-representation

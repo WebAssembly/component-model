@@ -19,7 +19,7 @@ But roughly speaking:
 | `union`                   | `T <: (union ... T ...)` |
 | `own`, `borrow`           | none (although resource subtyping may be introduced in the future which would imply handle subtyping) |
 | `func`                    | parameter names must match in order; contravariant parameter subtyping; superfluous parameters can be ignored in the subtype; `option` parameters can be ignored in the supertype; covariant result subtyping |
-| `component`               | all imports in the subtype must be present in the supertype with matching types; all exports in the supertype must be present in the subtype; the `URL` is treated as the complete name, when present, ignoring the `name` field |
+| `component`               | all imports in the subtype must be present in the supertype with matching types; all exports in the supertype must be present in the subtype |
 
 The remaining specialized value types inherit their subtyping from their
 fundamental value types.
