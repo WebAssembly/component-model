@@ -914,7 +914,7 @@ to `interface` items.
 
 ## Item: `include`
 
-A `include` statement enables union the current world with another world. The structure of an `include` statement is:
+A `include` statement enables the union of the current world with another world. The structure of an `include` statement is:
 
 ```wit
 include pkg.my-world-1 with { a as a1, b as b1 }
