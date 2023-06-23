@@ -954,7 +954,7 @@ include-item ::= 'include' use-path
                | 'include' use-path 'with' '{' include-names-list '}'
 
 include-names-list ::= include-names-item
-                 | include-names-item ',' include-names-item?
+                     | include-names-list ',' include-names-item
 
 include-names-item ::= id 'as' id
 ```
