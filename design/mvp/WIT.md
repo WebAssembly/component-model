@@ -312,32 +312,9 @@ world union-my-world-b {
 }
 ```
 
-### Name Conflicts
+### De-duplication of IDs
 
-When two or more included Worlds have the same name for an import or export, the name is considered to be in conflict. The conflict needs to be explicitly resolved by the world author using the `with` keyword. `with` allows the world author to rename the import or export to a different name.
-
-The following example shows how to resolve name conflicts where `union-my-world-a` and `union-my-world-b` are equivalent:
-
-```wit
-package local:demo
-
-world world-one { import a: func() }
-world world-two { import a: func() }
-
-world union-my-world-a { 
-    include foo
-    include bar with { a as b }
-}
-
-world union-my-world-b {
-  import a: func()
-  import b: func()
-}
-```
-
-### De-duplication
-
-If two worlds shared the same set of imports and exports, then the union of the two worlds will only contain one copy of the set of shared imports and exports. For example, the following two worlds `union-my-world-a` and `union-my-world-b` are equivalent:
+If two worlds shared the same set of import and export IDs, then the union of the two worlds will only contain one copy of this set. For example, the following two worlds `union-my-world-a` and `union-my-world-b` are equivalent:
 
 ```wit
 package local:demo
@@ -360,6 +337,57 @@ world union-my-world-a {
 world union-my-world-b {
     import a1
     import b1
+}
+```
+
+### Name Conflicts and `with`
+
+When two or more included Worlds have the same name for an import or export, the name is considered to be in conflict. The conflict needs to be explicitly resolved by the world author using the `with` keyword. `with` allows the world author to rename the import or export to a different name.
+
+Notice that when import or export names are IDs and since IDs are unique, there is no need to resolve name conflicts. Thus the `with` syntax is a no-op in this case. Only when import or export names are kebab names, name conflicts need to be resolved.
+
+The following example shows how to resolve name conflicts where `union-my-world-a` and `union-my-world-b` are equivalent:
+
+```wit
+package local:demo
+
+world world-one { import a: func() }
+world world-two { import a: func() }
+
+world union-my-world-a { 
+    include foo
+    include bar with { a as b }
+}
+
+world union-my-world-b {
+  import a: func()
+  import b: func()
+}
+```
+
+The following example shows that `with` is a no-op when the import or export name is an ID:
+
+```wit
+package local:demo
+
+world my-world-a {
+    import a1
+    import b1
+}
+
+world my-world-b {
+    import a1
+    import b1
+}
+
+world union-my-world-a {
+    include my-world-a with { a1 as a3 }
+    include my-world-b with { a1 as a2 }
+}
+
+world union-my-world-a {    
+  import a1
+  import b1
 }
 ```
 
@@ -917,8 +945,8 @@ to `interface` items.
 A `include` statement enables the union of the current world with another world. The structure of an `include` statement is:
 
 ```wit
-include pkg.my-world-1 with { a as a1, b as b1 }
-include self.my-world-2
+include wasi:io/my-world-1 with { a as a1, b as b1 }
+include my-world-2
 ```
 
 ```ebnf
