@@ -236,6 +236,150 @@ Kebab names cannot overlap and must be unique, even between imports and exports.
 IDs, however, can be both imported and exported. The same interface cannot be
 explicitly imported or exported twice.
 
+### Union of Worlds with `include`
+
+A World can be created by taking the union of two or more worlds. This operation allows world builders to form larger worlds from smaller worlds.
+
+Below is a simple example of a world that includes two other worlds.
+
+```wit
+package local:demo
+
+// definitions of a, b, c, foo, bar, baz are omitted
+
+world my-world-a {
+    import a
+    import b
+    export c
+}
+
+world my-world-b {
+    import foo
+    import bar
+    export baz
+}
+
+world union-my-world {
+     include my-world-a
+     include my-world-b
+}
+```
+
+The `include` statement is used to include the imports and exports of another World to the current World. It says that the new World should be able to run all components that target the included worlds and more.
+
+The `union-my-world` World defined above is equivalent to the following World:
+
+```wit
+world union-my-world {
+    import a
+    import b
+    export c
+    import foo
+    import bar
+    export baz
+}
+```
+
+The `include` statement also works with [WIT package](#wit-packages-and-use) defined below with the same semantics. For example, the following World `union-my-world-a` is equivalent to `union-my-world-b`:
+
+```wit
+package local:demo
+
+interface b { ... }
+interface a { ... }
+
+world my-world-a {
+    import a
+    import b
+    import wasi:io/c
+    export d: interface { ... }
+}
+
+world union-my-world-a {
+    include my-world-a
+}
+
+world union-my-world-b {
+    import a
+    import b
+    import wasi:io/c
+
+    export d: interface { ... }
+}
+```
+
+### De-duplication of IDs
+
+If two worlds shared the same set of import and export IDs, then the union of the two worlds will only contain one copy of this set. For example, the following two worlds `union-my-world-a` and `union-my-world-b` are equivalent:
+
+```wit
+package local:demo
+
+world my-world-a {
+    import a1
+    import b1
+}
+
+world my-world-b {
+    import a1
+    import b1
+}
+
+world union-my-world-a {
+    include my-world-a
+    include my-world-b
+}
+
+world union-my-world-b {
+    import a1
+    import b1
+}
+```
+
+### Name Conflicts and `with`
+
+When two or more included Worlds have the same name for an import or export that does *not* have an ID, automatic de-duplication cannot be used (because the two same-named imports/exports might have different meanings in the different worlds) and thus the conflict has to be resolved manually using the `with` keyword:
+The following example shows how to resolve name conflicts where `union-my-world-a` and `union-my-world-b` are equivalent:
+
+```wit
+package local:demo
+
+world world-one { import a: func() }
+world world-two { import a: func() }
+
+world union-my-world-a { 
+    include foo
+    include bar with { a as b }
+}
+
+world union-my-world-b {
+  import a: func()
+  import b: func()
+}
+```
+
+`with` cannot be used to rename IDs, however, so the following world would be invalid:
+```wit
+package local:demo
+
+interface a {
+    foo: func()
+}
+
+world world-using-a {
+    import a
+}
+
+world invalid-union-world {
+    include my-using-a with { a as b }  // invalid: 'a', which is short for 'local:demo/a', is an ID
+}
+
+### A Note on SubTyping
+
+In the future, when `optional` export is supported, the world author may explicitly mark exports as optional to make a component targeting an included World a subtype of the union World.
+
+For now, we are not following the subtyping rules for the `include` statement. That is, the `include` statement does not imply any subtyping relationship between the included worlds and the union world.
+
 ## WIT Packages and `use`
 [use]: #wit-packages-and-use
 
@@ -699,6 +843,7 @@ keyword ::= 'use'
           | 'import'
           | 'export'
           | 'package'
+          | 'include'
 ```
 
 ### Integers
@@ -763,7 +908,7 @@ Concretely, the structure of a world is:
 ```ebnf
 world-item ::= 'world' id '{' world-items* '}'
 
-world-items ::= export-item | import-item | use-item | typedef-item
+world-items ::= export-item | import-item | use-item | typedef-item | include-item
 
 export-item ::= 'export' id ':' extern-type
               | 'export' interface
@@ -777,6 +922,25 @@ Note that worlds can import types and define their own types to be exported
 from the root of a component and used within functions imported and exported.
 The `interface` item here additionally defines the grammar for IDs used to refer
 to `interface` items.
+
+## Item: `include`
+
+A `include` statement enables the union of the current world with another world. The structure of an `include` statement is:
+
+```wit
+include wasi:io/my-world-1 with { a as a1, b as b1 }
+include my-world-2
+```
+
+```ebnf
+include-item ::= 'include' use-path
+               | 'include' use-path 'with' '{' include-names-list '}'
+
+include-names-list ::= include-names-item
+                     | include-names-list ',' include-names-item
+
+include-names-item ::= id 'as' id
+```
 
 ## Item: `interface`
 
