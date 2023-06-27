@@ -359,6 +359,7 @@ world union-my-world-b {
 ```
 
 `with` cannot be used to rename IDs, however, so the following world would be invalid:
+
 ```wit
 package local:demo
 
@@ -373,6 +374,8 @@ world world-using-a {
 world invalid-union-world {
     include my-using-a with { a as b }  // invalid: 'a', which is short for 'local:demo/a', is an ID
 }
+
+```
 
 ### A Note on SubTyping
 
