@@ -200,7 +200,7 @@ sort           ::= core <core:sort>
                  | type
                  | component
                  | instance
-inlineexport   ::= (export <externname> <sortidx>)
+inlineexport   ::= (export <exportname> <sortidx>)
 string         ::= <core:name>
 name           ::= <label>
                  | [constructor]<label>
@@ -513,8 +513,8 @@ instancedecl  ::= core-prefix(<core:type>)
                 | <type>
                 | <alias>
                 | <exportdecl>
-importdecl    ::= (import <externname> bind-id(<externdesc>))
-exportdecl    ::= (export <externname> bind-id(<externdesc>))
+importdecl    ::= (import <importname> bind-id(<externdesc>))
+exportdecl    ::= (export <exportname> bind-id(<externdesc>))
 externdesc    ::= (<sort> (type <u32>) )
                 | core-prefix(<core:moduletype>)
                 | <functype>
@@ -643,11 +643,12 @@ capabilities of the component model.
 
 The `importdecl` and `exportdecl` declarators correspond to component `import`
 and `export` definitions, respectively, allowing an identifier to be bound for
-use by subsequent declarators. The definition of `externname` is given in the
-[imports and exports](#import-and-export-definitions) section below. Following
-the precedent of [`core:typeuse`], the text format allows both references to
-out-of-line type definitions (via `(type <typeidx>)`) and inline type
-expressions that the text format desugars into out-of-line type definitions.
+use by subsequent declarators. The definition of `importname` and `exportname`
+are given in the [imports and exports](#import-and-export-definitions) section
+below. Following the precedent of [`core:typeuse`], the text format allows both
+references to out-of-line type definitions (via `(type <typeidx>)`) and inline
+type expressions that the text format desugars into out-of-line type
+definitions.
 
 The `value` case of `externdesc` describes a runtime value that is imported or
 exported at instantiation time as described in the
@@ -1018,7 +1019,7 @@ produces a new local "name" for a resource type that is distinct from all
 preceding resource types. The interesting case is when resource type equality
 is considered from *outside* the component, particularly when a single
 component is instantiated multiple times. In this case, a single resource type
-definition that is exported with a single `externname` will get a fresh type
+definition that is exported with a single `exportname` will get a fresh type
 with each component instance, with the abstract typing rules mentioned above
 ensuring that each of the component's instance's resource types are kept
 distinct. Thus, in a sense, the generativity of resource types *generalizes*
@@ -1295,21 +1296,167 @@ of core linear memory.
 
 ### Import and Export Definitions
 
-Lastly, imports and exports are defined as:
-```
-import     ::= (import <externname> bind-id(<externdesc>))
-export     ::= (export <id>? <externname> <sortidx> <externdesc>?)
-externname ::= <name>
-             | (interface "<iid>")
-iid        ::= <label>:<label>/<label>(@<valid semver>)?
-```
 Both import and export definitions append a new element to the index space of
 the imported/exported `sort` which can be optionally bound to an identifier in
 the text format. In the case of imports, the identifier is bound just like Core
 WebAssembly, as part of the `externdesc` (e.g., `(import "x" (func $iden))`).
 In the case of exports, the `<id>?` right after the `export` is bound (the
 `<id>` inside the `<sortidx>` is a reference to the preceding definition being
-exported).
+exported). The grammar for imports and exports is:
+```
+import     ::= (import <importname> bind-id(<externdesc>))
+export     ::= (export <id>? <exportname> <sortidx> <externdesc>?)
+exportname ::= <name>
+             | (interface "<regid>")
+importname ::= <exportname>
+             | <name> (url <string> <integrity>?)
+             | <name> (relative-url <string> <integrity>?)
+             | (locked-dep "<regid>" <integrity>?)
+             | (unlocked-dep "<regidset>")
+regname    ::= <namespace>+<label><export>*
+namespace  ::= <label>:
+export     ::= /<label>
+regid      ::= <regname><version>?
+regidset   ::= <regname><verrange>?
+version    ::= @<valid semver>
+verrange   ::= <version>
+             | @*
+             | @{<verlower>}
+             | @{<verupper>}
+             | @{<verlower>,<verupper>}
+verlower   ::= >=<valid semver>
+verupper   ::= <<valid semver>
+integrity  ::= (integrity "<integrity-metadata>")
+```
+(The `valid semver` production is as defined by the [Semantic Versioning 2.0]
+spec.)
+
+Components provide six options for naming imports:
+* a **naked kebab-name** that leaves it up to the developer to "read the docs"
+  or otherwise figure out what to supply for the import;
+* an **interface id** that is assumed to uniquely identify a higher-level
+  semantic contract that the component is requesting an *unspecified* wasm
+  or native implementation of;
+* a **URL** that the component is requesting be resolved to a *particular* wasm
+  implementation by [fetching] the URL.
+* a **relative URL** that the component is requesting be resolved to a
+  *particular* wasm implementation by [fetching] the URL using the importing
+  component's URL as the [base URL];
+* a **locked dependency** that the component is requesting be resolved via
+  some contextually-supplied registry to a *particular* wasm implementation
+  using the given hierarchical name and version; and
+* an **unlocked dependency** that the component is requesting be resolved via
+  some contextually-supplied registry to *one of a set of possible* of wasm
+  implementations using the given hierarchical name and version range.
+
+Not all hosts are expected to support all six import naming options and, in
+general, build tools may need to wrap a to-be-deployed component with an outer
+component that only uses import names that are understood by the target host.
+For example:
+* an offline host may only provide a fixed set of `interface` imports,
+  requiring a build tool to **bundle** all other imports (replacing component
+  imports with component definitions);
+* browsers may only support URL imports and naked kebab-names (resolved via
+  import map), requiring the deployment process to make registry dependencies
+  available via URL (as usual);
+* a production server environment may only allow deployment of components
+  importing from a fixed set of `interface` imports and `locked-dep` imports,
+  thereby requiring all dependencies to be locked and deployed beforehand;
+* host embeddings without a direct developer interface (such as the JS API or
+  import maps) may reject all naked kebab-names, requiring the programmer to
+  fix these beforehand.
+
+The Component Model's grammar and validation rules allow URLs to be any
+`string` (i.e., length-prefixed UTF-8 string), leaving the well-formedness of
+the URL to be checked as part of the process of fetching the URL (which can
+fail for any number of additional reasons beyond validation).
+
+When a *particular* implementation is indicated (via URL or registry id),
+`importname` allows the component to additionally specify a cryptographic hash
+of the expected binary representation of the wasm implementation, reusing the
+[`integrity-metadata`] production defined by the W3C Subresource Integrity
+specification. When this hash is present, a component can express its intention
+to reuse another component or core module with the same degree of specificity
+as if the component or core module was nested directly, thereby allowing
+components to factor out common dependencies without compromising runtime
+behavior.
+
+The "registry" referred to by dependency names serves to map a hierarchical
+name and version to either a component or an export of a component. For
+example, in the registry name `a:b:c/d/e/f`, `a:b:c` traverses a path
+through namespaces `a` and `b` to a component `c` and `/d/e/f` traverses the
+exports of `c` (where `d` and `e` must be component exports but `f` can be
+anything). Given this abstract definition, a number of concrete data sources
+can be interpreted by developer tooling as "registries":
+* a live registry (perhaps accessed via [`warg`])
+* a local filesystem directory (perhaps containing vendored dependencies)
+* a fixed set of host-provided functionality (see also the [built-in modules] proposal)
+* a programmatically-created tree data structure (such as the `importObject`
+  parameter of [`WebAssembly.instantiate()`])
+
+For the 3 cases where an `importname` contains a kebab-`name`, that `name` is
+required to be unique within the component's imports so that it can be used as
+the primary name of the import both in source-language bindings and when
+supplying a component's imports via `instantiate`. In the other 3 cases where
+the import contains a structured, versioned registry name, that string serves
+as the primary name for use in source-language bindings and `instantiate` and
+is also required to be unique among imports. For source-language bindings, the
+sequence of labels in a registry name can be translated to nested scopes in the
+source language, thereby leveraging existing namespacing in the registry to
+avoid conflicts in the source bindings. Note that, because of the mandatory `:`
+in registry names, the set of kebab names and registry names is disjoint and so
+no discriminant is required to distinguish between a `name` and `regname`; a
+plain `string` covers both cases.
+
+Components provide two options for naming exports, symmetric to the first two
+options for naming imports:
+* a *naked kebab-name* that leaves it up to the developer to "read the docs"
+  or otherwise figure out what the export does and how to use it; and
+* an *interface name* that is assumed to be a globally-unique identifier for
+  a higher-level semantic contract that component is claiming to implement
+  when the given exported definition.
+
+Export names include the same uniqueness requirements between exports as described
+above for import names and *additionally* require kebab-`name`s to be unique
+between imports and exports. This allows a single kebab name to uniquely select
+an import *or* export without an "import" or "export" prefix. (The same
+interface id can however be present as both an import and export, as is
+necessary for basic [virtualization](examples/LinkTimeVirtualization.md) use
+cases.)
+
+As an example, the following component uses all 8 cases of imports and exports:
+```wasm
+(component
+  (import "custom-hook" (func (param string) (result string)))
+  (import (interface "wasi:http/handler") (instance
+    (export "request" (type $request (sub resource)))
+    (export "response" (type $response (sub resource)))
+    (export "handle" (func (param (own $request)) (result (own $response))))
+  ))
+  (import (url "https://mycdn.com/my-component.wasm") (component ...))
+  (import (relative-url "./other-component.wasm" (integrity "sha256-X9ArH3k...")) (component ...))
+  (import (locked-dep "my-registry:sqlite@1.2.3" (integrity "sha256-H8BRh8j...")) (component ...))
+  (import (unlocked-dep "my-registry:imagemagick@{>=1.0.0}") (instance ...))
+  ... impl
+  (export (interface "wasi:http/handler") (instance $http_handler_impl))
+  (export "configure" (func $configure_impl))
+)
+```
+Here, `custom-hook` and `configure` are imported/exported functions whose
+semantic contract is particular to this component, so naked kebab-names are
+used. In contrast, `wasi:http/handler` is the name of a separately-defined
+defined semantic contract, allowing the component to request the ability to
+make outgoing HTTP requests (through imports) and receive incoming HTTP
+requests (through exports) in a way that can be mechanically interpreted by
+hosts and tooling.
+
+The remaining 4 imports show the different ways that a component can import
+external implementations. Here, the `url`, `relative-url` and `locked-dep`
+imports use `component` types, allowing this component to privately create
+and wire up instances using `instance` definitions. In contrast, the
+`unlocked-dep` import uses an `instance` type, anticipating a subsequent
+tooling step (likely the one that performs dependency resolution) to select,
+instantiate and provide the instance.
 
 Validation of `export` requires that all transitive uses of resource types in
 the types of exported functions or values refer to resources that were either
@@ -1339,54 +1486,6 @@ the commented-out `export` is invalid because its type transitively refers to
 the standard [avoidance problem] that appears in module systems with abstract
 types. In particular, it ensures that a client of a component is able to
 externally define a type compatible with the exports of the component.
-
-Components provide two options for externally naming imports and exports:
-* a kebab-name, defined [above](#instance-definitions)
-* an *interface identifier*, defined to be a tuple of namespace name, package
-  name, interface name and, optionally, a semantic version.
-
-The kebab-name option is meant to be used when the meaning of the import or
-export is specific and unique to the containing component. Kebab-named exports
-are expected to be explicitly invoked by a client who has read the
-documentation to know what the export does and how to invoke it. This matches
-the normal situation for reusable packages published in a registry. Similarly,
-kebab-named imports represent component-specific callbacks, hooks or
-configuration that are meant to be explicitly supplied by a client who has read
-the documentation to know what they mean.
-
-In contrast, the interface identifier option allows a component to refer to an
-externally-specified interface so that hosts or tooling can automatically know
-what the component wants to import or how the component wants to be called
-without requiring any manual developer intervention. For example, a component
-could import `(interface "wasi:filesystem/types")` to request an implementation
-of a WASI-standardized filesystem. Or, a component could export
-`(interface "wasi:http/handler")` to tell the host to invoke the component in
-response to arriving HTTP requests.
-
-The namespace, package and interface name subfields of the interface identifier
-are meant to be resolved by some external mechanism such as a directory
-structure or a registry. However done, the identifier is expected to resolve to
-an [Wit-encoded type](WIT.md#binary-format) that must be [compatible](Subtyping.md)
-with the type of the import or export declared inside the component. Since this
-compatibility is relative to the name resolution context, compatibility
-checking is not included in basic component validation but, rather, is expected
-to be part of higher-level workflows (such as publication of a component to a
-registry), once the name-resolution context is fixed. Importantly, interface
-identifiers resolve to *types*, not *implementations*. Independently, a host or
-composition tool gets to select the specific implementation and the component
-importing or exporting the interface has no say in what that implementation is
-or whether the implementation is native host code or another component.
-
-Kebab names are required to be unique between all the imports and exports in a
-single component definition, component type or instance type, so that a single
-kebab-name uniquely identifies one import or export. Interface identifiers are
-also required to be unique, but only between imports or exports separately
-(i.e., a single interface identifier can be both imported and exported, while a
-single kebab name can't). Because interface identifiers always contain a colon
-(`:`), kebab-names and interface identifiers form a disjoint set of strings and
-thus the `string` literal of a `with` argument always matches at most one
-import and the `string` literal of an `alias export` always matches at most one
-export.
 
 
 ## Component Invariants
@@ -1606,10 +1705,17 @@ the same places where modules can be loaded today, branching on the `layer`
 field in the binary format to determine whether to decode as a module or a
 component.
 
+For `url` or `relative-url` import names, the `string` URL would be used as the
+[Module Specifier]. For naked kebab-`name` imports, the `name` would be
+used as the [Module Specifier]  (and an import map would be needed to map the
+`name` to a URL). For `locked-dep` and `unlocked-dep` import names,
+ESM-integration would likely simply fail loading the module, requiring a
+bundler to map these registry-relative names to URLs.
+
 TODO: ESM-integration for `interface` imports and exports is still being
 worked out in detail.
 
-The main question is how to deal with component imports having a
+The main remaining question is how to deal with component imports having a
 single string as well as the new importable component, module and instance
 types. Going through these one by one:
 
@@ -1704,6 +1810,10 @@ and will be added over the coming months to complete the MVP proposal:
 
 [`WebAssembly.instantiate()`]: https://developer.mozilla.org/en-US/docs/WebAssembly/JavaScript_interface/instantiate
 [`FinalizationRegistry`]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry
+[Fetching]: https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API
+[base URL]: https://developer.mozilla.org/en-US/docs/Web/API/URL/URL
+[`integrity-metadata`]: https://www.w3.org/TR/SRI/#the-integrity-attribute
+[Semantic Versioning 2.0]: https://semver.org/spec/v2.0.0.html
 
 [JS API]: https://webassembly.github.io/spec/js-api/index.html
 [*read the imports*]: https://webassembly.github.io/spec/js-api/index.html#read-the-imports
@@ -1727,6 +1837,7 @@ and will be added over the coming months to complete the MVP proposal:
 [JS Tuple]: https://github.com/tc39/proposal-record-tuple
 [JS Record]: https://github.com/tc39/proposal-record-tuple
 [Internal Slot]: https://tc39.es/ecma262/#sec-object-internal-methods-and-internal-slots
+[Built-in Modules]: https://github.com/tc39/proposal-built-in-modules
 
 [Kebab Case]: https://en.wikipedia.org/wiki/Letter_case#Kebab_case
 [De Bruijn Index]: https://en.wikipedia.org/wiki/De_Bruijn_index
@@ -1766,6 +1877,7 @@ and will be added over the coming months to complete the MVP proposal:
 [Host Embeddings]: ../high-level/UseCases.md#hosts-embedding-components
 
 [`wizer`]: https://github.com/bytecodealliance/wizer
+[`warg`]: https://warg.io
 
 [Scoping and Layering]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8
 [Future and Stream Types]: https://docs.google.com/presentation/d/1MNVOZ8hdofO3tI0szg_i-Yoy0N2QPU2C--LzVuoGSlE

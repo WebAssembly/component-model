@@ -78,7 +78,7 @@ sort                ::= 0x00 cs:<core:sort>                                => co
                       | 0x03                                               => type
                       | 0x04                                               => component
                       | 0x05                                               => instance
-inlineexport        ::= n:<externname> si:<sortidx>                        => (export n si)
+inlineexport        ::= n:<exportname> si:<sortidx>                        => (export n si)
 string              ::= s:<core:name>                                      => s
 name                ::= len:<u32> n:<name-chars>                           => n (if len = |n|)
 name-chars          ::= l:<label>                                          => l
@@ -102,9 +102,9 @@ Notes:
   for aliases (below).
 * Validation of `core:instantiatearg` initially only allows the `instance`
   sort, but would be extended to accept other sorts as core wasm is extended.
-* Validation of `instantiate` requires that each `<name>` or `<iid>` in an
-  imported `externname` in `c` matches a `string` in a `with` argument and that
-  the argument's type matches the import's type.
+* Validation of `instantiate` requires each `<name>`, `<regid>` or
+  `<regidset>` in an `importname` in `c` to match a `string` in a `with`
+  argument and for the types to match.
 * When validating `instantiate`, after each individual type-import is supplied
   via `with`, the actual type supplied is immediately substituted for all uses
   of the import, so that subsequent imports and all exports are now specialized
@@ -226,8 +226,8 @@ instancedecl  ::= 0x00 t:<core:type>                      => t
                 | 0x01 t:<type>                           => t
                 | 0x02 a:<alias>                          => a
                 | 0x04 ed:<exportdecl>                    => ed
-importdecl    ::= en:<externname> ed:<externdesc>         => (import en ed)
-exportdecl    ::= en:<externname> ed:<externdesc>         => (export en ed)
+importdecl    ::= in:<importname> ed:<externdesc>         => (import in ed)
+exportdecl    ::= en:<exportname> ed:<externdesc>         => (export en ed)
 externdesc    ::= 0x00 0x11 i:<core:typeidx>              => (core module (type i))
                 | 0x01 i:<typeidx>                        => (func (type i))
                 | 0x02 t:<valtype>                        => (value t)
@@ -264,8 +264,8 @@ Notes:
 * Validation rejects `resourcetype` type definitions inside `componenttype` and
   `instancettype`. Thus, handle types inside a `componenttype` can only refer
   to resource types that are imported or exported.
-* The uniqueness validation rules for `externname` described below are also
-  applied at the instance- and component-type level.
+* The uniqueness validation rules for `importname` and `exportname`
+  described below are also applied at the instance- and component-type level.
 * Validation of `externdesc` requires the various `typeidx` type constructors
   to match the preceding `sort`.
 * Validation of function parameter and result names, record field names,
@@ -328,14 +328,18 @@ flags are set.
 (See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
 in the explainer.)
 ```
-import      ::= en:<externname> ed:<externdesc>                      => (import en ed)
-export      ::= en:<externname> si:<sortidx> ed?:<externdesc>?       => (export en si ed?)
-externname  ::= 0x00 n:<name>                                        => n
-              | 0x01 iid:<iid>                                       => (interface iid)
-iid         ::= len:<u32> c:<iid-chars>                              => c (if len = |c|)
-iid-chars   ::= ns:<label> ':' pkg:<label> '/' n:<label> v:<version> => ns:pkg/nv
-version     ::=                                                      => ϵ
-              | '@' v:<valid semver>                                 => @v
+import      ::= in:<importname> ed:<externdesc>                      => (import in ed)
+export      ::= en:<exportname> si:<sortidx> ed?:<externdesc>?       => (export en si ed?)
+exportname  ::= 0x00 n:<name>                                        => n
+              | 0x01 ri:<regid'>                                     => (interface ri)
+importname  ::= en:<exportname>                                      => en
+              | 0x02 n:<name> s:<string> i?:<integrity'>?            => n (url s i?)
+              | 0x03 n:<name> s:<string> i?:<integrity'>?            => n (relative-url s i?)
+              | 0x04 ri:<regid'> i?:<integrity'>?                    => (locked-dep ri i?)
+              | 0x05 ris:<regidset'>                                 => (unlocked-dep ris)
+regid'      ::= len:<u32> ri:<regid>                                 => "ri" (if len = |ri|)
+regidset'   ::= len:<u32> ris:<regidset>                             => "ris" (if len = |ris|)
+integrity'  ::= len:<u32> im:<integrity-metadata>                    => "im" (if len = |im|)
 ```
 
 Notes:
@@ -347,13 +351,18 @@ Notes:
   (which disallows core sorts other than `core module`). When the optional
   `externdesc` immediate is present, validation requires it to be a supertype
   of the inferred `externdesc` of the `sortidx`.
-* The `name` fields of `externname` must be unique among all imports and exports
-  in the containing component definition, component type or instance type. (An
-  import and export cannot use the same `name`.)
-* The `id` fields of `externname` (that are present) must independently be
-  unique among imports and exports, respectively. (An import and export *may*
-  have the same `id`.)
+* The `name` fields of `exportname` and `importname` must be unique among all
+  imports and exports in the containing component definition, component type or
+  instance type. (An import and export cannot use the same `name`.)
+* The `regid` and `regidset` of `importname` and `exportname` must be
+  unique only among imports or exports. That is, two imports may *not*
+  have the same `regid`(`set`), but an import and export *may* have the same
+  `regid`.
+* `<regid>` and `<regidset>` refer to the grammatical productions defined in
+  the [text format](#import-and-export-definitions).
 * `<valid semver>` is as defined by [https://semver.org](https://semver.org/)
+* `<integrity-metadata>` is as defined by the
+  [SRI](https://www.w3.org/TR/SRI/#dfn-integrity-metadata) spec.
 
 ## Name Section
 
