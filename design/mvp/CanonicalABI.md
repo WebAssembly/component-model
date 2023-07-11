@@ -237,22 +237,17 @@ for the component caller or callee, resp.
 The meaning of the `opts` and `inst` fields are described with their associated
 types below.
 
-The `lenders` and `borrow_count` fields are used by the following 4 methods of
-`CallContext`. These methods are called at the appropriate points in the
-lifecycle of a call (below) and maintain the bookkeeping to dynamically ensure
-that `own` handles are not dropped while they have been `borrow`ed and that all
-`borrow` handles created for a call are dropped before the end of the call.
+The `lenders` and `borrow_count` fields are used by the following helper
+methods of `CallContext` plus the `{lift,lower}_{own,borrow}` operations. These
+fields are updated at the appropriate points in the lifecycle of a call (below)
+and maintain the bookkeeping to dynamically ensure that `own` handles are not
+dropped while they have been `borrow`ed and that all `borrow` handles created
+for a call are dropped before the end of the call.
 ```python
-  def lift_borrow_from(self, lending_handle):
-    if lending_handle.own:
-      lending_handle.lend_count += 1
-      self.lenders.append(lending_handle)
-
-  def add_borrow_to_table(self):
-    self.borrow_count += 1
-
-  def remove_borrow_from_table(self):
-    self.borrow_count -= 1
+  def track_owning_lend(self, lending_handle):
+    assert(lending_handle.own)
+    lending_handle.lend_count += 1
+    self.lenders.append(lending_handle)
 
   def exit_call(self):
     trap_if(self.borrow_count != 0)
@@ -380,23 +375,14 @@ free list in the free elements of `array`.
     else:
       i = len(self.array)
       self.array.append(h)
-    if h.scope is not None:
-      h.scope.add_borrow_to_table()
     return i
 
   def remove(self, rt, i):
     h = self.get(i)
-    trap_if(h.lend_count != 0)
     self.array[i] = None
     self.free.append(i)
-    if h.scope is not None:
-      h.scope.remove_borrow_from_table()
     return h
 ```
-In addition to handling allocation of the handle elements, the `add` and
-`remove` methods make balanced calls to the `add_borrow_to_table` and
-`remove_borrow_from_table` methods of `CallContext` which participate in the
-enforcement of the dynamic borrow rules.
 
 Finally, we can define `HandleTables` (plural) as simply a wrapper around
 a mutable mapping from `ResourceType` to `HandleTable`:
@@ -637,10 +623,13 @@ def unpack_flags_from_int(i, labels):
 
 `own` handles are lifted by removing the handle from the current component
 instance's handle table, so that ownership is *transferred* to the lowering
-component.
+component. The lifting operation fails if unique ownership of the handle isn't
+possible, for example if the index was actually a `borrow` or if the `own`
+handle is currently being lent out as borrows.
 ```python
 def lift_own(cx, i, t):
   h = cx.inst.handles.remove(t.rt, i)
+  trap_if(h.lend_count != 0)
   trap_if(not h.own)
   return h.rep
 ```
@@ -657,10 +646,11 @@ component instance's handle table:
 ```python
 def lift_borrow(cx, i, t):
   h = cx.inst.handles.get(t.rt, i)
-  cx.lift_borrow_from(h)
+  if h.own:
+    cx.track_owning_lend(h)
   return h.rep
 ```
-The `lift_borrow_from` call to `CallContext` participates in the enforcement of
+The `track_owning_lend` call to `CallContext` participates in the enforcement of
 the dynamic borrow rules.
 
 
@@ -1013,6 +1003,7 @@ def lower_borrow(cx, rep, t):
   if cx.inst is t.rt.impl:
     return rep
   h = HandleElem(rep, own=False, scope=cx)
+  cx.borrow_count += 1
   return cx.inst.handles.add(t.rt, h)
 ```
 The special case in `lower_borrow` is an optimization, recognizing that, when
@@ -1610,9 +1601,15 @@ the resource's destructor.
 def canon_resource_drop(inst, rt, i):
   h = inst.handles.remove(rt, i)
   if h.own:
+    assert(h.scope is None)
+    trap_if(h.lend_count != 0)
     trap_if(inst is not rt.impl and not rt.impl.may_enter)
     if rt.dtor:
       rt.dtor(h.rep)
+  else:
+    assert(h.scope is not None)
+    assert(h.scope.borrow_count > 0)
+    h.scope.borrow_count -= 1
 ```
 The `may_enter` guard ensures the non-reentrance [component invariant], since
 a destructor call is analogous to a call to an export.
