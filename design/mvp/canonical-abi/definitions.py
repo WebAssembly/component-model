@@ -544,6 +544,7 @@ def unpack_flags_from_int(i, labels):
 
 def lift_own(cx, i, t):
   h = cx.inst.handles.remove(t.rt, i)
+  trap_if(not h.own)
   return h.rep
 
 def lift_borrow(cx, i, t):
