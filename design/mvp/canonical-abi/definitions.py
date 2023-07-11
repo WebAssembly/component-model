@@ -288,16 +288,10 @@ class CallContext:
     self.lenders = []
     self.borrow_count = 0
 
-  def lift_borrow_from(self, lending_handle):
-    if lending_handle.own:
-      lending_handle.lend_count += 1
-      self.lenders.append(lending_handle)
-
-  def add_borrow_to_table(self):
-    self.borrow_count += 1
-
-  def remove_borrow_from_table(self):
-    self.borrow_count -= 1
+  def track_owning_lend(self, lending_handle):
+    assert(lending_handle.own)
+    lending_handle.lend_count += 1
+    self.lenders.append(lending_handle)
 
   def exit_call(self):
     trap_if(self.borrow_count != 0)
@@ -361,17 +355,12 @@ class HandleTable:
     else:
       i = len(self.array)
       self.array.append(h)
-    if h.scope is not None:
-      h.scope.add_borrow_to_table()
     return i
 
   def remove(self, rt, i):
     h = self.get(i)
-    trap_if(h.lend_count != 0)
     self.array[i] = None
     self.free.append(i)
-    if h.scope is not None:
-      h.scope.remove_borrow_from_table()
     return h
 
 class HandleTables:
@@ -544,12 +533,14 @@ def unpack_flags_from_int(i, labels):
 
 def lift_own(cx, i, t):
   h = cx.inst.handles.remove(t.rt, i)
+  trap_if(h.lend_count != 0)
   trap_if(not h.own)
   return h.rep
 
 def lift_borrow(cx, i, t):
   h = cx.inst.handles.get(t.rt, i)
-  cx.lift_borrow_from(h)
+  if h.own:
+    cx.track_owning_lend(h)
   return h.rep
 
 ### Storing
@@ -795,6 +786,7 @@ def lower_borrow(cx, rep, t):
   if cx.inst is t.rt.impl:
     return rep
   h = HandleElem(rep, own=False, scope=cx)
+  cx.borrow_count += 1
   return cx.inst.handles.add(t.rt, h)
 
 ### Flattening
@@ -1130,9 +1122,15 @@ def canon_resource_new(inst, rt, rep):
 def canon_resource_drop(inst, rt, i):
   h = inst.handles.remove(rt, i)
   if h.own:
+    assert(h.scope is None)
+    trap_if(h.lend_count != 0)
     trap_if(inst is not rt.impl and not rt.impl.may_enter)
     if rt.dtor:
       rt.dtor(h.rep)
+  else:
+    assert(h.scope is not None)
+    assert(h.scope.borrow_count > 0)
+    h.scope.borrow_count -= 1
 
 ### `canon resource.rep`
 
