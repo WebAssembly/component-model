@@ -641,6 +641,7 @@ component.
 ```python
 def lift_own(cx, i, t):
   h = cx.inst.handles.remove(t.rt, i)
+  trap_if(not h.own)
   return h.rep
 ```
 The abstract lifted value for handle types is currently just the internal
