@@ -219,7 +219,7 @@ definitions via the `cx` parameter of type `CallContext`:
 class CallContext:
   opts: CanonicalOptions
   inst: ComponentInstance
-  lenders: [Handle]
+  lenders: [HandleElem]
   borrow_count: int
 
   def __init__(self, opts, inst):
