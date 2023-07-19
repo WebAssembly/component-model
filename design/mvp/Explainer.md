@@ -487,11 +487,11 @@ defvaltype    ::= bool
                 | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64
                 | float32 | float64
                 | char | string
-                | (record (field <label> <valtype>)*)
+                | (record (field <label> <valtype>)+)
                 | (variant (case <id>? <label> <valtype>? (refines <id>)?)+)
                 | (list <valtype>)
-                | (tuple <valtype>*)
-                | (flags <label>*)
+                | (tuple <valtype>+)
+                | (flags <label>+)
                 | (enum <label>+)
                 | (union <valtype>+)
                 | (option <valtype>)
