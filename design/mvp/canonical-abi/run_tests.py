@@ -96,11 +96,13 @@ def test(t, vals_to_lift, v,
   if not equal_modulo_string_encoding(got, lower_v):
     fail("{} re-lift expected {} but got {}".format(test_name(), lower_v, got))
 
-test(Record([]), [], {})
+# Empty record types are not permitted yet.
+#test(Record([]), [], {})
 test(Record([Field('x',U8()), Field('y',U16()), Field('z',U32())]), [1,2,3], {'x':1,'y':2,'z':3})
 test(Tuple([Tuple([U8(),U8()]),U8()]), [1,2,3], {'0':{'0':1,'1':2},'1':3})
-t = Flags([])
-test(t, [], {})
+# Empty flags types are not permitted yet.
+#t = Flags([])
+#test(t, [], {})
 t = Flags(['a','b'])
 test(t, [0], {'a':False,'b':False})
 test(t, [2], {'a':False,'b':True})
@@ -242,7 +244,8 @@ def test_heap(t, expect, args, byte_array):
   cx = mk_cx(heap.memory)
   test(t, args, expect, cx)
 
-test_heap(List(Record([])), [{},{},{}], [0,3], [])
+# Empty record types are not permitted yet.
+#test_heap(List(Record([])), [{},{},{}], [0,3], [])
 test_heap(List(Bool()), [True,False,True], [0,3], [1,0,1])
 test_heap(List(Bool()), [True,False,True], [0,3], [1,0,2])
 test_heap(List(Bool()), [True,False,True], [3,3], [0xff,0xff,0xff, 1,0,1])
@@ -276,8 +279,9 @@ test_heap(List(Tuple([U16(),U8()])), [mk_tup(6,7),mk_tup(8,9)], [0,2],
           [6,0, 7, 0x0ff, 8,0, 9, 0xff])
 test_heap(List(Tuple([Tuple([U16(),U8()]),U8()])), [mk_tup([4,5],6),mk_tup([7,8],9)], [0,2],
           [4,0, 5,0xff, 6,0xff,  7,0, 8,0xff, 9,0xff])
-test_heap(List(Union([Record([]),U8(),Tuple([U8(),U16()])])), [{'0':{}}, {'1':42}, {'2':mk_tup(6,7)}], [0,3],
-          [0,0xff,0xff,0xff,0xff,0xff,  1,0xff,42,0xff,0xff,0xff,  2,0xff,6,0xff,7,0])
+# Empty record types are not permitted yet.
+#test_heap(List(Union([Record([]),U8(),Tuple([U8(),U16()])])), [{'0':{}}, {'1':42}, {'2':mk_tup(6,7)}], [0,3],
+#          [0,0xff,0xff,0xff,0xff,0xff,  1,0xff,42,0xff,0xff,0xff,  2,0xff,6,0xff,7,0])
 test_heap(List(Union([U32(),U8()])), [{'0':256}, {'1':42}], [0,2],
           [0,0xff,0xff,0xff,0,1,0,0,  1,0xff,0xff,0xff,42,0xff,0xff,0xff])
 test_heap(List(Tuple([Union([U8(),Tuple([U16(),U8()])]),U8()])),
@@ -285,12 +289,13 @@ test_heap(List(Tuple([Union([U8(),Tuple([U16(),U8()])]),U8()])),
           [1,0xff,5,0,6,0xff,7,0xff,  0,0xff,8,0xff,0xff,0xff,9,0xff])
 test_heap(List(Union([U8()])), [{'0':6},{'0':7},{'0':8}], [0,3],
           [0,6, 0,7, 0,8])
-t = List(Flags([]))
-test_heap(t, [{},{},{}], [0,3],
-          [])
-t = List(Tuple([Flags([]), U8()]))
-test_heap(t, [mk_tup({}, 42), mk_tup({}, 43), mk_tup({}, 44)], [0,3],
-          [42,43,44])
+# Empty flags types are not permitted yet.
+#t = List(Flags([]))
+#test_heap(t, [{},{},{}], [0,3],
+#          [])
+#t = List(Tuple([Flags([]), U8()]))
+#test_heap(t, [mk_tup({}, 42), mk_tup({}, 43), mk_tup({}, 44)], [0,3],
+#          [42,43,44])
 t = List(Flags(['a','b']))
 test_heap(t, [{'a':False,'b':False},{'a':False,'b':True},{'a':True,'b':True}], [0,3],
           [0,2,3])
