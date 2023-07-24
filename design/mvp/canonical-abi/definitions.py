@@ -249,7 +249,7 @@ def size_record(fields):
   for f in fields:
     s = align_to(s, alignment(f.t))
     s += size(f.t)
-  trap_if(s == 0)
+  assert(s > 0)
   return align_to(s, alignment_record(fields))
 
 def align_to(ptr, alignment):
