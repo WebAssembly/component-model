@@ -196,7 +196,7 @@ primvaltype   ::= 0x7f                                    => bool
                 | 0x74                                    => char
                 | 0x73                                    => string
 defvaltype    ::= pvt:<primvaltype>                       => pvt
-                | 0x72 lt*:vec(<labelvaltype>)            => (record (field lt)+)
+                | 0x72 lt*:vec(<labelvaltype>)            => (record (field lt)*)    (if |lt*| > 0)
                 | 0x71 case*:vec(<case>)                  => (variant case*)
                 | 0x70 t:<valtype>                        => (list t)
                 | 0x6f t*:vec(<valtype>)                  => (tuple t+)
