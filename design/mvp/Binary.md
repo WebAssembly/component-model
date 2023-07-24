@@ -244,10 +244,9 @@ Notes:
 * Validation of `valtype` requires the `typeidx` to refer to a `defvaltype`.
 * Validation of `own` and `borrow` requires the `typeidx` to refer to a
   resource type.
-* Validation only allows `borrow` to be used inside the `param` of a `functype`.
-  (This is likely to change in a future PR, converting `functype` into a
-  compound type constructor analogous to `moduletype` and `componenttype` and
-  using scoping to enforce this constraint instead.)
+* Validation of `functype` rejects any transitive use of `borrow` in a
+  `result` type. Similarly, validation of components and component types
+  rejects any transitive use of `borrow` in an exported value type.
 * Validation of `resourcetype` requires the destructor (if present) to have
   type `[i32] -> []`.
 * Validation of `instancedecl` (currently) only allows the `type` and
