@@ -1313,9 +1313,9 @@ importname ::= <exportname>
              | <name> (relative-url <string> <integrity>?)
              | (locked-dep "<regid>" <integrity>?)
              | (unlocked-dep "<regidset>")
-regname    ::= <namespace>+<label><export>*
+regname    ::= <namespace>+<label><projection>*
 namespace  ::= <label>:
-export     ::= /<label>
+projection ::= /<label>
 regid      ::= <regname><version>?
 regidset   ::= <regname><verrange>?
 version    ::= @<valid semver>
