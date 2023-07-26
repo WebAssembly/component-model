@@ -1395,10 +1395,9 @@ The `valid semver` production is as defined by the [Semantic Versioning 2.0]
 spec and is meant to be interpreted according to that specification. The
 `verrange` production embeds a minimal subset of the syntax for version ranges
 found in common package managers like `npm` and `cargo` and is meant to be
-interpreted with the same [semantics][SemVerRange]. (Mostly this is
-interpretation is the obvious lexicographic ordering, but note the particular
-behavior of pre-release tags.)
-
+interpreted with the same [semantics][SemVerRange]. (Mostly this
+interpretation is the usual SemVer-spec-defined ordering, but note the
+particular behavior of pre-release tags.)
 
 For the 3 cases where an `importname` contains a kebab-`name`, that `name` is
 required to be unique within the component's imports so that it can be used as
