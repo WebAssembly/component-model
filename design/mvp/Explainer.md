@@ -1323,7 +1323,7 @@ verrange   ::= <version>
              | @*
              | @{<verlower>}
              | @{<verupper>}
-             | @{<verlower>,<verupper>}
+             | @{<verlower> <verupper>}
 verlower   ::= >=<valid semver>
 verupper   ::= <<valid semver>
 integrity  ::= (integrity "<integrity-metadata>")
