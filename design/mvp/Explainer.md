@@ -1328,9 +1328,6 @@ verlower   ::= >=<valid semver>
 verupper   ::= <<valid semver>
 integrity  ::= (integrity "<integrity-metadata>")
 ```
-(The `valid semver` production is as defined by the [Semantic Versioning 2.0]
-spec.)
-
 Components provide six options for naming imports:
 * a **naked kebab-name** that leaves it up to the developer to "read the docs"
   or otherwise figure out what to supply for the import;
@@ -1393,6 +1390,15 @@ can be interpreted by developer tooling as "registries":
 * a fixed set of host-provided functionality (see also the [built-in modules] proposal)
 * a programmatically-created tree data structure (such as the `importObject`
   parameter of [`WebAssembly.instantiate()`])
+
+The `valid semver` production is as defined by the [Semantic Versioning 2.0]
+spec and is meant to be interpreted according to that specification. The
+`verrange` production embeds a minimal subset of the syntax for version ranges
+found in common package managers like `npm` and `cargo` and is meant to be
+interpreted with the same [semantics][SemVerRange]. (Mostly this is
+interpretation is the obvious lexicographic ordering, but note the particular
+behavior of pre-release tags.)
+
 
 For the 3 cases where an `importname` contains a kebab-`name`, that `name` is
 required to be unique within the component's imports so that it can be used as
@@ -1878,6 +1884,7 @@ and will be added over the coming months to complete the MVP proposal:
 
 [`wizer`]: https://github.com/bytecodealliance/wizer
 [`warg`]: https://warg.io
+[SemVerRange]: https://semver.npmjs.com/
 
 [Scoping and Layering]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8
 [Future and Stream Types]: https://docs.google.com/presentation/d/1MNVOZ8hdofO3tI0szg_i-Yoy0N2QPU2C--LzVuoGSlE
