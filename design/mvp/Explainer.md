@@ -1891,6 +1891,7 @@ and will be added over the coming months to complete the MVP proposal:
 [`wizer`]: https://github.com/bytecodealliance/wizer
 [`warg`]: https://warg.io
 [SemVerRange]: https://semver.npmjs.com/
+[OCI Registry]: https://github.com/opencontainers/distribution-spec
 
 [Scoping and Layering]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8
 [Future and Stream Types]: https://docs.google.com/presentation/d/1MNVOZ8hdofO3tI0szg_i-Yoy0N2QPU2C--LzVuoGSlE
