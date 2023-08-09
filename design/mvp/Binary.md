@@ -335,11 +335,12 @@ exportname  ::= 0x00 n:<name>                                        => n
 importname  ::= en:<exportname>                                      => en
               | 0x02 n:<name> s:<string> i?:<integrity'>?            => n (url s i?)
               | 0x03 n:<name> s:<string> i?:<integrity'>?            => n (relative-url s i?)
-              | 0x04 ri:<regid'> i?:<integrity'>?                    => (locked-dep ri i?)
-              | 0x05 ris:<regidset'>                                 => (unlocked-dep ris)
+              | 0x04 n:<name> i:<integrity'>                         => n i
+              | 0x05 ri:<regid'> i?:<integrity'>?                    => (locked-dep ri i?)
+              | 0x06 ris:<regidset'>                                 => (unlocked-dep ris)
 regid'      ::= len:<u32> ri:<regid>                                 => "ri" (if len = |ri|)
 regidset'   ::= len:<u32> ris:<regidset>                             => "ris" (if len = |ris|)
-integrity'  ::= len:<u32> im:<integrity-metadata>                    => "im" (if len = |im|)
+integrity'  ::= len:<u32> im:<integrity-metadata>                    => (integrity "im") (if len = |im|)
 ```
 
 Notes:

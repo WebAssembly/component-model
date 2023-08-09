@@ -1311,6 +1311,7 @@ exportname ::= <name>
 importname ::= <exportname>
              | <name> (url <string> <integrity>?)
              | <name> (relative-url <string> <integrity>?)
+             | <name> <integrity>
              | (locked-dep "<regid>" <integrity>?)
              | (unlocked-dep "<regidset>")
 regname    ::= <namespace>+<label><projection>*
@@ -1328,7 +1329,7 @@ verlower   ::= >=<valid semver>
 verupper   ::= <<valid semver>
 integrity  ::= (integrity "<integrity-metadata>")
 ```
-Components provide six options for naming imports:
+Components provide seven options for naming imports:
 * a **naked kebab-name** that leaves it up to the developer to "read the docs"
   or otherwise figure out what to supply for the import;
 * an **interface id** that is assumed to uniquely identify a higher-level
@@ -1339,6 +1340,8 @@ Components provide six options for naming imports:
 * a **relative URL** that the component is requesting be resolved to a
   *particular* wasm implementation by [fetching] the URL using the importing
   component's URL as the [base URL];
+* a **naked integrity hash** of the contents of a *particular* wasm
+  implemenentation without specifying where to locate those bytes.
 * a **locked dependency** that the component is requesting be resolved via
   some contextually-supplied registry to a *particular* wasm implementation
   using the given hierarchical name and version; and
@@ -1346,7 +1349,7 @@ Components provide six options for naming imports:
   some contextually-supplied registry to *one of a set of possible* of wasm
   implementations using the given hierarchical name and version range.
 
-Not all hosts are expected to support all six import naming options and, in
+Not all hosts are expected to support all seven import naming options and, in
 general, build tools may need to wrap a to-be-deployed component with an outer
 component that only uses import names that are understood by the target host.
 For example:
@@ -1361,7 +1364,9 @@ For example:
   thereby requiring all dependencies to be locked and deployed beforehand;
 * host embeddings without a direct developer interface (such as the JS API or
   import maps) may reject all naked kebab-names, requiring the programmer to
-  fix these beforehand.
+  fix these beforehand;
+* hosts without content-addressable storage may reject naked integrity hash
+  imports (as they have no way to locate the contents).
 
 The Component Model's grammar and validation rules allow URLs to be any
 `string` (i.e., length-prefixed UTF-8 string), leaving the well-formedness of
@@ -1376,7 +1381,8 @@ specification. When this hash is present, a component can express its intention
 to reuse another component or core module with the same degree of specificity
 as if the component or core module was nested directly, thereby allowing
 components to factor out common dependencies without compromising runtime
-behavior.
+behavior. When an `integrity` hash is present without a registry name, the
+host must locate the contents using the hash (e.g., using an [OCI Registry]).
 
 The "registry" referred to by dependency names serves to map a hierarchical
 name and version to either a component or an export of a component. For
@@ -1399,7 +1405,7 @@ interpreted with the same [semantics][SemVerRange]. (Mostly this
 interpretation is the usual SemVer-spec-defined ordering, but note the
 particular behavior of pre-release tags.)
 
-For the 3 cases where an `importname` contains a kebab-`name`, that `name` is
+For the 4 cases where an `importname` contains a kebab-`name`, that `name` is
 required to be unique within the component's imports so that it can be used as
 the primary name of the import both in source-language bindings and when
 supplying a component's imports via `instantiate`. In the other 3 cases where
@@ -1429,7 +1435,7 @@ interface id can however be present as both an import and export, as is
 necessary for basic [virtualization](examples/LinkTimeVirtualization.md) use
 cases.)
 
-As an example, the following component uses all 8 cases of imports and exports:
+As an example, the following component uses all 9 cases of imports and exports:
 ```wasm
 (component
   (import "custom-hook" (func (param string) (result string)))
@@ -1440,6 +1446,7 @@ As an example, the following component uses all 8 cases of imports and exports:
   ))
   (import (url "https://mycdn.com/my-component.wasm") (component ...))
   (import (relative-url "./other-component.wasm" (integrity "sha256-X9ArH3k...")) (component ...))
+  (import (integrity "sha256-Y3BsI4l...") (component ...))
   (import (locked-dep "my-registry:sqlite@1.2.3" (integrity "sha256-H8BRh8j...")) (component ...))
   (import (unlocked-dep "my-registry:imagemagick@{>=1.0.0}") (instance ...))
   ... impl
