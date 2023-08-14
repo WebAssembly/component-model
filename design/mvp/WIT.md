@@ -14,7 +14,7 @@ The Wasm Interface Type (WIT) format is an [IDL] to provide tooling for the
   on a WIT definition of a shared set of APIs between platforms.
 
 A WIT package is a collection of WIT [`interface`s][interfaces] and
-[`world`s][worlds] defined in files in the same directory that that all use the
+[`world`s][worlds] defined in files in the same directory that all use the
 file extension `wit`, for example `foo.wit`. Files are encoded as valid utf-8
 bytes. Types can be imported between interfaces within a package and
 additionally from other packages through IDs.
