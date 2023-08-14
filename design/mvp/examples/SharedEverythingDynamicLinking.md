@@ -4,8 +4,8 @@
 out of multiple Core WebAssembly modules so that common modules can be shared
 with other components. This provides an alternative to *static linking* which
 forces common code to be copied into each component. This type of linking
-should be able to leverage of existing support for native dynamic linking (of
-`.dll`s or `.so`s) which a single shared linear memory (hence
+should be able to leverage off existing support for native dynamic linking (of
+`.dll`s or `.so`s) with a single shared linear memory (hence
 *shared-everything* dynamic linking).
 
 Shared-everything dynamic linking should be *complementary* to the
@@ -13,12 +13,12 @@ shared-nothing dynamic linking of components described in the
 [explainer](../Explainer.md). In particular, dynamically-linked modules must not
 share linear memory across component instance boundaries. For example, we want
 the static dependency graph on the left to produce the runtime instance graph
-on the right: create the runtime instance graph on the right:
+on the right:
 
 <p align="center"><img src="./images/shared-everything-dynamic-linking.svg" width="600"></p>
 
 Here, `libc` defines and exports a linear memory that is imported by the other
-moudle instances contained within the same component instance. Thus, at
+module instances contained within the same component instance. Thus, at
 runtime, the composite application creates *three* instances of the `libc`
 module (creating *three* linear memories) yet contains only *one* copy of the
 `libc` code. This use case is tricky to implement in many module systems where
