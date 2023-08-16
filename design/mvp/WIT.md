@@ -348,8 +348,8 @@ world world-one { import a: func() }
 world world-two { import a: func() }
 
 world union-my-world-a { 
-    include foo
-    include bar with { a as b }
+    include world-one
+    include world-two with { a as b }
 }
 
 world union-my-world-b {
