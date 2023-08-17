@@ -15,7 +15,7 @@ But roughly speaking:
 | `list`                    | covariant element subtyping |
 | `tuple`                   | `(tuple T ...) <: T` |
 | `option`                  | `T <: (option T)` |
-| `expected`                | `T <: (expected T _)` |
+| `result`                  | `T <: (result T _)` |
 | `union`                   | `T <: (union ... T ...)` |
 | `own`, `borrow`           | none (although resource subtyping may be introduced in the future which would imply handle subtyping) |
 | `func`                    | parameter names must match in order; contravariant parameter subtyping; superfluous parameters can be ignored in the subtype; `option` parameters can be ignored in the supertype; covariant result subtyping |
