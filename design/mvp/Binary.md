@@ -202,7 +202,6 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x6f t*:vec(<valtype>)                  => (tuple t+)    (if |t*| > 0)
                 | 0x6e l*:vec(<label>)                    => (flags l+)    (if |l*| > 0)
                 | 0x6d l*:vec(<label>)                    => (enum l*)
-                | 0x6c t*:vec(<valtype>)                  => (union t*)
                 | 0x6b t:<valtype>                        => (option t)
                 | 0x6a t?:<valtype>? u?:<valtype>?        => (result t? (error u)?)
                 | 0x69 i:<typeidx>                        => (own i)

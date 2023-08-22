@@ -493,7 +493,6 @@ defvaltype    ::= bool
                 | (tuple <valtype>+)
                 | (flags <label>+)
                 | (enum <label>+)
-                | (union <valtype>+)
                 | (option <valtype>)
                 | (result <valtype>? (error <valtype>)?)
                 | (own <typeidx>)
@@ -588,7 +587,6 @@ defined by the following mapping:
                       (flags <label>*) ↦ (record (field <label> bool)*)
                        (enum <label>+) ↦ (variant (case <label>)+)
                     (option <valtype>) ↦ (variant (case "none") (case "some" <valtype>))
-                    (union <valtype>+) ↦ (variant (case "𝒊" <valtype>)+) for 𝒊=0,1,...
 (result <valtype>? (error <valtype>)?) ↦ (variant (case "ok" <valtype>?) (case "error" <valtype>?))
                                 string ↦ (list char)
 ```
@@ -1666,7 +1664,6 @@ At a high level, the additional coercions would be:
 | `flags` | TBD: maybe a [JS Record]? | same as [`dictionary`] of optional `boolean` fields with default values of `false` |
 | `enum` | same as [`enum`] | same as [`enum`] |
 | `option` | same as [`T?`] | same as [`T?`] |
-| `union` | same as [`union`] | same as [`union`] |
 | `result` | same as `variant`, but coerce a top-level `error` return value to a thrown exception | same as `variant`, but coerce uncaught exceptions to top-level `error` return values |
 | `own`, `borrow` | see below | see below |
 
@@ -1682,7 +1679,7 @@ Notes:
   would need to define its own custom binding built from objects. As a sketch,
   the JS values accepted by `(variant (case "a" u32) (case "b" string))` could
   include `{ tag: 'a', value: 42 }` and `{ tag: 'b', value: "hi" }`.
-* For `union` and `option`, when Web IDL doesn't support particular type
+* For `option`, when Web IDL doesn't support particular type
   combinations (e.g., `(option (option u32))`), the JS API would fall back to
   the JS API of the unspecialized `variant` (e.g.,
   `(variant (case "some" (option u32)) (case "none"))`, despecializing only
@@ -1838,7 +1835,6 @@ and will be added over the coming months to complete the MVP proposal:
 [`dictionary`]: https://webidl.spec.whatwg.org/#es-dictionary
 [`enum`]: https://webidl.spec.whatwg.org/#es-enumeration
 [`T?`]: https://webidl.spec.whatwg.org/#es-nullable-type
-[`union`]: https://webidl.spec.whatwg.org/#es-union
 [`Get`]: https://tc39.es/ecma262/#sec-get-o-p
 [JS NaN]: https://tc39.es/ecma262/#sec-ecmascript-language-types-number-type
 [Import Reflection]: https://github.com/tc39-transfer/proposal-import-reflection

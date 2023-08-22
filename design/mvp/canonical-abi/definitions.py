@@ -142,10 +142,6 @@ class Enum(ValType):
   labels: [str]
 
 @dataclass
-class Union(ValType):
-  ts: [ValType]
-
-@dataclass
 class Option(ValType):
   t: ValType
 
@@ -171,7 +167,6 @@ class Borrow(ValType):
 def despecialize(t):
   match t:
     case Tuple(ts)         : return Record([ Field(str(i), t) for i,t in enumerate(ts) ])
-    case Union(ts)         : return Variant([ Case(str(i), t) for i,t in enumerate(ts) ])
     case Enum(labels)      : return Variant([ Case(l, None) for l in labels ])
     case Option(t)         : return Variant([ Case("none", None), Case("some", t) ])
     case Result(ok, error) : return Variant([ Case("ok", ok), Case("error", error) ])

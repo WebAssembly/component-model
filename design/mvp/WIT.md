@@ -712,14 +712,6 @@ interface foo {
     too-slow,
   }
 
-  // similar to `variant`, but doesn't require naming cases and all variants
-  // have a type payload -- note that this is not a C union, it still has a
-  // discriminant
-  union input {
-    u64,
-    string,
-  }
-
   // a bitflags type
   flags permissions {
     read,
@@ -742,7 +734,7 @@ interface foo {
 }
 ```
 
-The `record`, `variant`, `enum`, `union`, and `flags` types must all have names
+The `record`, `variant`, `enum`, and `flags` types must all have names
 associated with them. The `list`, `option`, `result`, `tuple`, and primitive
 types do not need a name and can be mentioned in any context. This restriction
 is in place to assist with code generation in all languages to leverage
@@ -839,7 +831,6 @@ keyword ::= 'use'
           | 'enum'
           | 'flags'
           | 'variant'
-          | 'union'
           | 'static'
           | 'interface'
           | 'world'
@@ -964,7 +955,6 @@ interface-items ::= typedef-item
 typedef-item ::= resource-item
                | variant-items
                | record-item
-               | union-items
                | flags-items
                | enum-items
                | type-item
@@ -1141,29 +1131,6 @@ enum-items ::= 'enum' id '{' enum-cases '}'
 
 enum-cases ::= id
              | id ',' enum-cases?
-```
-
-### Item: `union` (variant but with no case names)
-
-A `union` statement defines a new type which is semantically equivalent to a
-`variant` where all of the cases have a payload type and the case names are
-numerical. This is special-cased, however, to have a different representation
-in the language ABIs or have different bindings generated in for languages.
-
-```wit
-union configuration {
-    string,
-    list<string>,
-}
-```
-
-Specifically the structure of this is:
-
-```ebnf
-union-items ::= 'union' id '{' union-cases '}'
-
-union-cases ::= ty
-              | ty ',' union-cases?
 ```
 
 ### Item: `resource`
