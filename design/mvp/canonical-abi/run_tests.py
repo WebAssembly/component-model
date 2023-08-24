@@ -114,25 +114,6 @@ test(t, [0,42], {'x': 42})
 test(t, [0,256], {'x': 0})
 test(t, [1,0x4048f5c3], {'y': 3.140000104904175})
 test(t, [2,0xffffffff], {'z': None})
-t = Union([U32(),U64()])
-test(t, [0,42], {'0':42})
-test(t, [0,(1<<35)], {'0':0})
-test(t, [1,(1<<35)], {'1':(1<<35)})
-t = Union([Float32(), U64()])
-test(t, [0,0x4048f5c3], {'0': 3.140000104904175})
-test(t, [0,(1<<35)], {'0': 0})
-test(t, [1,(1<<35)], {'1': (1<<35)})
-t = Union([Float64(), U64()])
-test(t, [0,0x40091EB851EB851F], {'0': 3.14})
-test(t, [0,(1<<35)], {'0': 1.69759663277e-313})
-test(t, [1,(1<<35)], {'1': (1<<35)})
-t = Union([U8()])
-test(t, [0,42], {'0':42})
-test(t, [1,256], None)
-test(t, [0,256], {'0':0})
-t = Union([Tuple([U8(),Float32()]), U64()])
-test(t, [0,42,3.14], {'0': {'0':42, '1':3.14}})
-test(t, [1,(1<<35),0], {'1': (1<<35)})
 t = Option(Float32())
 test(t, [0,3.14], {'none':None})
 test(t, [1,3.14], {'some':3.14})
@@ -279,16 +260,6 @@ test_heap(List(Tuple([U16(),U8()])), [mk_tup(6,7),mk_tup(8,9)], [0,2],
           [6,0, 7, 0x0ff, 8,0, 9, 0xff])
 test_heap(List(Tuple([Tuple([U16(),U8()]),U8()])), [mk_tup([4,5],6),mk_tup([7,8],9)], [0,2],
           [4,0, 5,0xff, 6,0xff,  7,0, 8,0xff, 9,0xff])
-# Empty record types are not permitted yet.
-#test_heap(List(Union([Record([]),U8(),Tuple([U8(),U16()])])), [{'0':{}}, {'1':42}, {'2':mk_tup(6,7)}], [0,3],
-#          [0,0xff,0xff,0xff,0xff,0xff,  1,0xff,42,0xff,0xff,0xff,  2,0xff,6,0xff,7,0])
-test_heap(List(Union([U32(),U8()])), [{'0':256}, {'1':42}], [0,2],
-          [0,0xff,0xff,0xff,0,1,0,0,  1,0xff,0xff,0xff,42,0xff,0xff,0xff])
-test_heap(List(Tuple([Union([U8(),Tuple([U16(),U8()])]),U8()])),
-          [mk_tup({'1':mk_tup(5,6)},7),mk_tup({'0':8},9)], [0,2],
-          [1,0xff,5,0,6,0xff,7,0xff,  0,0xff,8,0xff,0xff,0xff,9,0xff])
-test_heap(List(Union([U8()])), [{'0':6},{'0':7},{'0':8}], [0,3],
-          [0,6, 0,7, 0,8])
 # Empty flags types are not permitted yet.
 #t = List(Flags([]))
 #test_heap(t, [{},{},{}], [0,3],
