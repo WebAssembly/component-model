@@ -41,7 +41,7 @@
    * deployment and live upgrade / dynamic reconfiguration;
    * persistence and storage; and
    * distributed computing and partial failure.
-2. Don't specify a set of "component services".
+3. Don't specify a set of "component services".
    * Specifying services that may be implemented by a host and exposed to
      components is the domain of WASI and out of scope of the component model.
    * See also the [WASI FAQ entry](FAQ.md#how-does-wasi-relate-to-the-component-model).
