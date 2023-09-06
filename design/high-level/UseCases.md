@@ -261,7 +261,7 @@ the following use cases:
 5. A component runtime shares the compiled machine code of a component across
    many instances of that component.
 6. A component is composed of several core wasm modules that operate on a
-   single shared linear memory, some of which contain langauge runtime code
+   single shared linear memory, some of which contain language runtime code
    that is shared by all components produced from the same language toolchain.
    A component runtime shares the compiled machine code of the shared language
    runtime module.
