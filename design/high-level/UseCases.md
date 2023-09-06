@@ -197,7 +197,7 @@ use cases that require additional features:
    the client. The component developer can switch languages, toolchains or memory
    representations in the future without breaking existing clients.
 
-The above use cases roughly correspond to the use cases of an [RPC] framework,
+The above use cases roughly correspond to the use cases of a [RPC] framework,
 which have similar goals of crossing language boundaries. The major difference
 is the dropping of the distributed computing goals (see [non-goals](Goals.md#non-goals))
 and the additional performance goals mentioned [below](#performance).
