@@ -20,10 +20,10 @@
    * *Formal semantics*: define the component model within the same semantic
      framework as core wasm.
    * *Web platform integration*: ensure components can be natively supported
-      in browsers by extending the existing WebAssembly integration points: the
-      [JS API], [Web API] and [ESM-integration]. Before native support is
-      implemented, ensure components can be polyfilled in browsers via
-      Ahead-of-Time compilation to currently-supported browser functionality.
+     in browsers by extending the existing WebAssembly integration points: the
+     [JS API], [Web API] and [ESM-integration]. Before native support is
+     implemented, ensure components can be polyfilled in browsers via
+     Ahead-of-Time compilation to currently-supported browser functionality.
 4. Define the component model *incrementally*: starting from a set of
    [initial use cases] and expanding the set of use cases over time,
    prioritized by feedback and experience.
