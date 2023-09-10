@@ -2,7 +2,7 @@
 
 This explainer walks through the assembly-level definition of a
 [component](../high-level) and the proposed embedding of components into
-native JavaScript runtimes.
+native JavaScript runtimes. For a more user-focussed explanation, take a look at the **[Component Model Documentation](https://component-model.bytecodealliance.org/)**.
 
 * [Grammar](#grammar)
   * [Component definitions](#component-definitions)

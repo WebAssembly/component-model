@@ -1,7 +1,9 @@
 # Component Model design and specification
 
+This repository is where the component model is being standardized. For a more user-focussed explanation, take a look at the **[Component Model Documentation]**.
+
 This repository describes the high-level [goals], [use cases], [design choices]
-and [FAQ] of the component model as well as a more-detailed [explainer], [IDL],
+and [FAQ] of the component model as well as a more-detailed [assembly-level explainer], [IDL],
 [binary format] and [ABI] covering the initial Minimum Viable Product (MVP)
 release.
 
@@ -21,12 +23,12 @@ All Component Model work is done as part of the [W3C WebAssembly Community Group
 To contribute to any of these repositories, see the Community Group's
 [Contributing Guidelines].
 
-
+[Component Model Documentation]: https://component-model.bytecodealliance.org/
 [goals]: design/high-level/Goals.md
 [use cases]: design/high-level/UseCases.md
 [design choices]: design/high-level/Choices.md
 [FAQ]: design/high-level/FAQ.md
-[explainer]: design/mvp/Explainer.md
+[assembly-level explainer]: design/mvp/Explainer.md
 [IDL]: design/mvp/WIT.md
 [binary format]: design/mvp/Binary.md
 [ABI]: design/mvp/CanonicalABI.md
