@@ -927,11 +927,8 @@ include my-world-2
 ```
 
 ```ebnf
-include-item ::= 'include' use-path
-               | 'include' use-path 'with' '{' include-names-list '}'
-
-use-path ::= id
-           | id ':' id '/' id
+include-item ::= 'include' interface
+               | 'include' interface 'with' '{' include-names-list '}'
 
 include-names-list ::= include-names-item
                      | include-names-list ',' include-names-item
