@@ -930,6 +930,9 @@ include my-world-2
 include-item ::= 'include' use-path
                | 'include' use-path 'with' '{' include-names-list '}'
 
+use-path ::= id
+           | id ':' id '/' id
+
 include-names-list ::= include-names-item
                      | include-names-list ',' include-names-item
 
