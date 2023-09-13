@@ -1,8 +1,9 @@
 # Component Model Explainer
 
 This explainer walks through the assembly-level definition of a
-[component](../high-level) and the proposed embedding of components into
-native JavaScript runtimes. For a more user-focussed explanation, take a look at the **[Component Model Documentation](https://component-model.bytecodealliance.org/)**.
+[component](../high-level) and the proposed embedding of components into native
+JavaScript runtimes. For a more user-focussed explanation, take a look at the
+**[Component Model Documentation]**.
 
 * [Grammar](#grammar)
   * [Component definitions](#component-definitions)
@@ -1884,6 +1885,7 @@ and will be added over the coming months to complete the MVP proposal:
 [Use Cases]: ../high-level/UseCases.md
 [Host Embeddings]: ../high-level/UseCases.md#hosts-embedding-components
 
+[Component Model Documentation]: https://component-model.bytecodealliance.org
 [`wizer`]: https://github.com/bytecodealliance/wizer
 [`warg`]: https://warg.io
 [SemVerRange]: https://semver.npmjs.com/
