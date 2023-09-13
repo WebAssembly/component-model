@@ -880,18 +880,18 @@ into the scope of the current file and/or rename interfaces locally for
 convenience:
 
 ```ebnf
-toplevel-use-item ::= 'use' interface ('as' id)?
+toplevel-use-item ::= 'use' use-path ('as' id)?
 
-interface ::= id
+use-path ::= id
             | id ':' id '/' id ('@' valid-semver)?
 ```
 
-Here `interface` is the ID used to refer to interfaces. The bare form `id`
+Here `use-path` is the ID used to refer to interfaces. The bare form `id`
 refers to interfaces defined within the current package, and the full form
 refers to interfaces in package dependencies.
 
 The `as` syntax can be optionally used to specify a name that should be assigned
-to the interface. Otherwise the name is inferred from `interface`.
+to the interface. Otherwise the name is inferred from `use-path`.
 
 ## Item: `world`
 
@@ -905,9 +905,9 @@ world-item ::= 'world' id '{' world-items* '}'
 world-items ::= export-item | import-item | use-item | typedef-item | include-item
 
 export-item ::= 'export' id ':' extern-type
-              | 'export' interface
+              | 'export' use-path
 import-item ::= 'import' id ':' extern-type
-              | 'import' interface
+              | 'import' use-path
 
 extern-type ::= func-type | 'interface' '{' interface-items* '}'
 ```
@@ -927,8 +927,8 @@ include my-world-2
 ```
 
 ```ebnf
-include-item ::= 'include' interface
-               | 'include' interface 'with' '{' include-names-list '}'
+include-item ::= 'include' use-path
+               | 'include' use-path 'with' '{' include-names-list '}'
 
 include-names-list ::= include-names-item
                      | include-names-list ',' include-names-item
@@ -988,7 +988,7 @@ use my:dependency/the-interface.{more, names as foo}
 Specifically the structure of this is:
 
 ```ebnf
-use-item ::= 'use' interface '.' '{' use-names-list '}'
+use-item ::= 'use' use-path '.' '{' use-names-list '}'
 
 use-names-list ::= use-names-item
                  | use-names-item ',' use-names-list?
