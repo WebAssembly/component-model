@@ -21,7 +21,7 @@ additionally from other packages through IDs.
 
 This document will go through the purpose of the syntactic constructs of a WIT
 document, a pseudo-formal [grammar specification][lexical-structure], and
-additionally a specification of the [binary format][binary-format] of a WIT
+additionally a specification of the [package format][package-format] of a WIT
 package suitable for distribution.
 
 [IDL]: https://en.wikipedia.org/wiki/Interface_description_language
@@ -1375,110 +1375,137 @@ record bar2 {
 }
 ```
 
-# Binary Format
-[binary-format]: #binary-format
+# Package Format
+[package-format]: #package-format
 
-In addition to a textual format WIT packages can also be encoded to a binary
-format. The binary format for WIT is represented as a WebAssembly Component
-binary with a specific structure. The purpose of the WIT binary format is to:
+Each top-level WIT definition can be compiled into a single canonical
+Component Model [type definition](Explainer.md#type-definitions) that
+captures the result of performing the type resolution described above. These
+Component Model types can then be exported by a component along with other
+sorts of exports, allowing a single component to package both runtime
+functionality and development-time WIT interfaces. Thus, WIT does not need its
+own separate package format; WIT can be packaged as a component binary.
 
-* Provide a way to clearly define what an `interface` and a `world` map to in
-  the component model. For example a host is said to implement an `interface` if
-  it provides a subtype of the `instance` type defined in a component. Similarly
-  a component is said to implement a `world` if the component's type is a
-  subtype of the `world`'s type.
+Using component binaries to package WIT in this manner has several advantages:
+* We get to reuse the [binary format](Binary.md) of components, especially the
+  tricky type bits.
+* Downstream tooling does not need to replicate the resolution logic nor the
+  resolution environment (directories, registries, paths, arguments, etc) of
+  the WIT package producer; it can reuse the simpler compiled result.
+* Many aspects of the WIT syntax can evolve over time without breaking
+  downstream tooling, similar to what has happened with the Core WebAssembly
+  WAT text format over time.
+* When components are published in registries and assigned names (see the
+  discussion of naming in [Import and Export Definitions](Explainer.md#import-and-export-definitions)),
+  WIT interfaces and worlds can be published with the same tooling and named
+  using the same `namespace:package/export` naming scheme.
+* A single package can both contain an implementation and a collection of
+  `interface` and `world` definitions that are imported by that implementation
+  (e.g., an engine component can define and exports its own plugin `world`).
 
-* Provide a means by which the textual format of WIT can be evolved while
-  minimizing impact to the ecosystem. Similar to how the WebAssembly text format
-  has changed over time it's envisioned that it may be necessary to change the
-  WIT format for new features as new component model features are implemented.
-  The binary format provides a clear delineation of what to ubiquitously consume
-  without having to be so concerned with text format parsers.
-
-* A binary format is intended to be more efficient parse and store.
-
-The binary format for a WIT document can also be thought of in a loose sense as
-a fully-resolved and indexed representation of a WIT document. Constructs such
-as `use` are preserved but all name resolution has been boiled away to index
-references. Additionally the transitive import set is all finalized as well.
-
-An example of the binary format is that this document:
-
+As a first example, the following WIT:
 ```wit
-// host.wit
-package local:demo;
-
-interface console {
-  log: func(arg: string);
-}
-```
-
-would correspond to:
-
-```wasm
-(component
-  (type $demo (component
-    (type $console (instance
-      (export "log" (func (param "arg" string)))
-    ))
-    (export (interface "local:demo/console") (instance (type $console)))
-  ))
-  (export (interface "local:demo/wit") (type $demo))
-)
-```
-
-Here it can be seen how an `interface` corresponds to an `instance` in the
-component model. Note that the WIT package is encoded entirely within the type
-section of a component and does not actually represent any concrete instances.
-This is done to implement `use` statements:
-
-```wit
-// host.wit
 package local:demo;
 
 interface types {
-  enum level {
-    info,
-    debug,
+  resource file {
+    read: func(off: u32, n: u32) -> list<u8>;
+    write: func(off: u32, bytes: list<u8>);
   }
 }
 
-interface console {
-  use types.{level};
-
-  log: func(level: level, msg: string);
+interface namespace {
+  use types.{file};
+  open: func(name: string) -> file;
 }
 ```
-
-would correspond to:
-
+can be packaged into a component as:
 ```wasm
 (component
-  (type $demo (component
-    (type $types' (instance
-      (type $level (enum "info" "debug"))
-      (export "level" (type (eq $level)))
+  (type (export "types") (component
+    (type (export (interface "local:demo/types")) (instance
+      (export $file "file" (type (sub resource)))
+      (export "[method]file.read" (func
+        (param "self" (borrow $file)) (param "off" u32) (param "n" u32)
+        (result (list u8))
+      ))
+      (export "[method]file.write" (func
+        (param "self" (borrow $file))
+        (param "bytes" (list u8))
+      ))
     ))
-    (export $types (interface "local:demo/types") (instance (type $types')))
-    (alias export $types "level" (type $level'))
-    (type $console (instance
-      (alias outer $demo $level' (type $level''))
-      (export $level "level" (type (eq $level'')))
-      (export "log" (func (param "level" $level) (param "msg" string)))
-    ))
-    (export (interface "local:demo/console") (instance (type $console)))
   ))
-  (export (interface "local:demo/wit") (type $demo))
+  (type (export "namespace") (component
+    (import (interface "local:demo/types") (instance $types
+      (export "file" (type (sub resource)))
+    ))
+    (alias export $types "file" (type $file))
+    (type (export (interface "local:demo/namespace")) (instance
+      (export "open" (func (param "name" string) (result (own $file))))
+    ))
+  ))
+)
+```
+This example illustrates the basic structure of interfaces:
+* Each top-level WIT definition (in this example: `types` and `namespace`)
+  turns into a type export of the same kebab-name.
+* Each WIT interface is mapped to a component-type that exports an
+  instance-type with a fully-qualified interface name (in this example:
+  `local:demo/types` and `local:demo/namespace`). Note that this nested
+  scheme allows a single component to both define and implement a WIT interface
+  without name conflict.
+* The wrapping component-type has an `import` for every `use` in the interface,
+  bringing any `use`d types into scope so that they can be aliased when
+  building the instance-type. The component-type can be thought of as
+  "parameterizing" the interface's compiled instance type (∀T.{instance type}).
+  Note that there is *always* an outer wrapping component-type, even when the
+  interface contains no `use`s.
+
+One useful consequence of this encoding scheme is that each top-level
+definition is self-contained and valid (according to Component Model validation
+rules) independent of each other definition. This allows packages to be
+trivially split or unioned (assuming the result doesn't have to be a valid
+package, but rather just a raw list of non-exported type definitions).
+
+Another expectation is that, when a component containing WIT definitions is
+published to a registry, the registry validates that the fully-qualified WIT
+interface names inside the component are consistent with the registry-assigned
+package name. For example, the above component would only be valid if published
+with package name `local:demo`; any other package name would be inconsistent
+with the internal `local:demo/types` and `local:demo/namespace` exported
+interface names.
+
+Inter-package references are structurally no different than intra-package
+references other than the referenced WIT definition is not present in
+the component. For example, the following WIT:
+```wit
+package local:demo
+
+interface foo {
+  use wasi:http/types.{request};
+  frob: func(r: request) -> request;
+}
+```
+is encoded as:
+```wasm
+(component
+  (type $foo (component
+    (import (interface "wasi:http/types") (instance $types
+      (export "request" (type (sub resource)))
+    ))
+    (alias export $types "request" (type $request))
+    (type $foo' (instance
+      (export "frob" (func (param "r" (own $request)) (result (own $request))))
+    ))
+    (export (interface "local:demo/foo") (type (eq $foo')))
+  ))
+  (export "foo" (type $foo))
 )
 ```
 
-Here the `alias` of `"level"` indicates that the exact type is being used from a
-different interface.
-
-A `world` is represented as a component type.
-
+Worlds are encoded similarly to interfaces, but replace the inner exported
+instance-type with an inner exported *component*-type. For example, this WIT:
 ```wit
-// host.wit
 package local:demo;
 
 world the-world {
@@ -1486,29 +1513,29 @@ world the-world {
   export run: func();
 }
 ```
-
-would correspond to:
-
+is encoded as:
 ```wasm
 (component
-  (type $demo (component
-    (type $the-world (component
+  (type $the-world  (component
+    (type $the-world' (component
       (export "test" (func))
       (export "run" (func))
     ))
-    (export (interface "local:demo/the-world") (component (type $the-world)))
+    (export (interface "local:demo/the-world") (type (eq $the-world')))
   ))
-  (export (interface "local:demo/wit") (type $demo))
+  (export "the-world" (type $the-world))
 )
 ```
+In the current version of WIT, `world`s cannot contain `use` and thus the outer
+wrapping component-type will only ever contain a single `export`. However,
+as higher-order component use cases are supported by WIT (leading to worlds
+importing worlds), `use` may be useful and added, thus adding imports to the
+outer wrapping world.
 
-Component types in the WebAssembly component binary format cannot close over
-outer instances so interfaces referred to by a component are redefined, at least
-the parts needed, within the component:
-
-
+When a world imports or exports an interface, to produce a valid
+component-type, the interface's compiled instance-type ends up getting copied
+into the component-type. For example, the following WIT:
 ```wit
-// host.wit
 package local:demo;
 
 world the-world {
@@ -1519,61 +1546,32 @@ interface console {
   log: func(arg: string);
 }
 ```
-
-would correspond to:
-
+is encoded as:
 ```wasm
 (component
-  (type $demo (component
-    (type $console (instance
-      (export "log" (func (param "arg" string)))
-    ))
-    (export (interface "local:demo/console") (instance (type $console)))
-    (type $the-world (component
-      (type $console (instance
+  (type $the-world (component
+    (type $the-world'  (component
+      (import (interface "local:demo/console") (instance
         (export "log" (func (param "arg" string)))
       ))
-      (import (interface "local:demo/console") (instance (type $console)))
     ))
-    (export (interface "local:demo/the-world") (component (type $the-world)))
+    (export (interface "local:demo/the-world") (type (eq $the-world')))
   ))
-  (export (interface "local:demo/wit") (type $demo))
+  (export "the-world" (type $the-world))
+  (type $console (component
+    (type $console' (instance
+      (export "log" (func (param "arg" string)))
+    ))
+    (export (interface "local:demo/console") (type (eq $console')))
+  ))
+  (export "console" (type $console))
 )
 ```
+This duplication is useful in the case of cross-package references or split
+packages, allowing a compiled `world` definition to be fully self-contained and
+able to be used to compile a component without additional type information.
 
-Imports of packages are encoded as imports to the outermost component
-type as well.
-
-```wit
-// foo.wit
-package local:demo;
-
-interface foo {
-  use wasi:http/types.{some-type};
-}
-```
-
-would correspond to:
-
-```wasm
-(component
-  (type (export (interface "local:demo/wit")) (component
-    (import (interface "wasi:http/types") (instance $types
-      (type $some-type ...)
-      (export "some-type" (type (eq $some-type)))
-    ))
-    (alias export $types "some-type" (type $some-type))
-    (type $foo (instance
-      (export "some-type" (type (eq $some-type)))
-    ))
-    (export (interface "local:demo/foo") (instance (type $foo)))
-  ))
-)
-```
-
-Putting all of this together an example of development of the `wasi-http`
-package would be:
-
+Putting this all together, the following WIT definitions:
 ```wit
 // wasi-http repo
 
@@ -1586,75 +1584,70 @@ interface types {
 // wit/handler.wit
 interface handler {
   use types.{request, response};
-  handle: func(request) -> response;
+  handle: func(r: request) -> response;
 }
 
 // wit/proxy.wit
 package wasi:http;
 
 world proxy {
-  import wasi:logging/backend;
+  import wasi:logging/logger;
   import handler;
   export handler;
 }
 ```
-
-and its corresponding binary encoding would be:
-
+are encoded as:
 ```wasm
 (component
-  (type $http (component
-    ;; interface types
-    (type $types (instance
-      (type $request (record))
-      (type $response (record))
-      (export "request" (type (eq $request)))
-      (export "response" (type (eq $response)))
+  (type $types (component
+    (type $types' (instance
+      (export "request" (type (sub resource)))
+      (export "response" (type (sub resource)))
+      ...
     ))
-    (export $types (interface "wasi:http/types") (instance (type $types)))
-    (alias export $types "request" (type $request'))
-    (alias export $types "response" (type $response'))
-
-    ;; interface handler
-    (type $handler (instance
-      (export $request "request" (type (eq $request')))
-      (export $response "response" (type (eq $response')))
-      (export "handle" (func (param "request" $request) (result $response)))
-    ))
-    (export (interface "wasi:http/handler") (instance (type $handler)))
-
-    ;; world proxy
-    (type $proxy (component
-      ;; import of `wasi:logging/backend`
-      (type $backend
-        (instance)
-      )
-      (import (interface "wasi:logging/backend") (instance (type $backend)))
-
-      ;; transitive import of `wasi:http/types`
-      (type $types (instance
-        (type $request (record))
-        (type $response (record))
-        (export "request" (type (eq $request)))
-        (export "response" (type (eq $response)))
-      ))
-      (import (interface "wasi:http/types") (instance $types (type $types)))
-      (alias export $types "request" (type $request'))
-      (alias export $types "response" (type $response'))
-
-      ;; import of `wasi:http/handler`
-      (type $handler (instance
-        (export $request "request" (type (eq $request')))
-        (export $response "response" (type (eq $response')))
-        (export "handle" (func (param "request" $request) (result $response)))
-      ))
-      (import (interface "wasi:http/handler") (instance (type $handler)))
-
-      ;; import of `wasi:http/handler`
-      (export (interface "wasi:http/handler") (instance (type $handler)))
-    ))
-    (export (interface "wasi:http/proxy") (component (type $proxy)))
+    (export (interface "wasi:http/types") (type (eq $types')))
   ))
-  (export (interface "wasi:http/wit") (type $http))
+  (export "types" (type $types))
+  (type $handler (component
+    (import (interface "wasi:http/types") (instance $http-types
+      (export "request" (type (sub resource)))
+      (export "response" (type (sub resource)))
+    ))
+    (alias export $http-types "request" (type $request))
+    (alias export $http-types "response" (type $response))
+    (type $handler' (instance
+      (export "handle" (func (param "r" (own $request)) (result (own $response))))
+    ))
+    (export (interface "wasi:http/handler") (type (eq $handler')))
+  ))
+  (export "handler" (type $handler))
+  (type $proxy (component
+    (type $proxy' (component
+      (import (interface "wasi:logging/logger") (instance
+        ...
+      ))
+      (import (interface "wasi:http/types") (instance $http-types
+        (export "request" (type (sub resource)))
+        (export "response" (type (sub resource)))
+        ...
+      ))
+      (alias export $http-types "request" (type $request))
+      (alias export $http-types "response" (type $response))
+      (import (interface "wasi:http/handler") (instance
+        (export "handle" (func (param "r" (own $request)) (result (own $response))))
+      ))
+      (export (interface "wasi:http/handler") (instance
+        (export "handle" (func (param "r" (own $request)) (result (own $response))))
+      ))
+    ))
+    (export (interface "wasi:http/proxy") (type (eq $proxy')))
+  ))
+  (export "proxy" (type $proxy))
 )
 ```
+This examples shows how, in the context of concrete world (`wasi:http/proxy`),
+standalone interface definitions (such `wasi:http/handler`) are no longer in a
+"parameterized" form: there is no outer wrapping component-type and instead all
+`use`s are replaced by direct aliases to preceding type imports as determined
+by the WIT resolution process.
+
