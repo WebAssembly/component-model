@@ -867,7 +867,7 @@ WIT files optionally start with a package declaration which defines the ID of
 the package.
 
 ```ebnf
-package-decl        ::= 'package' id ':' id ('@' valid-semver)?
+package-decl        ::= 'package' ( id ':' )+ id ( '/' id )* ('@' valid-semver)?
 ```
 
 The production `valid-semver` is as defined by
@@ -883,7 +883,7 @@ convenience:
 toplevel-use-item ::= 'use' use-path ('as' id)?
 
 use-path ::= id
-            | id ':' id '/' id ('@' valid-semver)?
+           | ( id ':' )+ id ( '/' id )+ ('@' valid-semver)?
 ```
 
 Here `use-path` is the ID used to refer to interfaces. The bare form `id`
