@@ -1526,11 +1526,10 @@ is encoded as:
   (export "the-world" (type $the-world))
 )
 ```
-In the current version of WIT, `world`s cannot contain `use` and thus the outer
-wrapping component-type will only ever contain a single `export`. However,
-as higher-order component use cases are supported by WIT (leading to worlds
-importing worlds), `use` may be useful and added, thus adding imports to the
-outer wrapping world.
+In the current version of WIT, the outer wrapping component-type will only ever
+contain a single `export` and thus only serves to separate the kebab-name
+export from the inner exported interface name and to provide consistency with
+the encoding of `interface` shown above.
 
 When a world imports or exports an interface, to produce a valid
 component-type, the interface's compiled instance-type ends up getting copied
