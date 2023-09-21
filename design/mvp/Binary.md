@@ -347,9 +347,11 @@ Notes:
 * Validation requires that all resource types transitively used in the type of an
   export are introduced by a preceding `importdecl` or `exportdecl`.
 * Validation requires any exported `sortidx` to have a valid `externdesc`
-  (which disallows core sorts other than `core module`). When the optional
-  `externdesc` immediate is present, validation requires it to be a supertype
-  of the inferred `externdesc` of the `sortidx`.
+  (which disallows core sorts other than `core module`).
+* When an export's optional `externdesc` immediate is present, validation
+  requires it to be a supertype of the inferred `externdesc` of the `sortidx`.
+* Resource type exports must have an explicit ascribed `externdesc` (indicating
+  `(sub resource)` or `(eq <typeidx>)`).
 * The `name` fields of `exportname` and `importname` must be unique among all
   imports and exports in the containing component definition, component type or
   instance type. (An import and export cannot use the same `name`.)

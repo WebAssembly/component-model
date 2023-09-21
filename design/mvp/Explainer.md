@@ -931,46 +931,28 @@ bind a fresh abstract type. For example, in the following component:
 all four types aliases in the outer component are unequal, reflecting the fact
 that each instance of `$C` generates two fresh resource types.
 
-If a single resource type definition is exported more than once, the exports
-after the first are equality-bound to the first export. For example, the
-following component:
+When a component exports a type, the component must explicitly specify how the
+type should appear to the outside world by explicitly ascribing a `typebound`.
+For example, in the following component:
 ```wasm
 (component
   (type $r (resource (rep i32)))
-  (export "r1" (type $r))
-  (export "r2" (type $r))
+  (export $r1 "r1" (type $r) (type (sub resource)))
+  (export     "r2" (type $r) (type (eq $r1)))
+  (export     "r3" (type $r) (type (sub resource)))
 )
 ```
-is assigned the following `componenttype`:
+the inferred `componenttype` is:
 ```wasm
 (component
   (export $r1 "r1" (type (sub resource)))
-  (export "r2" (type (eq $r1)))
+  (export     "r2" (type (eq $r1)))
+  (export     "r3" (type (sub resource)))
 )
 ```
-Thus, from an external perspective, `r1` and `r2` are two labels for the same
-type.
-
-If a component wants to hide this fact and force clients to assume `r1` and
-`r2` are distinct types (thereby allowing the implementation to actually use
-separate types in the future without breaking clients), an explicit type can be
-ascribed to the export that replaces the `eq` bound with a less-precise `sub`
-bound.
-```wasm
-(component
-  (type $r (resource (rep i32)))
-  (export "r1" (type $r)
-  (export "r2" (type $r) (type (sub resource)))
-)
-```
-This component is assigned the following `componenttype`:
-```wasm
-(component
-  (export "r1" (type (sub resource)))
-  (export "r2" (type (sub resource)))
-)
-```
-The assignment of this type to the above component mirrors the *introduction*
+This type exposes to clients of this component that only `r1` and `r2` are
+equal even though all three exports are of the same internal type definition.
+The assignment of these types to the above component mirrors the *introduction*
 rule of [existential types]  (∃T).
 
 When supplying a resource type (imported *or* defined) to a type import via
