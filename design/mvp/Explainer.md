@@ -53,7 +53,7 @@ below.
 ### Component Definitions
 
 At the top-level, a `component` is a sequence of definitions of various kinds:
-```
+```ebnf
 component  ::= (component <id>? <definition>*)
 definition ::= core-prefix(<core:module>)
              | core-prefix(<core:instance>)
@@ -130,7 +130,7 @@ then supplying a set of named *arguments* which satisfy all the named *imports*
 of the selected module or component.
 
 The syntax for defining a core module instance is:
-```
+```ebnf
 core:instance       ::= (instance <id>? <core:instancexpr>)
 core:instanceexpr   ::= (instantiate <core:moduleidx> <core:instantiatearg>*)
                       | <core:inlineexport>*
@@ -188,7 +188,7 @@ next section.
 The syntax for defining component instances is symmetric to core module
 instances, but with an expanded component-level definition of `sort` and
 more restricted version of `name`:
-```
+```ebnf
 instance       ::= (instance <id>? <instanceexpr>)
 instanceexpr   ::= (instantiate <componentidx> <instantiatearg>*)
                  | <inlineexport>*
@@ -267,7 +267,7 @@ into the current component's index spaces. As represented in the AST below,
 there are three kinds of "targets" for an alias: the `export` of a component
 instance, the `core export` of a core module instance and a definition of an
 `outer` component (containing the current component):
-```
+```ebnf
 alias            ::= (alias <aliastarget> (<sort> <id>?))
 aliastarget      ::= export <instanceidx> <string>
                    | core export <core:instanceidx> <core:name>
@@ -299,7 +299,7 @@ inline:
 
 For `export` aliases, the inline sugar extends the definition of `sortidx`
 and the various sort-specific indices:
-```
+```ebnf
 sortidx     ::= (<sort> <u32>)          ;; as above
               | <inlinealias>
 Xidx        ::= <u32>                   ;; as above
@@ -389,7 +389,7 @@ type and function definitions which are introduced in the next two sections.
 
 The syntax for defining core types extends the existing core type definition
 syntax, adding a `module` type constructor:
-```
+```ebnf
 core:type        ::= (type <id>? <core:deftype>)              (GC proposal)
 core:deftype     ::= <core:functype>                          (WebAssembly 1.0)
                    | <core:structtype>                        (GC proposal)
@@ -429,7 +429,7 @@ this, module types start with an empty type index space that is populated by
 `type` declarators, so that, in the future, these `type` declarators can refer to
 type imports local to the module type itself. For example, in the future, the
 following module type would be expressible:
-```
+```wasm
 (component $C
   (core type $M (module
     (import "" "T" (type $T))
@@ -477,7 +477,7 @@ but use a completely different set of value types. Unlike [`core:valtype`]
 which is low-level and assumes a shared linear memory for communicating
 compound values, component-level value types assume no shared memory and must
 therefore be high-level, describing entire compound values.
-```
+```ebnf
 type          ::= (type <id>? <deftype>)
 deftype       ::= <defvaltype>
                 | <resourcetype>
@@ -1063,7 +1063,7 @@ two directions:
 
 Canonical definitions specify one of these two wrapping directions, the function
 to wrap and a list of configuration options:
-```
+```ebnf
 canon    ::= (canon lift core-prefix(<core:funcidx>) <canonopt>* bind-id(<externdesc>))
            | (canon lower <funcidx> <canonopt>* (core func <id>?))
 canonopt ::= string-encoding=utf8
@@ -1187,7 +1187,7 @@ adapt *existing* functions, there are also a set of canonical "built-ins" that
 define core functions out of nothing that can be imported by core modules to
 dynamically interact with Canonical ABI entities like resources (and, when
 async is added to the proposal, [tasks][Future and Stream Types]).
-```
+```ebnf
 canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
         | (canon resource.drop <typeidx> (core func <id>?))
@@ -1245,7 +1245,7 @@ Like modules, components can have start functions that are called during
 instantiation. Unlike modules, components can call start functions at multiple
 points during instantiation with each such call having parameters and results.
 Thus, `start` definitions in components look like function calls:
-```
+```ebnf
 start ::= (start <funcidx> (value <valueidx>)* (result (value <id>?))*)
 ```
 The `(value <valueidx>)*` list specifies the arguments passed to `funcidx` by
@@ -1257,7 +1257,7 @@ validated to match the signature of `funcidx`.
 
 As with all definition sorts, values may be imported and exported by
 components. As an example value import:
-```
+```wasm
 (import "env" (value $env (record (field "locale" (option string)))))
 ```
 As this example suggests, value imports can serve as generalized [environment
@@ -1302,7 +1302,7 @@ WebAssembly, as part of the `externdesc` (e.g., `(import "x" (func $iden))`).
 In the case of exports, the `<id>?` right after the `export` is bound (the
 `<id>` inside the `<sortidx>` is a reference to the preceding definition being
 exported). The grammar for imports and exports is:
-```
+```ebnf
 import     ::= (import <importname> bind-id(<externdesc>))
 export     ::= (export <id>? <exportname> <sortidx> <externdesc>?)
 exportname ::= <name>
@@ -1771,7 +1771,7 @@ to be satisfied by a JavaScript module via ESM-integration:
 export default () => "hi";
 ```
 when `bar.wasm` is loaded as an ESM:
-```
+```html
 <script src="bar.wasm" type="module"></script>
 ```
 

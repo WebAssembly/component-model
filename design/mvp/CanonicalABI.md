@@ -1414,7 +1414,7 @@ cover each of these `canon` cases.
 ### `canon lift`
 
 For a canonical definition:
-```
+```wasm
 (canon lift $callee:<funcidx> $opts:<canonopt>* (func $f (type $ft)))
 ```
 validation specifies:
@@ -1480,7 +1480,7 @@ actions after the lowering is complete.
 ### `canon lower`
 
 For a canonical definition:
-```
+```wasm
 (canon lower $callee:<funcidx> $opts:<canonopt>* (core func $f))
 ```
 where `$callee` has type `$ft`, validation specifies:
@@ -1568,7 +1568,7 @@ the AOT compiler as requiring an intermediate copy to implement the above
 ### `canon resource.new`
 
 For a canonical definition:
-```
+```wasm
 (canon resource.new $rt (core func $f))
 ```
 validation specifies:
@@ -1588,7 +1588,7 @@ def canon_resource_new(inst, rt, rep):
 ### `canon resource.drop`
 
 For a canonical definition:
-```
+```wasm
 (canon resource.drop $rt (core func $f))
 ```
 validation specifies:
@@ -1618,7 +1618,7 @@ a destructor call is analogous to a call to an export.
 ### `canon resource.rep`
 
 For a canonical definition:
-```
+```wasm
 (canon resource.rep $rt (core func $f))
 ```
 validation specifies:

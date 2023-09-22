@@ -1286,13 +1286,13 @@ components is via transfer of unique ownership.
 The resource method syntax defined above is syntactic sugar that expands into
 separate function items that take a first parameter named `self` of type
 `borrow`. For example, the compound definition:
-```
+```wit
 resource file {
     read: func(n: u32) -> list<u8>
 }
 ```
 is expanded into:
-```
+```wit
 resource file
 %[method]file.read: func(self: borrow<file>, n: u32) -> list<u8>
 ```

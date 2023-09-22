@@ -16,7 +16,7 @@ and validation will be present in the [formal specification](../../spec/).
 ## Component Definitions
 
 (See [Component Definitions](Explainer.md#component-definitions) in the explainer.)
-```
+```ebnf
 component ::= <preamble> s*:<section>*            => (component flatten(s*))
 preamble  ::= <magic> <version> <layer>
 magic     ::= 0x00 0x61 0x73 0x6D
@@ -52,7 +52,7 @@ Notes:
 ## Instance Definitions
 
 (See [Instance Definitions](Explainer.md#instance-definitions) in the explainer.)
-```
+```ebnf
 core:instance       ::= ie:<core:instanceexpr>                             => (instance ie)
 core:instanceexpr   ::= 0x00 m:<moduleidx> arg*:vec(<core:instantiatearg>) => (instantiate m arg*)
                       | 0x01 e*:vec(<core:inlineexport>)                   => e*
@@ -126,7 +126,7 @@ Notes:
 ## Alias Definitions
 
 (See [Alias Definitions](Explainer.md#alias-definitions) in the explainer.)
-```
+```ebnf
 alias       ::= s:<sort> t:<aliastarget>                => (alias t (s))
 aliastarget ::= 0x00 i:<instanceidx> n:<string>         => export i n
               | 0x01 i:<core:instanceidx> n:<core:name> => core export i n
@@ -148,7 +148,7 @@ Notes:
 ## Type Definitions
 
 (See [Type Definitions](Explainer.md#type-definitions) in the explainer.)
-```
+```ebnf
 core:type        ::= dt:<core:deftype>                  => (type dt)        (GC proposal)
 core:deftype     ::= ft:<core:functype>                 => ft               (WebAssembly 1.0)
                    | st:<core:structtype>               => st               (GC proposal)
@@ -176,7 +176,7 @@ Notes:
   space. Since core modules and core module types cannot nest in the MVP, this
   means that the maximum `ct` in an MVP `alias` declarator is `1`.
 
-```
+```ebnf
 type          ::= dt:<deftype>                            => (type dt)
 deftype       ::= dvt:<defvaltype>                        => dvt
                 | ft:<functype>                           => ft
@@ -277,7 +277,7 @@ Notes:
 ## Canonical Definitions
 
 (See [Canonical Definitions](Explainer.md#canonical-definitions) in the explainer.)
-```
+```ebnf
 canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift f opts type-index-space[ft])
            | 0x01 0x00 f:<funcidx> opts:<opts>                   => (canon lower f opts (core func))
            | 0x02 rt:<typeidx>                                   => (canon resource.new rt (core func))
@@ -302,7 +302,7 @@ Notes:
 ## Start Definitions
 
 (See [Start Definitions](Explainer.md#start-definitions) in the explainer.)
-```
+```ebnf
 start ::= f:<funcidx> arg*:vec(<valueidx>) r:<u32> => (start f (value arg)* (result (value))ʳ)
 ```
 Notes:
@@ -325,7 +325,7 @@ flags are set.
 
 (See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
 in the explainer.)
-```
+```ebnf
 import      ::= in:<importname> ed:<externdesc>                      => (import in ed)
 export      ::= en:<exportname> si:<sortidx> ed?:<externdesc>?       => (export en si ed?)
 exportname  ::= 0x00 n:<name>                                        => n
@@ -372,7 +372,7 @@ name all the declarations that can happen within a component. Similarly like its
 core wasm counterpart validity of this custom section is not required and
 engines should not reject components which have an invalid `name` section.
 
-```
+```ebnf
 namesec    ::= section_0(namedata)
 namedata   ::= n:<name>                (if n = 'component-name')
                name:<componentnamesubsec>?
