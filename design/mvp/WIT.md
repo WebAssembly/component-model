@@ -77,7 +77,7 @@ An example of an interface is:
 package local:demo
 
 interface host {
-  log: func(msg: string)
+  log: func(msg: string);
 }
 ```
 
@@ -101,7 +101,7 @@ and [function][functions] definitions. For example:
 package wasi:filesystem
 
 interface types {
-  use wasi:clocks.wall-clock.{datetime}
+  use wasi:clocks.wall-clock.{datetime};
 
   record stat {
     ino: u64,
@@ -110,7 +110,7 @@ interface types {
     // ...
   }
 
-  stat-file: func(path: string) -> result<stat>
+  stat-file: func(path: string) -> result<stat>;
 }
 ```
 
@@ -139,10 +139,10 @@ package local:demo
 
 world my-world {
   import host: interface {
-    log: func(param: string)
+    log: func(param: string);
   }
 
-  export run: func()
+  export run: func();
 }
 ```
 
@@ -168,12 +168,12 @@ function or an interface.
 package local:demo
 
 world command {
-  import wasi:filesystem/filesystem
-  import wasi:random/random
-  import wasi:clocks/monotonic-clock
+  import wasi:filesystem/filesystem;
+  import wasi:random/random;
+  import wasi:clocks/monotonic-clock;
   // ...
 
-  export main: func(args: list<string>)
+  export main: func(args: list<string>);
 }
 ```
 
@@ -190,14 +190,14 @@ avoids the need to have an out-of-line definition.
 package local:demo
 
 interface out-of-line {
-  the-function: func()
+  the-function: func();
 }
 
 world your-world {
-  import out-of-line
+  import out-of-line;
   // ... is roughly equivalent to ...
   import out-of-line: interface {
-    the-function: func()
+    the-function: func();
   }
 }
 ```
@@ -217,13 +217,13 @@ interface my-interface {
 
 world command {
   // generates an import of the ID `local:demo/my-interface`
-  import my-interface
+  import my-interface;
 
   // generates an import of the ID `wasi:filesystem/types`
-  import wasi:filesystem/types
+  import wasi:filesystem/types;
 
   // generates an import of the kebab-name `foo`
-  import foo: func()
+  import foo: func();
 
   // generates an import of the kebab-name `bar`
   import bar: interface {
@@ -248,20 +248,20 @@ package local:demo
 // definitions of a, b, c, foo, bar, baz are omitted
 
 world my-world-a {
-    import a
-    import b
-    export c
+    import a;
+    import b;
+    export c;
 }
 
 world my-world-b {
-    import foo
-    import bar
-    export baz
+    import foo;
+    import bar;
+    export baz;
 }
 
 world union-my-world {
-     include my-world-a
-     include my-world-b
+     include my-world-a;
+     include my-world-b;
 }
 ```
 
@@ -271,12 +271,12 @@ The `union-my-world` World defined above is equivalent to the following World:
 
 ```wit
 world union-my-world {
-    import a
-    import b
-    export c
-    import foo
-    import bar
-    export baz
+    import a;
+    import b;
+    export c;
+    import foo;
+    import bar;
+    export baz;
 }
 ```
 
@@ -289,20 +289,20 @@ interface b { ... }
 interface a { ... }
 
 world my-world-a {
-    import a
-    import b
-    import wasi:io/c
+    import a;
+    import b;
+    import wasi:io/c;
     export d: interface { ... }
 }
 
 world union-my-world-a {
-    include my-world-a
+    include my-world-a;
 }
 
 world union-my-world-b {
-    import a
-    import b
-    import wasi:io/c
+    import a;
+    import b;
+    import wasi:io/c;
 
     export d: interface { ... }
 }
@@ -316,23 +316,23 @@ If two worlds shared the same set of import and export IDs, then the union of th
 package local:demo
 
 world my-world-a {
-    import a1
-    import b1
+    import a1;
+    import b1;
 }
 
 world my-world-b {
-    import a1
-    import b1
+    import a1;
+    import b1;
 }
 
 world union-my-world-a {
-    include my-world-a
-    include my-world-b
+    include my-world-a;
+    include my-world-b;
 }
 
 world union-my-world-b {
-    import a1
-    import b1
+    import a1;
+    import b1;
 }
 ```
 
@@ -344,17 +344,17 @@ The following example shows how to resolve name conflicts where `union-my-world-
 ```wit
 package local:demo
 
-world world-one { import a: func() }
-world world-two { import a: func() }
+world world-one { import a: func(); }
+world world-two { import a: func(); }
 
-world union-my-world-a { 
-    include world-one
+world union-my-world-a {
+    include world-one;
     include world-two with { a as b }
 }
 
 world union-my-world-b {
-  import a: func()
-  import b: func()
+  import a: func();
+  import b: func();
 }
 ```
 
@@ -364,11 +364,11 @@ world union-my-world-b {
 package local:demo
 
 interface a {
-    foo: func()
+    foo: func();
 }
 
 world world-using-a {
-    import a
+    import a;
 }
 
 world invalid-union-world {
@@ -408,11 +408,11 @@ package local:demo
 interface types {
   enum errno { /* ... */ }
 
-  type size = u32
+  type size = u32;
 }
 
 interface my-host-functions {
-  use types.{errno, size}
+  use types.{errno, size};
 }
 ```
 
@@ -428,7 +428,7 @@ Names imported via `use` can be renamed as they're imported as well:
 package local:demo
 
 interface my-host-functions {
-  use types.{errno as my-errno}
+  use types.{errno as my-errno};
 }
 ```
 
@@ -443,14 +443,14 @@ interfaces are defined in sibling files:
 interface types {
   enum errno { /* ... */ }
 
-  type size = u32
+  type size = u32;
 }
 
 // host.wit
 package local:demo
 
 interface my-host-functions {
-  use types.{errno, size}
+  use types.{errno, size};
 }
 ```
 
@@ -465,9 +465,9 @@ the same syntax is used in `import` and `export` directives:
 package local:demo
 
 world my-world {
-  import host
+  import host;
 
-  export another-interface
+  export another-interface;
 }
 
 interface host {
@@ -487,7 +487,7 @@ dependencies. For example above it was seen:
 package local:demo
 
 world my-world {
-  import wasi:clocks/monotonic-clock
+  import wasi:clocks/monotonic-clock;
 }
 ```
 
@@ -500,7 +500,7 @@ well:
 package local:demo
 
 interface my-interface {
-  use wasi:http/types.{request, response}
+  use wasi:http/types.{request, response};
 }
 ```
 
@@ -513,12 +513,12 @@ so far it can get a bit repetitive to be referred to:
 package local:demo
 
 interface my-interface {
-  use wasi:http/types@1.0.0.{request, response}
+  use wasi:http/types@1.0.0.{request, response};
 }
 
 world my-world {
-  import wasi:http/handler@1.0.0
-  export wasi:http/handler@1.0.0
+  import wasi:http/handler@1.0.0;
+  export wasi:http/handler@1.0.0;
 }
 ```
 
@@ -530,16 +530,16 @@ rewritten as:
 ```wit
 package local:demo
 
-use wasi:http/types@1.0.0
-use wasi:http/handler@1.0.0
+use wasi:http/types@1.0.0;
+use wasi:http/handler@1.0.0;
 
 interface my-interface {
-  use types.{request, response}
+  use types.{request, response};
 }
 
 world my-world {
-  import handler
-  export handler
+  import handler;
+  export handler;
 }
 ```
 
@@ -552,8 +552,8 @@ file's scope:
 ```wit
 package local:demo
 
-use wasi:http/types   // defines the name `types`
-use wasi:http/handler // defines the name `handler`
+use wasi:http/types;   // defines the name `types`
+use wasi:http/handler; // defines the name `handler`
 ```
 
 Like with interface-level-`use` the `as` keyword can be used to rename the
@@ -562,8 +562,8 @@ inferred name:
 ```wit
 package local:demo
 
-use wasi:http/types as http-types
-use wasi:http/handler as http-handler
+use wasi:http/types as http-types;
+use wasi:http/handler as http-handler;
 ```
 
 Note that these can all be combined to additionally import packages with
@@ -572,8 +572,8 @@ multiple versions and renaming as different identifiers.
 ```wit
 package local:demo
 
-use wasi:http/types@1.0.0 as http-types1
-use wasi:http/types@2.0.0 as http-types2
+use wasi:http/types@1.0.0 as http-types1;
+use wasi:http/types@2.0.0 as http-types2;
 
 // ...
 ```
@@ -599,9 +599,9 @@ interface shared {
 
 world my-world {
   import host: interface {
-    use shared.{metadata}
+    use shared.{metadata};
 
-    get: func() -> metadata
+    get: func() -> metadata;
   }
 }
 ```
@@ -649,9 +649,9 @@ be named and have unique names:
 package local:demo
 
 interface foo {
-  a1: func()
-  a2: func(x: u32)
-  a3: func(y: u64, z: float32)
+  a1: func();
+  a2: func(x: u32);
+  a3: func(y: u64, z: float32);
 }
 ```
 
@@ -661,8 +661,8 @@ Functions can return at most one unnamed type:
 package local:demo
 
 interface foo {
-  a1: func() -> u32
-  a2: func() -> string
+  a1: func() -> u32;
+  a2: func() -> string;
 }
 ```
 
@@ -672,7 +672,7 @@ And functions can also return multiple types by naming them:
 package local:demo
 
 interface foo {
-  a: func() -> (a: u32, b: float32)
+  a: func() -> (a: u32, b: float32);
 }
 ```
 
@@ -721,16 +721,16 @@ interface foo {
 
   // type aliases are allowed to primitive types and additionally here are some
   // examples of other types
-  type t1 = u32
-  type t2 = tuple<u32, u64>
-  type t3 = string
-  type t4 = option<u32>
-  type t5 = result<_, errno>            // no "ok" type
-  type t6 = result<string>              // no "err" type
-  type t7 = result<char, errno>         // both types specified
-  type t8 = result                      // no "ok" or "err" type
-  type t9 = list<string>
-  type t10 = t9
+  type t1 = u32;
+  type t2 = tuple<u32, u64>;
+  type t3 = string;
+  type t4 = option<u32>;
+  type t5 = result<_, errno>;           // no "ok" type
+  type t6 = result<string>;             // no "err" type
+  type t7 = result<char, errno>;        // both types specified
+  type t8 = result;                     // no "ok" or "err" type
+  type t9 = list<string>;
+  type t10 = t9;
 }
 ```
 
@@ -880,7 +880,7 @@ into the scope of the current file and/or rename interfaces locally for
 convenience:
 
 ```ebnf
-toplevel-use-item ::= 'use' use-path ('as' id)?
+toplevel-use-item ::= 'use' use-path ('as' id)? ';'
 
 use-path ::= id
            | ( id ':' )+ id ( '/' id )+ ('@' valid-semver)?
@@ -905,11 +905,11 @@ world-item ::= 'world' id '{' world-items* '}'
 world-items ::= export-item | import-item | use-item | typedef-item | include-item
 
 export-item ::= 'export' id ':' extern-type
-              | 'export' use-path
+              | 'export' use-path ';'
 import-item ::= 'import' id ':' extern-type
-              | 'import' use-path
+              | 'import' use-path ';'
 
-extern-type ::= func-type | 'interface' '{' interface-items* '}'
+extern-type ::= func-type ';' | 'interface' '{' interface-items* '}'
 ```
 
 Note that worlds can import types and define their own types to be exported
@@ -922,12 +922,12 @@ to `interface` items.
 A `include` statement enables the union of the current world with another world. The structure of an `include` statement is:
 
 ```wit
-include wasi:io/my-world-1 with { a as a1, b as b1 }
-include my-world-2
+include wasi:io/my-world-1 with { a as a1, b as b1 };
+include my-world-2;
 ```
 
 ```ebnf
-include-item ::= 'include' use-path
+include-item ::= 'include' use-path ';'
                | 'include' use-path 'with' '{' include-names-list '}'
 
 include-names-list ::= include-names-item
@@ -959,7 +959,7 @@ typedef-item ::= resource-item
                | enum-items
                | type-item
 
-func-item ::= id ':' func-type
+func-item ::= id ':' func-type ';'
 
 func-type ::= 'func' param-list result-list
 
@@ -988,7 +988,7 @@ use my:dependency/the-interface.{more, names as foo}
 Specifically the structure of this is:
 
 ```ebnf
-use-item ::= 'use' use-path '.' '{' use-names-list '}'
+use-item ::= 'use' use-path '.' '{' use-names-list '}' ';'
 
 use-names-list ::= use-names-item
                  | use-names-item ',' use-names-list?
@@ -1012,14 +1012,14 @@ be later referred to when defining items using this type. This construct is
 similar to a type alias in other languages
 
 ```wit
-type my-awesome-u32 = u32
-type my-complicated-tuple = tuple<u32, s32, string>
+type my-awesome-u32 = u32;
+type my-complicated-tuple = tuple<u32, s32, string>;
 ```
 
 Specifically the structure of this is:
 
 ```ebnf
-type-item ::= 'type' id '=' ty
+type-item ::= 'type' id '=' ty ';'
 ```
 
 ### Item: `record` (bag of named fields)
@@ -1143,8 +1143,8 @@ that can't or shouldn't be copied by value.
 For example, the following Wit defines a resource type and a function that
 takes and returns a handle to a `blob`:
 ```wit
-resource blob
-transform: func(blob) -> blob
+resource blob;
+transform: func(blob) -> blob;
 ```
 
 As syntactic sugar, resource statements can also declare any number of
@@ -1158,19 +1158,19 @@ sugar for a function returning a handle of the containing resource type.
 For example, the following resource definition:
 ```wit
 resource blob {
-    constructor(init: list<u8>)
-    write: func(bytes: list<u8>)
-    read: func(n: u32) -> list<u8>
-    merge: static func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob
+    constructor(init: list<u8>);
+    write: func(bytes: list<u8>);
+    read: func(n: u32) -> list<u8>;
+    merge: static func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob;
 }
 ```
 desugars into:
 ```wit
-resource blob
-%[constructor]blob: func(self: borrow<blob>, bytes: list<u8>) -> blob
-%[method]blob.write: func(self: borrow<blob>, bytes: list<u8>)
-%[method]blob.read: func(self: borrow<blob>, n: u32) -> list<u8>
-%[static]blob.merge: func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob
+resource blob;
+%[constructor]blob: func(self: borrow<blob>, bytes: list<u8>) -> blob;
+%[method]blob.write: func(self: borrow<blob>, bytes: list<u8>);
+%[method]blob.read: func(self: borrow<blob>, n: u32) -> list<u8>;
+%[static]blob.merge: func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob;
 ```
 These `%`-prefixed [`name`s](Explainer.md) embed the resource type name so that
 bindings generators can generate idiomatic syntax for the target language or
@@ -1187,11 +1187,11 @@ desugar to an owned return value.
 
 Specifically, the syntax for a `resource` definition is:
 ```ebnf
-resource-item ::= 'resource' id resource-methods?
-resource-methods ::= '{' resource-method* '}'
-resource-method ::= func-item
-                  | id ':' 'static' func-type
-                  | 'constructor' param-list
+resource-item ::= 'resource' id ';'
+                | 'resource' id '{' resource-method* '}'
+resource-method ::= func-item ';'
+                  | id ':' 'static' func-type ';'
+                  | 'constructor' param-list ';'
 ```
 
 The syntax for handle types is presented [below](#handles).
@@ -1204,9 +1204,9 @@ above are introducing new named types but "anonymous" types are also supported,
 such as built-ins. For example:
 
 ```wit
-type number = u32
-type fallible-function-result = result<u32, string>
-type headers = list<string>
+type number = u32;
+type fallible-function-result = result<u32, string>;
+type headers = list<string>;
 ```
 
 Specifically the following types are available:
@@ -1288,13 +1288,13 @@ separate function items that take a first parameter named `self` of type
 `borrow`. For example, the compound definition:
 ```wit
 resource file {
-    read: func(n: u32) -> list<u8>
+    read: func(n: u32) -> list<u8>;
 }
 ```
 is expanded into:
 ```wit
 resource file
-%[method]file.read: func(self: borrow<file>, n: u32) -> list<u8>
+%[method]file.read: func(self: borrow<file>, n: u32) -> list<u8>;
 ```
 where `%[method]file.read` is the desugared name of a method according to the
 Component Model's definition of [`name`](Explainer.md).
@@ -1307,9 +1307,9 @@ Identifiers in `wit` can be defined with two different forms. The first is a
 production in the Component Model text format.
 
 ```wit
-foo: func(bar: u32) -> ()
+foo: func(bar: u32);
 
-red-green-blue: func(r: u32, g: u32, b: u32) -> ()
+red-green-blue: func(r: u32, g: u32, b: u32);
 ```
 
 This form can't name identifiers which have the same name as wit keywords, so
@@ -1317,12 +1317,12 @@ the second form is the same syntax with the same restrictions as the first, but
 prefixed with '%':
 
 ```wit
-%foo: func(%bar: u32) -> ()
+%foo: func(%bar: u32);
 
-%red-green-blue: func(%r: u32, %g: u32, %b: u32) -> ()
+%red-green-blue: func(%r: u32, %g: u32, %b: u32);
 
 // This form also supports identifiers that would otherwise be keywords.
-%variant: func(%enum: s32) -> ()
+%variant: func(%enum: s32);
 ```
 
 [kebab-case]: https://en.wikipedia.org/wiki/Letter_case#Kebab_case
@@ -1333,7 +1333,7 @@ A `wit` document is resolved after parsing to ensure that all names resolve
 correctly. For example this is not a valid `wit` document:
 
 ```wit
-type foo = bar  // ERROR: name `bar` not defined
+type foo = bar;  // ERROR: name `bar` not defined
 ```
 
 Type references primarily happen through the `id` production of `ty`.
@@ -1341,15 +1341,15 @@ Type references primarily happen through the `id` production of `ty`.
 Additionally names in a `wit` document can only be defined once:
 
 ```wit
-type foo = u32
-type foo = u64  // ERROR: name `foo` already defined
+type foo = u32;
+type foo = u64;  // ERROR: name `foo` already defined
 ```
 
 Names do not need to be defined before they're used (unlike in C or C++),
 it's ok to define a type after it's used:
 
 ```wit
-type foo = bar
+type foo = bar;
 
 record bar {
     age: u32,
@@ -1359,14 +1359,14 @@ record bar {
 Types, however, cannot be recursive:
 
 ```wit
-type foo = foo  // ERROR: cannot refer to itself
+type foo = foo;  // ERROR: cannot refer to itself
 
 record bar1 {
     a: bar2,
 }
 
 record bar2 {
-    a: bar1,  // ERROR: record cannot refer to itself
+    a: bar1,    // ERROR: record cannot refer to itself
 }
 ```
 
@@ -1404,7 +1404,7 @@ An example of the binary format is that this document:
 package local:demo
 
 interface console {
-  log: func(arg: string)
+  log: func(arg: string);
 }
 ```
 
@@ -1439,9 +1439,9 @@ interface types {
 }
 
 interface console {
-  use types.{level}
+  use types.{level};
 
-  log: func(level: level, msg: string)
+  log: func(level: level, msg: string);
 }
 ```
 
@@ -1477,8 +1477,8 @@ A `world` is represented as a component type.
 package local:demo
 
 world the-world {
-  export test: func()
-  export run: func()
+  export test: func();
+  export run: func();
 }
 ```
 
@@ -1507,11 +1507,11 @@ the parts needed, within the component:
 package local:demo
 
 world the-world {
-  import console
+  import console;
 }
 
 interface console {
-  log: func(arg: string)
+  log: func(arg: string);
 }
 ```
 
@@ -1544,7 +1544,7 @@ type as well.
 package local:demo
 
 interface foo {
-  use wasi:http/types.{some-type}
+  use wasi:http/types.{some-type};
 }
 ```
 
@@ -1580,17 +1580,17 @@ interface types {
 
 // wit/handler.wit
 interface handler {
-  use types.{request, response}
-  handle: func(request) -> response
+  use types.{request, response};
+  handle: func(request) -> response;
 }
 
 // wit/proxy.wit
 package wasi:http
 
 world proxy {
-  import wasi:logging/backend
-  import handler
-  export handler
+  import wasi:logging/backend;
+  import handler;
+  export handler;
 }
 ```
 
