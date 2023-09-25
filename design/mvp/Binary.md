@@ -12,6 +12,8 @@ rules, but rather merge the minimal need-to-know elements of both, with just
 enough detail to create a prototype. A complete definition of the binary format
 and validation will be present in the [formal specification](../../spec/).
 
+See the [explainer introduction](Explainer.md) for an explanation of 🪙.
+
 
 ## Component Definitions
 
@@ -74,7 +76,7 @@ instantiatearg      ::= n:<string>  si:<sortidx>                           => (w
 sortidx             ::= sort:<sort> idx:<u32>                              => (sort idx)
 sort                ::= 0x00 cs:<core:sort>                                => core cs
                       | 0x01                                               => func
-                      | 0x02                                               => value
+                      | 0x02                                               => value 🪙
                       | 0x03                                               => type
                       | 0x04                                               => component
                       | 0x05                                               => instance
@@ -207,7 +209,7 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x69 i:<typeidx>                        => (own i)
                 | 0x68 i:<typeidx>                        => (borrow i)
 labelvaltype  ::= l:<label> t:<valtype>                   => l t
-case          ::= l:<label> t?:<valtype>? r?:<u32>?       => (case l t? (refines case-label[r])?)
+case          ::= l:<label> t?:<valtype>? ignored?:<u32>? => (case l t?)
 <T>?          ::= 0x00                                    =>
                 | 0x01 t:<T>                              => t
 valtype       ::= i:<typeidx>                             => i
@@ -229,7 +231,7 @@ importdecl    ::= in:<importname> ed:<externdesc>         => (import in ed)
 exportdecl    ::= en:<exportname> ed:<externdesc>         => (export en ed)
 externdesc    ::= 0x00 0x11 i:<core:typeidx>              => (core module (type i))
                 | 0x01 i:<typeidx>                        => (func (type i))
-                | 0x02 t:<valtype>                        => (value t)
+                | 0x02 t:<valtype>                        => (value t) 🪙
                 | 0x03 b:<typebound>                      => (type b)
                 | 0x04 i:<typeidx>                        => (component (type i))
                 | 0x05 i:<typeidx>                        => (instance (type i))
@@ -269,9 +271,8 @@ Notes:
 * Validation of function parameter and result names, record field names,
   variant case names, flag names, and enum case names requires that the name be
   unique for the func, record, variant, flags, or enum type definition.
-* Validation of the optional `refines` clause of a variant case requires that
-  the case index is less than the current case's index (and therefore
-  cases are acyclic).
+* The `ignored?` immediate of `case` may be used in the future to support
+  variant subtyping but is currently ignored.
 
 
 ## Canonical Definitions
@@ -299,7 +300,7 @@ Notes:
   [`CanonicalABI.md`](CanonicalABI.md#canonical-definitions).
 
 
-## Start Definitions
+## 🪙 Start Definitions
 
 (See [Start Definitions](Explainer.md#start-definitions) in the explainer.)
 ```ebnf

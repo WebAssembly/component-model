@@ -12,10 +12,9 @@ reference interpreter and test suite.
 
 ## Milestones
 
-The Component Model is being incrementally developed and stabilized as part of
-the overall [WASI preview process]. The current contents of this repo reflect
-the "Preview 2" milestone. The "Preview 3" milestone will be primarily
-concerned with the addition of [async support].
+The Component Model is currently being incrementally developed and stabilized
+as part of [WASI Preview 2]. The subsequent "Preview 3" milestone will be
+primarily concerned with the addition of [async support].
 
 ## Contributing
 
@@ -35,5 +34,5 @@ To contribute to any of these repositories, see the Community Group's
 [formal spec]: spec/
 [W3C WebAssembly Community Group]: https://www.w3.org/community/webassembly/
 [Contributing Guidelines]: https://webassembly.org/community/contributing/
-[WASI preview process]: https://github.com/WebAssembly/meetings/blob/main/wasi/2023/presentations/2023-02-09-gohman-wasi-roadmap.pdf
+[WASI Preview 2]: https://github.com/WebAssembly/WASI/tree/main/preview2
 [Async Support]: https://docs.google.com/presentation/d/1MNVOZ8hdofO3tI0szg_i-Yoy0N2QPU2C--LzVuoGSlE/edit?usp=share_link
