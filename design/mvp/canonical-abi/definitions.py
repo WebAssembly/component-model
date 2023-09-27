@@ -7,6 +7,7 @@
 from __future__ import annotations
 import math
 import struct
+import random
 from dataclasses import dataclass
 from typing import Optional
 from typing import Callable
@@ -392,8 +393,8 @@ def load(cx, ptr, t):
     case S16()          : return load_int(cx, ptr, 2, signed=True)
     case S32()          : return load_int(cx, ptr, 4, signed=True)
     case S64()          : return load_int(cx, ptr, 8, signed=True)
-    case Float32()      : return canonicalize32(reinterpret_i32_as_float(load_int(cx, ptr, 4)))
-    case Float64()      : return canonicalize64(reinterpret_i64_as_float(load_int(cx, ptr, 8)))
+    case Float32()      : return maybe_scramble_nan32(reinterpret_i32_as_float(load_int(cx, ptr, 4)))
+    case Float64()      : return maybe_scramble_nan64(reinterpret_i64_as_float(load_int(cx, ptr, 8)))
     case Char()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
     case String()       : return load_string(cx, ptr)
     case List(t)        : return load_list(cx, ptr, t)
@@ -410,24 +411,41 @@ def convert_int_to_bool(i):
   assert(i >= 0)
   return bool(i)
 
+DETERMINISTIC_PROFILE = False # or True
+THE_HOST_WANTS_TO = True # or False
+CANONICAL_FLOAT32_NAN = 0x7fc00000
+CANONICAL_FLOAT64_NAN = 0x7ff8000000000000
+
+def maybe_scramble_nan32(f):
+  if math.isnan(f):
+    if DETERMINISTIC_PROFILE:
+      f = reinterpret_i32_as_float(CANONICAL_FLOAT32_NAN)
+    elif THE_HOST_WANTS_TO:
+      f = reinterpret_i32_as_float(random_nan_bits(32, 8))
+    assert(math.isnan(f))
+  return f
+
+def maybe_scramble_nan64(f):
+  if math.isnan(f):
+    if DETERMINISTIC_PROFILE:
+      f = reinterpret_i64_as_float(CANONICAL_FLOAT64_NAN)
+    elif THE_HOST_WANTS_TO:
+      f = reinterpret_i64_as_float(random_nan_bits(64, 11))
+    assert(math.isnan(f))
+  return f
+
 def reinterpret_i32_as_float(i):
   return struct.unpack('!f', struct.pack('!I', i))[0] # f32.reinterpret_i32
 
 def reinterpret_i64_as_float(i):
   return struct.unpack('!d', struct.pack('!Q', i))[0] # f64.reinterpret_i64
 
-CANONICAL_FLOAT32_NAN = 0x7fc00000
-CANONICAL_FLOAT64_NAN = 0x7ff8000000000000
-
-def canonicalize32(f):
-  if math.isnan(f):
-    return reinterpret_i32_as_float(CANONICAL_FLOAT32_NAN)
-  return f
-
-def canonicalize64(f):
-  if math.isnan(f):
-    return reinterpret_i64_as_float(CANONICAL_FLOAT64_NAN)
-  return f
+def random_nan_bits(total_bits, exponent_bits):
+  fraction_bits = total_bits - exponent_bits - 1
+  bits = random.getrandbits(total_bits)
+  bits |= ((1 << exponent_bits) - 1) << fraction_bits
+  bits |= 1 << random.randrange(fraction_bits - 1)
+  return bits
 
 def convert_i32_to_char(cx, i):
   trap_if(i >= 0x110000)
@@ -554,8 +572,8 @@ def store(cx, v, t, ptr):
     case S16()          : store_int(cx, v, ptr, 2, signed=True)
     case S32()          : store_int(cx, v, ptr, 4, signed=True)
     case S64()          : store_int(cx, v, ptr, 8, signed=True)
-    case Float32()      : store_int(cx, reinterpret_float_as_i32(canonicalize32(v)), ptr, 4)
-    case Float64()      : store_int(cx, reinterpret_float_as_i64(canonicalize64(v)), ptr, 8)
+    case Float32()      : store_int(cx, reinterpret_float_as_i32(maybe_scramble_nan32(v)), ptr, 4)
+    case Float64()      : store_int(cx, reinterpret_float_as_i64(maybe_scramble_nan64(v)), ptr, 8)
     case Char()         : store_int(cx, char_to_i32(v), ptr, 4)
     case String()       : store_string(cx, v, ptr)
     case List(t)        : store_list(cx, v, ptr, t)
@@ -874,8 +892,8 @@ def lift_flat(cx, vi, t):
     case S16()          : return lift_flat_signed(vi, 32, 16)
     case S32()          : return lift_flat_signed(vi, 32, 32)
     case S64()          : return lift_flat_signed(vi, 64, 64)
-    case Float32()      : return canonicalize32(vi.next('f32'))
-    case Float64()      : return canonicalize64(vi.next('f64'))
+    case Float32()      : return maybe_scramble_nan32(vi.next('f32'))
+    case Float64()      : return maybe_scramble_nan64(vi.next('f64'))
     case Char()         : return convert_i32_to_char(cx, vi.next('i32'))
     case String()       : return lift_flat_string(cx, vi)
     case List(t)        : return lift_flat_list(cx, vi, t)
@@ -963,8 +981,8 @@ def lower_flat(cx, v, t):
     case S16()          : return lower_flat_signed(v, 32)
     case S32()          : return lower_flat_signed(v, 32)
     case S64()          : return lower_flat_signed(v, 64)
-    case Float32()      : return [Value('f32', canonicalize32(v))]
-    case Float64()      : return [Value('f64', canonicalize64(v))]
+    case Float32()      : return [Value('f32', maybe_scramble_nan32(v))]
+    case Float64()      : return [Value('f64', maybe_scramble_nan64(v))]
     case Char()         : return [Value('i32', char_to_i32(v))]
     case String()       : return lower_flat_string(cx, v)
     case List(t)        : return lower_flat_list(cx, v, t)
