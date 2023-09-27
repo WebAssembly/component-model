@@ -1318,20 +1318,22 @@ exported). The grammar for imports and exports is:
 import     ::= (import <importname> bind-id(<externdesc>))
 export     ::= (export <id>? <exportname> <sortidx> <externdesc>?)
 exportname ::= <name>
-             | (interface "<regid>")
+             | (interface "<iid>")
+iid        ::= <namespace><label><projection><version>?
+             | <namespace>+<label><projection>+<version>? 🪺
+namespace  ::= <label>:
+projection ::= /<label>
+version    ::= @<valid semver>
 importname ::= <exportname>
              | <name> (url <string> <integrity>?)
              | <name> (relative-url <string> <integrity>?)
              | <name> <integrity>
-             | (locked-dep "<regid>" <integrity>?)
-             | (unlocked-dep "<regidset>")
-regname    ::= <namespace><label><projection>?
+             | (locked-dep "<pkgid>" <integrity>?)
+             | (unlocked-dep "<pkgidset>")
+pkgname    ::= <namespace><label>
              | <namespace>+<label><projection>* 🪺
-namespace  ::= <label>:
-projection ::= /<label>
-regid      ::= <regname><version>?
-regidset   ::= <regname><verrange>?
-version    ::= @<valid semver>
+pkgid      ::= <pkgname><version>?
+pkgidset   ::= <pkgname><verrange>?
 verrange   ::= <version>
              | @*
              | @{<verlower>}
@@ -1429,8 +1431,8 @@ sequence of labels in a registry name can be translated to nested scopes in the
 source language, thereby leveraging existing namespacing in the registry to
 avoid conflicts in the source bindings. Note that, because of the mandatory `:`
 in registry names, the set of kebab names and registry names is disjoint and so
-no discriminant is required to distinguish between a `name` and `regname`; a
-plain `string` covers both cases.
+no discriminant is required to distinguish between a `name`, `iid` or `pkgid`;
+a plain `string` covers both cases.
 
 Components provide two options for naming exports, symmetric to the first two
 options for naming imports:

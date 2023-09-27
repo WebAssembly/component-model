@@ -104,8 +104,8 @@ Notes:
   for aliases (below).
 * Validation of `core:instantiatearg` initially only allows the `instance`
   sort, but would be extended to accept other sorts as core wasm is extended.
-* Validation of `instantiate` requires each `<name>`, `<regid>` or
-  `<regidset>` in an `importname` in `c` to match a `string` in a `with`
+* Validation of `instantiate` requires each `<name>`, `<iid>`, `<pkgid>` or
+  `<pkgidset>` in an `importname` in `c` to match a `string` in a `with`
   argument and for the types to match.
 * When validating `instantiate`, after each individual type-import is supplied
   via `with`, the actual type supplied is immediately substituted for all uses
@@ -330,15 +330,16 @@ in the explainer.)
 import      ::= in:<importname> ed:<externdesc>                      => (import in ed)
 export      ::= en:<exportname> si:<sortidx> ed?:<externdesc>?       => (export en si ed?)
 exportname  ::= 0x00 n:<name>                                        => n
-              | 0x01 ri:<regid'>                                     => (interface ri)
+              | 0x01 i:<iid'>                                        => (interface i)
+iid'        ::= len:<u32> i:<iid>                                    => "i" (if len = |i|)
 importname  ::= en:<exportname>                                      => en
               | 0x02 n:<name> s:<string> i?:<integrity'>?            => n (url s i?)
               | 0x03 n:<name> s:<string> i?:<integrity'>?            => n (relative-url s i?)
               | 0x04 n:<name> i:<integrity'>                         => n i
-              | 0x05 ri:<regid'> i?:<integrity'>?                    => (locked-dep ri i?)
-              | 0x06 ris:<regidset'>                                 => (unlocked-dep ris)
-regid'      ::= len:<u32> ri:<regid>                                 => "ri" (if len = |ri|)
-regidset'   ::= len:<u32> ris:<regidset>                             => "ris" (if len = |ris|)
+              | 0x05 p:<pkgid'> i?:<integrity'>?                     => (locked-dep p i?)
+              | 0x06 p:<pkgidset'>                                   => (unlocked-dep p)
+pkgid'      ::= len:<u32> p:<pkgid>                                  => "p" (if len = |p|)
+pkgidset'   ::= len:<u32> p:<pkgidset>                               => "p" (if len = |p|)
 integrity'  ::= len:<u32> im:<integrity-metadata>                    => (integrity "im") (if len = |im|)
 ```
 
@@ -354,11 +355,10 @@ Notes:
 * The `name` fields of `exportname` and `importname` must be unique among all
   imports and exports in the containing component definition, component type or
   instance type. (An import and export cannot use the same `name`.)
-* The `regid` and `regidset` of `importname` and `exportname` must be
+* The `iid`, `pkgid` and `pkgidset` of `importname` and `exportname` must be
   unique only among imports or exports. That is, two imports may *not*
-  have the same `regid`(`set`), but an import and export *may* have the same
-  `regid`.
-* `<regid>` and `<regidset>` refer to the grammatical productions defined in
+  have the same id, but an import and export *may* have the same id.
+* `<iid>`, `<pkgid>` and `<pkgidset>` refer to the grammatical productions defined in
   the [text format](#import-and-export-definitions).
 * `<valid semver>` is as defined by [https://semver.org](https://semver.org/)
 * `<integrity-metadata>` is as defined by the
