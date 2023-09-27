@@ -209,7 +209,7 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x69 i:<typeidx>                        => (own i)
                 | 0x68 i:<typeidx>                        => (borrow i)
 labelvaltype  ::= l:<label> t:<valtype>                   => l t
-case          ::= l:<label> t?:<valtype>? ignored?:<u32>? => (case l t?)
+case          ::= l:<label> t?:<valtype>? 0x00            => (case l t?)
 <T>?          ::= 0x00                                    =>
                 | 0x01 t:<T>                              => t
 valtype       ::= i:<typeidx>                             => i
@@ -271,8 +271,8 @@ Notes:
 * Validation of function parameter and result names, record field names,
   variant case names, flag names, and enum case names requires that the name be
   unique for the func, record, variant, flags, or enum type definition.
-* The `ignored?` immediate of `case` may be used in the future to support
-  variant subtyping but is currently ignored.
+* (The `0x00` immediate of `case` may be reinterpreted in the future as the
+  `none` case of an optional immediate.)
 
 
 ## Canonical Definitions
