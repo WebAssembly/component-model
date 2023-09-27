@@ -1427,12 +1427,7 @@ options for naming imports:
   when the given exported definition.
 
 Export names include the same uniqueness requirements between exports as described
-above for import names and *additionally* require kebab-`name`s to be unique
-between imports and exports. This allows a single kebab name to uniquely select
-an import *or* export without an "import" or "export" prefix. (The same
-interface id can however be present as both an import and export, as is
-necessary for basic [virtualization](examples/LinkTimeVirtualization.md) use
-cases.)
+above for import names.
 
 As an example, the following component uses all 9 cases of imports and exports:
 ```wasm

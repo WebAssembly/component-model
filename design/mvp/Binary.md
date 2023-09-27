@@ -350,13 +350,8 @@ Notes:
   (which disallows core sorts other than `core module`). When the optional
   `externdesc` immediate is present, validation requires it to be a supertype
   of the inferred `externdesc` of the `sortidx`.
-* The `name` fields of `exportname` and `importname` must be unique among all
-  imports and exports in the containing component definition, component type or
-  instance type. (An import and export cannot use the same `name`.)
-* The `regid` and `regidset` of `importname` and `exportname` must be
-  unique only among imports or exports. That is, two imports may *not*
-  have the same `regid`(`set`), but an import and export *may* have the same
-  `regid`.
+* The `<name>`, `<regid>` and `<regidset>` of imports must be relatively unique.
+* The `<name>` and `<regid>` of exports must be relatively unique.
 * `<regid>` and `<regidset>` refer to the grammatical productions defined in
   the [text format](#import-and-export-definitions).
 * `<valid semver>` is as defined by [https://semver.org](https://semver.org/)
