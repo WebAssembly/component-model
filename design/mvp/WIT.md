@@ -46,13 +46,13 @@ Package identifiers are specified at the top of a WIT file via a `package`
 declaration:
 
 ```wit
-package wasi:clocks
+package wasi:clocks;
 ```
 
 or
 
 ```wit
-package wasi:clocks@1.2.0
+package wasi:clocks@1.2.0;
 ```
 
 WIT packages can be defined in a collection of files and at least one of them
@@ -74,7 +74,7 @@ belong to an interface.
 An example of an interface is:
 
 ```wit
-package local:demo
+package local:demo;
 
 interface host {
   log: func(msg: string);
@@ -98,7 +98,7 @@ An `interface` can contain [`use`][use] statements, [type][types] definitions,
 and [function][functions] definitions. For example:
 
 ```wit
-package wasi:filesystem
+package wasi:filesystem;
 
 interface types {
   use wasi:clocks.wall-clock.{datetime};
@@ -135,7 +135,7 @@ equivalent of a `component` type in the component model. For example this
 world:
 
 ```wit
-package local:demo
+package local:demo;
 
 world my-world {
   import host: interface {
@@ -165,7 +165,7 @@ Worlds can contain any number of imports and exports, and can be either a
 function or an interface.
 
 ```wit
-package local:demo
+package local:demo;
 
 world command {
   import wasi:filesystem/filesystem;
@@ -187,7 +187,7 @@ Additionally interfaces can be defined inline with an explicit kebab-name that
 avoids the need to have an out-of-line definition.
 
 ```wit
-package local:demo
+package local:demo;
 
 interface out-of-line {
   the-function: func();
@@ -209,7 +209,7 @@ In the component model imports to a component either use an ID or a
 kebab-name, and in WIT this is reflected in the syntax:
 
 ```wit
-package local:demo
+package local:demo;
 
 interface my-interface {
   // ..
@@ -243,7 +243,7 @@ A World can be created by taking the union of two or more worlds. This operation
 Below is a simple example of a world that includes two other worlds.
 
 ```wit
-package local:demo
+package local:demo;
 
 // definitions of a, b, c, foo, bar, baz are omitted
 
@@ -283,7 +283,7 @@ world union-my-world {
 The `include` statement also works with [WIT package](#wit-packages-and-use) defined below with the same semantics. For example, the following World `union-my-world-a` is equivalent to `union-my-world-b`:
 
 ```wit
-package local:demo
+package local:demo;
 
 interface b { ... }
 interface a { ... }
@@ -313,7 +313,7 @@ world union-my-world-b {
 If two worlds shared the same set of import and export IDs, then the union of the two worlds will only contain one copy of this set. For example, the following two worlds `union-my-world-a` and `union-my-world-b` are equivalent:
 
 ```wit
-package local:demo
+package local:demo;
 
 world my-world-a {
     import a1;
@@ -342,7 +342,7 @@ When two or more included Worlds have the same name for an import or export that
 The following example shows how to resolve name conflicts where `union-my-world-a` and `union-my-world-b` are equivalent:
 
 ```wit
-package local:demo
+package local:demo;
 
 world world-one { import a: func(); }
 world world-two { import a: func(); }
@@ -361,7 +361,7 @@ world union-my-world-b {
 `with` cannot be used to rename IDs, however, so the following world would be invalid:
 
 ```wit
-package local:demo
+package local:demo;
 
 interface a {
     foo: func();
@@ -403,7 +403,7 @@ A `use` statement inside of an `interface` or `world` block can be used to
 import types:
 
 ```wit
-package local:demo
+package local:demo;
 
 interface types {
   enum errno { /* ... */ }
@@ -425,7 +425,7 @@ Interfaces linked with `use` must be acyclic.
 Names imported via `use` can be renamed as they're imported as well:
 
 ```wit
-package local:demo
+package local:demo;
 
 interface my-host-functions {
   use types.{errno as my-errno};
@@ -447,7 +447,7 @@ interface types {
 }
 
 // host.wit
-package local:demo
+package local:demo;
 
 interface my-host-functions {
   use types.{errno, size};
@@ -462,7 +462,7 @@ the same syntax is used in `import` and `export` directives:
 
 ```wit
 // a.wit
-package local:demo
+package local:demo;
 
 world my-world {
   import host;
@@ -484,7 +484,7 @@ When referring to an interface an ID form can additionally be used to refer to
 dependencies. For example above it was seen:
 
 ```wit
-package local:demo
+package local:demo;
 
 world my-world {
   import wasi:clocks/monotonic-clock;
@@ -497,7 +497,7 @@ This is the package identified by `wasi:clocks` and the interface
 well:
 
 ```wit
-package local:demo
+package local:demo;
 
 interface my-interface {
   use wasi:http/types.{request, response};
@@ -510,7 +510,7 @@ If a package being referred to has a version number, then using the above syntax
 so far it can get a bit repetitive to be referred to:
 
 ```wit
-package local:demo
+package local:demo;
 
 interface my-interface {
   use wasi:http/types@1.0.0.{request, response};
@@ -528,7 +528,7 @@ interfaces within the scope of the file itself. For example the above could be
 rewritten as:
 
 ```wit
-package local:demo
+package local:demo;
 
 use wasi:http/types@1.0.0;
 use wasi:http/handler@1.0.0;
@@ -550,7 +550,7 @@ The interface referred to by a `use` is the name that is defined in the current
 file's scope:
 
 ```wit
-package local:demo
+package local:demo;
 
 use wasi:http/types;   // defines the name `types`
 use wasi:http/handler; // defines the name `handler`
@@ -560,7 +560,7 @@ Like with interface-level-`use` the `as` keyword can be used to rename the
 inferred name:
 
 ```wit
-package local:demo
+package local:demo;
 
 use wasi:http/types as http-types;
 use wasi:http/handler as http-handler;
@@ -570,7 +570,7 @@ Note that these can all be combined to additionally import packages with
 multiple versions and renaming as different identifiers.
 
 ```wit
-package local:demo
+package local:demo;
 
 use wasi:http/types@1.0.0 as http-types1;
 use wasi:http/types@2.0.0 as http-types2;
@@ -589,7 +589,7 @@ component.
 For example this document:
 
 ```wit
-package local:demo
+package local:demo;
 
 interface shared {
   record metadata {
@@ -646,7 +646,7 @@ Functions are defined in an [`interface`][interfaces] or are listed as an
 be named and have unique names:
 
 ```wit
-package local:demo
+package local:demo;
 
 interface foo {
   a1: func();
@@ -658,7 +658,7 @@ interface foo {
 Functions can return at most one unnamed type:
 
 ```wit
-package local:demo
+package local:demo;
 
 interface foo {
   a1: func() -> u32;
@@ -669,7 +669,7 @@ interface foo {
 And functions can also return multiple types by naming them:
 
 ```wit
-package local:demo
+package local:demo;
 
 interface foo {
   a: func() -> (a: u32, b: float32);
@@ -688,7 +688,7 @@ time. The types supported in WIT is the same set of types supported in the
 component model itself:
 
 ```wit
-package local:demo
+package local:demo;
 
 interface foo {
   // "package of named fields"
@@ -867,7 +867,7 @@ WIT files optionally start with a package declaration which defines the ID of
 the package.
 
 ```ebnf
-package-decl        ::= 'package' ( id ':' )+ id ( '/' id )* ('@' valid-semver)?
+package-decl        ::= 'package' ( id ':' )+ id ( '/' id )* ('@' valid-semver)?  ';'
 ```
 
 The production `valid-semver` is as defined by
@@ -1401,7 +1401,7 @@ An example of the binary format is that this document:
 
 ```wit
 // host.wit
-package local:demo
+package local:demo;
 
 interface console {
   log: func(arg: string);
@@ -1429,7 +1429,7 @@ This is done to implement `use` statements:
 
 ```wit
 // host.wit
-package local:demo
+package local:demo;
 
 interface types {
   enum level {
@@ -1474,7 +1474,7 @@ A `world` is represented as a component type.
 
 ```wit
 // host.wit
-package local:demo
+package local:demo;
 
 world the-world {
   export test: func();
@@ -1504,7 +1504,7 @@ the parts needed, within the component:
 
 ```wit
 // host.wit
-package local:demo
+package local:demo;
 
 world the-world {
   import console;
@@ -1541,7 +1541,7 @@ type as well.
 
 ```wit
 // foo.wit
-package local:demo
+package local:demo;
 
 interface foo {
   use wasi:http/types.{some-type};
@@ -1585,7 +1585,7 @@ interface handler {
 }
 
 // wit/proxy.wit
-package wasi:http
+package wasi:http;
 
 world proxy {
   import wasi:logging/backend;
