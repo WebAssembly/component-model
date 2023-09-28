@@ -17,7 +17,7 @@ without regard to `parent.wasm`:
 ```wasm
 ;; child.wat
 (component
-  (import (interface "wasi:filesystem/types") (instance
+  (import "wasi:filesystem/types" (instance
     (export "read" (func ...))
     (export "write" (func ...))
   ))
@@ -31,7 +31,7 @@ out and reused as a separate component:
 ```wasm
 ;; virtualize.wat
 (component
-  (import (interface "wasi:filesystem/types") (instance $fs
+  (import "wasi:filesystem/types" (instance $fs
     (export "read" (func ...))
     (export "write" (func ...))
   ))
@@ -49,7 +49,7 @@ We now write the parent component by composing `child.wasm` with
 ```wasm
 ;; parent.wat
 (component
-  (import (interface "wasi:filesystem/types") (instance $real-fs ...))
+  (import "wasi:filesystem/types" (instance $real-fs ...))
   (import "./virtualize.wasm" (component $Virtualize ...))
   (import "./child.wasm" (component $Child ...))
   (instance $virtual-fs (instantiate (component $Virtualize)
@@ -66,7 +66,7 @@ definitions in place of imports:
 ```wasm
 ;; parent.wat
 (component
-  (import (interface "wasi:filesystem/types") (instance $real-fs ...))
+  (import "wasi:filesystem/types" (instance $real-fs ...))
   (component $Virtualize ... copied inline ...)
   (component $Child ... copied inline ...)
   (instance $virtual-fs (instantiate (component $Virtualize)

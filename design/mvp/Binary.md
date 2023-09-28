@@ -73,6 +73,7 @@ instance            ::= ie:<instanceexpr>                                  => (i
 instanceexpr        ::= 0x00 c:<componentidx> arg*:vec(<instantiatearg>)   => (instantiate c arg*)
                       | 0x01 e*:vec(<inlineexport>)                        => e*
 instantiatearg      ::= n:<string>  si:<sortidx>                           => (with n si)
+string              ::= s:<core:name>                                      => s
 sortidx             ::= sort:<sort> idx:<u32>                              => (sort idx)
 sort                ::= 0x00 cs:<core:sort>                                => core cs
                       | 0x01                                               => func
@@ -81,16 +82,6 @@ sort                ::= 0x00 cs:<core:sort>                                => co
                       | 0x04                                               => component
                       | 0x05                                               => instance
 inlineexport        ::= n:<exportname> si:<sortidx>                        => (export n si)
-string              ::= s:<core:name>                                      => s
-name                ::= len:<u32> n:<name-chars>                           => n (if len = |n|)
-name-chars          ::= l:<label>                                          => l
-                      | '[constructor]' r:<label>                          => [constructor]r
-                      | '[method]' r:<label> '.' m:<label>                 => [method]r.m
-                      | '[static]' r:<label> '.' s:<label>                 => [static]r.s
-label               ::= w:<word>                                           => w
-                      | l:<label> '-' w:<word>                             => l-w
-word                ::= w:[0x61-0x7a] x*:[0x30-0x39,0x61-0x7a]*            => char(w)char(x)*
-                      | W:[0x41-0x5a] X*:[0x30-0x39,0x41-0x5a]*            => char(W)char(X)*
 ```
 Notes:
 * Reused Core binary rules: [`core:name`], (variable-length encoded) [`core:u32`]
@@ -104,25 +95,15 @@ Notes:
   for aliases (below).
 * Validation of `core:instantiatearg` initially only allows the `instance`
   sort, but would be extended to accept other sorts as core wasm is extended.
-* Validation of `instantiate` requires each `<name>`, `<iid>`, `<pkgid>` or
-  `<pkgidset>` in an `importname` in `c` to match a `string` in a `with`
-  argument and for the types to match.
+* Validation of `instantiate` requires each `<importname>` in `c` to match a
+  `string` in a `with` argument (compared as strings) and for the types to
+  match.
 * When validating `instantiate`, after each individual type-import is supplied
   via `with`, the actual type supplied is immediately substituted for all uses
   of the import, so that subsequent imports and all exports are now specialized
   to the actual type.
 * The indices in `sortidx` are validated according to their `sort`'s index
   spaces, which are built incrementally as each definition is validated.
-* Validation requires that annotated `name`s only occur on `func` imports or
-  exports and that the `r:<label>` matches the `name` of a preceding `resource`
-  import or export, respectively, in the same scope (component, component type
-  or instance type).
-* Validation of `[constructor]` names requires that the `func` returns a
-  `(result (own $R))`, where `$R` is the resource labeled `r`.
-* Validation of `[method]` names requires the first parameter of the function
-  to be `(param "self" (borrow $R))`, where `$R` is the resource labeled `r`.
-* Validation of `[method]` and `[static]` names ensures that all field names
-  are disjoint.
 
 
 ## Alias Definitions
@@ -202,14 +183,15 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x71 case*:vec(<case>)                  => (variant case*)
                 | 0x70 t:<valtype>                        => (list t)
                 | 0x6f t*:vec(<valtype>)                  => (tuple t+)    (if |t*| > 0)
-                | 0x6e l*:vec(<label>)                    => (flags l+)    (if |l*| > 0)
-                | 0x6d l*:vec(<label>)                    => (enum l*)
+                | 0x6e l*:vec(<label'>)                   => (flags l+)    (if |l*| > 0)
+                | 0x6d l*:vec(<label'>)                   => (enum l*)
                 | 0x6b t:<valtype>                        => (option t)
                 | 0x6a t?:<valtype>? u?:<valtype>?        => (result t? (error u)?)
                 | 0x69 i:<typeidx>                        => (own i)
                 | 0x68 i:<typeidx>                        => (borrow i)
-labelvaltype  ::= l:<label> t:<valtype>                   => l t
-case          ::= l:<label> t?:<valtype>? 0x00            => (case l t?)
+labelvaltype  ::= l:<label'> t:<valtype>                  => l t
+case          ::= l:<label'> t?:<valtype>? 0x00           => (case l t?)
+label'        ::= len:<u32> l:<label>                     => l    (if len = |l|)
 <T>?          ::= 0x00                                    =>
                 | 0x01 t:<T>                              => t
 valtype       ::= i:<typeidx>                             => i
@@ -264,13 +246,12 @@ Notes:
 * Validation rejects `resourcetype` type definitions inside `componenttype` and
   `instancettype`. Thus, handle types inside a `componenttype` can only refer
   to resource types that are imported or exported.
-* The uniqueness validation rules for `importname` and `exportname`
-  described below are also applied at the instance- and component-type level.
+* All parameter labels, result labels, record field labels, variant case
+  labels, flag labels, enum case labels, component import names, component
+  export names, instance import names and instance export names must be
+  unique in their containing scope.
 * Validation of `externdesc` requires the various `typeidx` type constructors
   to match the preceding `sort`.
-* Validation of function parameter and result names, record field names,
-  variant case names, flag names, and enum case names requires that the name be
-  unique for the func, record, variant, flags, or enum type definition.
 * (The `0x00` immediate of `case` may be reinterpreted in the future as the
   `none` case of an optional immediate.)
 
@@ -327,20 +308,12 @@ flags are set.
 (See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
 in the explainer.)
 ```ebnf
-import      ::= in:<importname> ed:<externdesc>                      => (import in ed)
-export      ::= en:<exportname> si:<sortidx> ed?:<externdesc>?       => (export en si ed?)
-exportname  ::= 0x00 n:<name>                                        => n
-              | 0x01 i:<iid'>                                        => (interface i)
-iid'        ::= len:<u32> i:<iid>                                    => "i" (if len = |i|)
-importname  ::= en:<exportname>                                      => en
-              | 0x02 n:<name> s:<string> i?:<integrity'>?            => n (url s i?)
-              | 0x03 n:<name> s:<string> i?:<integrity'>?            => n (relative-url s i?)
-              | 0x04 n:<name> i:<integrity'>                         => n i
-              | 0x05 p:<pkgid'> i?:<integrity'>?                     => (locked-dep p i?)
-              | 0x06 p:<pkgidset'>                                   => (unlocked-dep p)
-pkgid'      ::= len:<u32> p:<pkgid>                                  => "p" (if len = |p|)
-pkgidset'   ::= len:<u32> p:<pkgidset>                               => "p" (if len = |p|)
-integrity'  ::= len:<u32> im:<integrity-metadata>                    => (integrity "im") (if len = |im|)
+import      ::= en:<importname'> ed:<externdesc>                     => (import in ed)
+export      ::= en:<exportname'> si:<sortidx> ed?:<externdesc>?      => (export en si ed?)
+importname' ::= <junk> len:<u32> in:<importname>                     => in  (if len = |in|)
+exportname' ::= <junk> len:<u32> en:<exportname>                     => en  (if len = |en|)
+junk        ::= 0x00
+              | 0x01
 ```
 
 Notes:
@@ -352,13 +325,26 @@ Notes:
   (which disallows core sorts other than `core module`). When the optional
   `externdesc` immediate is present, validation requires it to be a supertype
   of the inferred `externdesc` of the `sortidx`.
-* The `<name>`, `<iid>`, `<pkgid>` and `<pkgidset>` of imports must be relatively unique.
-* The `<name>` and `<iid>` of exports must be relatively unique.
-* `<iid>`, `<pkgid>` and `<pkgidset>` refer to the grammatical productions defined in
-  the [text format](#import-and-export-definitions).
+* `<importname>` and `<exportname>` refer to the productions defined in the
+  [text format](Explainer.md#import-and-export-definitions).
+* The `<importname>`s of a component must be unique and the `<exportname>`s of
+  a component must be unique as well (defined in terms of raw string equality).
+* Validation requires that annotated `plainname`s only occur on `func` imports
+  or exports and that the first label of a `[constructor]`, `[method]` or
+  `[static]` matches the `plainname` of a preceding `resource` import or
+  export, respectively, in the same scope (component, component type or
+  instance type).
+* Validation of `[constructor]` names requires that the `func` returns a
+  `(result (own $R))`, where `$R` is the resource labeled `r`.
+* Validation of `[method]` names requires the first parameter of the function
+  to be `(param "self" (borrow $R))`, where `$R` is the resource labeled `r`.
+* Validation of `[method]` and `[static]` names ensures that all field names
+  are disjoint.
 * `<valid semver>` is as defined by [https://semver.org](https://semver.org/)
 * `<integrity-metadata>` is as defined by the
   [SRI](https://www.w3.org/TR/SRI/#dfn-integrity-metadata) spec.
+* The `junk` byte is leftover from a previous iteration and will be removed at
+  the next breaking binary format change.
 
 ## Name Section
 

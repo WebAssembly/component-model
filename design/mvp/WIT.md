@@ -87,7 +87,7 @@ would correspond to:
 
 ```wasm
 (component
-  (import (interface "local:demo/host") (instance $host
+  (import "local:demo/host" (instance $host
     (export "log" (func (param "msg" string)))
   ))
   ;; ...
@@ -182,9 +182,8 @@ description of [`use`][use].
 
 An imported or exported interface corresponds to an imported or exported
 instance in the component model. Functions are equivalent to bare component
-functions.
-Additionally interfaces can be defined inline with an explicit kebab-name that
-avoids the need to have an out-of-line definition.
+functions. Additionally interfaces can be defined inline with an explicit
+[plain name] that avoids the need to have an out-of-line definition.
 
 ```wit
 package local:demo;
@@ -202,11 +201,11 @@ world your-world {
 }
 ```
 
-The kebab name of the `import` or `export` is the name of the corresponding item
-in the final component.
+The plain name of an `import` or `export` statement is used as the plain name
+of the final component `import` or `export` definition.
 
-In the component model imports to a component either use an ID or a
-kebab-name, and in WIT this is reflected in the syntax:
+In the component model imports to a component either use an plain or interface
+name, and in WIT this is reflected in the syntax:
 
 ```wit
 package local:demo;
@@ -222,10 +221,10 @@ world command {
   // generates an import of the ID `wasi:filesystem/types`
   import wasi:filesystem/types;
 
-  // generates an import of the kebab-name `foo`
+  // generates an import of the plain name `foo`
   import foo: func();
 
-  // generates an import of the kebab-name `bar`
+  // generates an import of the plain name `bar`
   import bar: interface {
     // ...
   }
@@ -235,6 +234,8 @@ world command {
 Kebab names cannot overlap and must be unique, even between imports and exports.
 IDs, however, can be both imported and exported. The same interface cannot be
 explicitly imported or exported twice.
+
+[Plain Name]: Explainer.md#import-and-export-definitions
 
 ### Union of Worlds with `include`
 
@@ -610,7 +611,7 @@ would generate this component:
 
 ```wasm
 (component
-  (import (interface "local:demo/shared") (instance $shared
+  (import "local:demo/shared" (instance $shared
     (type $metadata (record (; ... ;)))
     (export "metadata" (type (eq $metadata)))
   ))
@@ -744,11 +745,8 @@ defined within each language as well.
 ## WIT Identifiers
 [identifiers]: #wit-identifiers
 
-Identifiers in WIT documents are required to be valid component identifiers,
-meaning that they're "kebab cased". This currently is restricted to ascii
-characters and numbers that are `-` separated.
-
-For more information on this see the [binary format](./Binary.md).
+Identifiers in WIT documents are required to be valid plain or interface
+names, as defined by the [component model text format](Explainer.md#import-and-export-definitions).
 
 # Lexical structure
 [lexical-structure]: #lexical-structure
@@ -1308,8 +1306,8 @@ Component Model's definition of [`name`](Explainer.md).
 ## Identifiers
 
 Identifiers in `wit` can be defined with two different forms. The first is a
-[kebab-case] identifier defined by the [`name`](Explainer.md#instance-definitions)
-production in the Component Model text format.
+[kebab-case] [`label`](Explainer.md#import-and-export-names) production in the
+Component Model text format.
 
 ```wit
 foo: func(bar: u32);
@@ -1423,7 +1421,7 @@ can be packaged into a component as:
 ```wasm
 (component
   (type (export "types") (component
-    (export (interface "local:demo/types") (instance
+    (export "local:demo/types" (instance
       (export $file "file" (type (sub resource)))
       (export "[method]file.read" (func
         (param "self" (borrow $file)) (param "off" u32) (param "n" u32)
@@ -1436,11 +1434,11 @@ can be packaged into a component as:
     ))
   ))
   (type (export "namespace") (component
-    (import (interface "local:demo/types") (instance $types
+    (import "local:demo/types" (instance $types
       (export "file" (type (sub resource)))
     ))
     (alias export $types "file" (type $file))
-    (export (interface "local:demo/namespace") (instance
+    (export "local:demo/namespace" (instance
       (export "open" (func (param "name" string) (result (own $file))))
     ))
   ))
@@ -1489,16 +1487,15 @@ interface foo {
 is encoded as:
 ```wasm
 (component
-  (type $foo (component
-    (import (interface "wasi:http/types") (instance $types
+  (type (export "foo") (component
+    (import "wasi:http/types" (instance $types
       (export "request" (type (sub resource)))
     ))
     (alias export $types "request" (type $request))
-    (export (interface "local:demo/foo") (instance
+    (export "local:demo/foo" (instance
       (export "frob" (func (param "r" (own $request)) (result (own $request))))
     ))
   ))
-  (export "foo" (type $foo))
 )
 ```
 
@@ -1515,13 +1512,12 @@ world the-world {
 is encoded as:
 ```wasm
 (component
-  (type $the-world  (component
-    (export (interface "local:demo/the-world") (component
+  (type (export "the-world") (component
+    (export "local:demo/the-world" (component
       (export "test" (func))
       (export "run" (func))
     ))
   ))
-  (export "the-world" (type $the-world))
 )
 ```
 In the current version of WIT, the outer wrapping component-type will only ever
@@ -1546,20 +1542,18 @@ interface console {
 is encoded as:
 ```wasm
 (component
-  (type $the-world (component
-    (export (interface "local:demo/the-world") (component
-      (import (interface "local:demo/console") (instance
+  (type (export "the-world") (component
+    (export "local:demo/the-world" (component
+      (import "local:demo/console" (instance
         (export "log" (func (param "arg" string)))
       ))
     ))
   ))
-  (export "the-world" (type $the-world))
-  (type $console (component
-    (export (interface "local:demo/console") (instance
+  (type (export "console") (component
+    (export "local:demo/console" (instance
       (export "log" (func (param "arg" string)))
     ))
   ))
-  (export "console" (type $console))
 )
 ```
 This duplication is useful in the case of cross-package references or split
@@ -1594,47 +1588,44 @@ world proxy {
 are encoded as:
 ```wasm
 (component
-  (type $types (component
-    (export (interface "wasi:http/types") (instance
+  (type (export "types") (component
+    (export "wasi:http/types" (instance
       (export "request" (type (sub resource)))
       (export "response" (type (sub resource)))
       ...
     ))
   ))
-  (export "types" (type $types))
-  (type $handler (component
-    (import (interface "wasi:http/types") (instance $http-types
+  (type (export "handler") (component
+    (import "wasi:http/types" (instance $http-types
       (export "request" (type (sub resource)))
       (export "response" (type (sub resource)))
     ))
     (alias export $http-types "request" (type $request))
     (alias export $http-types "response" (type $response))
-    (export (interface "wasi:http/handler") (instance
+    (export "wasi:http/handler" (instance
       (export "handle" (func (param "r" (own $request)) (result (own $response))))
     ))
   ))
-  (export "handler" (type $handler))
-  (type $proxy (component
-    (export (interface "wasi:http/proxy") (component
-      (import (interface "wasi:logging/logger") (instance
+  (type (export "proxy") (component
+    (export "wasi:http/proxy" (component
+      (import "wasi:logging/logger" (instance
         ...
       ))
-      (import (interface "wasi:http/types") (instance $http-types
+      (import "wasi:http/types" (instance $http-types
         (export "request" (type (sub resource)))
         (export "response" (type (sub resource)))
         ...
       ))
       (alias export $http-types "request" (type $request))
       (alias export $http-types "response" (type $response))
-      (import (interface "wasi:http/handler") (instance
+      (import "wasi:http/handler" (instance
         (export "handle" (func (param "r" (own $request)) (result (own $response))))
       ))
-      (export (interface "wasi:http/handler") (instance
+      (export "wasi:http/handler" (instance
         (export "handle" (func (param "r" (own $request)) (result (own $response))))
       ))
     ))
   ))
-  (export "proxy" (type $proxy))
 )
 ```
 This examples shows how, in the context of concrete world (`wasi:http/proxy`),
