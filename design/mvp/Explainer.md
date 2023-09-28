@@ -14,7 +14,7 @@ JavaScript runtimes. For a more user-focussed explanation, take a look at the
   * [Canonical definitions](#canonical-definitions)
     * [Canonical ABI](#canonical-built-ins)
     * [Canonical built-ins](#canonical-built-ins)
-  * [Start definitions](#start-definitions)
+  * [Start definitions](#-start-definitions)
   * [Import and export definitions](#import-and-export-definitions)
 * [Component invariants](#component-invariants)
 * [JavaScript embedding](#JavaScript-embedding)
@@ -22,6 +22,15 @@ JavaScript runtimes. For a more user-focussed explanation, take a look at the
   * [ESM-integration](#ESM-integration)
 * [Examples](#examples)
 * [TODO](#TODO)
+
+By default, the features described in this explainer (as well as the supporting
+[Binary.md](Binary.md), [WIT.md](WIT.md) and [CanonicalABI.md](CanonicalABI.md))
+have been implemented and are included in the [WASI Preview 2] stability
+milestone. Features that are not part of Preview 2 are demarcated by one of the
+emoji symbols listed below; these emojis will be removed once they are
+implemented, considered stable and included in a future milestone:
+* 🪙: value imports/exports and component-level start function
+* 🪺: nested namespaces and packages in import/export names
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
 this repo merges and supersedes the [module-linking] and [interface-types]
@@ -63,7 +72,7 @@ definition ::= core-prefix(<core:module>)
              | <alias>
              | <type>
              | <canon>
-             | <start>
+             | <start> 🪺
              | <import>
              | <export>
 
@@ -197,7 +206,7 @@ instantiatearg ::= (with <string> <sortidx>)
 sortidx        ::= (<sort> <u32>)
 sort           ::= core <core:sort>
                  | func
-                 | value
+                 | value 🪙
                  | type
                  | component
                  | instance
@@ -221,7 +230,7 @@ future include `data`). Thus, component-level `sort` injects the full set
 of `core:sort`, so that they may be referenced (leaving it up to validation
 rules to throw out the core sorts that aren't allowed in various contexts).
 
-The `value` sort refers to a value that is provided and consumed during
+🪙 The `value` sort refers to a value that is provided and consumed during
 instantiation. How this works is described in the
 [start definitions](#start-definitions) section.
 
@@ -489,7 +498,7 @@ defvaltype    ::= bool
                 | float32 | float64
                 | char | string
                 | (record (field <label> <valtype>)+)
-                | (variant (case <id>? <label> <valtype>? (refines <id>)?)+)
+                | (variant (case <id>? <label> <valtype>?)+)
                 | (list <valtype>)
                 | (tuple <valtype>+)
                 | (flags <label>+)
@@ -520,7 +529,7 @@ externdesc    ::= (<sort> (type <u32>) )
                 | <functype>
                 | <componenttype>
                 | <instancetype>
-                | (value <valtype>)
+                | (value <valtype>) 🪙
                 | (type <typebound>)
 typebound     ::= (eq <typeidx>)
                 | (sub resource)
@@ -573,13 +582,6 @@ conditions mentioned above are enforced at runtime by the Component Model
 through these canonical definitions. The `typeidx` immediate of a handle type
 must refer to a `resource` type (described below) that statically classifies
 the particular kinds of resources the handle can point to.
-
-The [subtyping] between all these types is described in a separate
-[subtyping explainer](Subtyping.md). Of note here, though: the optional
-`refines` field in the `case`s of `variant`s is exclusively concerned with
-subtyping. In particular, a `variant` subtype can contain a `case` not present
-in the supertype if the subtype's `case` `refines` (directly or transitively)
-some `case` in the supertype.
 
 The sets of values allowed for the remaining *specialized value types* are
 defined by the following mapping:
@@ -649,7 +651,7 @@ references to out-of-line type definitions (via `(type <typeidx>)`) and inline
 type expressions that the text format desugars into out-of-line type
 definitions.
 
-The `value` case of `externdesc` describes a runtime value that is imported or
+🪙 The `value` case of `externdesc` describes a runtime value that is imported or
 exported at instantiation time as described in the
 [start definitions](#start-definitions) section below.
 
@@ -729,11 +731,7 @@ Like core modules, components have an up-front validation phase in which the
 definitions of a component are checked for basic consistency. Type checking
 is a central part of validation and, e.g., occurs when validating that the
 `with` arguments of an [`instantiate`](#instance-definitions) expression are
-type-compatible with the `import`s of the component being instantiated. To allow
-backwards-compatible API evolution, "compatibility" is defined in terms of a
-[subtyping] relation, saying that `t1` is "compatible" with `t2` when a value
-of type `t1` is *substitutable* for a value of `t2` without breaking any basic
-assumptions the receiver has about `t2` values.
+type-compatible with the `import`s of the component being instantiated.
 
 To incrementally describe how type-checking works, we'll start by asking how
 *type equality* works for non-resource, non-handle, local type definitions and
@@ -766,28 +764,42 @@ all 5 variations of `$ListListStringX` are considered equal since, after
 decoding, they all have the same AST.
 
 Next, the type equality relation on ASTs is relaxed to a more flexible
-subtyping relation. This subtyping relation is recursively defined starting
-with a set of base-case rules such as:
-* `u8` is a subtype of `u16`
-* `f32` is a subtype of `f64`
+[subtyping] relation. Currently, subtyping is only relaxed for `instance` and
+`component` types, but may be relaxed for more type constructors in the future
+to better support API Evolution (being careful to understand how subtyping
+manifests itself in the wide variety of source languages so that
+subtype-compatible updates don't inadvertantly break source-level clients).
 
-and then a set of inductive rules like:
-* If `t1` is a subtype of `t2`, `list t1` is a subtype of `list t2`
-* If `t1` is a subtype of `t2`, `option t1` is a subtype of `option t2`
-
-The full list of rules is in [`Subtyping.md`](Subtyping.md). The rules are
-defined so that a type-checking implementation can simply recurse on the ASTs
-of two types in tandem to determine at each node whether the "left-hand side" is
-a subtype of the "right-hand side". For example, the following component is
-valid because, using the rules just given, the decoded AST of `$L1` is a
-subtype of the decoded AST of `$L2`:
-```wasm
+Component and instance subtyping allows a subtype to export more and import
+less than is declared by the supertype, ignoring the exact order of imports and
+exports and considering only names. For example, here, `$I1` is a subtype of
+`$I2`:
+```wat
 (component
-  (import "v1" (value $v1 (list (list u8))))
-  (component $C
-    (import "v2" (value $v2 (list (list u16))))
-  )
-  (instance $c (instantiate $C (with "v2" (value $v1))))
+  (type $I1 (instance
+    (export "foo" (func))
+    (export "bar" (func))
+    (export "baz" (func))
+  ))
+  (type $I2 (instance
+    (export "bar" (func))
+    (export "foo" (func))
+  ))
+)
+```
+and `$C1` is a subtype of `$C2`:
+```wat
+(component
+  (type $C1 (component
+    (import "a" (func))
+    (export "x" (func))
+    (export "y" (func))
+  ))
+  (type $C2 (component
+    (import "a" (func))
+    (import "b" (func))
+    (export "x" (func))
+  ))
 )
 ```
 
@@ -1239,7 +1251,7 @@ See the [CanonicalABI.md](CanonicalABI.md#canonical-definitions) for detailed
 definitions of each of these built-ins and their interactions.
 
 
-### Start Definitions
+### 🪙 Start Definitions
 
 Like modules, components can have start functions that are called during
 instantiation. Unlike modules, components can call start functions at multiple
@@ -1306,19 +1318,22 @@ exported). The grammar for imports and exports is:
 import     ::= (import <importname> bind-id(<externdesc>))
 export     ::= (export <id>? <exportname> <sortidx> <externdesc>?)
 exportname ::= <name>
-             | (interface "<regid>")
+             | (interface "<iid>")
+iid        ::= <namespace><label><projection><version>?
+             | <namespace>+<label><projection>+<version>? 🪺
+namespace  ::= <label>:
+projection ::= /<label>
+version    ::= @<valid semver>
 importname ::= <exportname>
              | <name> (url <string> <integrity>?)
              | <name> (relative-url <string> <integrity>?)
              | <name> <integrity>
-             | (locked-dep "<regid>" <integrity>?)
-             | (unlocked-dep "<regidset>")
-regname    ::= <namespace>+<label><projection>*
-namespace  ::= <label>:
-projection ::= /<label>
-regid      ::= <regname><version>?
-regidset   ::= <regname><verrange>?
-version    ::= @<valid semver>
+             | (locked-dep "<pkgid>" <integrity>?)
+             | (unlocked-dep "<pkgidset>")
+pkgname    ::= <namespace><label>
+             | <namespace>+<label><projection>* 🪺
+pkgid      ::= <pkgname><version>?
+pkgidset   ::= <pkgname><verrange>?
 verrange   ::= <version>
              | @*
              | @{<verlower>}
@@ -1385,11 +1400,12 @@ host must locate the contents using the hash (e.g., using an [OCI Registry]).
 
 The "registry" referred to by dependency names serves to map a hierarchical
 name and version to either a component or an export of a component. For
-example, in the registry name `a:b:c/d/e/f`, `a:b:c` traverses a path
-through namespaces `a` and `b` to a component `c` and `/d/e/f` traverses the
-exports of `c` (where `d` and `e` must be component exports but `f` can be
-anything). Given this abstract definition, a number of concrete data sources
-can be interpreted by developer tooling as "registries":
+example, in the full generality of nested namespaces and packages (🪺),
+in a registry name `a:b:c/d/e/f`, `a:b:c` traverses a path through namespaces
+`a` and `b` to a component `c` and `/d/e/f` traverses the exports of `c` (where
+`d` and `e` must be component exports but `f` can be anything). Given this
+abstract definition, a number of concrete data sources can be interpreted by
+developer tooling as "registries":
 * a live registry (perhaps accessed via [`warg`])
 * a local filesystem directory (perhaps containing vendored dependencies)
 * a fixed set of host-provided functionality (see also the [built-in modules] proposal)
@@ -1415,8 +1431,8 @@ sequence of labels in a registry name can be translated to nested scopes in the
 source language, thereby leveraging existing namespacing in the registry to
 avoid conflicts in the source bindings. Note that, because of the mandatory `:`
 in registry names, the set of kebab names and registry names is disjoint and so
-no discriminant is required to distinguish between a `name` and `regname`; a
-plain `string` covers both cases.
+no discriminant is required to distinguish between a `name`, `iid` or `pkgid`;
+a plain `string` covers both cases.
 
 Components provide two options for naming exports, symmetric to the first two
 options for naming imports:
@@ -1609,7 +1625,7 @@ For example, the following component:
 ;; a.wasm
 (component
   (import "one" (func))
-  (import "two" (value string))
+  (import "two" (value string)) 🪙
   (import "three" (instance
     (export "four" (instance
       (export "five" (core module
@@ -1634,7 +1650,7 @@ could be successfully instantiated via:
 ```js
 WebAssembly.instantiateStreaming(fetch('./a.wasm'), {
   one: () => (),
-  two: "hi",
+  two: "hi", 🪙
   three: {
     four: {
       five: await WebAssembly.compileStreaming(fetch('./b.wasm'))
@@ -1878,6 +1894,7 @@ and will be added over the coming months to complete the MVP proposal:
 [stack-switching]: https://github.com/WebAssembly/stack-switching/blob/main/proposals/stack-switching/Overview.md
 [esm-integration]: https://github.com/WebAssembly/esm-integration/tree/main/proposals/esm-integration
 [gc]: https://github.com/WebAssembly/gc/blob/main/proposals/gc/MVP.md
+[WASI Preview 2]: https://github.com/WebAssembly/WASI/tree/main/preview2
 
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Canonical ABI]: CanonicalABI.md

@@ -883,7 +883,8 @@ convenience:
 toplevel-use-item ::= 'use' use-path ('as' id)? ';'
 
 use-path ::= id
-           | ( id ':' )+ id ( '/' id )+ ('@' valid-semver)?
+           | id ':' id '/' id ('@' valid-semver)?
+           | ( id ':' )+ id ( '/' id )+ ('@' valid-semver)? 🪺
 ```
 
 Here `use-path` is the ID used to refer to interfaces. The bare form `id`
@@ -892,6 +893,10 @@ refers to interfaces in package dependencies.
 
 The `as` syntax can be optionally used to specify a name that should be assigned
 to the interface. Otherwise the name is inferred from `use-path`.
+
+As a future extension, WIT, components and component registries may allow
+nesting both namespaces and packages, which would then generalize the syntax of
+`use-path` as suggested by the 🪺 suffixed rule.
 
 ## Item: `world`
 
