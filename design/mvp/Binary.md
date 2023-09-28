@@ -12,6 +12,8 @@ rules, but rather merge the minimal need-to-know elements of both, with just
 enough detail to create a prototype. A complete definition of the binary format
 and validation will be present in the [formal specification](../../spec/).
 
+See the [explainer introduction](Explainer.md) for an explanation of 🪙.
+
 
 ## Component Definitions
 
@@ -74,7 +76,7 @@ instantiatearg      ::= n:<string>  si:<sortidx>                           => (w
 sortidx             ::= sort:<sort> idx:<u32>                              => (sort idx)
 sort                ::= 0x00 cs:<core:sort>                                => core cs
                       | 0x01                                               => func
-                      | 0x02                                               => value
+                      | 0x02                                               => value 🪙
                       | 0x03                                               => type
                       | 0x04                                               => component
                       | 0x05                                               => instance
@@ -102,8 +104,8 @@ Notes:
   for aliases (below).
 * Validation of `core:instantiatearg` initially only allows the `instance`
   sort, but would be extended to accept other sorts as core wasm is extended.
-* Validation of `instantiate` requires each `<name>`, `<regid>` or
-  `<regidset>` in an `importname` in `c` to match a `string` in a `with`
+* Validation of `instantiate` requires each `<name>`, `<iid>`, `<pkgid>` or
+  `<pkgidset>` in an `importname` in `c` to match a `string` in a `with`
   argument and for the types to match.
 * When validating `instantiate`, after each individual type-import is supplied
   via `with`, the actual type supplied is immediately substituted for all uses
@@ -207,7 +209,7 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x69 i:<typeidx>                        => (own i)
                 | 0x68 i:<typeidx>                        => (borrow i)
 labelvaltype  ::= l:<label> t:<valtype>                   => l t
-case          ::= l:<label> t?:<valtype>? r?:<u32>?       => (case l t? (refines case-label[r])?)
+case          ::= l:<label> t?:<valtype>? 0x00            => (case l t?)
 <T>?          ::= 0x00                                    =>
                 | 0x01 t:<T>                              => t
 valtype       ::= i:<typeidx>                             => i
@@ -229,7 +231,7 @@ importdecl    ::= in:<importname> ed:<externdesc>         => (import in ed)
 exportdecl    ::= en:<exportname> ed:<externdesc>         => (export en ed)
 externdesc    ::= 0x00 0x11 i:<core:typeidx>              => (core module (type i))
                 | 0x01 i:<typeidx>                        => (func (type i))
-                | 0x02 t:<valtype>                        => (value t)
+                | 0x02 t:<valtype>                        => (value t) 🪙
                 | 0x03 b:<typebound>                      => (type b)
                 | 0x04 i:<typeidx>                        => (component (type i))
                 | 0x05 i:<typeidx>                        => (instance (type i))
@@ -269,9 +271,8 @@ Notes:
 * Validation of function parameter and result names, record field names,
   variant case names, flag names, and enum case names requires that the name be
   unique for the func, record, variant, flags, or enum type definition.
-* Validation of the optional `refines` clause of a variant case requires that
-  the case index is less than the current case's index (and therefore
-  cases are acyclic).
+* (The `0x00` immediate of `case` may be reinterpreted in the future as the
+  `none` case of an optional immediate.)
 
 
 ## Canonical Definitions
@@ -299,7 +300,7 @@ Notes:
   [`CanonicalABI.md`](CanonicalABI.md#canonical-definitions).
 
 
-## Start Definitions
+## 🪙 Start Definitions
 
 (See [Start Definitions](Explainer.md#start-definitions) in the explainer.)
 ```ebnf
@@ -329,15 +330,16 @@ in the explainer.)
 import      ::= in:<importname> ed:<externdesc>                      => (import in ed)
 export      ::= en:<exportname> si:<sortidx> ed?:<externdesc>?       => (export en si ed?)
 exportname  ::= 0x00 n:<name>                                        => n
-              | 0x01 ri:<regid'>                                     => (interface ri)
+              | 0x01 i:<iid'>                                        => (interface i)
+iid'        ::= len:<u32> i:<iid>                                    => "i" (if len = |i|)
 importname  ::= en:<exportname>                                      => en
               | 0x02 n:<name> s:<string> i?:<integrity'>?            => n (url s i?)
               | 0x03 n:<name> s:<string> i?:<integrity'>?            => n (relative-url s i?)
               | 0x04 n:<name> i:<integrity'>                         => n i
-              | 0x05 ri:<regid'> i?:<integrity'>?                    => (locked-dep ri i?)
-              | 0x06 ris:<regidset'>                                 => (unlocked-dep ris)
-regid'      ::= len:<u32> ri:<regid>                                 => "ri" (if len = |ri|)
-regidset'   ::= len:<u32> ris:<regidset>                             => "ris" (if len = |ris|)
+              | 0x05 p:<pkgid'> i?:<integrity'>?                     => (locked-dep p i?)
+              | 0x06 p:<pkgidset'>                                   => (unlocked-dep p)
+pkgid'      ::= len:<u32> p:<pkgid>                                  => "p" (if len = |p|)
+pkgidset'   ::= len:<u32> p:<pkgidset>                               => "p" (if len = |p|)
 integrity'  ::= len:<u32> im:<integrity-metadata>                    => (integrity "im") (if len = |im|)
 ```
 
@@ -350,9 +352,9 @@ Notes:
   (which disallows core sorts other than `core module`). When the optional
   `externdesc` immediate is present, validation requires it to be a supertype
   of the inferred `externdesc` of the `sortidx`.
-* The `<name>`, `<regid>` and `<regidset>` of imports must be relatively unique.
-* The `<name>` and `<regid>` of exports must be relatively unique.
-* `<regid>` and `<regidset>` refer to the grammatical productions defined in
+* The `<name>`, `<iid>`, `<pkgid>` and `<pkgidset>` of imports must be relatively unique.
+* The `<name>` and `<iid>` of exports must be relatively unique.
+* `<iid>`, `<pkgid>` and `<pkgidset>` refer to the grammatical productions defined in
   the [text format](#import-and-export-definitions).
 * `<valid semver>` is as defined by [https://semver.org](https://semver.org/)
 * `<integrity-metadata>` is as defined by the
