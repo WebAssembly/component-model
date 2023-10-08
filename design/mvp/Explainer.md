@@ -545,7 +545,7 @@ sets of abstract values:
 | `bool`                    | `true` and `false` |
 | `s8`, `s16`, `s32`, `s64` | integers in the range [-2<sup>N-1</sup>, 2<sup>N-1</sup>-1] |
 | `u8`, `u16`, `u32`, `u64` | integers in the range [0, 2<sup>N</sup>-1] |
-| `float32`, `float64`      | [IEEE754] floating-pointer numbers with a single, canonical "Not a Number" ([NaN]) value |
+| `float32`, `float64`      | [IEEE754] floating-point numbers |
 | `char`                    | [Unicode Scalar Values] |
 | `record`                  | heterogeneous [tuples] of named values |
 | `variant`                 | heterogeneous [tagged unions] of named values |
@@ -559,15 +559,6 @@ and lowering definitions*, which are introduced [below](#canonical-definitions).
 For example, while abstract `variant`s contain a list of `case`s labelled by
 name, canonical lifting and lowering map each case to an `i32` value starting
 at `0`.
-
-The `float32` and `float64` values have their NaNs canonicalized to a single
-value so that:
-1. consumers of NaN values are free to use the rest of the NaN payload for
-   optimization purposes (like [NaN boxing]) without needing to worry about
-   whether the NaN payload bits were significant; and
-2. producers of NaN values across component boundaries do not develop brittle
-   assumptions that NaN payload bits are preserved by the other side (since
-   they often aren't).
 
 The `own` and `borrow` value types are both *handle types*. Handles logically
 contain the opaque address of a resource and avoid copying the resource when
@@ -1666,7 +1657,7 @@ At a high level, the additional coercions would be:
 | `u8`, `u16`, `u32` | as a Number value | `ToUint8`, `ToUint16`, `ToUint32` |
 | `s64` | as a BigInt value | `ToBigInt64` |
 | `u64` | as a BigInt value | `ToBigUint64` |
-| `float32`, `float64` | as a Number, mapping the canonical NaN to [JS NaN] | `ToNumber` mapping [JS NaN] to the canonical NaN |
+| `float32`, `float64` | as a Number value | `ToNumber` |
 | `char` | same as [`USVString`] | same as [`USVString`], throw if the USV length is not 1 |
 | `record` | TBD: maybe a [JS Record]? | same as [`dictionary`] |
 | `variant` | see below | see below |
@@ -1848,7 +1839,6 @@ and will be added over the coming months to complete the MVP proposal:
 [`enum`]: https://webidl.spec.whatwg.org/#es-enumeration
 [`T?`]: https://webidl.spec.whatwg.org/#es-nullable-type
 [`Get`]: https://tc39.es/ecma262/#sec-get-o-p
-[JS NaN]: https://tc39.es/ecma262/#sec-ecmascript-language-types-number-type
 [Import Reflection]: https://github.com/tc39-transfer/proposal-import-reflection
 [Module Record]: https://tc39.es/ecma262/#sec-abstract-module-records
 [Module Specifier]: https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ModuleSpecifier
@@ -1864,8 +1854,6 @@ and will be added over the coming months to complete the MVP proposal:
 [Closure]: https://en.wikipedia.org/wiki/Closure_(computer_programming)
 [Empty Type]: https://en.wikipedia.org/w/index.php?title=Empty_type
 [IEEE754]: https://en.wikipedia.org/wiki/IEEE_754
-[NaN]: https://en.wikipedia.org/wiki/NaN
-[NaN Boxing]: https://wingolog.org/archives/2011/05/18/value-representation-in-javascript-implementations
 [Unicode Scalar Values]: https://unicode.org/glossary/#unicode_scalar_value
 [Tuples]: https://en.wikipedia.org/wiki/Tuple
 [Tagged Unions]: https://en.wikipedia.org/wiki/Tagged_union

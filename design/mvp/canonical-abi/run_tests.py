@@ -154,18 +154,32 @@ test_pairs(Char(), [(0xE000,'\uE000'), (0x10FFFF,'\U0010FFFF'), (0x110000,None),
 test_pairs(Enum(['a','b']), [(0,{'a':None}), (1,{'b':None}), (2,None)])
 
 def test_nan32(inbits, outbits):
-  f = lift_flat(mk_cx(), ValueIter([Value('f32', reinterpret_i32_as_float(inbits))]), Float32())
-  assert(reinterpret_float_as_i32(f) == outbits)
+  origf = reinterpret_i32_as_float(inbits)
+  f = lift_flat(mk_cx(), ValueIter([Value('f32', origf)]), Float32())
+  if DETERMINISTIC_PROFILE:
+    assert(reinterpret_float_as_i32(f) == outbits)
+  else:
+    assert(not math.isnan(origf) or math.isnan(f))
   cx = mk_cx(int.to_bytes(inbits, 4, 'little'))
   f = load(cx, 0, Float32())
-  assert(reinterpret_float_as_i32(f) == outbits)
+  if DETERMINISTIC_PROFILE:
+    assert(reinterpret_float_as_i32(f) == outbits)
+  else:
+    assert(not math.isnan(origf) or math.isnan(f))
 
 def test_nan64(inbits, outbits):
-  f = lift_flat(mk_cx(), ValueIter([Value('f64', reinterpret_i64_as_float(inbits))]), Float64())
-  assert(reinterpret_float_as_i64(f) == outbits)
+  origf = reinterpret_i64_as_float(inbits)
+  f = lift_flat(mk_cx(), ValueIter([Value('f64', origf)]), Float64())
+  if DETERMINISTIC_PROFILE:
+    assert(reinterpret_float_as_i64(f) == outbits)
+  else:
+    assert(not math.isnan(origf) or math.isnan(f))
   cx = mk_cx(int.to_bytes(inbits, 8, 'little'))
   f = load(cx, 0, Float64())
-  assert(reinterpret_float_as_i64(f) == outbits)
+  if DETERMINISTIC_PROFILE:
+    assert(reinterpret_float_as_i64(f) == outbits)
+  else:
+    assert(not math.isnan(origf) or math.isnan(f))
 
 test_nan32(0x7fc00000, CANONICAL_FLOAT32_NAN)
 test_nan32(0x7fc00001, CANONICAL_FLOAT32_NAN)
