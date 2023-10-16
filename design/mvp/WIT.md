@@ -1423,7 +1423,7 @@ can be packaged into a component as:
 ```wasm
 (component
   (type (export "types") (component
-    (type (export (interface "local:demo/types")) (instance
+    (export (interface "local:demo/types") (instance
       (export $file "file" (type (sub resource)))
       (export "[method]file.read" (func
         (param "self" (borrow $file)) (param "off" u32) (param "n" u32)
@@ -1440,7 +1440,7 @@ can be packaged into a component as:
       (export "file" (type (sub resource)))
     ))
     (alias export $types "file" (type $file))
-    (type (export (interface "local:demo/namespace")) (instance
+    (export (interface "local:demo/namespace") (instance
       (export "open" (func (param "name" string) (result (own $file))))
     ))
   ))
@@ -1450,7 +1450,7 @@ This example illustrates the basic structure of interfaces:
 * Each top-level WIT definition (in this example: `types` and `namespace`)
   turns into a type export of the same kebab-name.
 * Each WIT interface is mapped to a component-type that exports an
-  instance-type with a fully-qualified interface name (in this example:
+  instance with a fully-qualified interface name (in this example:
   `local:demo/types` and `local:demo/namespace`). Note that this nested
   scheme allows a single component to both define and implement a WIT interface
   without name conflict.
@@ -1494,17 +1494,16 @@ is encoded as:
       (export "request" (type (sub resource)))
     ))
     (alias export $types "request" (type $request))
-    (type $foo' (instance
+    (export (interface "local:demo/foo") (instance
       (export "frob" (func (param "r" (own $request)) (result (own $request))))
     ))
-    (export (interface "local:demo/foo") (type (eq $foo')))
   ))
   (export "foo" (type $foo))
 )
 ```
 
 Worlds are encoded similarly to interfaces, but replace the inner exported
-instance-type with an inner exported *component*-type. For example, this WIT:
+instance-type with an inner exported *component*. For example, this WIT:
 ```wit
 package local:demo;
 
@@ -1517,11 +1516,10 @@ is encoded as:
 ```wasm
 (component
   (type $the-world  (component
-    (type $the-world' (component
+    (export (interface "local:demo/the-world") (component
       (export "test" (func))
       (export "run" (func))
     ))
-    (export (interface "local:demo/the-world") (type (eq $the-world')))
   ))
   (export "the-world" (type $the-world))
 )
@@ -1549,19 +1547,17 @@ is encoded as:
 ```wasm
 (component
   (type $the-world (component
-    (type $the-world'  (component
+    (export (interface "local:demo/the-world") (component
       (import (interface "local:demo/console") (instance
         (export "log" (func (param "arg" string)))
       ))
     ))
-    (export (interface "local:demo/the-world") (type (eq $the-world')))
   ))
   (export "the-world" (type $the-world))
   (type $console (component
-    (type $console' (instance
+    (export (interface "local:demo/console") (instance
       (export "log" (func (param "arg" string)))
     ))
-    (export (interface "local:demo/console") (type (eq $console')))
   ))
   (export "console" (type $console))
 )
@@ -1599,12 +1595,11 @@ are encoded as:
 ```wasm
 (component
   (type $types (component
-    (type $types' (instance
+    (export (interface "wasi:http/types") (instance
       (export "request" (type (sub resource)))
       (export "response" (type (sub resource)))
       ...
     ))
-    (export (interface "wasi:http/types") (type (eq $types')))
   ))
   (export "types" (type $types))
   (type $handler (component
@@ -1614,14 +1609,13 @@ are encoded as:
     ))
     (alias export $http-types "request" (type $request))
     (alias export $http-types "response" (type $response))
-    (type $handler' (instance
+    (export (interface "wasi:http/handler") (instance
       (export "handle" (func (param "r" (own $request)) (result (own $response))))
     ))
-    (export (interface "wasi:http/handler") (type (eq $handler')))
   ))
   (export "handler" (type $handler))
   (type $proxy (component
-    (type $proxy' (component
+    (export (interface "wasi:http/proxy") (component
       (import (interface "wasi:logging/logger") (instance
         ...
       ))
@@ -1639,7 +1633,6 @@ are encoded as:
         (export "handle" (func (param "r" (own $request)) (result (own $response))))
       ))
     ))
-    (export (interface "wasi:http/proxy") (type (eq $proxy')))
   ))
   (export "proxy" (type $proxy))
 )
