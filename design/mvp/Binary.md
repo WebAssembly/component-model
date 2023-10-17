@@ -310,10 +310,8 @@ in the explainer.)
 ```ebnf
 import      ::= en:<importname'> ed:<externdesc>                     => (import in ed)
 export      ::= en:<exportname'> si:<sortidx> ed?:<externdesc>?      => (export en si ed?)
-importname' ::= <junk> len:<u32> in:<importname>                     => in  (if len = |in|)
-exportname' ::= <junk> len:<u32> en:<exportname>                     => en  (if len = |en|)
-junk        ::= 0x00
-              | 0x01
+importname' ::= 0x00 len:<u32> in:<importname>                       => in  (if len = |in|)
+exportname' ::= 0x00 len:<u32> en:<exportname>                       => en  (if len = |en|)
 ```
 
 Notes:
@@ -343,8 +341,6 @@ Notes:
 * `<valid semver>` is as defined by [https://semver.org](https://semver.org/)
 * `<integrity-metadata>` is as defined by the
   [SRI](https://www.w3.org/TR/SRI/#dfn-integrity-metadata) spec.
-* The `junk` byte is leftover from a previous iteration and will be removed at
-  the next breaking binary format change.
 
 ## Name Section
 
