@@ -7,6 +7,7 @@ JavaScript runtimes. For a more user-focussed explanation, take a look at the
 
 * [Grammar](#grammar)
   * [Component definitions](#component-definitions)
+    * [Index spaces](#index-spaces)
   * [Instance definitions](#instance-definitions)
   * [Alias definitions](#alias-definitions)
   * [Type definitions](#type-definitions)
@@ -127,6 +128,59 @@ This top-level component roots a tree with 4 modules and 1 component as
 leaves. However, in the absence of any `instance` definitions (introduced
 next), nothing will be instantiated or executed at runtime; everything here is
 dead code.
+
+
+#### Index Spaces
+
+[Like Core WebAssembly][Core Indices], the Component Model places each
+`<definition>` into one of a fixed set of *index spaces*, allowing the
+definition to be referred to by subsequent definitions (in the text and binary
+format) via a nonnegative integral *index*. When defining, validating and
+executing a component, there are 5 component-level index spaces:
+* (component) functions
+* (component) values
+* (component) types
+* component instances
+* components
+
+and 7 core index spaces:
+* (core) functions
+* (core) tables
+* (core) memories
+* (core) globals
+* (core) types
+* module instances
+* modules
+
+for a total of 12 index spaces that need to be maintained by an implementation
+when, e.g., validating a component. These 12 index spaces correspond 1:1 with
+the terminals of the `<sort>` production defined below and thus "sort" and
+"index space" can be used interchangeably.
+
+Also [like Core WebAssembly][Core Identifiers], the Component Model text format
+allows *identifiers* to be used in place of these indices, which are resolved
+when parsing into indices in the AST (upon which validation and execution is
+defined). Thus, the following two components are equivalent:
+```wasm
+(component
+  (core module (; empty ;))
+  (component   (; empty ;))
+  (core module (; empty ;))
+  (export "C" (component 0))
+  (export "M1" (core module 0))
+  (export "M2" (core module 1))
+)
+```
+```wasm
+(component
+  (core module $M1 (; empty ;))
+  (component $C    (; empty ;))
+  (core module $M2 (; empty ;))
+  (export "C" (component $C))
+  (export "M1" (core module $M1))
+  (export "M2" (core module $M2))
+)
+```
 
 
 ### Instance Definitions
@@ -1800,6 +1854,8 @@ and will be added over the coming months to complete the MVP proposal:
 [Structure Section]: https://webassembly.github.io/spec/core/syntax/index.html
 [Text Format Section]: https://webassembly.github.io/spec/core/text/index.html
 [Binary Format Section]: https://webassembly.github.io/spec/core/binary/index.html
+[Core Indices]: https://webassembly.github.io/spec/core/syntax/modules.html#indices
+[Core Identifiers]: https://webassembly.github.io/spec/core/text/values.html#text-id
 
 [Index Space]: https://webassembly.github.io/spec/core/syntax/modules.html#indices
 [Abbreviations]: https://webassembly.github.io/spec/core/text/conventions.html#abbreviations
