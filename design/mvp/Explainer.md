@@ -143,12 +143,16 @@ executing a component, there are 5 component-level index spaces:
 * component instances
 * components
 
-and 7 core index spaces:
+5 core index spaces that also exist in WebAssembly 1.0:
 * (core) functions
 * (core) tables
 * (core) memories
 * (core) globals
 * (core) types
+
+and 2 additional core index spaces that contain core definition introduced by
+the Component Model that are not in WebAssembly 1.0 (yet: the [module-linking]
+proposal would add them):
 * module instances
 * modules
 
