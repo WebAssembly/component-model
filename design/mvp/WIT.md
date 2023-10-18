@@ -1503,7 +1503,7 @@ is encoded as:
 ```
 
 Worlds are encoded similarly to interfaces, but replace the inner exported
-instance-type with an inner exported *component*. For example, this WIT:
+instance with an inner exported *component*. For example, this WIT:
 ```wit
 package local:demo;
 
