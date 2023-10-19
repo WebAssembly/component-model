@@ -133,7 +133,7 @@ dead code.
 #### Index Spaces
 
 [Like Core WebAssembly][Core Indices], the Component Model places each
-`<definition>` into one of a fixed set of *index spaces*, allowing the
+`definition` into one of a fixed set of *index spaces*, allowing the
 definition to be referred to by subsequent definitions (in the text and binary
 format) via a nonnegative integral *index*. When defining, validating and
 executing a component, there are 5 component-level index spaces:
@@ -158,7 +158,7 @@ proposal would add them):
 
 for a total of 12 index spaces that need to be maintained by an implementation
 when, e.g., validating a component. These 12 index spaces correspond 1:1 with
-the terminals of the `<sort>` production defined below and thus "sort" and
+the terminals of the `sort` production defined below and thus "sort" and
 "index space" can be used interchangeably.
 
 Also [like Core WebAssembly][Core Identifiers], the Component Model text format
