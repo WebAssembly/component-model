@@ -168,8 +168,10 @@ core:exportdecl  ::= n:<core:name> d:<core:importdesc>  => (export n d)
 ```
 Notes:
 * Reused Core binary rules: [`core:import`], [`core:importdesc`], [`core:functype`]
-* Validation of `core:moduledecl` (currently) rejects `core:moduletype` definitions
-  inside `type` declarators (i.e., nested core module types).
+* Validation of `core:moduledecl` rejects `core:moduletype` definitions
+  and `outer` aliases of `core:moduletype` definitions inside `type`
+  declarators. Thus, as an invariant, when validating a `core:moduletype`, the
+  core type index space will not contain any core module types.
 * As described in the explainer, each module type is validated with an
   initially-empty type index space.
 * `alias` declarators currently only allow `outer` `type` aliases but
