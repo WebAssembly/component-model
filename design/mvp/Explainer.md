@@ -477,11 +477,12 @@ where strip-id(X) parses '(' sort Y ')' when X parses '(' sort <id>? Y ')'
 ```
 
 Here, `core:deftype` (short for "defined type") is inherited from the [gc]
-proposal and extended with a `module` type constructor. If module-linking is
+proposal and extended with a `module` type constructor. If [module-linking] is
 added to Core WebAssembly, an `instance` type constructor would be added as
 well but, for now, it's left out since it's unnecessary. Also, in the MVP,
-validation will reject nested `core:moduletype`, since, before module-linking,
-core modules cannot themselves import or export other core modules.
+validation will reject `core:moduletype` defining or aliasing other
+`core:moduletype`s, since, before module-linking, core modules cannot
+themselves import or export other core modules.
 
 The body of a module type contains an ordered list of "module declarators"
 which describe, at a type level, the imports and exports of the module. In a
