@@ -1194,7 +1194,7 @@ Specifically, the syntax for a `resource` definition is:
 ```ebnf
 resource-item ::= 'resource' id ';'
                 | 'resource' id '{' resource-method* '}'
-resource-method ::= func-item ';'
+resource-method ::= func-item
                   | id ':' 'static' func-type ';'
                   | 'constructor' param-list ';'
 ```
