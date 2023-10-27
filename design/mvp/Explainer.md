@@ -1510,7 +1510,7 @@ As an example, the following component uses all 9 cases of imports and exports:
   (import "integrity=<sha256-Y3BsI4l...>" (component ...))
   ... impl
   (export "wasi:http/handler" (instance $http_handler_impl))
-  (export "get-JSON" (func $get_json_impl (result string)))
+  (export "get-JSON" (func $get_json_impl))
 )
 ```
 Here, `custom-hook` and `get-JSON` are plain names for functions whose semantic
