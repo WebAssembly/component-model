@@ -1364,11 +1364,11 @@ interfacename ::= <namespace> <label> <projection> <version>?
 namespace     ::= <label> ':'
 projection    ::= '/' <label>
 version       ::= '@' <valid semver>
-depname       ::= 'unlocked-dep=<' <pkgidset> '>'
-                | 'locked-dep=<' <pkgid> '>' ( ',' <hashname> )?
-pkgidset      ::= <pkgname> <verrange>?
-pkgid         ::= <pkgname> <version>?
-pkgname       ::= <namespace> <label>
+depname       ::= 'unlocked-dep=<' <pkgnamequery> '>'
+                | 'locked-dep=<' <pkgname> '>' ( ',' <hashname> )?
+pkgnamequery  ::= <pkgpath> <verrange>?
+pkgname       ::= <pkgpath> <version>?
+pkgpath       ::= <namespace> <label>
                 | <namespace>+ <label> <projection>* 🪺
 verrange      ::= '@*'
                 | '@{' <verlower> '}'
