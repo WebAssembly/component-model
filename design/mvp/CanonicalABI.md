@@ -442,8 +442,8 @@ def load(cx, ptr, t):
     case S16()          : return load_int(cx, ptr, 2, signed=True)
     case S32()          : return load_int(cx, ptr, 4, signed=True)
     case S64()          : return load_int(cx, ptr, 8, signed=True)
-    case Float32()      : return maybe_scramble_nan32(reinterpret_i32_as_float(load_int(cx, ptr, 4)))
-    case Float64()      : return maybe_scramble_nan64(reinterpret_i64_as_float(load_int(cx, ptr, 8)))
+    case Float32()      : return reinterpret_i32_as_float(load_int(cx, ptr, 4))
+    case Float64()      : return reinterpret_i64_as_float(load_int(cx, ptr, 8))
     case Char()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
     case String()       : return load_string(cx, ptr)
     case List(t)        : return load_list(cx, ptr, t)
@@ -480,32 +480,37 @@ the [deterministic profile], NaNs are canonicalized to a particular NaN
 bit-pattern.
 ```python
 DETERMINISTIC_PROFILE = False # or True
-THE_HOST_WANTS_TO = True # or False
 CANONICAL_FLOAT32_NAN = 0x7fc00000
 CANONICAL_FLOAT64_NAN = 0x7ff8000000000000
 
 def maybe_scramble_nan32(f):
   if math.isnan(f):
     if DETERMINISTIC_PROFILE:
-      f = reinterpret_i32_as_float(CANONICAL_FLOAT32_NAN)
-    elif THE_HOST_WANTS_TO:
-      f = reinterpret_i32_as_float(random_nan_bits(32, 8))
+      f = core_f32_reinterpret_i32(CANONICAL_FLOAT32_NAN)
+    else:
+      f = core_f32_reinterpret_i32(random_nan_bits(32, 8))
     assert(math.isnan(f))
   return f
 
 def maybe_scramble_nan64(f):
   if math.isnan(f):
     if DETERMINISTIC_PROFILE:
-      f = reinterpret_i64_as_float(CANONICAL_FLOAT64_NAN)
-    elif THE_HOST_WANTS_TO:
-      f = reinterpret_i64_as_float(random_nan_bits(64, 11))
+      f = core_f64_reinterpret_i64(CANONICAL_FLOAT64_NAN)
+    else:
+      f = core_f64_reinterpret_i64(random_nan_bits(64, 11))
     assert(math.isnan(f))
   return f
 
 def reinterpret_i32_as_float(i):
-  return struct.unpack('!f', struct.pack('!I', i))[0] # f32.reinterpret_i32
+  return maybe_scramble_nan32(core_f32_reinterpret_i32(i))
 
 def reinterpret_i64_as_float(i):
+  return maybe_scramble_nan64(core_f64_reinterpret_i64(i))
+
+def core_f32_reinterpret_i32(i):
+  return struct.unpack('!f', struct.pack('!I', i))[0] # f32.reinterpret_i32
+
+def core_f64_reinterpret_i64(i):
   return struct.unpack('!d', struct.pack('!Q', i))[0] # f64.reinterpret_i64
 
 def random_nan_bits(total_bits, exponent_bits):
@@ -703,8 +708,8 @@ def store(cx, v, t, ptr):
     case S16()          : store_int(cx, v, ptr, 2, signed=True)
     case S32()          : store_int(cx, v, ptr, 4, signed=True)
     case S64()          : store_int(cx, v, ptr, 8, signed=True)
-    case Float32()      : store_int(cx, reinterpret_float_as_i32(maybe_scramble_nan32(v)), ptr, 4)
-    case Float64()      : store_int(cx, reinterpret_float_as_i64(maybe_scramble_nan64(v)), ptr, 8)
+    case Float32()      : store_int(cx, reinterpret_float_as_i32(v), ptr, 4)
+    case Float64()      : store_int(cx, reinterpret_float_as_i64(v), ptr, 8)
     case Char()         : store_int(cx, char_to_i32(v), ptr, 4)
     case String()       : store_string(cx, v, ptr)
     case List(t)        : store_list(cx, v, ptr, t)
@@ -728,9 +733,15 @@ Floats are stored directly into memory (after the NaN-scrambling described
 above):
 ```python
 def reinterpret_float_as_i32(f):
-  return struct.unpack('!I', struct.pack('!f', f))[0] # i32.reinterpret_f32
+  return core_i32_reinterpret_f32(maybe_scramble_nan32(v))
 
 def reinterpret_float_as_i64(f):
+  return core_i64_reinterpret_f64(maybe_scramble_nan64(v))
+
+def core_i32_reinterpret_f32(f):
+  return struct.unpack('!I', struct.pack('!f', f))[0] # i32.reinterpret_f32
+
+def core_i64_reinterpret_f64(f):
   return struct.unpack('!Q', struct.pack('!d', f))[0] # i64.reinterpret_f64
 ```
 
