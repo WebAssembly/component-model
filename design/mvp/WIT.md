@@ -132,10 +132,18 @@ interfaces are well-formed and acyclic.
 [worlds]: #wit-worlds
 
 WIT packages can contain `world` definitions at the top-level in addition to
-[`interface`][interfaces] definitions. A world is a complete description of
-both imports and exports of a component. A world can be thought of as an
-equivalent of a `component` type in the component model. For example this
-world:
+[`interface`][interfaces] definitions.
+
+Conceptually, a world encapsulates the full spectrum of interaction capabilities for a component.
+There are two perspectives looking at a world:
+
+- The guest's perspective, a world that it targets describes all
+of the imports it is capable of calling and all the exports it is required to provide. A guest `component` may provide more exports than what the world requires.
+- The host's perspective, a world that it targets describes all of the imports it is required to provide and all the exports it is capable of calling. The host may provide more imports than what the world requires.
+
+A world can be thought of as an equivalent of a `component` type in the component model
+
+For example this world:
 
 ```wit
 package local:demo;
