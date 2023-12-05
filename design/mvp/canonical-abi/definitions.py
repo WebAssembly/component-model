@@ -336,7 +336,7 @@ class HandleTable:
   free: [int]
 
   def __init__(self):
-    self.array = []
+    self.array = [None]
     self.free = []
 
   def get(self, i):
@@ -351,6 +351,7 @@ class HandleTable:
       self.array[i] = h
     else:
       i = len(self.array)
+      trap_if(i >= 2**30)
       self.array.append(h)
     return i
 

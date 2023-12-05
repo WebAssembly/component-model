@@ -350,7 +350,7 @@ class HandleTable:
   free: [int]
 
   def __init__(self):
-    self.array = []
+    self.array = [None]
     self.free = []
 
   def get(self, i):
@@ -361,7 +361,9 @@ class HandleTable:
 The `HandleTable` class maintains a dense array of handles that can contain
 holes created by the `remove` method (defined below). When handles are accessed
 (by lifting and `resource.rep`), there are thus both a bounds check and hole
-check necessary.
+check necessary. Upon initialization, table element `0` is allocated and set to
+`None`, effectively reserving index `0` which is both useful for catching
+null/uninitialized accesses and allowing `0` to serve as a sentinel value.
 
 The `add` and `remove` methods work together to maintain a free list of holes
 that are used in preference to growing the table. The free list is represented
@@ -375,6 +377,7 @@ free list in the free elements of `array`.
       self.array[i] = h
     else:
       i = len(self.array)
+      trap_if(i >= 2**30)
       self.array.append(h)
     return i
 
@@ -384,6 +387,9 @@ free list in the free elements of `array`.
     self.free.append(i)
     return h
 ```
+The handle index limit of `2**20` ensures that the high 2 bits of handle
+indices are unset and available for other use in guest code (e.g., for tagging,
+packed words or sentinel values).
 
 Finally, we can define `HandleTables` (plural) as simply a wrapper around
 a mutable mapping from `ResourceType` to `HandleTable`:
