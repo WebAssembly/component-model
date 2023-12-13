@@ -387,7 +387,7 @@ free list in the free elements of `array`.
     self.free.append(i)
     return h
 ```
-The handle index limit of `2**20` ensures that the high 2 bits of handle
+The handle index limit of `2**30` ensures that the high 2 bits of handle
 indices are unset and available for other use in guest code (e.g., for tagging,
 packed words or sentinel values).
 
