@@ -435,10 +435,10 @@ def decode_i64_as_float(i):
   return canonicalize_nan64(core_f64_reinterpret_i64(i))
 
 def core_f32_reinterpret_i32(i):
-  return struct.unpack('!f', struct.pack('!I', i))[0] # f32.reinterpret_i32
+  return struct.unpack('<f', struct.pack('<I', i))[0] # f32.reinterpret_i32
 
 def core_f64_reinterpret_i64(i):
-  return struct.unpack('!d', struct.pack('!Q', i))[0] # f64.reinterpret_i64
+  return struct.unpack('<d', struct.pack('<Q', i))[0] # f64.reinterpret_i64
 
 def convert_i32_to_char(cx, i):
   trap_if(i >= 0x110000)
@@ -611,10 +611,10 @@ def encode_float_as_i64(f):
   return core_i64_reinterpret_f64(maybe_scramble_nan64(f))
 
 def core_i32_reinterpret_f32(f):
-  return struct.unpack('!I', struct.pack('!f', f))[0] # i32.reinterpret_f32
+  return struct.unpack('<I', struct.pack('<f', f))[0] # i32.reinterpret_f32
 
 def core_i64_reinterpret_f64(f):
-  return struct.unpack('!Q', struct.pack('!d', f))[0] # i64.reinterpret_f64
+  return struct.unpack('<Q', struct.pack('<d', f))[0] # i64.reinterpret_f64
 
 def char_to_i32(c):
   i = ord(c)
