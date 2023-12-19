@@ -483,29 +483,23 @@ DETERMINISTIC_PROFILE = False # or True
 CANONICAL_FLOAT32_NAN = 0x7fc00000
 CANONICAL_FLOAT64_NAN = 0x7ff8000000000000
 
-def maybe_scramble_nan32(f):
+def canonicalize_nan32(f):
   if math.isnan(f):
-    if DETERMINISTIC_PROFILE:
-      f = core_f32_reinterpret_i32(CANONICAL_FLOAT32_NAN)
-    else:
-      f = core_f32_reinterpret_i32(random_nan_bits(32, 8))
+    f = core_f32_reinterpret_i32(CANONICAL_FLOAT32_NAN)
     assert(math.isnan(f))
   return f
 
-def maybe_scramble_nan64(f):
+def canonicalize_nan64(f):
   if math.isnan(f):
-    if DETERMINISTIC_PROFILE:
-      f = core_f64_reinterpret_i64(CANONICAL_FLOAT64_NAN)
-    else:
-      f = core_f64_reinterpret_i64(random_nan_bits(64, 11))
+    f = core_f64_reinterpret_i64(CANONICAL_FLOAT64_NAN)
     assert(math.isnan(f))
   return f
 
 def reinterpret_i32_as_float(i):
-  return maybe_scramble_nan32(core_f32_reinterpret_i32(i))
+  return canonicalize_nan32(core_f32_reinterpret_i32(i))
 
 def reinterpret_i64_as_float(i):
-  return maybe_scramble_nan64(core_f64_reinterpret_i64(i))
+  return canonicalize_nan64(core_f64_reinterpret_i64(i))
 
 def core_f32_reinterpret_i32(i):
   return struct.unpack('!f', struct.pack('!I', i))[0] # f32.reinterpret_i32
@@ -732,6 +726,24 @@ def store_int(cx, v, ptr, nbytes, signed = False):
 Floats are stored directly into memory (after the NaN-scrambling described
 above):
 ```python
+def maybe_scramble_nan32(f):
+  if math.isnan(f):
+    if DETERMINISTIC_PROFILE:
+      f = core_f32_reinterpret_i32(CANONICAL_FLOAT32_NAN)
+    else:
+      f = core_f32_reinterpret_i32(random_nan_bits(32, 8))
+    assert(math.isnan(f))
+  return f
+
+def maybe_scramble_nan64(f):
+  if math.isnan(f):
+    if DETERMINISTIC_PROFILE:
+      f = core_f64_reinterpret_i64(CANONICAL_FLOAT64_NAN)
+    else:
+      f = core_f64_reinterpret_i64(random_nan_bits(64, 11))
+    assert(math.isnan(f))
+  return f
+
 def reinterpret_float_as_i32(f):
   return core_i32_reinterpret_f32(maybe_scramble_nan32(v))
 
@@ -1192,8 +1204,8 @@ def lift_flat(cx, vi, t):
     case S16()          : return lift_flat_signed(vi, 32, 16)
     case S32()          : return lift_flat_signed(vi, 32, 32)
     case S64()          : return lift_flat_signed(vi, 64, 64)
-    case Float32()      : return maybe_scramble_nan32(vi.next('f32'))
-    case Float64()      : return maybe_scramble_nan64(vi.next('f64'))
+    case Float32()      : return canonicalize_nan32(vi.next('f32'))
+    case Float64()      : return canonicalize_nan64(vi.next('f64'))
     case Char()         : return convert_i32_to_char(cx, vi.next('i32'))
     case String()       : return lift_flat_string(cx, vi)
     case List(t)        : return lift_flat_list(cx, vi, t)
