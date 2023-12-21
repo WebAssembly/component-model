@@ -442,8 +442,8 @@ def load(cx, ptr, t):
     case S16()          : return load_int(cx, ptr, 2, signed=True)
     case S32()          : return load_int(cx, ptr, 4, signed=True)
     case S64()          : return load_int(cx, ptr, 8, signed=True)
-    case Float32()      : return maybe_scramble_nan32(reinterpret_i32_as_float(load_int(cx, ptr, 4)))
-    case Float64()      : return maybe_scramble_nan64(reinterpret_i64_as_float(load_int(cx, ptr, 8)))
+    case Float32()      : return decode_i32_as_float(load_int(cx, ptr, 4))
+    case Float64()      : return decode_i64_as_float(load_int(cx, ptr, 8))
     case Char()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
     case String()       : return load_string(cx, ptr)
     case List(t)        : return load_list(cx, ptr, t)
@@ -469,51 +469,42 @@ def convert_int_to_bool(i):
   return bool(i)
 ```
 
-Lifting and lowering float values may (from the component's perspective)
-non-deterministically modify the sign and payload bits of Not-A-Number (NaN)
-values, reflecting the practical reality that different languages, protocols
-and CPUs have different effects on NaNs. Although this non-determinism is
-expressed in the Python code below as generating a "random" NaN bit-pattern,
-native implementations do not need to literally generate a random bit-pattern;
-they may canonicalize to an arbitrary fixed NaN value. When a host implements
-the [deterministic profile], NaNs are canonicalized to a particular NaN
-bit-pattern.
+Floats are loaded directly from memory, with the sign and payload information
+of NaN values discarded. Consequently, there is only one unique NaN value per
+floating-point type. This reflects the practical reality that some languages
+and protocols do not preserve these bits. In the Python code below, this is
+expressed as canonicalizing NaNs to a particular bit pattern.
+
+See the comments about lowering of float values for a discussion of possible
+optimizations.
 ```python
 DETERMINISTIC_PROFILE = False # or True
-THE_HOST_WANTS_TO = True # or False
 CANONICAL_FLOAT32_NAN = 0x7fc00000
 CANONICAL_FLOAT64_NAN = 0x7ff8000000000000
 
-def maybe_scramble_nan32(f):
+def canonicalize_nan32(f):
   if math.isnan(f):
-    if DETERMINISTIC_PROFILE:
-      f = reinterpret_i32_as_float(CANONICAL_FLOAT32_NAN)
-    elif THE_HOST_WANTS_TO:
-      f = reinterpret_i32_as_float(random_nan_bits(32, 8))
+    f = core_f32_reinterpret_i32(CANONICAL_FLOAT32_NAN)
     assert(math.isnan(f))
   return f
 
-def maybe_scramble_nan64(f):
+def canonicalize_nan64(f):
   if math.isnan(f):
-    if DETERMINISTIC_PROFILE:
-      f = reinterpret_i64_as_float(CANONICAL_FLOAT64_NAN)
-    elif THE_HOST_WANTS_TO:
-      f = reinterpret_i64_as_float(random_nan_bits(64, 11))
+    f = core_f64_reinterpret_i64(CANONICAL_FLOAT64_NAN)
     assert(math.isnan(f))
   return f
 
-def reinterpret_i32_as_float(i):
+def decode_i32_as_float(i):
+  return canonicalize_nan32(core_f32_reinterpret_i32(i))
+
+def decode_i64_as_float(i):
+  return canonicalize_nan64(core_f64_reinterpret_i64(i))
+
+def core_f32_reinterpret_i32(i):
   return struct.unpack('!f', struct.pack('!I', i))[0] # f32.reinterpret_i32
 
-def reinterpret_i64_as_float(i):
+def core_f64_reinterpret_i64(i):
   return struct.unpack('!d', struct.pack('!Q', i))[0] # f64.reinterpret_i64
-
-def random_nan_bits(total_bits, exponent_bits):
-  fraction_bits = total_bits - exponent_bits - 1
-  bits = random.getrandbits(total_bits)
-  bits |= ((1 << exponent_bits) - 1) << fraction_bits
-  bits |= 1 << random.randrange(fraction_bits - 1)
-  return bits
 ```
 
 An `i32` is converted to a `char` (a [Unicode Scalar Value]) by dynamically
@@ -703,8 +694,8 @@ def store(cx, v, t, ptr):
     case S16()          : store_int(cx, v, ptr, 2, signed=True)
     case S32()          : store_int(cx, v, ptr, 4, signed=True)
     case S64()          : store_int(cx, v, ptr, 8, signed=True)
-    case Float32()      : store_int(cx, reinterpret_float_as_i32(maybe_scramble_nan32(v)), ptr, 4)
-    case Float64()      : store_int(cx, reinterpret_float_as_i64(maybe_scramble_nan64(v)), ptr, 8)
+    case Float32()      : store_int(cx, encode_float_as_i32(v), ptr, 4)
+    case Float64()      : store_int(cx, encode_float_as_i64(v), ptr, 8)
     case Char()         : store_int(cx, char_to_i32(v), ptr, 4)
     case String()       : store_string(cx, v, ptr)
     case List(t)        : store_list(cx, v, ptr, t)
@@ -724,13 +715,55 @@ def store_int(cx, v, ptr, nbytes, signed = False):
   cx.opts.memory[ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed=signed)
 ```
 
-Floats are stored directly into memory (after the NaN-scrambling described
-above):
+Floats are stored directly into memory, with the sign and payload bits of NaN
+values modified non-deterministically. This reflects the practical reality that
+different languages, protocols and CPUs have different effects on NaNs.
+
+Although this non-determinism is expressed in the Python code below as
+generating a "random" NaN bit-pattern, native implementations do not need to
+use the same "random" algorithm, or even any random algorithm at all. Hosts
+may instead chose to canonicalize to an arbitrary fixed NaN value, or even to
+the original value of the NaN before lifting, allowing them to optimize away
+both the canonicalization of lifting and the randomization of lowering.
+
+When a host implements the [deterministic profile], NaNs are canonicalized to
+a particular NaN bit-pattern.
 ```python
-def reinterpret_float_as_i32(f):
+def maybe_scramble_nan32(f):
+  if math.isnan(f):
+    if DETERMINISTIC_PROFILE:
+      f = core_f32_reinterpret_i32(CANONICAL_FLOAT32_NAN)
+    else:
+      f = core_f32_reinterpret_i32(random_nan_bits(32, 8))
+    assert(math.isnan(f))
+  return f
+
+def maybe_scramble_nan64(f):
+  if math.isnan(f):
+    if DETERMINISTIC_PROFILE:
+      f = core_f64_reinterpret_i64(CANONICAL_FLOAT64_NAN)
+    else:
+      f = core_f64_reinterpret_i64(random_nan_bits(64, 11))
+    assert(math.isnan(f))
+  return f
+
+def random_nan_bits(total_bits, exponent_bits):
+  fraction_bits = total_bits - exponent_bits - 1
+  bits = random.getrandbits(total_bits)
+  bits |= ((1 << exponent_bits) - 1) << fraction_bits
+  bits |= 1 << random.randrange(fraction_bits - 1)
+  return bits
+
+def encode_float_as_i32(f):
+  return core_i32_reinterpret_f32(maybe_scramble_nan32(f))
+
+def encode_float_as_i64(f):
+  return core_i64_reinterpret_f64(maybe_scramble_nan64(f))
+
+def core_i32_reinterpret_f32(f):
   return struct.unpack('!I', struct.pack('!f', f))[0] # i32.reinterpret_f32
 
-def reinterpret_float_as_i64(f):
+def core_i64_reinterpret_f64(f):
   return struct.unpack('!Q', struct.pack('!d', f))[0] # i64.reinterpret_f64
 ```
 
@@ -1181,8 +1214,8 @@ def lift_flat(cx, vi, t):
     case S16()          : return lift_flat_signed(vi, 32, 16)
     case S32()          : return lift_flat_signed(vi, 32, 32)
     case S64()          : return lift_flat_signed(vi, 64, 64)
-    case Float32()      : return maybe_scramble_nan32(vi.next('f32'))
-    case Float64()      : return maybe_scramble_nan64(vi.next('f64'))
+    case Float32()      : return canonicalize_nan32(vi.next('f32'))
+    case Float64()      : return canonicalize_nan64(vi.next('f64'))
     case Char()         : return convert_i32_to_char(cx, vi.next('i32'))
     case String()       : return lift_flat_string(cx, vi)
     case List(t)        : return lift_flat_list(cx, vi, t)
@@ -1256,10 +1289,10 @@ def lift_flat_variant(cx, vi, cases):
       have = flat_types.pop(0)
       x = vi.next(have)
       match (have, want):
-        case ('i32', 'f32') : return reinterpret_i32_as_float(x)
+        case ('i32', 'f32') : return decode_i32_as_float(x)
         case ('i64', 'i32') : return wrap_i64_to_i32(x)
-        case ('i64', 'f32') : return reinterpret_i32_as_float(wrap_i64_to_i32(x))
-        case ('i64', 'f64') : return reinterpret_i64_as_float(x)
+        case ('i64', 'f32') : return decode_i32_as_float(wrap_i64_to_i32(x))
+        case ('i64', 'f64') : return decode_i64_as_float(x)
         case _              : return x
   c = cases[case_index]
   if c.t is None:
@@ -1367,10 +1400,10 @@ def lower_flat_variant(cx, v, cases):
   for i,have in enumerate(payload):
     want = flat_types.pop(0)
     match (have.t, want):
-      case ('f32', 'i32') : payload[i] = Value('i32', reinterpret_float_as_i32(have.v))
+      case ('f32', 'i32') : payload[i] = Value('i32', encode_float_as_i32(have.v))
       case ('i32', 'i64') : payload[i] = Value('i64', have.v)
-      case ('f32', 'i64') : payload[i] = Value('i64', reinterpret_float_as_i32(have.v))
-      case ('f64', 'i64') : payload[i] = Value('i64', reinterpret_float_as_i64(have.v))
+      case ('f32', 'i64') : payload[i] = Value('i64', encode_float_as_i32(have.v))
+      case ('f64', 'i64') : payload[i] = Value('i64', encode_float_as_i64(have.v))
       case _              : pass
   for want in flat_types:
     payload.append(Value(want, 0))
