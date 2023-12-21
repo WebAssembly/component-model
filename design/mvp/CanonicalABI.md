@@ -695,7 +695,7 @@ def store(cx, v, t, ptr):
     case S32()          : store_int(cx, v, ptr, 4, signed=True)
     case S64()          : store_int(cx, v, ptr, 8, signed=True)
     case Float32()      : store_int(cx, encode_float_as_i32(v), ptr, 4)
-    case Float64()      : store_int(cx, encodencode_float_as_i64(v), ptr, 8)
+    case Float64()      : store_int(cx, encode_float_as_i64(v), ptr, 8)
     case Char()         : store_int(cx, char_to_i32(v), ptr, 4)
     case String()       : store_string(cx, v, ptr)
     case List(t)        : store_list(cx, v, ptr, t)
