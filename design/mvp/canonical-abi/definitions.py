@@ -394,8 +394,8 @@ def load(cx, ptr, t):
     case S16()          : return load_int(cx, ptr, 2, signed=True)
     case S32()          : return load_int(cx, ptr, 4, signed=True)
     case S64()          : return load_int(cx, ptr, 8, signed=True)
-    case Float32()      : return reinterpret_i32_as_float(load_int(cx, ptr, 4))
-    case Float64()      : return reinterpret_i64_as_float(load_int(cx, ptr, 8))
+    case Float32()      : return decode_i32_as_float(load_int(cx, ptr, 4))
+    case Float64()      : return decode_i64_as_float(load_int(cx, ptr, 8))
     case Char()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
     case String()       : return load_string(cx, ptr)
     case List(t)        : return load_list(cx, ptr, t)
@@ -428,10 +428,10 @@ def canonicalize_nan64(f):
     assert(math.isnan(f))
   return f
 
-def reinterpret_i32_as_float(i):
+def decode_i32_as_float(i):
   return canonicalize_nan32(core_f32_reinterpret_i32(i))
 
-def reinterpret_i64_as_float(i):
+def decode_i64_as_float(i):
   return canonicalize_nan64(core_f64_reinterpret_i64(i))
 
 def core_f32_reinterpret_i32(i):
@@ -565,8 +565,8 @@ def store(cx, v, t, ptr):
     case S16()          : store_int(cx, v, ptr, 2, signed=True)
     case S32()          : store_int(cx, v, ptr, 4, signed=True)
     case S64()          : store_int(cx, v, ptr, 8, signed=True)
-    case Float32()      : store_int(cx, reinterpret_float_as_i32(v), ptr, 4)
-    case Float64()      : store_int(cx, reinterpret_float_as_i64(v), ptr, 8)
+    case Float32()      : store_int(cx, encode_float_as_i32(v), ptr, 4)
+    case Float64()      : store_int(cx, encode_float_as_i64(v), ptr, 8)
     case Char()         : store_int(cx, char_to_i32(v), ptr, 4)
     case String()       : store_string(cx, v, ptr)
     case List(t)        : store_list(cx, v, ptr, t)
@@ -604,10 +604,10 @@ def random_nan_bits(total_bits, exponent_bits):
   bits |= 1 << random.randrange(fraction_bits - 1)
   return bits
 
-def reinterpret_float_as_i32(f):
+def encode_float_as_i32(f):
   return core_i32_reinterpret_f32(maybe_scramble_nan32(f))
 
-def reinterpret_float_as_i64(f):
+def encode_float_as_i64(f):
   return core_i64_reinterpret_f64(maybe_scramble_nan64(f))
 
 def core_i32_reinterpret_f32(f):
@@ -966,10 +966,10 @@ def lift_flat_variant(cx, vi, cases):
       have = flat_types.pop(0)
       x = vi.next(have)
       match (have, want):
-        case ('i32', 'f32') : return reinterpret_i32_as_float(x)
+        case ('i32', 'f32') : return decode_i32_as_float(x)
         case ('i64', 'i32') : return wrap_i64_to_i32(x)
-        case ('i64', 'f32') : return reinterpret_i32_as_float(wrap_i64_to_i32(x))
-        case ('i64', 'f64') : return reinterpret_i64_as_float(x)
+        case ('i64', 'f32') : return decode_i32_as_float(wrap_i64_to_i32(x))
+        case ('i64', 'f64') : return decode_i64_as_float(x)
         case _              : return x
   c = cases[case_index]
   if c.t is None:
@@ -1047,10 +1047,10 @@ def lower_flat_variant(cx, v, cases):
   for i,have in enumerate(payload):
     want = flat_types.pop(0)
     match (have.t, want):
-      case ('f32', 'i32') : payload[i] = Value('i32', reinterpret_float_as_i32(have.v))
+      case ('f32', 'i32') : payload[i] = Value('i32', encode_float_as_i32(have.v))
       case ('i32', 'i64') : payload[i] = Value('i64', have.v)
-      case ('f32', 'i64') : payload[i] = Value('i64', reinterpret_float_as_i32(have.v))
-      case ('f64', 'i64') : payload[i] = Value('i64', reinterpret_float_as_i64(have.v))
+      case ('f32', 'i64') : payload[i] = Value('i64', encode_float_as_i32(have.v))
+      case ('f64', 'i64') : payload[i] = Value('i64', encode_float_as_i64(have.v))
       case _              : pass
   for want in flat_types:
     payload.append(Value(want, 0))
