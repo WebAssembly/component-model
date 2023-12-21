@@ -469,23 +469,19 @@ def convert_int_to_bool(i):
   return bool(i)
 ```
 
-Lifting and lowering float values may (from the component's perspective)
-non-deterministically modify the sign and payload bits of Not-A-Number (NaN)
-values, reflecting the practical reality that different languages, protocols
-and CPUs have different effects on NaNs. Although this non-determinism is
-expressed in the Python code below as generating a "random" NaN bit-pattern,
-native implementations do not need to literally generate a random bit-pattern;
-they may canonicalize to an arbitrary fixed NaN value. When a host implements
-the [deterministic profile], NaNs are canonicalized to a particular NaN
-bit-pattern.
+Floats are loaded directly from memory, with the sign and payload information
+of NaN values discarded. Consequently, there is only one unique NaN value per
+floating-point type. This reflects the practical reality that some languages
+and protocols do not preserve these bits. In the Python code below, this is
+expressed as canonicalizing NaNs to a particular bit pattern.
+
+See the comments about lowering of float values for a discussion of possible
+optimizations.
 ```python
 DETERMINISTIC_PROFILE = False # or True
 CANONICAL_FLOAT32_NAN = 0x7fc00000
 CANONICAL_FLOAT64_NAN = 0x7ff8000000000000
 
-# NaN values are always canonicalized when lifted, to illustrate that even
-# though Python floating-point values preserve NaN payloads, Component Model
-# floating-point values do not.
 def canonicalize_nan32(f):
   if math.isnan(f):
     f = core_f32_reinterpret_i32(CANONICAL_FLOAT32_NAN)
@@ -509,18 +505,6 @@ def core_f32_reinterpret_i32(i):
 
 def core_f64_reinterpret_i64(i):
   return struct.unpack('!d', struct.pack('!Q', i))[0] # f64.reinterpret_i64
-
-# Generate an integer value representing the bitpattern of a NaN with
-# random bits.
-#
-# The specific random function here isn't part of the specification, and is
-# only an example of randomization which may occur.
-def random_nan_bits(total_bits, exponent_bits):
-  fraction_bits = total_bits - exponent_bits - 1
-  bits = random.getrandbits(total_bits)
-  bits |= ((1 << exponent_bits) - 1) << fraction_bits
-  bits |= 1 << random.randrange(fraction_bits - 1)
-  return bits
 ```
 
 An `i32` is converted to a `char` (a [Unicode Scalar Value]) by dynamically
@@ -731,17 +715,20 @@ def store_int(cx, v, ptr, nbytes, signed = False):
   cx.opts.memory[ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed=signed)
 ```
 
-Floats are stored directly into memory (after the NaN-scrambling described
-above):
+Floats are stored directly into memory, with the sign and payload bits of NaN
+values modified non-deterministically. This reflects the practical reality that
+different languages, protocols and CPUs have different effects on NaNs.
+
+Although this non-determinism is expressed in the Python code below as
+generating a "random" NaN bit-pattern, native implementations do not need to
+use the same "random" algorithm, or even any random algorithm at all. Hosts
+may instead chose to canonicalize to an arbitrary fixed NaN value, or even to
+the original value of the NaN before lifting, allowing them to optimize away
+both the canonicalization of lifting and the randomization of lowering.
+
+When a host implements the [deterministic profile], NaNs are canonicalized to
+a particular NaN bit-pattern.
 ```python
-# NaN values are always scrambled when lowered, to illustrate that even
-# though Python floating-point values preserve NaN payloads, Component Model
-# floating-point values do not.
-#
-# However, the specific randomization function used here is just an example;
-# actual implementations could use a different function. They could even
-# use the original NaN values from before canonicalization, avoiding all
-# overhead from canonicalization and randomization.
 def maybe_scramble_nan32(f):
   if math.isnan(f):
     if DETERMINISTIC_PROFILE:
@@ -760,11 +747,18 @@ def maybe_scramble_nan64(f):
     assert(math.isnan(f))
   return f
 
+def random_nan_bits(total_bits, exponent_bits):
+  fraction_bits = total_bits - exponent_bits - 1
+  bits = random.getrandbits(total_bits)
+  bits |= ((1 << exponent_bits) - 1) << fraction_bits
+  bits |= 1 << random.randrange(fraction_bits - 1)
+  return bits
+
 def reinterpret_float_as_i32(f):
-  return core_i32_reinterpret_f32(maybe_scramble_nan32(v))
+  return core_i32_reinterpret_f32(maybe_scramble_nan32(f))
 
 def reinterpret_float_as_i64(f):
-  return core_i64_reinterpret_f64(maybe_scramble_nan64(v))
+  return core_i64_reinterpret_f64(maybe_scramble_nan64(f))
 
 def core_i32_reinterpret_f32(f):
   return struct.unpack('!I', struct.pack('!f', f))[0] # i32.reinterpret_f32
