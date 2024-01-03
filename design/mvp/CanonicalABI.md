@@ -1697,6 +1697,53 @@ def canon_resource_rep(inst, rt, i):
 Note that the "locally-defined" requirement above ensures that only the
 component instance defining a resource can access its representation.
 
+### 🧵 `canon thread.spawn`
+
+For a canonical definition:
+```wasm
+(canon thread.spawn (type $ft) (core func $st))
+```
+validation specifies:
+* `$ft` must refer to a `shared` function type; initially, only the type `(func
+  shared (param $c i32))` is allowed (see explanation below)
+* `$st` is imported with type `(func (param $f (ref null $ft)) (param $n i32)
+  (param $c i32))`.
+
+> Note: ideally, a thread could be spawned with [arbitrary thread parameters].
+> To import polymorphic versions of `$st`, a naming scheme is necessary to
+> differentiate between the imports with varying `$ft`. Since many languages can
+> use `$c` to address a memory region containing multiple values (the current
+> [wasi-libc convention]), the initial version restricts `$ft` to `[i32] -> []`.
+> The inclusion of `$ft` ensures backwards compatibility for when arbitrary
+> parameters are allowed.
+
+Calling `$st` spawns `$n` threads, each of which:
+  - checks that reference `$f` is not null and satisfies type `$ft`
+  - invokes `$f` with `$c`
+  - executes `$f` until completion or trap in a `shared` context as described by
+    the [shared-everything threads] proposal.
+
+In pseudocode, `$st` looks like:
+
+```python
+def canon_thread_spawn(ft, f, n, c):
+  trap_if(f is None or ft is not f.type)
+  for i in range(n):
+    spawn(lambda: f(c))
+```
+
+### 🧵 `canon thread.hw_concurrency`
+
+For a canonical definition:
+```wasm
+(canon thread.hw_concurrency (core func $f))
+```
+validation specifies:
+* `$f` is imported with type `(func shared (result i32))`.
+
+Calling `$f` returns the number of threads the underlying hardware can be
+expected to execute concurrently. This value can be artificially limited by
+engine configuration.
 
 
 [Canonical Definitions]: Explainer.md#canonical-definitions
@@ -1730,3 +1777,7 @@ component instance defining a resource can access its representation.
 
 [`import_name`]: https://clang.llvm.org/docs/AttributeReference.html#import-name
 [`export_name`]: https://clang.llvm.org/docs/AttributeReference.html#export-name
+
+[Arbitrary Thread Parameters]: https://github.com/WebAssembly/shared-everything-threads/discussions/3
+[wasi-libc Convention]: https://github.com/WebAssembly/wasi-libc/blob/925ad6d7/libc-top-half/musl/src/thread/pthread_create.c#L318
+[Shared-Everything Threads]: https://github.com/WebAssembly/shared-everything-threads/blob/main/proposals/shared-everything-threads/Overview.md

@@ -32,6 +32,7 @@ emoji symbols listed below; these emojis will be removed once they are
 implemented, considered stable and included in a future milestone:
 * 🪙: value imports/exports and component-level start function
 * 🪺: nested namespaces and packages in import/export names
+* 🧵: thread lifecycle built-ins
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
 this repo merges and supersedes the [module-linking] and [interface-types]
@@ -1219,7 +1220,12 @@ canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
         | (canon resource.drop <typeidx> (core func <id>?))
         | (canon resource.rep <typeidx> (core func <id>?))
+        | 🧵 (canon thread.spawn <typeidx> (core func <id>?))
+        | 🧵 (canon thread.hw_concurrency (core func <id>?))
 ```
+
+##### Resources
+
 The `resource.new` built-in has type `[i32] -> [i32]` and creates a new
 resource (with resource type `typeidx`) with the given `i32` value as its
 representation and returning the `i32` index of a new handle pointing to this
@@ -1261,6 +1267,15 @@ allowing it to create and return new resources to its client:
 Here, the `i32` returned by `resource.new`, which is an index into the
 component's handle-table, is immediately returned by `make_R`, thereby
 transferring ownership of the newly-created resource to the export's caller.
+
+##### 🧵 Threads
+
+The `thread.spawn` built-in has type `[f:(ref null $f) n:i32 c:i32] -> []` and
+spawns a new thread by invoking the shared function `f` `n` times while passing
+`c` to each.
+
+The `resource.hw_concurrency` built-in has type `[i32] -> []` and returns the
+number of threads can be expected to execute concurrently.
 
 See the [CanonicalABI.md](CanonicalABI.md#canonical-definitions) for detailed
 definitions of each of these built-ins and their interactions.
