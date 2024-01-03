@@ -62,7 +62,7 @@ modules" could be added as a future feature.
 to the Core WebAssembly specification, adding only the new concepts of instance
 and module definitions (which, like other kinds of definitions, could be
 imported and exported). As part of the overall [scoping and layering proposal],
-Module Linking as moved into a layer above WebAssembly and merged with the
+Module Linking has moved into a layer above WebAssembly and merged with the
 Interface Types proposal. However, it may still make sense and be complementary
 to the Component Model to add Module Linking to Core WebAssembly in the future
 as originally proposed.
