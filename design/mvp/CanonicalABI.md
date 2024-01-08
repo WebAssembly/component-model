@@ -5,7 +5,7 @@ functions of components in the Component Model and the values and functions
 of modules in Core WebAssembly.
 
 * [Supporting definitions](#supporting-definitions)
-  * [Despecialization](#Despecialization)
+  * [Despecialization](#despecialization)
   * [Alignment](#alignment)
   * [Size](#size)
   * [Runtime State](#runtime-state)
@@ -15,7 +15,6 @@ of modules in Core WebAssembly.
   * [Flat Lifting](#flat-lifting)
   * [Flat Lowering](#flat-lowering)
   * [Lifting and Lowering Values](#lifting-and-lowering-values)
-  * [Lifting and Lowering Functions](#lifting-and-lowering-functions)
 * [Canonical definitions](#canonical-definitions)
   * [`canon lift`](#canon-lift)
   * [`canon lower`](#canon-lower)
@@ -220,7 +219,7 @@ definitions via the `cx` parameter of type `CallContext`:
 class CallContext:
   opts: CanonicalOptions
   inst: ComponentInstance
-  lenders: [HandleElem]
+  lenders: list[HandleElem]
   borrow_count: int
 
   def __init__(self, opts, inst):
@@ -346,8 +345,8 @@ of handles that all share the same `ResourceType`. Defining `HandleTable` in
 chunks, we start with the fields and `get` method:
 ```python
 class HandleTable:
-  array: [Optional[HandleElem]]
-  free: [int]
+  array: list[Optional[HandleElem]]
+  free: list[int]
 
   def __init__(self):
     self.array = [None]
@@ -450,8 +449,8 @@ def load(cx, ptr, t):
     case Record(fields) : return load_record(cx, ptr, fields)
     case Variant(cases) : return load_variant(cx, ptr, cases)
     case Flags(labels)  : return load_flags(cx, ptr, labels)
-    case Own()          : return lift_own(cx, load_int(opts, ptr, 4), t)
-    case Borrow()       : return lift_borrow(cx, load_int(opts, ptr, 4), t)
+    case Own()          : return lift_own(cx, load_int(cx.opts, ptr, 4), t)
+    case Borrow()       : return lift_borrow(cx, load_int(cx.opts, ptr, 4), t)
 ```
 
 Integers are loaded directly from memory, with their high-order bit interpreted
@@ -702,8 +701,8 @@ def store(cx, v, t, ptr):
     case Record(fields) : store_record(cx, v, ptr, fields)
     case Variant(cases) : store_variant(cx, v, ptr, cases)
     case Flags(labels)  : store_flags(cx, v, ptr, labels)
-    case Own()          : store_int(cx, lower_own(opts, v, t), ptr, 4)
-    case Borrow()       : store_int(cx, lower_borrow(opts, v, t), ptr, 4)
+    case Own()          : store_int(cx, lower_own(cx.opts, v, t), ptr, 4)
+    case Borrow()       : store_int(cx, lower_borrow(cx.opts, v, t), ptr, 4)
 ```
 
 Integers are stored directly into memory. Because the input domain is exactly
@@ -1195,7 +1194,7 @@ class Value:
 
 @dataclass
 class ValueIter:
-  values: [Value]
+  values: list[Value]
   i = 0
   def next(self, t):
     v = self.values[self.i]

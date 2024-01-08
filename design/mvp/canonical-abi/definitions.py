@@ -41,17 +41,17 @@ class CoreExportDecl:
 
 @dataclass
 class ModuleType(ExternType):
-  imports: [CoreImportDecl]
-  exports: [CoreExportDecl]
+  imports: list[CoreImportDecl]
+  exports: list[CoreExportDecl]
 
 @dataclass
 class CoreFuncType(CoreExternType):
-  params: [str]
-  results: [str]
+  params: list[str]
+  results: list[str]
 
 @dataclass
 class CoreMemoryType(CoreExternType):
-  initial: [int]
+  initial: list[int]
   maximum: Optional[int]
 
 @dataclass
@@ -61,17 +61,17 @@ class ExternDecl:
 
 @dataclass
 class ComponentType(ExternType):
-  imports: [ExternDecl]
-  exports: [ExternDecl]
+  imports: list[ExternDecl]
+  exports: list[ExternDecl]
 
 @dataclass
 class InstanceType(ExternType):
-  exports: [ExternDecl]
+  exports: list[ExternDecl]
 
 @dataclass
 class FuncType(ExternType):
-  params: [typing.Tuple[str,ValType]]
-  results: [ValType|typing.Tuple[str,ValType]]
+  params: list[tuple[str,ValType]]
+  results: list[ValType|tuple[str,ValType]]
   def param_types(self):
     return self.extract_types(self.params)
   def result_types(self):
@@ -122,25 +122,25 @@ class Field:
 
 @dataclass
 class Record(ValType):
-  fields: [Field]
+  fields: list[Field]
 
 @dataclass
 class Tuple(ValType):
-  ts: [ValType]
+  ts: list[ValType]
 
 @dataclass
 class Case:
   label: str
   t: Optional[ValType]
-  refines: str = None
+  refines: Optional[str] = None
 
 @dataclass
 class Variant(ValType):
-  cases: [Case]
+  cases: list[Case]
 
 @dataclass
 class Enum(ValType):
-  labels: [str]
+  labels: list[str]
 
 @dataclass
 class Option(ValType):
@@ -153,7 +153,7 @@ class Result(ValType):
 
 @dataclass
 class Flags(ValType):
-  labels: [str]
+  labels: list[str]
 
 @dataclass
 class Own(ValType):
@@ -276,7 +276,7 @@ def num_i32_flags(labels):
 class CallContext:
   opts: CanonicalOptions
   inst: ComponentInstance
-  lenders: [HandleElem]
+  lenders: list[HandleElem]
   borrow_count: int
 
   def __init__(self, opts, inst):
@@ -332,8 +332,8 @@ class HandleElem:
     self.lend_count = 0
 
 class HandleTable:
-  array: [Optional[HandleElem]]
-  free: [int]
+  array: list[Optional[HandleElem]]
+  free: list[int]
 
   def __init__(self):
     self.array = [None]
@@ -402,8 +402,8 @@ def load(cx, ptr, t):
     case Record(fields) : return load_record(cx, ptr, fields)
     case Variant(cases) : return load_variant(cx, ptr, cases)
     case Flags(labels)  : return load_flags(cx, ptr, labels)
-    case Own()          : return lift_own(cx, load_int(opts, ptr, 4), t)
-    case Borrow()       : return lift_borrow(cx, load_int(opts, ptr, 4), t)
+    case Own()          : return lift_own(cx, load_int(cx.opts, ptr, 4), t)
+    case Borrow(): return lift_borrow(cx, load_int(cx.opts, ptr, 4), t)
 
 def load_int(cx, ptr, nbytes, signed = False):
   return int.from_bytes(cx.opts.memory[ptr : ptr+nbytes], 'little', signed=signed)
@@ -573,8 +573,8 @@ def store(cx, v, t, ptr):
     case Record(fields) : store_record(cx, v, ptr, fields)
     case Variant(cases) : store_variant(cx, v, ptr, cases)
     case Flags(labels)  : store_flags(cx, v, ptr, labels)
-    case Own()          : store_int(cx, lower_own(opts, v, t), ptr, 4)
-    case Borrow()       : store_int(cx, lower_borrow(opts, v, t), ptr, 4)
+    case Own()          : store_int(cx, lower_own(cx.opts, v, t), ptr, 4)
+    case Borrow()       : store_int(cx, lower_borrow(cx.opts, v, t), ptr, 4)
 
 def store_int(cx, v, ptr, nbytes, signed = False):
   cx.opts.memory[ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed=signed)
@@ -897,7 +897,7 @@ class Value:
 
 @dataclass
 class ValueIter:
-  values: [Value]
+  values: list[Value]
   i = 0
   def next(self, t):
     v = self.values[self.i]
