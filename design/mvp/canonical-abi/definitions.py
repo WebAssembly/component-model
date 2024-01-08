@@ -403,7 +403,7 @@ def load(cx, ptr, t):
     case Variant(cases) : return load_variant(cx, ptr, cases)
     case Flags(labels)  : return load_flags(cx, ptr, labels)
     case Own()          : return lift_own(cx, load_int(cx.opts, ptr, 4), t)
-    case Borrow(): return lift_borrow(cx, load_int(cx.opts, ptr, 4), t)
+    case Borrow()       : return lift_borrow(cx, load_int(cx.opts, ptr, 4), t)
 
 def load_int(cx, ptr, nbytes, signed = False):
   return int.from_bytes(cx.opts.memory[ptr : ptr+nbytes], 'little', signed=signed)
