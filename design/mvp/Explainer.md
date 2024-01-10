@@ -1270,6 +1270,11 @@ transferring ownership of the newly-created resource to the export's caller.
 
 ##### 🧵 Threads
 
+The [shared-everything-threads] proposal adds component model built-ins for
+thread management. These are specified as built-ins and not core WebAssembly
+instructions because browsers expect this functionality to come from existing
+Web/JS APIs.
+
 The `thread.spawn` built-in has type `[f:(ref null $f) n:i32 c:i32] -> []` and
 spawns a new thread by invoking the shared function `f` `n` times while passing
 `c` to each.
@@ -1958,3 +1963,5 @@ and will be added over the coming months to complete the MVP proposal:
 
 [Scoping and Layering]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8
 [Future and Stream Types]: https://docs.google.com/presentation/d/1MNVOZ8hdofO3tI0szg_i-Yoy0N2QPU2C--LzVuoGSlE
+
+[shared-everything-threads]: https://github.com/WebAssembly/shared-everything-threads
