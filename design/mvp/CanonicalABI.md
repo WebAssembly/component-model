@@ -1706,7 +1706,7 @@ For a canonical definition:
 validation specifies:
 * `$ft` must refer to a `shared` function type; initially, only the type `(func
   shared (param $c i32))` is allowed (see explanation below)
-* `$st` is imported with type `(func (param $f (ref null $ft)) (param $n i32)
+* `$st` is given type `(func (param $f (ref null $ft)) (param $n i32)
   (param $c i32))`.
 
 > Note: ideally, a thread could be spawned with [arbitrary thread parameters].
