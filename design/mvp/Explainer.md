@@ -32,7 +32,7 @@ emoji symbols listed below; these emojis will be removed once they are
 implemented, considered stable and included in a future milestone:
 * 🪙: value imports/exports and component-level start function
 * 🪺: nested namespaces and packages in import/export names
-* 🧵: thread lifecycle built-ins
+* 🧵: threading built-ins
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
 this repo merges and supersedes the [module-linking] and [interface-types]
