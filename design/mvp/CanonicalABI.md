@@ -1707,7 +1707,7 @@ validation specifies:
 * `$ft` must refer to a `shared` function type; initially, only the type `(func
   shared (param $c i32))` is allowed (see explanation below)
 * `$st` is given type `(func (param $f (ref null $ft)) (param $n i32)
-  (param $c i32))`.
+  (param $c i32) (result $e i32))`.
 
 In the [deterministic profile], validation fails if `thread.spawn` is used.
 
@@ -1731,8 +1731,11 @@ In pseudocode, `$st` looks like:
 def canon_thread_spawn(ft, f, n, c):
   assert(not DETERMINISTIC_PROFILE)
   trap_if(f is None or ft is not f.type)
+  if not can_spawn(n):
+    return -1
   for i in range(n):
     spawn(lambda: f(c))
+  return 0
 ```
 
 ### 🧵 `canon thread.hw_concurrency`
