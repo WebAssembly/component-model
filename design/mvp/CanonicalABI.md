@@ -1717,8 +1717,8 @@ validation specifies:
 > The inclusion of `$ft` ensures backwards compatibility for when arbitrary
 > parameters are allowed.
 
-Calling `$st` spawns `$n` threads, each of which:
-  - checks that reference `$f` is not null and satisfies type `$ft`
+Calling `$st` checks that the reference `$f` is not null and satisfies type
+`$ft`. Then, it spawns `$n` threads, each of which:
   - invokes `$f` with `$c`
   - executes `$f` until completion or trap in a `shared` context as described by
     the [shared-everything threads] proposal.
