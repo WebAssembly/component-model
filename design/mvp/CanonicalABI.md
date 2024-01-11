@@ -1709,6 +1709,8 @@ validation specifies:
 * `$st` is given type `(func (param $f (ref null $ft)) (param $n i32)
   (param $c i32))`.
 
+In the [deterministic profile], validation fails if `thread.spawn` is used.
+
 > Note: ideally, a thread could be spawned with [arbitrary thread parameters].
 > To import polymorphic versions of `$st`, a naming scheme is necessary to
 > differentiate between the imports with varying `$ft`. Since many languages can
@@ -1727,6 +1729,7 @@ In pseudocode, `$st` looks like:
 
 ```python
 def canon_thread_spawn(ft, f, n, c):
+  assert(not DETERMINISTIC_PROFILE)
   trap_if(f is None or ft is not f.type)
   for i in range(n):
     spawn(lambda: f(c))
