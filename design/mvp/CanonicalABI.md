@@ -1743,8 +1743,16 @@ validation specifies:
 
 Calling `$f` returns the number of threads the underlying hardware can be
 expected to execute concurrently. This value can be artificially limited by
-engine configuration.
+engine configuration and is not allowed to change over the lifetime of a
+component instance.
 
+```python
+def canon_thread_hw_concurrency():
+  if DETERMINISTIC_PROFILE:
+    return 1
+  else:
+    return NUM_ALLOWED_THREADS
+```
 
 [Canonical Definitions]: Explainer.md#canonical-definitions
 [`canonopt`]: Explainer.md#canonical-definitions
