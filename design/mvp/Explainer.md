@@ -11,6 +11,13 @@ JavaScript runtimes. For a more user-focussed explanation, take a look at the
   * [Instance definitions](#instance-definitions)
   * [Alias definitions](#alias-definitions)
   * [Type definitions](#type-definitions)
+    * [Fundamental value types](#fundamental-value-types)
+      * [Numeric types](#numeric-types)
+      * [Container types](#container-types)
+      * [Handle types](#handle-types)
+    * [Specialized value types](#specialized-value-types)
+    * [Definition types](#definition-types)
+    * [Declarators](#declarators)
     * [Type checking](#type-checking)
   * [Canonical definitions](#canonical-definitions)
     * [Canonical ABI](#canonical-built-ins)
@@ -560,6 +567,9 @@ typebound     ::= (eq <typeidx>)
 
 where bind-id(X) parses '(' sort <id>? Y ')' when X parses '(' sort Y ')'
 ```
+
+#### Fundamental value types
+
 The value types in `valtype` can be broken into two categories: *fundamental*
 value types and *specialized* value types, where the latter are defined by
 expansion into the former. The *fundamental value types* have the following
@@ -569,7 +579,7 @@ sets of abstract values:
 | `bool`                    | `true` and `false` |
 | `s8`, `s16`, `s32`, `s64` | integers in the range [-2<sup>N-1</sup>, 2<sup>N-1</sup>-1] |
 | `u8`, `u16`, `u32`, `u64` | integers in the range [0, 2<sup>N</sup>-1] |
-| `float32`, `float64`      | [IEEE754] floating-point numbers |
+| `float32`, `float64`      | [IEEE754] floating-point numbers, with a single NaN value |
 | `char`                    | [Unicode Scalar Values] |
 | `record`                  | heterogeneous [tuples] of named values |
 | `variant`                 | heterogeneous [tagged unions] of named values |
@@ -584,6 +594,29 @@ For example, while abstract `variant`s contain a list of `case`s labelled by
 name, canonical lifting and lowering map each case to an `i32` value starting
 at `0`.
 
+##### Numeric types
+
+While core numeric types are defined in terms of sets of bit-patterns and
+operations that interpret the bits in various ways, component-level numeric
+types are defined in terms of sets of values. This allows the values to be
+translated between source languages and protocols that use different
+value representations.
+
+Core integer types are just bit-patterns that don't distinguish between signed
+and unsigned, while component-level integer types are sets of integers that
+either include negative values or don't. Core floating-point types have many
+distinct NaN bit-patterns, while component-level floating-point types have only
+a single NaN value. And boolean values in core wasm are usually represented as
+`i32`s where operations interpret all-zeros as `false`, while at the
+component-level there is a `bool` type with `true` and `false` values.
+
+##### Container types
+
+The `record`, `variant`, and `list` types allow for grouping, categorizing,
+and sequencing contained values.
+
+##### Handle types
+
 The `own` and `borrow` value types are both *handle types*. Handles logically
 contain the opaque address of a resource and avoid copying the resource when
 passed across component boundaries. By way of metaphor to operating systems,
@@ -597,6 +630,8 @@ conditions mentioned above are enforced at runtime by the Component Model
 through these canonical definitions. The `typeidx` immediate of a handle type
 must refer to a `resource` type (described below) that statically classifies
 the particular kinds of resources the handle can point to.
+
+#### Specialized value types
 
 The sets of values allowed for the remaining *specialized value types* are
 defined by the following mapping:
@@ -613,8 +648,10 @@ cases. This could be relaxed in the future to allow an empty list of cases, with
 the empty `(variant)` effectively serving as a [empty type] and indicating
 unreachability.
 
-The remaining 3 type constructors in `deftype` use `valtype` to describe
-shared-nothing functions, components and component instances:
+#### Definition types
+
+The remaining 4 type constructors in `deftype` use `valtype` to describe
+shared-nothing functions, resources, components, and component instances:
 
 The `func` type constructor describes a component-level function definition
 that takes and returns a list of `valtype`. In contrast to [`core:functype`],
@@ -656,6 +693,8 @@ Both `instance` and `component` type constructors are built from a sequence of
 declarators. The meanings of these declarators is basically the same as the
 core module declarators introduced above, but expanded to cover the additional
 capabilities of the component model.
+
+#### Declarators
 
 The `importdecl` and `exportdecl` declarators correspond to component `import`
 and `export` definitions, respectively, allowing an identifier to be bound for
