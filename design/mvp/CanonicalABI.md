@@ -1729,9 +1729,8 @@ In pseudocode, `$st` looks like:
 
 ```python
 def canon_thread_spawn(ft, f, n, c):
-  assert(not DETERMINISTIC_PROFILE)
   trap_if(f is None or ft is not f.type)
-  if not can_spawn(n):
+  if DETERMINISTIC_PROFILE:
     return -1
   for i in range(n):
     spawn(lambda: f(c))
