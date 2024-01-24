@@ -22,7 +22,7 @@ JavaScript runtimes. For a more user-focussed explanation, take a look at the
   * [Canonical definitions](#canonical-definitions)
     * [Canonical ABI](#canonical-built-ins)
     * [Canonical built-ins](#canonical-built-ins)
-  * [Start definitions](#-start-definitions)
+  * [Start Definitions](#-start-definitions)
   * [Import and export definitions](#import-and-export-definitions)
 * [Component invariants](#component-invariants)
 * [JavaScript embedding](#JavaScript-embedding)
@@ -1305,15 +1305,28 @@ See the [CanonicalABI.md](CanonicalABI.md#canonical-definitions) for detailed
 definitions of each of these built-ins and their interactions.
 
 
-### 🪙 Start Definitions
+### Start Definitions
 
 Like modules, components can have start functions that are called during
-instantiation. Unlike modules, components can call start functions at multiple
-points during instantiation with each such call having parameters and results.
+instantiation. Unlike modules, component dependencies are always acyclic,
+so their dependencies are always initialized first, so they can call
+imports without any special considerations.
+
 Thus, `start` definitions in components look like function calls:
 ```ebnf
 start ::= (start <funcidx> (value <valueidx>)* (result (value <id>?))*)
 ```
+
+If multiple start definitins are present in a component, they are called in
+the order they appear in the encoding.
+
+Currently, the `(value <valueidx>)*` and `(result (value <id>?))` lists are
+required to be empty, and `<funcidx>` must refer to a function with no
+arguments or return values. In the 🪙 future, these will allow the calls
+to be passed arguments and return results.
+
+#### 🪙 Start Definition arguments and results
+
 The `(value <valueidx>)*` list specifies the arguments passed to `funcidx` by
 indexing into the *value index space*. Value definitions (in the value index
 space) are like immutable `global` definitions in Core WebAssembly except that
