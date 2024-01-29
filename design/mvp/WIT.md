@@ -65,6 +65,19 @@ in the Component Model's representation of [`interface`s][interfaces] and
 
 [names of imports and exports]: Explainer.md#import-and-export-definitions
 
+## WIT IDs
+
+Leaf elements in WIT files have IDs that are references to their canonical
+definitions. A WIT ID includes the WIT package specifier and path within that
+uniquely defines the element.
+
+For example, the `wasi:clock@0.2.0` world imports the `wall-clock` interface
+which has a `now: func() -> datetime` method. The ID for this method would be
+`wasi:clock@0.2.0/wall-clock/now`.
+
+When different worlds are combined, the canonical IDs of leaf
+nodes will be used for deduplication.
+
 ## WIT Interfaces
 [interfaces]: #wit-interfaces
 
