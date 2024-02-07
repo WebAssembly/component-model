@@ -1624,18 +1624,6 @@ three runtime invariants:
    more-efficient non-reentrant runtime glue code (particularly in the middle
    of the [Canonical ABI](CanonicalABI.md)). This implies that components by
    default don't allow concurrency and multi-threaded access will trap.
-3. Components enforce the current informal rule that `start` functions are
-   only for "internal" initialization by trapping if a component attempts to
-   call a component import during instantiation. In Core WebAssembly, this
-   invariant is not viable since cross-module calls are often necessary when
-   initializing shared linear memory (e.g., calling `libc`'s `malloc`).
-   However, at the granularity of components, this invariant appears viable and
-   would allow runtimes and toolchains considerable optimization flexibility
-   based on the resulting purity of instantiation. As one example, tools like
-   [`wizer`] could be used to *transparently* snapshot the post-instantiation
-   state of a component to reuse in future instantiations. As another example,
-   a component runtime could optimize the instantiation of a component DAG by
-   transparently instantiating non-root components lazily and/or in parallel.
 
 
 ## JavaScript Embedding
