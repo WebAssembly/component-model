@@ -5,6 +5,7 @@ This explainer walks through the assembly-level definition of a
 JavaScript runtimes. For a more user-focussed explanation, take a look at the
 **[Component Model Documentation]**.
 
+* [Gated features](#gated-features)
 * [Grammar](#grammar)
   * [Component definitions](#component-definitions)
     * [Index spaces](#index-spaces)
@@ -30,6 +31,8 @@ JavaScript runtimes. For a more user-focussed explanation, take a look at the
   * [ESM-integration](#ESM-integration)
 * [Examples](#examples)
 * [TODO](#TODO)
+
+## Gated Features
 
 By default, the features described in this explainer (as well as the supporting
 [Binary.md](Binary.md), [WIT.md](WIT.md) and [CanonicalABI.md](CanonicalABI.md))
