@@ -1706,8 +1706,8 @@ For a canonical definition:
 validation specifies:
 * `$ft` must refer to a `shared` function type; initially, only the type `(func
   shared (param $c i32))` is allowed (see explanation below)
-* `$st` is given type `(func (param $f (ref null $ft)) (param $n i32)
-  (param $c i32) (result $e i32))`.
+* `$st` is given type `(func (param $f (ref null $ft)) (param $c i32) (result $e
+  i32))`.
 
 In the [deterministic profile], validation fails if `thread.spawn` is used.
 
@@ -1720,7 +1720,7 @@ In the [deterministic profile], validation fails if `thread.spawn` is used.
 > parameters are allowed.
 
 Calling `$st` checks that the reference `$f` is not null and satisfies type
-`$ft`. Then, it spawns `$n` threads, each of which:
+`$ft`. Then, it spawns a thread which:
   - invokes `$f` with `$c`
   - executes `$f` until completion or trap in a `shared` context as described by
     the [shared-everything threads] proposal.
@@ -1728,13 +1728,14 @@ Calling `$st` checks that the reference `$f` is not null and satisfies type
 In pseudocode, `$st` looks like:
 
 ```python
-def canon_thread_spawn(ft, f, n, c):
+def canon_thread_spawn(ft, f, c):
   trap_if(f is None or ft is not f.type)
   if DETERMINISTIC_PROFILE:
     return -1
-  for i in range(n):
-    spawn(lambda: f(c))
-  return 0
+  if spawn(lambda: f(c)):
+    return 0
+  else:
+    return -1
 ```
 
 ### 🧵 `canon thread.hw_concurrency`

@@ -1275,9 +1275,8 @@ thread management. These are specified as built-ins and not core WebAssembly
 instructions because browsers expect this functionality to come from existing
 Web/JS APIs.
 
-The `thread.spawn` built-in has type `[f:(ref null $f) n:i32 c:i32] -> []` and
-spawns a new thread by invoking the shared function `f` `n` times while passing
-`c` to each.
+The `thread.spawn` built-in has type `[f:(ref null $f) c:i32] -> []` and spawns
+a new thread by invoking the shared function `f` while passing `c` to it.
 
 The `resource.hw_concurrency` built-in has type `[i32] -> []` and returns the
 number of threads can be expected to execute concurrently.
