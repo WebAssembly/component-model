@@ -114,6 +114,7 @@ class String(ValType): pass
 @dataclass
 class List(ValType):
   t: ValType
+  l: Optional[int] = None
 
 @dataclass
 class Field:
@@ -185,11 +186,17 @@ def alignment(t):
     case Float32()          : return 4
     case Float64()          : return 8
     case Char()             : return 4
-    case String() | List(_) : return 4
+    case String()           : return 4
+    case List(t, l)         : return alignment_list(t, l)
     case Record(fields)     : return alignment_record(fields)
     case Variant(cases)     : return alignment_variant(cases)
     case Flags(labels)      : return alignment_flags(labels)
     case Own(_) | Borrow(_) : return 4
+
+def alignment_list(elem_type, maybe_length):
+  if maybe_length is not None:
+    return alignment(elem_type)
+  return 4
 
 def alignment_record(fields):
   a = 1
@@ -234,11 +241,17 @@ def size(t):
     case Float32()          : return 4
     case Float64()          : return 8
     case Char()             : return 4
-    case String() | List(_) : return 8
+    case String()           : return 8
+    case List(t, l)         : return size_list(t, l)
     case Record(fields)     : return size_record(fields)
     case Variant(cases)     : return size_variant(cases)
     case Flags(labels)      : return size_flags(labels)
     case Own(_) | Borrow(_) : return 4
+
+def size_list(elem_type, maybe_length):
+  if maybe_length is not None:
+    return maybe_length * size(elem_type)
+  return 8
 
 def size_record(fields):
   s = 0
@@ -398,7 +411,7 @@ def load(cx, ptr, t):
     case Float64()      : return decode_i64_as_float(load_int(cx, ptr, 8))
     case Char()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
     case String()       : return load_string(cx, ptr)
-    case List(t)        : return load_list(cx, ptr, t)
+    case List(t, l)     : return load_list(cx, ptr, t, l)
     case Record(fields) : return load_record(cx, ptr, fields)
     case Variant(cases) : return load_variant(cx, ptr, cases)
     case Flags(labels)  : return load_flags(cx, ptr, labels)
@@ -480,7 +493,9 @@ def load_string_from_range(cx, ptr, tagged_code_units):
 
   return (s, cx.opts.string_encoding, tagged_code_units)
 
-def load_list(cx, ptr, elem_type):
+def load_list(cx, ptr, elem_type, maybe_length):
+  if maybe_length is not None:
+    return load_list_from_valid_range(cx, ptr, maybe_length, elem_type)
   begin = load_int(cx, ptr, 4)
   length = load_int(cx, ptr + 4, 4)
   return load_list_from_range(cx, begin, length, elem_type)
@@ -488,6 +503,9 @@ def load_list(cx, ptr, elem_type):
 def load_list_from_range(cx, ptr, length, elem_type):
   trap_if(ptr != align_to(ptr, alignment(elem_type)))
   trap_if(ptr + length * size(elem_type) > len(cx.opts.memory))
+  return load_list_from_valid_range(cx, ptr, length, elem_type)
+
+def load_list_from_valid_range(cx, ptr, length, elem_type):
   a = []
   for i in range(length):
     a.append(load(cx, ptr + i * size(elem_type), elem_type))
@@ -569,7 +587,7 @@ def store(cx, v, t, ptr):
     case Float64()      : store_int(cx, encode_float_as_i64(v), ptr, 8)
     case Char()         : store_int(cx, char_to_i32(v), ptr, 4)
     case String()       : store_string(cx, v, ptr)
-    case List(t)        : store_list(cx, v, ptr, t)
+    case List(t, l)     : store_list(cx, v, ptr, t, l)
     case Record(fields) : store_record(cx, v, ptr, fields)
     case Variant(cases) : store_variant(cx, v, ptr, cases)
     case Flags(labels)  : store_flags(cx, v, ptr, labels)
@@ -764,7 +782,11 @@ def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   trap_if(ptr + latin1_size > len(cx.opts.memory))
   return (ptr, latin1_size)
 
-def store_list(cx, v, ptr, elem_type):
+def store_list(cx, v, ptr, elem_type, maybe_length):
+  if maybe_length is not None:
+    assert(maybe_length == len(v))
+    store_list_into_valid_range(cx, v, ptr, elem_type)
+    return
   begin, length = store_list_into_range(cx, v, elem_type)
   store_int(cx, begin, ptr, 4)
   store_int(cx, length, ptr + 4, 4)
@@ -775,9 +797,12 @@ def store_list_into_range(cx, v, elem_type):
   ptr = cx.opts.realloc(0, 0, alignment(elem_type), byte_length)
   trap_if(ptr != align_to(ptr, alignment(elem_type)))
   trap_if(ptr + byte_length > len(cx.opts.memory))
+  store_list_into_valid_range(cx, v, ptr, elem_type)
+  return (ptr, len(v))
+
+def store_list_into_valid_range(cx, v, ptr, elem_type):
   for i,e in enumerate(v):
     store(cx, e, elem_type, ptr + i * size(elem_type))
-  return (ptr, len(v))
 
 def store_record(cx, v, ptr, fields):
   for f in fields:
@@ -860,11 +885,17 @@ def flatten_type(t):
     case Float32()            : return ['f32']
     case Float64()            : return ['f64']
     case Char()               : return ['i32']
-    case String() | List(_)   : return ['i32', 'i32']
+    case String()             : return ['i32', 'i32']
+    case List(t, l)           : return flatten_list(t, l)
     case Record(fields)       : return flatten_record(fields)
     case Variant(cases)       : return flatten_variant(cases)
     case Flags(labels)        : return ['i32'] * num_i32_flags(labels)
     case Own(_) | Borrow(_)   : return ['i32']
+
+def flatten_list(elem_type, maybe_length):
+  if maybe_length is not None:
+    return flatten_type(elem_type) * maybe_length
+  return ['i32', 'i32']
 
 def flatten_record(fields):
   flat = []
@@ -920,7 +951,7 @@ def lift_flat(cx, vi, t):
     case Float64()      : return canonicalize_nan64(vi.next('f64'))
     case Char()         : return convert_i32_to_char(cx, vi.next('i32'))
     case String()       : return lift_flat_string(cx, vi)
-    case List(t)        : return lift_flat_list(cx, vi, t)
+    case List(t, l)     : return lift_flat_list(cx, vi, t, l)
     case Record(fields) : return lift_flat_record(cx, vi, fields)
     case Variant(cases) : return lift_flat_variant(cx, vi, cases)
     case Flags(labels)  : return lift_flat_flags(vi, labels)
@@ -945,7 +976,12 @@ def lift_flat_string(cx, vi):
   packed_length = vi.next('i32')
   return load_string_from_range(cx, ptr, packed_length)
 
-def lift_flat_list(cx, vi, elem_type):
+def lift_flat_list(cx, vi, elem_type, maybe_length):
+  if maybe_length is not None:
+    a = []
+    for i in range(maybe_length):
+      a.append(lift_flat(cx, vi, elem_type))
+    return a
   ptr = vi.next('i32')
   length = vi.next('i32')
   return load_list_from_range(cx, ptr, length, elem_type)
@@ -1009,7 +1045,7 @@ def lower_flat(cx, v, t):
     case Float64()      : return [Value('f64', maybe_scramble_nan64(v))]
     case Char()         : return [Value('i32', char_to_i32(v))]
     case String()       : return lower_flat_string(cx, v)
-    case List(t)        : return lower_flat_list(cx, v, t)
+    case List(t, l)     : return lower_flat_list(cx, v, t, l)
     case Record(fields) : return lower_flat_record(cx, v, fields)
     case Variant(cases) : return lower_flat_variant(cx, v, cases)
     case Flags(labels)  : return lower_flat_flags(v, labels)
@@ -1025,7 +1061,13 @@ def lower_flat_string(cx, v):
   ptr, packed_length = store_string_into_range(cx, v)
   return [Value('i32', ptr), Value('i32', packed_length)]
 
-def lower_flat_list(cx, v, elem_type):
+def lower_flat_list(cx, v, elem_type, maybe_length):
+  if maybe_length is not None:
+    assert(maybe_length == len(v))
+    flat = []
+    for e in v:
+      flat += lower_flat(cx, e, elem_type)
+    return flat
   (ptr, length) = store_list_into_range(cx, v, elem_type)
   return [Value('i32', ptr), Value('i32', length)]
 
