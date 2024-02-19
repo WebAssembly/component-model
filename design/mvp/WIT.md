@@ -25,8 +25,11 @@ document, a pseudo-formal [grammar specification][lexical-structure], and
 additionally a specification of the [package format][package-format] of a WIT
 package suitable for distribution.
 
+See [Gated Features] for an explanation of 🔧.
+
 [IDL]: https://en.wikipedia.org/wiki/Interface_description_language
 [components]: https://github.com/webassembly/component-model
+[Gated Features]: Explainer.md#gated-features
 
 ## Package Names
 
@@ -1561,6 +1564,9 @@ tuple-list ::= ty
              | ty ',' tuple-list?
 
 list ::= 'list' '<' ty '>'
+       | 'list' '<' ty ',' uint '>' 🔧
+
+uint ::= [1-9][0-9]*
 
 option ::= 'option' '<' ty '>'
 
@@ -1574,8 +1580,18 @@ The `tuple` type is semantically equivalent to a `record` with numerical fields,
 but it frequently can have language-specific meaning so it's provided as a
 first-class type.
 
-Similarly the `option` and `result` types are semantically equivalent to the
-variants:
+🔧 A `list` with a fixed length provides the low-level memory representation of a
+homogeneous `tuple` of the same length, but with the dynamic indexing of a
+list. E.g., the following two functions have the same low-level (Core
+WebAssembly) representation, but will naturally produce different source-level
+bindings:
+
+```wit
+get-ipv4-address1: func() -> list<u8, 4>;
+get-ipv4-address2: func() -> tuple<u8, u8, u8, u8>;
+```
+
+The `option` and `result` types are semantically equivalent to the variants:
 
 ```wit
 variant option {
