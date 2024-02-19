@@ -106,6 +106,8 @@ def test(t, vals_to_lift, v,
 #test(Record([]), [], {})
 test(Record([Field('x',U8()), Field('y',U16()), Field('z',U32())]), [1,2,3], {'x':1,'y':2,'z':3})
 test(Tuple([Tuple([U8(),U8()]),U8()]), [1,2,3], {'0':{'0':1,'1':2},'1':3})
+test(List(U8(),3), [1,2,3], [1,2,3])
+test(List(List(U8(),2),3), [1,2,3,4,5,6], [[1,2],[3,4],[5,6]])
 # Empty flags types are not permitted yet.
 #t = Flags([])
 #test(t, [], {})
@@ -272,6 +274,12 @@ test_heap(List(List(U16())), [[5,6]], [0,1],
 test_heap(List(List(U16())), None, [0,1],
           [9,0,0,0, 2,0,0,0,
           0, 5,0, 6,0])
+test_heap(List(List(U8(),2)), [[1,2],[3,4]], [0,2],
+          [1,2, 3,4])
+test_heap(List(List(U32(),2)), [[1,2],[3,4]], [0,2],
+          [1,0,0,0,2,0,0,0, 3,0,0,0,4,0,0,0])
+test_heap(List(List(U32(),2)), None, [1,2],
+          [0, 1,0,0,0,2,0,0,0, 3,0,0,0,4,0,0,0])
 test_heap(List(Tuple([U8(),U8(),U16(),U32()])), [mk_tup(6,7,8,9),mk_tup(4,5,6,7)], [0,2],
           [6, 7, 8,0, 9,0,0,0,   4, 5, 6,0, 7,0,0,0])
 test_heap(List(Tuple([U8(),U16(),U8(),U32()])), [mk_tup(6,7,8,9),mk_tup(4,5,6,7)], [0,2],
