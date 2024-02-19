@@ -211,8 +211,8 @@ instancedecl  ::= 0x00 t:<core:type>                      => t
                 | 0x01 t:<type>                           => t
                 | 0x02 a:<alias>                          => a
                 | 0x04 ed:<exportdecl>                    => ed
-importdecl    ::= in:<importname> ed:<externdesc>         => (import in ed)
-exportdecl    ::= en:<exportname> ed:<externdesc>         => (export en ed)
+importdecl    ::= in:<importname'> ed:<externdesc>        => (import in ed)
+exportdecl    ::= en:<exportname'> ed:<externdesc>        => (export en ed)
 externdesc    ::= 0x00 0x11 i:<core:typeidx>              => (core module (type i))
                 | 0x01 i:<typeidx>                        => (func (type i))
                 | 0x02 t:<valtype>                        => (value t) 🪙
@@ -310,7 +310,7 @@ flags are set.
 (See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
 in the explainer.)
 ```ebnf
-import      ::= en:<importname'> ed:<externdesc>                     => (import in ed)
+import      ::= in:<importname'> ed:<externdesc>                     => (import in ed)
 export      ::= en:<exportname'> si:<sortidx> ed?:<externdesc>?      => (export en si ed?)
 importname' ::= 0x00 len:<u32> in:<importname>                       => in  (if len = |in|)
 exportname' ::= 0x00 len:<u32> en:<exportname>                       => en  (if len = |en|)
