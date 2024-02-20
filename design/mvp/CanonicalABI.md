@@ -1730,7 +1730,14 @@ def canon_thread_spawn(f, c):
   trap_if(f is None)
   if DETERMINISTIC_PROFILE:
     return -1
-  if spawn(lambda: f(c)):
+
+  def thread_start():
+    try:
+      f(c)
+    except CoreWebAssemblyException:
+      trap()
+
+  if spawn(thread_start):
     return 0
   else:
     return -1
