@@ -1709,8 +1709,6 @@ validation specifies:
 * `$st` is given type `(func (param $f (ref null $ft)) (param $c i32) (result $e
   i32))`.
 
-In the [deterministic profile], validation fails if `thread.spawn` is used.
-
 > Note: ideally, a thread could be spawned with [arbitrary thread parameters].
 > To import polymorphic versions of `$st`, a naming scheme is necessary to
 > differentiate between the imports with varying `$ft`. Since many languages can
@@ -1719,8 +1717,8 @@ In the [deterministic profile], validation fails if `thread.spawn` is used.
 > The inclusion of `$ft` ensures backwards compatibility for when arbitrary
 > parameters are allowed.
 
-Calling `$st` checks that the reference `$f` is not null and satisfies type
-`$ft`. Then, it spawns a thread which:
+Calling `$st` checks that the reference `$f` is not null. Then, it spawns a
+thread which:
   - invokes `$f` with `$c`
   - executes `$f` until completion or trap in a `shared` context as described by
     the [shared-everything threads] proposal.
@@ -1728,8 +1726,8 @@ Calling `$st` checks that the reference `$f` is not null and satisfies type
 In pseudocode, `$st` looks like:
 
 ```python
-def canon_thread_spawn(ft, f, c):
-  trap_if(f is None or ft is not f.type)
+def canon_thread_spawn(f, c):
+  trap_if(f is None)
   if DETERMINISTIC_PROFILE:
     return -1
   if spawn(lambda: f(c)):
@@ -1745,7 +1743,7 @@ For a canonical definition:
 (canon thread.hw_concurrency (core func $f))
 ```
 validation specifies:
-* `$f` is imported with type `(func shared (result i32))`.
+* `$f` is given type `(func shared (result i32))`.
 
 Calling `$f` returns the number of threads the underlying hardware can be
 expected to execute concurrently. This value can be artificially limited by

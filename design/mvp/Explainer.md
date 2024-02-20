@@ -1220,8 +1220,8 @@ canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
         | (canon resource.drop <typeidx> (core func <id>?))
         | (canon resource.rep <typeidx> (core func <id>?))
-        | 🧵 (canon thread.spawn <typeidx> (core func <id>?))
-        | 🧵 (canon thread.hw_concurrency (core func <id>?))
+        | (canon thread.spawn <typeidx> (core func <id>?)) 🧵
+        | (canon thread.hw_concurrency (core func <id>?)) 🧵
 ```
 
 ##### Resources
@@ -1275,11 +1275,12 @@ thread management. These are specified as built-ins and not core WebAssembly
 instructions because browsers expect this functionality to come from existing
 Web/JS APIs.
 
-The `thread.spawn` built-in has type `[f:(ref null $f) c:i32] -> []` and spawns
-a new thread by invoking the shared function `f` while passing `c` to it.
+The `thread.spawn` built-in has type `[f:(ref null $f) c:i32] -> [i32]` and
+spawns a new thread by invoking the shared function `f` while passing `c` to it,
+returning whether a thread was successfully spawned.
 
-The `resource.hw_concurrency` built-in has type `[i32] -> []` and returns the
-number of threads can be expected to execute concurrently.
+The `resource.hw_concurrency` built-in has type `[] -> [i32]` and returns the
+number of threads that can be expected to execute concurrently.
 
 See the [CanonicalABI.md](CanonicalABI.md#canonical-definitions) for detailed
 definitions of each of these built-ins and their interactions.
@@ -1946,6 +1947,7 @@ and will be added over the coming months to complete the MVP proposal:
 [stack-switching]: https://github.com/WebAssembly/stack-switching/blob/main/proposals/stack-switching/Overview.md
 [esm-integration]: https://github.com/WebAssembly/esm-integration/tree/main/proposals/esm-integration
 [gc]: https://github.com/WebAssembly/gc/blob/main/proposals/gc/MVP.md
+[shared-everything-threads]: https://github.com/WebAssembly/shared-everything-threads
 [WASI Preview 2]: https://github.com/WebAssembly/WASI/tree/main/preview2
 
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
@@ -1962,5 +1964,3 @@ and will be added over the coming months to complete the MVP proposal:
 
 [Scoping and Layering]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8
 [Future and Stream Types]: https://docs.google.com/presentation/d/1MNVOZ8hdofO3tI0szg_i-Yoy0N2QPU2C--LzVuoGSlE
-
-[shared-everything-threads]: https://github.com/WebAssembly/shared-everything-threads
