@@ -1051,7 +1051,8 @@ world-items ::= gate world-definition
 
 world-definition ::= export-item
                    | import-item
-                   | use-item
+                   | use-export-item
+                   | use-import-item
                    | typedef-item
                    | include-item
 
@@ -1060,6 +1061,9 @@ export-item ::= 'export' id ':' extern-type
 import-item ::= 'import' id ':' extern-type
               | 'import' use-path ';'
 
+use-import-item ::= 'use' 'import' use-item-body
+use-export-item ::= 'use' 'export' use-item-body
+
 extern-type ::= func-type ';' | 'interface' '{' interface-items* '}'
 ```
 
@@ -1067,6 +1071,27 @@ Note that worlds can import types and define their own types to be exported
 from the root of a component and used within functions imported and exported.
 The `interface` item here additionally defines the grammar for IDs used to refer
 to `interface` items.
+
+The `use export`/`use import` items work just like `use` inside an `interface`
+except that they exclusively refer to exports/imports, respectively. This
+allows a world to import and export the same interface and be able to
+independently refer to same type in both. For example, the following world
+defines a single function using both an imported and exported version of the
+same interface's resource type:
+
+```wit
+interface i {
+  resource r;
+}
+
+world w {
+  import i;
+  export i;
+  use import i.{r as r1};
+  use export i.{r as r2};
+  export transform: func(in: r1) -> r2;
+}
+```
 
 [`componenttype`]: Explainer.md#type-definitions
 
@@ -1144,7 +1169,9 @@ use my:dependency/the-interface.{more, names as foo}
 Specifically the structure of this is:
 
 ```ebnf
-use-item ::= 'use' use-path '.' '{' use-names-list '}' ';'
+use-item ::= 'use' use-item-body
+
+use-item-body ::= use-path '.' '{' use-names-list '}' ';'
 
 use-names-list ::= use-names-item
                  | use-names-item ',' use-names-list?
