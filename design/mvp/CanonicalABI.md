@@ -1478,11 +1478,11 @@ For a canonical definition:
 (canon lift $callee:<funcidx> $opts:<canonopt>* (func $f (type $ft)))
 ```
 validation specifies:
-* `$callee` must have type `flatten($ft, 'lift')`
+* `$callee` must have type `flatten_functype($ft, 'lift')`
 * `$f` is given type `$ft`
 * a `memory` is present if required by lifting and is a subtype of `(memory 1)`
 * a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
-* if a `post-return` is present, it has type `(func (param flatten($ft)['results']))`
+* if a `post-return` is present, it has type `(func (param flatten_functype($ft)['results']))`
 
 When instantiating component instance `$inst`:
 * Define `$f` to be the closure `lambda call, args: canon_lift($opts, $inst, $callee, $ft, args)`
@@ -1544,7 +1544,7 @@ For a canonical definition:
 (canon lower $callee:<funcidx> $opts:<canonopt>* (core func $f))
 ```
 where `$callee` has type `$ft`, validation specifies:
-* `$f` is given type `flatten($ft, 'lower')`
+* `$f` is given type `flatten_functype($ft, 'lower')`
 * a `memory` is present if required by lifting and is a subtype of `(memory 1)`
 * a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
 * there is no `post-return` in `$opts`
@@ -1581,8 +1581,9 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
 
   return flat_results
 ```
-The definitions of `canon_lift` and `canon_lower` are mostly symmetric (swapping
-lifting and lowering), with a few exceptions:
+The definitions of `canon_lift` and `canon_lower` are mostly symmetric
+(swapping lifting and lowering), with a few exceptions (in `flatten_functype`,
+as defined above):
 * The caller does not need a `post-return` function since the Core WebAssembly
   caller simply regains control when `canon_lower` returns, allowing it to free
   (or not) any memory passed as `flat_args`.
