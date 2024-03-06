@@ -1710,10 +1710,10 @@ validation specifies:
   i32))`.
 
 > Note: ideally, a thread could be spawned with [arbitrary thread parameters].
-> To import polymorphic versions of `$st`, a naming scheme is necessary to
-> differentiate between the imports with varying `$ft`. Since many languages can
-> use `$c` to address a memory region containing multiple values (the current
-> [wasi-libc convention]), the initial version restricts `$ft` to `[i32] -> []`.
+> Currently, that would require additional work in the toolchain to support so,
+> for simplicity, the current proposal simply fixes a single `i32` parameter type.
+> However, `thread.spawn` could be extended to allow arbitrary thread parameters
+> in the future, once it's concretely beneficial to the toolchain. 
 > The inclusion of `$ft` ensures backwards compatibility for when arbitrary
 > parameters are allowed.
 
