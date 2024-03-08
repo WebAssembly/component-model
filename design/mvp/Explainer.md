@@ -42,6 +42,7 @@ emoji symbols listed below; these emojis will be removed once they are
 implemented, considered stable and included in a future milestone:
 * 🪙: value imports/exports and component-level start function
 * 🪺: nested namespaces and packages in import/export names
+* 🧵: threading built-ins
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
 this repo merges and supersedes the [module-linking] and [interface-types]
@@ -1261,7 +1262,12 @@ canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
         | (canon resource.drop <typeidx> (core func <id>?))
         | (canon resource.rep <typeidx> (core func <id>?))
+        | (canon thread.spawn <typeidx> (core func <id>?)) 🧵
+        | (canon thread.hw_concurrency (core func <id>?)) 🧵
 ```
+
+##### Resources
+
 The `resource.new` built-in has type `[i32] -> [i32]` and creates a new
 resource (with resource type `typeidx`) with the given `i32` value as its
 representation and returning the `i32` index of a new handle pointing to this
@@ -1303,6 +1309,20 @@ allowing it to create and return new resources to its client:
 Here, the `i32` returned by `resource.new`, which is an index into the
 component's handle-table, is immediately returned by `make_R`, thereby
 transferring ownership of the newly-created resource to the export's caller.
+
+##### 🧵 Threads
+
+The [shared-everything-threads] proposal adds component model built-ins for
+thread management. These are specified as built-ins and not core WebAssembly
+instructions because browsers expect this functionality to come from existing
+Web/JS APIs.
+
+The `thread.spawn` built-in has type `[f:(ref null $f) c:i32] -> [i32]` and
+spawns a new thread by invoking the shared function `f` while passing `c` to it,
+returning whether a thread was successfully spawned.
+
+The `resource.hw_concurrency` built-in has type `[] -> [i32]` and returns the
+number of threads that can be expected to execute concurrently.
 
 See the [CanonicalABI.md](CanonicalABI.md#canonical-definitions) for detailed
 definitions of each of these built-ins and their interactions.
@@ -1957,6 +1977,7 @@ and will be added over the coming months to complete the MVP proposal:
 [stack-switching]: https://github.com/WebAssembly/stack-switching/blob/main/proposals/stack-switching/Overview.md
 [esm-integration]: https://github.com/WebAssembly/esm-integration/tree/main/proposals/esm-integration
 [gc]: https://github.com/WebAssembly/gc/blob/main/proposals/gc/MVP.md
+[shared-everything-threads]: https://github.com/WebAssembly/shared-everything-threads
 [WASI Preview 2]: https://github.com/WebAssembly/WASI/tree/main/preview2
 
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions

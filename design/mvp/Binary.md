@@ -267,6 +267,8 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x02 rt:<typeidx>                                   => (canon resource.new rt (core func))
            | 0x03 rt:<typdidx>                                   => (canon resource.drop rt (core func))
            | 0x04 rt:<typeidx>                                   => (canon resource.rep rt (core func))
+           | 0x05 ft:<typeidx>                                   => (canon thread.spawn ft (core func))
+           | 0x06                                                => (canon thread.hw_concurrency (core func))
 opts     ::= opt*:vec(<canonopt>)                                => opt*
 canonopt ::= 0x00                                                => string-encoding=utf8
            | 0x01                                                => string-encoding=utf16

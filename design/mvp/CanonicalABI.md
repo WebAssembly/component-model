@@ -1697,7 +1697,73 @@ def canon_resource_rep(inst, rt, i):
 Note that the "locally-defined" requirement above ensures that only the
 component instance defining a resource can access its representation.
 
+### 🧵 `canon thread.spawn`
 
+For a canonical definition:
+```wasm
+(canon thread.spawn (type $ft) (core func $st))
+```
+validation specifies:
+* `$ft` must refer to a `shared` function type; initially, only the type `(func
+  shared (param $c i32))` is allowed (see explanation below)
+* `$st` is given type `(func (param $f (ref null $ft)) (param $c i32) (result $e
+  i32))`.
+
+> Note: ideally, a thread could be spawned with [arbitrary thread parameters].
+> Currently, that would require additional work in the toolchain to support so,
+> for simplicity, the current proposal simply fixes a single `i32` parameter type.
+> However, `thread.spawn` could be extended to allow arbitrary thread parameters
+> in the future, once it's concretely beneficial to the toolchain. 
+> The inclusion of `$ft` ensures backwards compatibility for when arbitrary
+> parameters are allowed.
+
+Calling `$st` checks that the reference `$f` is not null. Then, it spawns a
+thread which:
+  - invokes `$f` with `$c`
+  - executes `$f` until completion or trap in a `shared` context as described by
+    the [shared-everything threads] proposal.
+
+In pseudocode, `$st` looks like:
+
+```python
+def canon_thread_spawn(f, c):
+  trap_if(f is None)
+  if DETERMINISTIC_PROFILE:
+    return -1
+
+  def thread_start():
+    try:
+      f(c)
+    except CoreWebAssemblyException:
+      trap()
+
+  if spawn(thread_start):
+    return 0
+  else:
+    return -1
+```
+
+### 🧵 `canon thread.hw_concurrency`
+
+For a canonical definition:
+```wasm
+(canon thread.hw_concurrency (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func shared (result i32))`.
+
+Calling `$f` returns the number of threads the underlying hardware can be
+expected to execute concurrently. This value can be artificially limited by
+engine configuration and is not allowed to change over the lifetime of a
+component instance.
+
+```python
+def canon_thread_hw_concurrency():
+  if DETERMINISTIC_PROFILE:
+    return 1
+  else:
+    return NUM_ALLOWED_THREADS
+```
 
 [Canonical Definitions]: Explainer.md#canonical-definitions
 [`canonopt`]: Explainer.md#canonical-definitions
@@ -1730,3 +1796,7 @@ component instance defining a resource can access its representation.
 
 [`import_name`]: https://clang.llvm.org/docs/AttributeReference.html#import-name
 [`export_name`]: https://clang.llvm.org/docs/AttributeReference.html#export-name
+
+[Arbitrary Thread Parameters]: https://github.com/WebAssembly/shared-everything-threads/discussions/3
+[wasi-libc Convention]: https://github.com/WebAssembly/wasi-libc/blob/925ad6d7/libc-top-half/musl/src/thread/pthread_create.c#L318
+[Shared-Everything Threads]: https://github.com/WebAssembly/shared-everything-threads/blob/main/proposals/shared-everything-threads/Overview.md
