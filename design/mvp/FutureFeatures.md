@@ -38,6 +38,15 @@ to and from the statically-compiled host implementation language). See
 [`list.lift_canon` and `list.lower_canon`] for more details.
 
 
+## Mutability constraints on reference types 📡
+
+Mutability constraints are a complex issue, especially in oop languages. For 
+example, whether array is internally mutable determines whether some operations 
+can accept specific subtypes. There are no constraints in the current MVP 
+version, which may lead to unexpected semantic damage. This can only be 
+guaranteed by the language compiler for the time being, and it is not 
+cross-language safe.
+
 ## Shared-some-things linking via "adapter modules"
 
 The original [Interface Types proposal] and the re-layered [Module Linking

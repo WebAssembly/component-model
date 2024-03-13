@@ -43,6 +43,7 @@ implemented, considered stable and included in a future milestone:
 * 🪙: value imports/exports and component-level start function
 * 🪺: nested namespaces and packages in import/export names
 * 🧵: threading built-ins
+* 📡: reference types ([gc] proposal integration)
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
 this repo merges and supersedes the [module-linking] and [interface-types]
@@ -590,6 +591,7 @@ sets of abstract values:
 | `list`                    | homogeneous, variable-length [sequences] of values |
 | `own`                     | a unique, opaque address of a resource that will be destroyed when this value is dropped |
 | `borrow`                  | an opaque address of a resource that must be dropped before the current export call returns |
+
 
 How these abstract values are produced and consumed from Core WebAssembly
 values and linear memory is configured by the component via *canonical lifting
@@ -1142,6 +1144,7 @@ canonopt ::= string-encoding=utf8
            | (memory <core:memidx>)
            | (realloc <core:funcidx>)
            | (post-return <core:funcidx>)
+           | (reference-type <ref-opts>*) 📡
 ```
 While the production `externdesc` accepts any `sort`, the validation rules
 for `canon lift` would only allow the `func` sort. In the future, other sorts
@@ -1172,6 +1175,34 @@ have the following core function type:
 The Canonical ABI will use `realloc` both to allocate (passing `0` for the
 first two parameters) and reallocate. If the Canonical ABI needs `realloc`,
 validation requires this option to be present (there is no default).
+
+📡 `(reference-type ...)` requires Canonical ABI to pass parameters and 
+results by reference type, which is not used by default. This option is the 
+same as (memory ...) and `(realloc ...) ` cannot be used at the same time. 
+In the MVP version, the reference type refers to the specific monomorphic 
+type, such as `(ref array (mut u8))` or `(ref $definded)` where 
+`(type $definded (struct (mut f32) (mut f32)))`, instead of type-erased 
+`(ref eq)`. In the MVP version, no mutability constraints are included, 
+and all fields are of mutable type.
+
+📡 When `reference-type` is enabled, the parameter type will change as follows:
+
+| wit type             | wasm w/o `reference-type`   | wasm w/ `reference-type`         |
+| :------------------- | :-------------------------- | :------------------------------- |
+| `bool`               | `(i32,)`                    | `(i32,)`                         |
+| `char`               | `(i32,)`                    | `(i32,)`                         |
+| `u8`                 | `(i32,)`                    | `(i32,)`                         |
+| `u16`                | `(i32,)`                    | `(i32,)`                         |
+| `u32`                | `(i32,)`                    | `(i32,)`                         |
+| `u64`                | `(i32,)`                    | `(i32,)`                         |
+| `resource`           | `(ptr: i32)`                | `(ref extern,)`                  |
+| `list<T>`            | `(ptr: i32, len: i32)`      | `(ref array (mut $t),)`          |
+| `record { a, b }`    | `(a: A, b: B)` (flatten)    | `(ref struct $record,)`          |
+| `tuple<A, B>`(in⩽16) | `(a: A, b: B)` (flatten)    | `(a: A, b: B)`   (flatten)       |
+| `tuple<A, B>`(out>1) | `(ptr: i32)`                | `(ref struct (mut $a)(mut $b),)` |
+| `option<T>`          | `(i32, i32)`                | `(ref null $t,)`                 |
+| `result<A, B>`       | `(i32, i32)`                | `(i32, (ref eq))`                |
+| `variant`            | `(i32, [MAX_VARIANT_SIZE])` | `(i32, (ref eq))`                |
 
 The `(post-return ...)` option may only be present in `canon lift`
 and specifies a core function to be called with the original return values
