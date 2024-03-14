@@ -647,6 +647,16 @@ defined by the following mapping:
 (result <valtype>? (error <valtype>)?) ↦ (variant (case "ok" <valtype>?) (case "error" <valtype>?))
                                 string ↦ (list char)
 ```
+
+Specialized value types have the same semantics as their corresponding
+despecialized types, but have distinct type encodings. This allows them to
+convey a more specific intent; for example, `result` isn't just a variant,
+it's a variant that *means* succcess or failure, so source-code bindings
+can expose it via idiomatic source-language error reporting. And this can
+also sometimes allow values to be represented differently; for example
+`string` may use different Unicode encodings, while still representing the
+same set of values.
+
 Note that, at least initially, variants are required to have a non-empty list of
 cases. This could be relaxed in the future to allow an empty list of cases, with
 the empty `(variant)` effectively serving as a [empty type] and indicating
