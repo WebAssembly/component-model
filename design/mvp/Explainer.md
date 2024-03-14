@@ -1150,6 +1150,8 @@ While the production `externdesc` accepts any `sort`, the validation rules
 for `canon lift` would only allow the `func` sort. In the future, other sorts
 may be added (viz., types), hence the explicit sort.
 
+##### `string-encoding` options
+
 The `string-encoding` option specifies the encoding the Canonical ABI will use
 for the `string` type. The `latin1+utf16` encoding captures a common string
 encoding across Java, JavaScript and .NET VMs and allows a dynamic choice
@@ -1158,6 +1160,8 @@ Point range) or UTF-16 (which can express all Code Points, but uses either
 2 or 4 bytes per Code Point). If no `string-encoding` option is specified, the
 default is UTF-8. It is a validation error to include more than one
 `string-encoding` option.
+
+##### `memory` options
 
 The `(memory ...)` option specifies the memory that the Canonical ABI will
 use to load and store values. If the Canonical ABI needs to load or store,
@@ -1176,33 +1180,48 @@ The Canonical ABI will use `realloc` both to allocate (passing `0` for the
 first two parameters) and reallocate. If the Canonical ABI needs `realloc`,
 validation requires this option to be present (there is no default).
 
-📡 `(reference-type ...)` requires Canonical ABI to pass parameters and 
-results by reference type, which is not used by default. This option is the 
-same as (memory ...) and `(realloc ...) ` cannot be used at the same time. 
-In the MVP version, the reference type refers to the specific monomorphic 
-type, such as `(ref array (mut u8))` or `(ref $definded)` where 
-`(type $definded (struct (mut f32) (mut f32)))`, instead of type-erased 
-`(ref eq)`. In the MVP version, no mutability constraints are included, 
-and all fields are of mutable type.
+##### `reference-type` options
+
+📡 `(reference-type ...)` does not take effect by default. When this option 
+is turned on, Canonical ABI will be required to use reference types to pass 
+parameters. This option conflicts with `memory` and `realloc` and cannot 
+exist at the same time.
+
+📡 In the MVP version, the reference type refers to the specific monomorphic 
+type, such as `(ref array (mut u8))`, instead of type-erased 
+`(ref eq)`. 
 
 📡 When `reference-type` is enabled, the parameter type will change as follows:
 
-| wit type             | wasm w/o `reference-type`   | wasm w/ `reference-type`         |
-| :------------------- | :-------------------------- | :------------------------------- |
-| `bool`               | `(i32,)`                    | `(i32,)`                         |
-| `char`               | `(i32,)`                    | `(i32,)`                         |
-| `u8`                 | `(i32,)`                    | `(i32,)`                         |
-| `u16`                | `(i32,)`                    | `(i32,)`                         |
-| `u32`                | `(i32,)`                    | `(i32,)`                         |
-| `u64`                | `(i32,)`                    | `(i32,)`                         |
-| `resource`           | `(ptr: i32)`                | `(ref extern,)`                  |
-| `list<T>`            | `(ptr: i32, len: i32)`      | `(ref array (mut $t),)`          |
-| `record { a, b }`    | `(a: A, b: B)` (flatten)    | `(ref struct $record,)`          |
-| `tuple<A, B>`(in⩽16) | `(a: A, b: B)` (flatten)    | `(a: A, b: B)`   (flatten)       |
-| `tuple<A, B>`(out>1) | `(ptr: i32)`                | `(ref struct (mut $a)(mut $b),)` |
-| `option<T>`          | `(i32, i32)`                | `(ref null $t,)`                 |
-| `result<A, B>`       | `(i32, i32)`                | `(i32, (ref eq))`                |
-| `variant`            | `(i32, [MAX_VARIANT_SIZE])` | `(i32, (ref eq))`                |
+| wit type             | wasm w/o `reference-type`   | wasm w/ `reference-type`          |
+| :------------------- | :-------------------------- | :-------------------------------- |
+| `bool`               | `(i32,)`                    | `(i32,)`                          |
+| `char`               | `(i32,)`                    | `(i32,)`                          |
+| `u8`                 | `(i32,)`                    | `(i32,)`                          |
+| `u16`                | `(i32,)`                    | `(i32,)`                          |
+| `u32`                | `(i32,)`                    | `(i32,)`                          |
+| `u64`                | `(i32,)`                    | `(i32,)`                          |
+| `resource`           | `(ptr: i32)`                | `(ref extern,)`                   |
+| `list<T>`            | `(ptr: i32, len: i32)`      | `(ref array (mut $t),)`           |
+| `record { a, b }`    | `(a: A, b: B)` (flatten)    | `(ref struct $record,)`           |
+| `tuple<A, B>`(in⩽16) | `(a: A, b: B)` (flatten)    | `(a: A, b: B)` (flatten)          |
+| `tuple<A, B>`(out>1) | `(ptr: i32)`                | `(ref struct (mut $a) (mut $b),)` |
+| `result<A, B>`       | `(i32, i32)`                | `(i32, (ref eq))`                 |
+| `variant`            | `(i32, [MAX_VARIANT_SIZE])` | `(i32, (ref eq))`                 |
+
+📡 Nullable types are treated specially in many languages and are therefore not 
+considered variants when the `reference-types` option is on.
+
+| wit type               | wasm w/o `reference-type` | wasm w/ `reference-type` |
+|:-----------------------|:--------------------------|:-------------------------|
+| `option<bool>`         | `(i32, i32)`              | `(ref null i31)`         |
+| `option<char>`         | `(i32, i32)`              | `(ref null i32)`         |
+| `option<i8>`           | `(i32, i32)`              | `(ref null i31)`         |
+| `option<i32>`          | `(i32, i32)`              | `(ref null i32)`         |
+| `option<i64>`          | `(i32, i64)`              | `(ref null i64)`         |
+| `option<T>` (ref type) | `(i32, SIZE_OF_T)`        | `(ref null $t)`          |
+
+##### `post-return` options
 
 The `(post-return ...)` option may only be present in `canon lift`
 and specifies a core function to be called with the original return values

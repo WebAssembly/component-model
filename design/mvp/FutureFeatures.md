@@ -47,6 +47,14 @@ version, which may lead to unexpected semantic damage. This can only be
 guaranteed by the language compiler for the time being, and it is not 
 cross-language safe.
 
+## Integrate `stringref` with reference types 📡
+
+The current wit `string` type is regarded as `(array (u8))` or `(array (mut u8))`. 
+When the `stringref` proposal is stable, it can be considered to be mapped to 
+`stringref`. In other words, the `reference-type` option can work together with 
+the `string-encoding` option.
+
+
 ## Shared-some-things linking via "adapter modules"
 
 The original [Interface Types proposal] and the re-layered [Module Linking
