@@ -652,10 +652,11 @@ Specialized value types have the same semantics as their corresponding
 despecialized types, but have distinct type encodings. This allows them to
 convey a more specific intent; for example, `result` isn't just a variant,
 it's a variant that *means* success or failure, so source-code bindings
-can expose it via idiomatic source-language error reporting. And this can
-also sometimes allow values to be represented differently; for example
-`string` may use different Unicode encodings, while still representing the
-same set of values.
+can expose it via idiomatic source-language error reporting. And, this can
+also sometimes allow values to be represented differently; for example,
+`string` may use different Unicode encodings while still representing the
+same set of values. Notably, the Canonical ABI uses different representations
+for `string` and `flags`.
 
 Note that, at least initially, variants are required to have a non-empty list of
 cases. This could be relaxed in the future to allow an empty list of cases, with
