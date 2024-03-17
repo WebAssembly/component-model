@@ -1162,7 +1162,7 @@ resource blob {
 desugars into:
 ```wit
 resource blob;
-%[constructor]blob: func(self: borrow<blob>, bytes: list<u8>) -> blob;
+%[constructor]blob: func(init: list<u8>) -> blob;
 %[method]blob.write: func(self: borrow<blob>, bytes: list<u8>);
 %[method]blob.read: func(self: borrow<blob>, n: u32) -> list<u8>;
 %[static]blob.merge: func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob;
