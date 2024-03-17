@@ -449,8 +449,8 @@ def load(cx, ptr, t):
     case Record(fields) : return load_record(cx, ptr, fields)
     case Variant(cases) : return load_variant(cx, ptr, cases)
     case Flags(labels)  : return load_flags(cx, ptr, labels)
-    case Own()          : return lift_own(cx, load_int(cx.opts, ptr, 4), t)
-    case Borrow()       : return lift_borrow(cx, load_int(cx.opts, ptr, 4), t)
+    case Own()          : return lift_own(cx, load_int(cx, ptr, 4), t)
+    case Borrow()       : return lift_borrow(cx, load_int(cx, ptr, 4), t)
 ```
 
 Integers are loaded directly from memory, with their high-order bit interpreted
