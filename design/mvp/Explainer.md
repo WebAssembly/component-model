@@ -648,18 +648,18 @@ defined by the following mapping:
                                 string ↦ (list char)
 ```
 
-Specialized value types have the same set of semantic values as their 
+Specialized value types have the same set of semantic values as their
 corresponding despecialized types, but have distinct type constructors
 (which are not type-equal to the unspecialized type constructors) and
 thus have distinct binary encodings. This allows specialized value types to
 convey a more specific intent; for example, `result` isn't just a variant,
 it's a variant that *means* success or failure, so source-code bindings
-can expose it via idiomatic source-language error reporting. This can
-sometimes allow values to be represented differently in the Canonical ABI.
-For example, `string` uses various Unicode encodings while `list<char>`
-uses a sequence of 4-byte `char` code points.  Similarly, `flags` uses a
-bit-vector while an equivalent record of boolean fields uses a sequence of
-boolean-valued bytes.
+can expose it via idiomatic source-language error reporting. Additionally,
+this can sometimes allow values to be represented differently. For example,
+`string` in the Canonical ABI uses various Unicode encodings while
+`list<char>` uses a sequence of 4-byte `char` code points.  Similarly,
+`flags` in the Canonical ABI uses a bit-vector while an equivalent record
+of boolean fields uses a sequence of boolean-valued bytes.
 
 Note that, at least initially, variants are required to have a non-empty list of
 cases. This could be relaxed in the future to allow an empty list of cases, with
