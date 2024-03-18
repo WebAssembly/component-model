@@ -530,7 +530,7 @@ deftype       ::= <defvaltype>
                 | <instancetype>
 defvaltype    ::= bool
                 | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64
-                | float32 | float64
+                | f32 | f64
                 | char | string
                 | (record (field "<label>" <valtype>)+)
                 | (variant (case <id>? "<label>" <valtype>?)+)
@@ -583,7 +583,7 @@ sets of abstract values:
 | `bool`                    | `true` and `false` |
 | `s8`, `s16`, `s32`, `s64` | integers in the range [-2<sup>N-1</sup>, 2<sup>N-1</sup>-1] |
 | `u8`, `u16`, `u32`, `u64` | integers in the range [0, 2<sup>N</sup>-1] |
-| `float32`, `float64`      | [IEEE754] floating-point numbers, with a single NaN value |
+| `f32`, `f64`              | [IEEE754] floating-point numbers, with a single NaN value |
 | `char`                    | [Unicode Scalar Values] |
 | `record`                  | heterogeneous [tuples] of named values |
 | `variant`                 | heterogeneous [tagged unions] of named values |
@@ -1755,7 +1755,7 @@ At a high level, the additional coercions would be:
 | `u8`, `u16`, `u32` | as a Number value | `ToUint8`, `ToUint16`, `ToUint32` |
 | `s64` | as a BigInt value | `ToBigInt64` |
 | `u64` | as a BigInt value | `ToBigUint64` |
-| `float32`, `float64` | as a Number value | `ToNumber` |
+| `f32`, `f64` | as a Number value | `ToNumber` |
 | `char` | same as [`USVString`] | same as [`USVString`], throw if the USV length is not 1 |
 | `record` | TBD: maybe a [JS Record]? | same as [`dictionary`] |
 | `variant` | see below | see below |
