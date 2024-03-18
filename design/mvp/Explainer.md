@@ -652,7 +652,7 @@ Specialized value types have the same set of semantic values as their
 corresponding despecialized types, but have distinct type constructors
 (which are not type-equal to the unspecialized type constructors) and
 thus have distinct binary encodings. This allows specialized value types to
-convey a more specific intent; for example, `result` isn't just a variant,
+convey a more specific intent. For example, `result` isn't just a variant,
 it's a variant that *means* success or failure, so source-code bindings
 can expose it via idiomatic source-language error reporting. Additionally,
 this can sometimes allow values to be represented differently. For example,
