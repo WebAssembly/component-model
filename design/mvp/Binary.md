@@ -276,7 +276,7 @@ canonopt ::= 0x00                                                => string-encod
            | 0x03 m:<core:memidx>                                => (memory m)
            | 0x04 f:<core:funcidx>                               => (realloc f)
            | 0x05 f:<core:funcidx>                               => (post-return f)
-           | 0x06 vec(<ref-options>)                             => (reference-type opt*) 📡
+           | 0x06                                                => reference-type 📡
 ```
 Notes:
 * The second `0x00` byte in `canon` stands for the `func` sort and thus the

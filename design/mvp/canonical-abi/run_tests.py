@@ -32,16 +32,17 @@ class Heap:
     self.memory[ret : ret + original_size] = self.memory[original_ptr : original_ptr + original_size]
     return ret
 
-def mk_opts(memory = bytearray(), encoding = 'utf8', realloc = None, post_return = None):
+def mk_opts(memory = bytearray(), encoding = 'utf8', realloc = None, post_return = None, reference_type = False):
   opts = CanonicalOptions()
   opts.memory = memory
   opts.string_encoding = encoding
   opts.realloc = realloc
   opts.post_return = post_return
+  opts.reference_type = reference_type
   return opts
 
-def mk_cx(memory = bytearray(), encoding = 'utf8', realloc = None, post_return = None):
-  opts = mk_opts(memory, encoding, realloc, post_return)
+def mk_cx(memory = bytearray(), encoding = 'utf8', realloc = None, post_return = None, reference_type = False):
+  opts = mk_opts(memory, encoding, realloc, post_return, reference_type)
   return CallContext(opts, ComponentInstance())
 
 def mk_str(s):
@@ -234,9 +235,9 @@ for src_encoding in encodings:
     for s in fun_strings:
       test_string(src_encoding, dst_encoding, s)
 
-def test_heap(t, expect, args, byte_array):
+def test_heap(t, expect, args, byte_array, reference_type=False):
   heap = Heap(byte_array)
-  cx = mk_cx(heap.memory)
+  cx = mk_cx(heap.memory, reference_type=reference_type)
   test(t, args, expect, cx)
 
 # Empty record types are not permitted yet.

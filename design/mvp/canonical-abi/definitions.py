@@ -300,6 +300,7 @@ class CanonicalOptions:
   string_encoding: str
   realloc: Callable[[int,int,int,int],int]
   post_return: Callable[[],None]
+  reference_type: bool
 
 class ComponentInstance:
   may_leave: bool
@@ -941,44 +942,56 @@ def lift_flat_signed(vi, core_width, t_width):
   return i
 
 def lift_flat_string(cx, vi):
-  ptr = vi.next('i32')
-  packed_length = vi.next('i32')
-  return load_string_from_range(cx, ptr, packed_length)
+  if cx.opts.reference_type:
+    raise NotImplementedError
+  else:
+    ptr = vi.next('i32')
+    packed_length = vi.next('i32')
+    return load_string_from_range(cx, ptr, packed_length)
 
 def lift_flat_list(cx, vi, elem_type):
-  ptr = vi.next('i32')
-  length = vi.next('i32')
-  return load_list_from_range(cx, ptr, length, elem_type)
+  if cx.opts.reference_type:
+    raise NotImplementedError
+  else:
+    ptr = vi.next('i32')
+    length = vi.next('i32')
+    return load_list_from_range(cx, ptr, length, elem_type)
 
 def lift_flat_record(cx, vi, fields):
-  record = {}
-  for f in fields:
-    record[f.label] = lift_flat(cx, vi, f.t)
-  return record
+  if cx.opts.reference_type:
+      raise NotImplementedError
+  else:
+    record = {}
+    for f in fields:
+      record[f.label] = lift_flat(cx, vi, f.t)
+    return record
 
 def lift_flat_variant(cx, vi, cases):
-  flat_types = flatten_variant(cases)
-  assert(flat_types.pop(0) == 'i32')
-  case_index = vi.next('i32')
-  trap_if(case_index >= len(cases))
-  class CoerceValueIter:
-    def next(self, want):
-      have = flat_types.pop(0)
-      x = vi.next(have)
-      match (have, want):
-        case ('i32', 'f32') : return decode_i32_as_float(x)
-        case ('i64', 'i32') : return wrap_i64_to_i32(x)
-        case ('i64', 'f32') : return decode_i32_as_float(wrap_i64_to_i32(x))
-        case ('i64', 'f64') : return decode_i64_as_float(x)
-        case _              : return x
-  c = cases[case_index]
-  if c.t is None:
-    v = None
+  if cx.opts.reference_type:
+    raise NotImplementedError
   else:
-    v = lift_flat(cx, CoerceValueIter(), c.t)
-  for have in flat_types:
-    _ = vi.next(have)
-  return { case_label_with_refinements(c, cases): v }
+    flat_types = flatten_variant(cases)
+    assert(flat_types.pop(0) == 'i32')
+    case_index = vi.next('i32')
+    trap_if(case_index >= len(cases))
+    class CoerceValueIter:
+      def next(self, want):
+        have = flat_types.pop(0)
+        x = vi.next(have)
+        match (have, want):
+          case ('i32', 'f32') : return decode_i32_as_float(x)
+          case ('i64', 'i32') : return wrap_i64_to_i32(x)
+          case ('i64', 'f32') : return decode_i32_as_float(wrap_i64_to_i32(x))
+          case ('i64', 'f64') : return decode_i64_as_float(x)
+          case _              : return x
+    c = cases[case_index]
+    if c.t is None:
+      v = None
+    else:
+      v = lift_flat(cx, CoerceValueIter(), c.t)
+    for have in flat_types:
+      _ = vi.next(have)
+    return { case_label_with_refinements(c, cases): v }
 
 def wrap_i64_to_i32(i):
   assert(0 <= i < (1 << 64))
@@ -1026,35 +1039,44 @@ def lower_flat_string(cx, v):
   return [Value('i32', ptr), Value('i32', packed_length)]
 
 def lower_flat_list(cx, v, elem_type):
-  (ptr, length) = store_list_into_range(cx, v, elem_type)
-  return [Value('i32', ptr), Value('i32', length)]
+  if cx.opts.reference_type:
+    raise NotImplementedError
+  else:
+    (ptr, length) = store_list_into_range(cx, v, elem_type)
+    return [Value('i32', ptr), Value('i32', length)]
 
 def lower_flat_record(cx, v, fields):
-  flat = []
-  for f in fields:
-    flat += lower_flat(cx, v[f.label], f.t)
-  return flat
+  if cx.opts.reference_type:
+      raise NotImplementedError
+  else:
+    flat = []
+    for f in fields:
+      flat += lower_flat(cx, v[f.label], f.t)
+    return flat
 
 def lower_flat_variant(cx, v, cases):
-  case_index, case_value = match_case(v, cases)
-  flat_types = flatten_variant(cases)
-  assert(flat_types.pop(0) == 'i32')
-  c = cases[case_index]
-  if c.t is None:
-    payload = []
+  if cx.opts.reference_type:
+      raise NotImplementedError
   else:
-    payload = lower_flat(cx, case_value, c.t)
-  for i,have in enumerate(payload):
-    want = flat_types.pop(0)
-    match (have.t, want):
-      case ('f32', 'i32') : payload[i] = Value('i32', encode_float_as_i32(have.v))
-      case ('i32', 'i64') : payload[i] = Value('i64', have.v)
-      case ('f32', 'i64') : payload[i] = Value('i64', encode_float_as_i32(have.v))
-      case ('f64', 'i64') : payload[i] = Value('i64', encode_float_as_i64(have.v))
-      case _              : pass
-  for want in flat_types:
-    payload.append(Value(want, 0))
-  return [Value('i32', case_index)] + payload
+    case_index, case_value = match_case(v, cases)
+    flat_types = flatten_variant(cases)
+    assert(flat_types.pop(0) == 'i32')
+    c = cases[case_index]
+    if c.t is None:
+      payload = []
+    else:
+      payload = lower_flat(cx, case_value, c.t)
+    for i,have in enumerate(payload):
+      want = flat_types.pop(0)
+      match (have.t, want):
+        case ('f32', 'i32') : payload[i] = Value('i32', encode_float_as_i32(have.v))
+        case ('i32', 'i64') : payload[i] = Value('i64', have.v)
+        case ('f32', 'i64') : payload[i] = Value('i64', encode_float_as_i32(have.v))
+        case ('f64', 'i64') : payload[i] = Value('i64', encode_float_as_i64(have.v))
+        case _              : pass
+    for want in flat_types:
+      payload.append(Value(want, 0))
+    return [Value('i32', case_index)] + payload
 
 def lower_flat_flags(v, labels):
   i = pack_flags_into_int(v, labels)

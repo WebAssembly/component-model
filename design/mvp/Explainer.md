@@ -1144,7 +1144,7 @@ canonopt ::= string-encoding=utf8
            | (memory <core:memidx>)
            | (realloc <core:funcidx>)
            | (post-return <core:funcidx>)
-           | (reference-type <ref-opts>*) 📡
+           | reference-type 📡
 ```
 While the production `externdesc` accepts any `sort`, the validation rules
 for `canon lift` would only allow the `func` sort. In the future, other sorts
@@ -1182,14 +1182,10 @@ validation requires this option to be present (there is no default).
 
 ##### `reference-type` options
 
-📡 `(reference-type ...)` does not take effect by default. When this option 
+📡 `reference-type` does not take effect by default. When this option 
 is turned on, Canonical ABI will be required to use reference types to pass 
 parameters. This option conflicts with `memory` and `realloc` and cannot 
 exist at the same time.
-
-📡 In the MVP version, the reference type refers to the specific monomorphic 
-type, such as `(ref array (mut u8))`, instead of type-erased 
-`(ref eq)`. 
 
 📡 When `reference-type` is enabled, the parameter type will change as follows:
 
@@ -1206,20 +1202,18 @@ type, such as `(ref array (mut u8))`, instead of type-erased
 | `record { a, b }`    | `(a: A, b: B)` (flatten)    | `(ref struct $record,)`           |
 | `tuple<A, B>`(in⩽16) | `(a: A, b: B)` (flatten)    | `(a: A, b: B)` (flatten)          |
 | `tuple<A, B>`(out>1) | `(ptr: i32)`                | `(ref struct (mut $a) (mut $b),)` |
-| `result<A, B>`       | `(i32, i32)`                | `(i32, (ref eq))`                 |
-| `variant`            | `(i32, [MAX_VARIANT_SIZE])` | `(i32, (ref eq))`                 |
 
-📡 Nullable types are treated specially in many languages and are therefore not 
-considered variants when the `reference-types` option is on.
+📡 For variant types, they will be unpacked into two parts: enumeration and data.
 
-| wit type               | wasm w/o `reference-type` | wasm w/ `reference-type` |
-|:-----------------------|:--------------------------|:-------------------------|
-| `option<bool>`         | `(i32, i32)`              | `(ref null i31)`         |
-| `option<char>`         | `(i32, i32)`              | `(ref null i32)`         |
-| `option<i8>`           | `(i32, i32)`              | `(ref null i31)`         |
-| `option<i32>`          | `(i32, i32)`              | `(ref null i32)`         |
-| `option<i64>`          | `(i32, i64)`              | `(ref null i64)`         |
-| `option<T>` (ref type) | `(i32, SIZE_OF_T)`        | `(ref null $t)`          |
+| wit type                | wasm w/o `reference-type`   | wasm w/ `reference-type` |
+| :---------------------- | :-------------------------- | :----------------------- |
+| `option<A>` (heap type) | `(i32, [A_SIZE])`           | `(i32, (ref null eq))`   |
+| `none`      (heap type) | `(0, [FILL_ZEROES])`        | `(1, null)`              |
+| `(some A)`  (heap type) | `(1, [A_SIZE])`             | `(0, ref $a)`            |
+| `result<A, B>`          | `(i32, [MAX_VARIANT_SIZE])` | `(i32, (ref null eq))`   |
+| `(ok A)`                | `(0, [A_SIZE])`             | `(0, ref $a)`            |
+| `(err B)`               | `(1, [B_SIZE])`             | `(1, ref $b)`            |
+| `variant`               | `(i32, [MAX_VARIANT_SIZE])` | `(i32, (ref null eq))`   |
 
 ##### `post-return` options
 
