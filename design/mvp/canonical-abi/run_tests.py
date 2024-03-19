@@ -109,12 +109,12 @@ test(t, [2], {'a':False,'b':True})
 test(t, [3], {'a':True,'b':True})
 test(t, [4], {'a':False,'b':False})
 test(Flags([str(i) for i in range(33)]), [0xffffffff,0x1], { str(i):True for i in range(33) })
-t = Variant([Case('x',U8()),Case('y',Float32()),Case('z',None)])
+t = Variant([Case('x',U8()),Case('y',F32()),Case('z',None)])
 test(t, [0,42], {'x': 42})
 test(t, [0,256], {'x': 0})
 test(t, [1,0x4048f5c3], {'y': 3.140000104904175})
 test(t, [2,0xffffffff], {'z': None})
-t = Option(Float32())
+t = Option(F32())
 test(t, [0,3.14], {'none':None})
 test(t, [1,3.14], {'some':3.14})
 t = Result(U8(),U32())
@@ -147,21 +147,21 @@ test_pairs(U32(), [((1<<31)-1,(1<<31)-1),(1<<31,1<<31),(((1<<32)-1),(1<<32)-1)])
 test_pairs(S32(), [((1<<31)-1,(1<<31)-1),(1<<31,-(1<<31)),((1<<32)-1,-1)])
 test_pairs(U64(), [((1<<63)-1,(1<<63)-1), (1<<63,1<<63), ((1<<64)-1,(1<<64)-1)])
 test_pairs(S64(), [((1<<63)-1,(1<<63)-1), (1<<63,-(1<<63)), ((1<<64)-1,-1)])
-test_pairs(Float32(), [(3.14,3.14)])
-test_pairs(Float64(), [(3.14,3.14)])
+test_pairs(F32(), [(3.14,3.14)])
+test_pairs(F64(), [(3.14,3.14)])
 test_pairs(Char(), [(0,'\x00'), (65,'A'), (0xD7FF,'\uD7FF'), (0xD800,None), (0xDFFF,None)])
 test_pairs(Char(), [(0xE000,'\uE000'), (0x10FFFF,'\U0010FFFF'), (0x110000,None), (0xFFFFFFFF,None)])
 test_pairs(Enum(['a','b']), [(0,{'a':None}), (1,{'b':None}), (2,None)])
 
 def test_nan32(inbits, outbits):
   origf = decode_i32_as_float(inbits)
-  f = lift_flat(mk_cx(), ValueIter([Value('f32', origf)]), Float32())
+  f = lift_flat(mk_cx(), ValueIter([Value('f32', origf)]), F32())
   if DETERMINISTIC_PROFILE:
     assert(encode_float_as_i32(f) == outbits)
   else:
     assert(not math.isnan(origf) or math.isnan(f))
   cx = mk_cx(int.to_bytes(inbits, 4, 'little'))
-  f = load(cx, 0, Float32())
+  f = load(cx, 0, F32())
   if DETERMINISTIC_PROFILE:
     assert(encode_float_as_i32(f) == outbits)
   else:
@@ -169,13 +169,13 @@ def test_nan32(inbits, outbits):
 
 def test_nan64(inbits, outbits):
   origf = decode_i64_as_float(inbits)
-  f = lift_flat(mk_cx(), ValueIter([Value('f64', origf)]), Float64())
+  f = lift_flat(mk_cx(), ValueIter([Value('f64', origf)]), F64())
   if DETERMINISTIC_PROFILE:
     assert(encode_float_as_i64(f) == outbits)
   else:
     assert(not math.isnan(origf) or math.isnan(f))
   cx = mk_cx(int.to_bytes(inbits, 8, 'little'))
-  f = load(cx, 0, Float64())
+  f = load(cx, 0, F64())
   if DETERMINISTIC_PROFILE:
     assert(encode_float_as_i64(f) == outbits)
   else:
@@ -322,12 +322,12 @@ def test_flatten(t, params, results):
   got = flatten_functype(t, 'lower')
   assert(got == expect)
 
-test_flatten(FuncType([U8(),Float32(),Float64()],[]), ['i32','f32','f64'], [])
-test_flatten(FuncType([U8(),Float32(),Float64()],[Float32()]), ['i32','f32','f64'], ['f32'])
-test_flatten(FuncType([U8(),Float32(),Float64()],[U8()]), ['i32','f32','f64'], ['i32'])
-test_flatten(FuncType([U8(),Float32(),Float64()],[Tuple([Float32()])]), ['i32','f32','f64'], ['f32'])
-test_flatten(FuncType([U8(),Float32(),Float64()],[Tuple([Float32(),Float32()])]), ['i32','f32','f64'], ['f32','f32'])
-test_flatten(FuncType([U8(),Float32(),Float64()],[Float32(),Float32()]), ['i32','f32','f64'], ['f32','f32'])
+test_flatten(FuncType([U8(),F32(),F64()],[]), ['i32','f32','f64'], [])
+test_flatten(FuncType([U8(),F32(),F64()],[F32()]), ['i32','f32','f64'], ['f32'])
+test_flatten(FuncType([U8(),F32(),F64()],[U8()]), ['i32','f32','f64'], ['i32'])
+test_flatten(FuncType([U8(),F32(),F64()],[Tuple([F32()])]), ['i32','f32','f64'], ['f32'])
+test_flatten(FuncType([U8(),F32(),F64()],[Tuple([F32(),F32()])]), ['i32','f32','f64'], ['f32','f32'])
+test_flatten(FuncType([U8(),F32(),F64()],[F32(),F32()]), ['i32','f32','f64'], ['f32','f32'])
 test_flatten(FuncType([U8() for _ in range(17)],[]), ['i32' for _ in range(17)], [])
 test_flatten(FuncType([U8() for _ in range(17)],[Tuple([U8(),U8()])]), ['i32' for _ in range(17)], ['i32','i32'])
 

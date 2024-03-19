@@ -106,8 +106,8 @@ class S32(ValType): pass
 class U32(ValType): pass
 class S64(ValType): pass
 class U64(ValType): pass
-class Float32(ValType): pass
-class Float64(ValType): pass
+class F32(ValType): pass
+class F64(ValType): pass
 class Char(ValType): pass
 class String(ValType): pass
 
@@ -182,8 +182,8 @@ def alignment(t):
     case S16() | U16()      : return 2
     case S32() | U32()      : return 4
     case S64() | U64()      : return 8
-    case Float32()          : return 4
-    case Float64()          : return 8
+    case F32()              : return 4
+    case F64()              : return 8
     case Char()             : return 4
     case String() | List(_) : return 4
     case Record(fields)     : return alignment_record(fields)
@@ -231,8 +231,8 @@ def size(t):
     case S16() | U16()      : return 2
     case S32() | U32()      : return 4
     case S64() | U64()      : return 8
-    case Float32()          : return 4
-    case Float64()          : return 8
+    case F32()              : return 4
+    case F64()              : return 8
     case Char()             : return 4
     case String() | List(_) : return 8
     case Record(fields)     : return size_record(fields)
@@ -394,8 +394,8 @@ def load(cx, ptr, t):
     case S16()          : return load_int(cx, ptr, 2, signed=True)
     case S32()          : return load_int(cx, ptr, 4, signed=True)
     case S64()          : return load_int(cx, ptr, 8, signed=True)
-    case Float32()      : return decode_i32_as_float(load_int(cx, ptr, 4))
-    case Float64()      : return decode_i64_as_float(load_int(cx, ptr, 8))
+    case F32()          : return decode_i32_as_float(load_int(cx, ptr, 4))
+    case F64()          : return decode_i64_as_float(load_int(cx, ptr, 8))
     case Char()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
     case String()       : return load_string(cx, ptr)
     case List(t)        : return load_list(cx, ptr, t)
@@ -565,8 +565,8 @@ def store(cx, v, t, ptr):
     case S16()          : store_int(cx, v, ptr, 2, signed=True)
     case S32()          : store_int(cx, v, ptr, 4, signed=True)
     case S64()          : store_int(cx, v, ptr, 8, signed=True)
-    case Float32()      : store_int(cx, encode_float_as_i32(v), ptr, 4)
-    case Float64()      : store_int(cx, encode_float_as_i64(v), ptr, 8)
+    case F32()          : store_int(cx, encode_float_as_i32(v), ptr, 4)
+    case F64()          : store_int(cx, encode_float_as_i64(v), ptr, 8)
     case Char()         : store_int(cx, char_to_i32(v), ptr, 4)
     case String()       : store_string(cx, v, ptr)
     case List(t)        : store_list(cx, v, ptr, t)
@@ -857,8 +857,8 @@ def flatten_type(t):
     case U8() | U16() | U32() : return ['i32']
     case S8() | S16() | S32() : return ['i32']
     case S64() | U64()        : return ['i64']
-    case Float32()            : return ['f32']
-    case Float64()            : return ['f64']
+    case F32()                : return ['f32']
+    case F64()                : return ['f64']
     case Char()               : return ['i32']
     case String() | List(_)   : return ['i32', 'i32']
     case Record(fields)       : return flatten_record(fields)
@@ -916,8 +916,8 @@ def lift_flat(cx, vi, t):
     case S16()          : return lift_flat_signed(vi, 32, 16)
     case S32()          : return lift_flat_signed(vi, 32, 32)
     case S64()          : return lift_flat_signed(vi, 64, 64)
-    case Float32()      : return canonicalize_nan32(vi.next('f32'))
-    case Float64()      : return canonicalize_nan64(vi.next('f64'))
+    case F32()          : return canonicalize_nan32(vi.next('f32'))
+    case F64()          : return canonicalize_nan64(vi.next('f64'))
     case Char()         : return convert_i32_to_char(cx, vi.next('i32'))
     case String()       : return lift_flat_string(cx, vi)
     case List(t)        : return lift_flat_list(cx, vi, t)
@@ -1005,8 +1005,8 @@ def lower_flat(cx, v, t):
     case S16()          : return lower_flat_signed(v, 32)
     case S32()          : return lower_flat_signed(v, 32)
     case S64()          : return lower_flat_signed(v, 64)
-    case Float32()      : return [Value('f32', maybe_scramble_nan32(v))]
-    case Float64()      : return [Value('f64', maybe_scramble_nan64(v))]
+    case F32()          : return [Value('f32', maybe_scramble_nan32(v))]
+    case F64()          : return [Value('f64', maybe_scramble_nan64(v))]
     case Char()         : return [Value('i32', char_to_i32(v))]
     case String()       : return lower_flat_string(cx, v)
     case List(t)        : return lower_flat_list(cx, v, t)
