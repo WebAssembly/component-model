@@ -1593,10 +1593,10 @@ as defined above):
 
 Since any cross-component call necessarily transits through a statically-known
 `canon_lower`+`canon_lift` call pair, an AOT compiler can fuse `canon_lift` and
-`canon_lower` into a single, efficient trampoline. This allows efficient
-compilation of the permissive [subtyping](Subtyping.md) allowed between
-components (including the elimination of string operations on the labels of
-records and variants) as well as post-MVP [adapter functions].
+`canon_lower` into a single, efficient trampoline. In the future this may allow
+efficient compilation of permissive subtyping between components (including the
+elimination of string operations on the labels of records and variants) as well
+as post-MVP [adapter functions].
 
 By clearing `may_enter` for the duration of calls to imports, the `may_enter`
 guard in `canon_lift` ensures that components cannot be externally reentered,
