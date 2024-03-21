@@ -176,8 +176,8 @@ primvaltype   ::= 0x7f                                    => bool
                 | 0x79                                    => u32
                 | 0x78                                    => s64
                 | 0x77                                    => u64
-                | 0x76                                    => float32
-                | 0x75                                    => float64
+                | 0x76                                    => f32
+                | 0x75                                    => f64
                 | 0x74                                    => char
                 | 0x73                                    => string
 defvaltype    ::= pvt:<primvaltype>                       => pvt
