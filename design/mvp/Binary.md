@@ -285,7 +285,7 @@ Notes:
   [`CanonicalABI.md`](CanonicalABI.md#canonical-definitions).
 
 
-## 🪙 Start Definitions
+## Start Definitions
 
 (See [Start Definitions](Explainer.md#start-definitions) in the explainer.)
 ```ebnf
@@ -294,10 +294,11 @@ start ::= f:<funcidx> arg*:vec(<valueidx>) r:<u32> => (start f (value arg)* (res
 Notes:
 * Validation requires `f` have `functype` with `param` arity and types matching `arg*`
   and `result` arity `r`.
-* Validation appends the `result` types of `f` to the value index space (making
+* Currently, `arg*` and `result*` are requird to be empty.
+* 🪙 Validation appends the `result` types of `f` to the value index space (making
   them available for reference by subsequent definitions).
 
-In addition to the type-compatibility checks mentioned above, the validation
+🪙 In addition to the type-compatibility checks mentioned above, the validation
 rules for value definitions additionally require that each value is consumed
 exactly once. Thus, during validation, each value has an associated "consumed"
 boolean flag. When a value is first added to the value index space (via
