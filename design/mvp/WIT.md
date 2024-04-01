@@ -655,7 +655,7 @@ package local:demo;
 interface foo {
   a1: func();
   a2: func(x: u32);
-  a3: func(y: u64, z: float32);
+  a3: func(y: u64, z: f32);
 }
 ```
 
@@ -676,7 +676,7 @@ And functions can also return multiple types by naming them:
 package local:demo;
 
 interface foo {
-  a: func() -> (a: u32, b: float32);
+  a: func() -> (a: u32, b: f32);
 }
 ```
 
@@ -1209,7 +1209,7 @@ Specifically the following types are available:
 ```ebnf
 ty ::= 'u8' | 'u16' | 'u32' | 'u64'
      | 's8' | 's16' | 's32' | 's64'
-     | 'float32' | 'float64'
+     | 'f32' | 'f64'
      | 'char'
      | 'bool'
      | 'string'
