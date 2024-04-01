@@ -934,7 +934,46 @@ include-names-item ::= id 'as' id
 ## Item: `interface`
 
 Interfaces can be defined in a `wit` file. Interfaces have a name and a
-sequence of items and functions.
+sequence of items and functions, all of which can be gated on an `id` or a
+semantic version.
+
+For example, the following interface has 4 items, 3 of which are gated:
+```wit
+interface foo {
+  a: func();
+
+  @since(version = "0.2.1")
+  b: func();
+
+  @since(version = "0.2.2")
+  @feature(name = "fancy-foo")
+  c: func();
+
+  @feature(name = "fancier-foo")
+  d: func();
+}
+```
+The `@since` gate indicates that `b` and `c` were added as part of the `0.2.1`
+and `0.2.2` releases, resp. Thus, when building a component targeting, e.g.,
+`0.2.1`, `b` can be used, but `c` cannot. An important expectation set by the
+`@since` gate is that, once applied to an item, the item is never modified
+incompatibly going forward (according to general semantic versioning rules).
+
+In contrast, the lone `@feature` gate on `d` indicates that `d` is part of the
+`fancier-foo` feature that is still under active development and thus `d` may
+change type or be removed at any time. An important expectation set by the
+`@feature` gate is that toolchains will not expose `@feature`-only-gated items
+by default unless explicitly opted-into by the developer.
+
+Together, these gates support a development flow in which new features start
+with a `@feature` gate while the details are still being hashed out. Then, once
+the feature is stable (and, in a WASI context, voted upon), the `@since` gate
+can be added. To enable a smooth transition, both gates can be present at the
+same time, exposing the feature by when the target version is greater-or-equal.
+After a suitable transition period (during which producer toolchains bump their
+default target versions to enable the feature by default), the `@feature` gate
+can then be removed. Thus, in the above example, the `fancy-foo` feature gate
+could be removed from `c` once `0.2.2` is the default target version.
 
 Specifically interfaces have the structure:
 
@@ -943,9 +982,15 @@ Specifically interfaces have the structure:
 ```ebnf
 interface-item ::= 'interface' id '{' interface-items* '}'
 
-interface-items ::= typedef-item
-                  | use-item
-                  | func-item
+interface-items ::= gate interface-definition
+
+gate ::= since-gate? feature-gate?
+since-gate ::= '@since' '(' 'version' '=' '"' <valid semver> '"' ')'
+feature-gate ::= '@feature' '(' 'name' '=' '"' id '"' ')'
+
+interface-definition ::= typedef-item
+                       | use-item
+                       | func-item
 
 typedef-item ::= resource-item
                | variant-items
@@ -969,6 +1014,7 @@ named-type-list ::= ϵ
 
 named-type ::= id ':' ty
 ```
+
 
 ## Item: `use`
 
@@ -1626,3 +1672,45 @@ standalone interface definitions (such `wasi:http/handler`) are no longer in a
 `use`s are replaced by direct aliases to preceding type imports as determined
 by the WIT resolution process.
 
+Unlike most other WIT constructs, the `@feature` and `@version` gates are not
+represented in the component binary. Instead, these are considered "macro"
+constructs that take the place of maintaining two copies of a single WIT document.
+In particular, when encoding a collection of WIT documents into a binary, a target
+version and set of feature names is supplied and determines whether individual
+gated items are included or not.
+
+For example, the following WIT document:
+```wit
+package ns:p@1.1.0;
+
+interface i {
+  f: func()
+
+  @since(version = "1.1.0")
+  g: func()
+}
+```
+is encoded as the following component when the target version is `1.0.0`:
+```wat
+(component
+  (type (export "i") (component
+    (export "ns:p/i@1.0.0" (instance
+      (export "f" (func))
+    ))
+  ))
+)
+```
+If the target version was instead `1.1.0`, the same WIT document would be
+encoded as:
+```wat
+(component
+  (type (export "i") (component
+    (export "ns:p/i@1.1.0" (instance
+      (export "f" (func))
+      (export "g" (func))
+    ))
+  ))
+)
+```
+Thus, `@since` and `@feature` gates are not part of the runtime semantics of
+components, just part of the source-level tooling for producing components.
