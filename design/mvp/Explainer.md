@@ -106,15 +106,15 @@ inner `func` doesn't need a `core` prefix; the `core` token is used to mark the
 The [`core:module`] production is unmodified by the Component Model and thus
 components embed Core WebAssembly (text and binary format) modules as currently
 standardized, allowing reuse of an unmodified Core WebAssembly implementation.
-The next two productions, `core:instance` and `core:alias`, are not currently
-included in Core WebAssembly, but would be if Core WebAssembly adopted the
-[module-linking] proposal. These two new core definitions are introduced below,
-alongside their component-level counterparts. Finally, the existing
-[`core:type`] production is extended below to add core module types as proposed
-for module-linking. Thus, the overall idea is to represent core definitions (in
-the AST, binary and text format) as-if they had already been added to Core
-WebAssembly so that, if they eventually are, the implementation of decoding and
-validation can be shared in a layered fashion.
+The next production, `core:instance`, is not currently included in Core
+WebAssembly, but would be if Core WebAssembly adopted the [module-linking]
+proposal. This new core definition is introduced below, alongside its
+component-level counterpart. Finally, the existing [`core:type`] production is
+extended below to add core module types as proposed for module-linking. Thus,
+the overall idea is to represent core definitions (in the AST, binary and text
+format) as-if they had already been added to Core WebAssembly so that, if they
+eventually are, the implementation of decoding and validation can be shared in
+a layered fashion.
 
 The next kind of definition is, recursively, a component itself. Thus,
 components form trees with all other kinds of definitions only appearing at the
