@@ -36,6 +36,7 @@ section   ::=    section_0(<core:custom>)         => ϵ
             | s: section_9(<start>)               => [s]
             | i*:section_10(vec(<import>))        => i*
             | e*:section_11(vec(<export>))        => e*
+            | v*:section_12(vec(<value>))         => v* 🪙
 ```
 Notes:
 * Reused Core binary rules: [`core:section`], [`core:custom`], [`core:module`]
@@ -215,12 +216,14 @@ importdecl    ::= in:<importname'> ed:<externdesc>        => (import in ed)
 exportdecl    ::= en:<exportname'> ed:<externdesc>        => (export en ed)
 externdesc    ::= 0x00 0x11 i:<core:typeidx>              => (core module (type i))
                 | 0x01 i:<typeidx>                        => (func (type i))
-                | 0x02 t:<valtype>                        => (value t) 🪙
+                | 0x02 b:<valuebound>                     => (value b) 🪙
                 | 0x03 b:<typebound>                      => (type b)
                 | 0x04 i:<typeidx>                        => (component (type i))
                 | 0x05 i:<typeidx>                        => (instance (type i))
 typebound     ::= 0x00 i:<typeidx>                        => (eq i)
                 | 0x01                                    => (sub resource)
+valuebound    ::= 0x00 i:<valueidx>                       => (eq i) 🪙
+                | 0x01 t:<valtype>                        => t 🪙
 ```
 Notes:
 * The type opcodes follow the same negative-SLEB128 scheme as Core WebAssembly,
@@ -347,6 +350,64 @@ Notes:
 * `<integrity-metadata>` is as defined by the
   [SRI](https://www.w3.org/TR/SRI/#dfn-integrity-metadata) spec.
 
+## 🪙 Value Definitions
+
+(See [Value Definitions](Explainer.md#value-definitions) in the explainer.)
+
+```ebnf
+value                      ::= t:<valtype> v:<val(t)>                  => (value t v)
+val(bool)                  ::= 0x00                                    => false
+                             | 0x01                                    => true
+val(u8)                    ::= v:<core:u8>                             => v
+val(s8)                    ::= v:<core:s8>                             => v
+val(s16)                   ::= v:<core:s16>                            => v
+val(u16)                   ::= v:<core:u16>                            => v
+val(s32)                   ::= v:<core:s32>                            => v
+val(u32)                   ::= v:<core:u32>                            => v
+val(s64)                   ::= v:<core:s64>                            => v
+val(u64)                   ::= v:<core:u64>                            => v
+val(f32)                   ::= v:<core:f32>                            => v (if !isnan(v))
+                             | 0x00 0x00 0xC0 0x7F                     => nan
+val(f64)                   ::= v:<core:f64>                            => v (if !isnan(v))
+                             | 0x00 0x00 0x00 0x00 0x00 0x00 0xF8 0x7F => nan
+val(char)                  ::= v:<core:u32>                            => v (if v < 0xD800 or 0xE000 <= v <= 0x10FFFF)
+val(string)                ::= v:<core:name>                           => v
+val(i:<typeidx>)           ::= v:<val(type-index-space[i])>            => v
+val((record (field l t)+)) ::= v+:<val(t)>+                            => (record v+)
+val((variant (case l t?)+) ::= i:<core:u32> v?:<val(t[i])>?            => (variant l[i] v?)
+val((list t))              ::= v:vec(<val(t)>)                         => (list v)
+val((tuple t+))            ::= v+:<val(t)>+                            => (tuple v+)
+val((flags l+))            ::= v:<core:uN>                             => (flags (l[i] for i in 0..N-1 if v & 2^i > 0)) (where N = |l+|)
+val((enum l+))             ::= i:<core:u32>                            => (enum l[i])
+val((option t))            ::= 0x00                                    => none
+                             | 0x01 v:<val(t)>                         => (some v)
+val((result))              ::= 0x00                                    => ok
+                             | 0x01                                    => error
+val((result t))            ::= 0x00 v:<val(t)>                         => (ok v)
+                             | 0x01                                    => error
+val((result (error u)))    ::= 0x00                                    => ok
+                             | 0x01 v:<val(u)>                         => (error v)
+val((result t (error u)))  ::= 0x00 v:<val(t)>                         => (ok v)
+                             | 0x01 v:<val(u)>                         => (error v)
+```
+
+Notes:
+* Reused Core binary rules:
+    - [`core:name`]
+    - [`core:s8`]
+    - [`core:s16`]
+    - [`core:s32`]
+    - [`core:s64`]
+    - [`core:u8`]
+    - [`core:u16`]
+    - [`core:u32`]
+    - [`core:u64`]
+    - [`core:uN`]
+    - [`core:f32`]
+    - [`core:f64`]
+* `&` operator is used to denote bitwise AND operation, which performs AND on every bit of two numbers in their binary form
+* `isnan` is a function, which takes a floating point number as a parameter and returns `true` iff it represents a NaN as defined in [IEEE 754 standard]
+
 ## Name Section
 
 Like the core wasm [name
@@ -376,7 +437,17 @@ appear once within a `name` section, for example component instances can only be
 named once.
 
 
+[`core:s8`]: https://webassembly.github.io/spec/core/binary/values.html#integers
+[`core:u8`]: https://webassembly.github.io/spec/core/binary/values.html#integers
+[`core:s16`]: https://webassembly.github.io/spec/core/binary/values.html#integers
+[`core:u16`]: https://webassembly.github.io/spec/core/binary/values.html#integers
+[`core:s32`]: https://webassembly.github.io/spec/core/binary/values.html#integers
 [`core:u32`]: https://webassembly.github.io/spec/core/binary/values.html#integers
+[`core:s64`]: https://webassembly.github.io/spec/core/binary/values.html#integers
+[`core:u64`]: https://webassembly.github.io/spec/core/binary/values.html#integers
+[`core:uN`]: https://webassembly.github.io/spec/core/binary/values.html#integers
+[`core:f32`]: https://webassembly.github.io/spec/core/binary/values.html#floating-point
+[`core:f64`]: https://webassembly.github.io/spec/core/binary/values.html#floating-point
 [`core:section`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-section
 [`core:custom`]: https://webassembly.github.io/spec/core/binary/modules.html#custom-section
 [`core:module`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-module
@@ -388,3 +459,5 @@ named once.
 
 [type-imports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
 [module-linking]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md
+
+[IEEE 754 standard]: https://ieeexplore.ieee.org/document/8766229
