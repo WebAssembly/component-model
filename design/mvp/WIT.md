@@ -945,35 +945,37 @@ interface foo {
   @since(version = "0.2.1")
   b: func();
 
-  @since(version = "0.2.2")
-  @feature(name = "fancy-foo")
+  @since(version = "0.2.2", feature = "fancy-foo")
   c: func();
 
-  @feature(name = "fancier-foo")
+  @unstable(feature = "fancier-foo")
   d: func();
 }
 ```
 The `@since` gate indicates that `b` and `c` were added as part of the `0.2.1`
 and `0.2.2` releases, resp. Thus, when building a component targeting, e.g.,
 `0.2.1`, `b` can be used, but `c` cannot. An important expectation set by the
-`@since` gate is that, once applied to an item, the item is never modified
+`@since` gate is that, once applied to an item, the item is not modified
 incompatibly going forward (according to general semantic versioning rules).
 
-In contrast, the lone `@feature` gate on `d` indicates that `d` is part of the
+In contrast, the `@unstable` gate on `d` indicates that `d` is part of the
 `fancier-foo` feature that is still under active development and thus `d` may
 change type or be removed at any time. An important expectation set by the
-`@feature` gate is that toolchains will not expose `@feature`-only-gated items
-by default unless explicitly opted-into by the developer.
+`@unstable` gate is that toolchains will not expose `@unstable` features by
+default unless explicitly opted-into by the developer.
 
 Together, these gates support a development flow in which new features start
-with a `@feature` gate while the details are still being hashed out. Then, once
-the feature is stable (and, in a WASI context, voted upon), the `@since` gate
-can be added. To enable a smooth transition, both gates can be present at the
-same time, exposing the feature by when the target version is greater-or-equal.
-After a suitable transition period (during which producer toolchains bump their
-default target versions to enable the feature by default), the `@feature` gate
-can then be removed. Thus, in the above example, the `fancy-foo` feature gate
-could be removed from `c` once `0.2.2` is the default target version.
+with an `@unstable` gate while the details are still being hashed out. Then,
+once the feature is stable (and, in a WASI context, voted upon), the
+`@unstable` gate is switched to a `@since` gate. To enable a smooth transition
+(during which producer toolchains are targeting a version earlier than the
+`@since`-specified `version`), the `@since` gate contains an optional `feature`
+field that, when present, says to enable the feature when *either* the target
+version is greator-or-equal *or* the feature name is explicitly enabled by the
+developer. Thus, `c` is enabled if the version is `0.2.2` or newer or the
+`fancy-foo` feature is explicitly enabled by the developer. The `feature` field
+can be removed once producer toolchains have updated their default version to
+enable the feature by default.
 
 Specifically interfaces have the structure:
 
@@ -984,9 +986,11 @@ interface-item ::= 'interface' id '{' interface-items* '}'
 
 interface-items ::= gate interface-definition
 
-gate ::= since-gate? feature-gate?
-since-gate ::= '@since' '(' 'version' '=' '"' <valid semver> '"' ')'
-feature-gate ::= '@feature' '(' 'name' '=' '"' id '"' ')'
+gate ::= unstable-gate
+       | since-gate
+unstable-gate ::= '@unstable' '(' feature-field ')'
+feature-field ::= 'feature' '=' '"' id '"'
+since-gate ::= '@since' '(' 'version' '=' '"' <valid semver> '"' ( ',' feature-field )? ')'
 
 interface-definition ::= typedef-item
                        | use-item
@@ -1672,12 +1676,13 @@ standalone interface definitions (such `wasi:http/handler`) are no longer in a
 `use`s are replaced by direct aliases to preceding type imports as determined
 by the WIT resolution process.
 
-Unlike most other WIT constructs, the `@feature` and `@version` gates are not
-represented in the component binary. Instead, these are considered "macro"
-constructs that take the place of maintaining two copies of a single WIT document.
-In particular, when encoding a collection of WIT documents into a binary, a target
-version and set of feature names is supplied and determines whether individual
-gated items are included or not.
+Unlike most other WIT constructs, the `@since` and `@unstable` gates are not
+represented in the component binary. Instead, they are considered "macro"
+constructs that take the place of maintaining two copies of a single WIT
+document. In particular, when encoding a collection of WIT documents into a
+binary, the target version and set of explicitly-enabled feature names
+determine whether individual gated features are included in the encoded type or
+not.
 
 For example, the following WIT document:
 ```wit
@@ -1712,5 +1717,5 @@ encoded as:
   ))
 )
 ```
-Thus, `@since` and `@feature` gates are not part of the runtime semantics of
+Thus, `@since` and `@unstable` gates are not part of the runtime semantics of
 components, just part of the source-level tooling for producing components.
