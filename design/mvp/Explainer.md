@@ -23,7 +23,8 @@ JavaScript runtimes. For a more user-focused explanation, take a look at the
   * [Canonical definitions](#canonical-definitions)
     * [Canonical ABI](#canonical-built-ins)
     * [Canonical built-ins](#canonical-built-ins)
-  * [Start definitions](#-start-definitions)
+  * [Value definitions](#value-definitions)
+  * [Start definitions](#start-definitions)
   * [Import and export definitions](#import-and-export-definitions)
 * [Component invariants](#component-invariants)
 * [JavaScript embedding](#JavaScript-embedding)
@@ -87,6 +88,7 @@ definition ::= core-prefix(<core:module>)
              | <start> 🪺
              | <import>
              | <export>
+             | <value> 🪙
 
 where core-prefix(X) parses '(' 'core' Y ')' when X parses '(' Y ')'
 ```
@@ -296,7 +298,7 @@ contain any valid UTF-8 string).
 
 🪙 The `value` sort refers to a value that is provided and consumed during
 instantiation. How this works is described in the
-[start definitions](#start-definitions) section.
+[value definitions](#value-definitions) section.
 
 To see a non-trivial example of component instantiation, we'll first need to
 introduce a few other definitions below that allow components to import, define
@@ -568,10 +570,12 @@ externdesc    ::= (<sort> (type <u32>) )
                 | <functype>
                 | <componenttype>
                 | <instancetype>
-                | (value <valtype>) 🪙
+                | (value <valuebound>) 🪙
                 | (type <typebound>)
 typebound     ::= (eq <typeidx>)
                 | (sub resource)
+valuebound    ::= (eq <valueidx>) 🪙
+                | <valtype> 🪙
 
 where bind-id(X) parses '(' sort <id>? Y ')' when X parses '(' sort Y ')'
 ```
@@ -737,7 +741,7 @@ definitions.
 
 🪙 The `value` case of `externdesc` describes a runtime value that is imported or
 exported at instantiation time as described in the
-[start definitions](#start-definitions) section below.
+[value definitions](#value-definitions) section below.
 
 The `type` case of `externdesc` describes an imported or exported type along
 with its "bound":
@@ -1355,6 +1359,134 @@ number of threads that can be expected to execute concurrently.
 See the [CanonicalABI.md](CanonicalABI.md#canonical-definitions) for detailed
 definitions of each of these built-ins and their interactions.
 
+### 🪙 Value Definitions
+
+Value definitions (in the value index space) are like immutable `global` definitions
+in Core WebAssembly except that validation requires them to be consumed exactly
+once at instantiation-time (i.e., they are [linear]).
+
+Components may define values in the value index space using following syntax:
+
+```ebnf
+value ::= (value <id>? <valtype> <val>)
+val   ::= false | true
+        | <core:i64>
+        | <core:f64> | NaN
+        | '<core:char>'
+        | <core:name>
+        | (record <val>+)
+        | (variant "<label>" <val>?)
+        | (list <val>*)
+        | (tuple <val>+)
+        | (flags "<label>"*)
+        | (enum "<label>")
+        | none | (some <val>)
+        | ok | (ok <val>) | error | (error <val>)
+```
+
+The validation rules for `value` require the `val` to match the `valtype`.  For example:
+```wasm
+(component
+  (value $a bool true)
+  (value $b u8 1)
+  (value $c u16 2)
+  (value $d u32 3)
+  (value $e u64 4)
+  (value $f u8 5)
+  (value $g u16 6)
+  (value $h u32 7)
+  (value $i u64 8)
+  (value $j f32 9.1)
+  (value $k f64 9.2)
+  (value $l char 'a')
+  (value $m string "hello")
+  (value $n (record (field "a" bool) (field "b" u8)) (record true 1))
+  (value $o (variant (case "a" bool) (case "b" u8)) (variant "b" 1))
+  (value $p (list (result (option u8)))
+    (list
+      error
+      (ok (some 1))
+      (ok none)
+      error
+      (ok (some 2))
+    )
+  )
+  (value $q (tuple u8 u16 u32) (tuple 1 2 3))
+
+  (type $abc (flags "a" "b" "c"))
+  (value $r $abc (flags "a" "c"))
+
+  (value $s (enum "a" "b" "c") (enum "b"))
+
+  (type $complex
+    (tuple
+      (record
+        (field "a" (option string))
+        (field "b" (tuple (option u8) string))
+      )
+      (list char)
+      $abc
+      string
+    )
+  )
+  (value $complex1 (type $complex)
+    (tuple
+      (record
+        none
+        (tuple none "empty")
+      )
+      (list)
+      (flags)
+      ""
+    )
+  )
+  (value $complex2 (type $complex)
+    (tuple
+      (record
+        (some "example")
+        (tuple (some 42) "hello")
+      )
+      (list 'a' 'b' 'c')
+      (flags "b" "a")
+      "hi"
+    )
+  )
+)
+```
+
+As with all definition sorts, values may be imported and exported by
+components. As an example value import:
+```wasm
+(import "env" (value $env (record (field "locale" (option string)))))
+```
+As this example suggests, value imports can serve as generalized [environment
+variables], allowing not just `string`, but the full range of `valtype`.
+
+Values can also be exported.  For example:
+```wasm
+(component
+  (import "system-port" (value $port u16))
+  (value $url string "https://example.com")
+  (export "default-url" (value $url))
+  (export "default-port" (value $port))
+)
+```
+The inferred type of this component is:
+```wasm
+(component
+  (import "system-port" (value $port u16))
+  (value $url string "https://example.com")
+  (export "default-url" (value (eq $url)))
+  (export "default-port" (value (eq $port)))
+)
+```
+Thus, by default, the precise constant or import being exported is propagated
+into the component's type and thus its public interface.  In this way, value exports
+can act as semantic configuration data provided by the component to the host
+or other client tooling.
+Components can also keep the exact value being exported abstract (so that the
+precise value is not part of the type and public interface) using the "type ascription"
+feature mentioned in the [imports and exports](#import-and-export-definitions) section below.
 
 ### 🪙 Start Definitions
 
@@ -1366,19 +1498,8 @@ Thus, `start` definitions in components look like function calls:
 start ::= (start <funcidx> (value <valueidx>)* (result (value <id>?))*)
 ```
 The `(value <valueidx>)*` list specifies the arguments passed to `funcidx` by
-indexing into the *value index space*. Value definitions (in the value index
-space) are like immutable `global` definitions in Core WebAssembly except that
-validation requires them to be consumed exactly once at instantiation-time
-(i.e., they are [linear]). The arity and types of the two value lists are
+indexing into the *value index space*. The arity and types of the two value lists are
 validated to match the signature of `funcidx`.
-
-As with all definition sorts, values may be imported and exported by
-components. As an example value import:
-```wasm
-(import "env" (value $env (record (field "locale" (option string)))))
-```
-As this example suggests, value imports can serve as generalized [environment
-variables], allowing not just `string`, but the full range of `valtype`.
 
 With this, we can define a component that imports a string and computes a new
 exported string at instantiation time:
@@ -1657,6 +1778,25 @@ the standard [avoidance problem] that appears in module systems with abstract
 types. In particular, it ensures that a client of a component is able to
 externally define a type compatible with the exports of the component.
 
+Similar to type exports, value exports may also ascribe a type to keep the precise
+value from becoming part of the type and public interface.
+
+For example:
+```wasm
+(component
+  (value $url string "https://example.com")
+  (export "default-url" (value $url) (value string))
+)
+```
+
+The inferred type of this component is:
+```wasm
+(component
+  (export "default-url" (value string))
+)
+```
+
+Note, that the `url` value definition is absent from the component type
 
 ## Component Invariants
 
@@ -1941,6 +2081,9 @@ and will be added over the coming months to complete the MVP proposal:
 [Index Space]: https://webassembly.github.io/spec/core/syntax/modules.html#indices
 [Abbreviations]: https://webassembly.github.io/spec/core/text/conventions.html#abbreviations
 
+[`core:i64`]: https://webassembly.github.io/spec/core/syntax/values.html#integers
+[`core:f64`]: https://webassembly.github.io/spec/core/syntax/values.html#floating-point
+[`core:char`]: https://webassembly.github.io/spec/core/syntax/values.html#syntax-name
 [`core:name`]: https://webassembly.github.io/spec/core/syntax/values.html#syntax-name
 [`core:module`]: https://webassembly.github.io/spec/core/text/modules.html#text-module
 [`core:type`]: https://webassembly.github.io/spec/core/text/modules.html#types
