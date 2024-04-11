@@ -207,7 +207,7 @@ world your-world {
 The plain name of an `import` or `export` statement is used as the plain name
 of the final component `import` or `export` definition.
 
-In the component model imports to a component either use an plain or interface
+In the component model imports to a component either use a plain or interface
 name, and in WIT this is reflected in the syntax:
 
 ```wit
@@ -381,7 +381,7 @@ world invalid-union-world {
 
 ```
 
-### A Note on SubTyping
+### A Note on Subtyping
 
 In the future, when `optional` export is supported, the world author may explicitly mark exports as optional to make a component targeting an included World a subtype of the union World.
 
@@ -1248,7 +1248,7 @@ variant option {
 }
 
 variant result {
-    ok(ok-ty)
+    ok(ok-ty),
     err(err-ty),
 }
 ```

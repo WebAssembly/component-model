@@ -1482,10 +1482,10 @@ validation specifies:
 * `$f` is given type `$ft`
 * a `memory` is present if required by lifting and is a subtype of `(memory 1)`
 * a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
-* if a `post-return` is present, it has type `(func (param flatten_functype($ft)['results']))`
+* if a `post-return` is present, it has type `(func (param flatten_functype($ft).results))`
 
 When instantiating component instance `$inst`:
-* Define `$f` to be the closure `lambda call, args: canon_lift($opts, $inst, $callee, $ft, args)`
+* Define `$f` to be the closure `lambda args: canon_lift($opts, $inst, $callee, $ft, args)`
 
 Thus, `$f` captures `$opts`, `$inst`, `$callee` and `$ft` in a closure which
 can be subsequently exported or passed into a child instance (via `with`). If
@@ -1550,7 +1550,7 @@ where `$callee` has type `$ft`, validation specifies:
 * there is no `post-return` in `$opts`
 
 When instantiating component instance `$inst`:
-* Define `$f` to be the closure: `lambda call, args: canon_lower($opts, $inst, $callee, $ft, args)`
+* Define `$f` to be the closure: `lambda args: canon_lower($opts, $inst, $callee, $ft, args)`
 
 Thus, from the perspective of Core WebAssembly, `$f` is a [function instance]
 containing a `hostfunc` that closes over `$opts`, `$inst`, `$callee` and `$ft`

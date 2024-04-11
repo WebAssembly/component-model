@@ -533,7 +533,7 @@ defvaltype    ::= bool
                 | f32 | f64
                 | char | string
                 | (record (field "<label>" <valtype>)+)
-                | (variant (case <id>? "<label>" <valtype>?)+)
+                | (variant (case "<label>" <valtype>?)+)
                 | (list <valtype>)
                 | (tuple <valtype>+)
                 | (flags "<label>"+)
@@ -663,7 +663,7 @@ of boolean fields uses a sequence of boolean-valued bytes.
 
 Note that, at least initially, variants are required to have a non-empty list of
 cases. This could be relaxed in the future to allow an empty list of cases, with
-the empty `(variant)` effectively serving as a [empty type] and indicating
+the empty `(variant)` effectively serving as an [empty type] and indicating
 unreachability.
 
 #### Definition types
@@ -688,9 +688,9 @@ canonical built-ins described [below](#canonical-built-ins). The `rep`
 immediate of a `resource` type specifies its *core representation type*, which
 is currently fixed to `i32`, but will be relaxed in the future (to at least
 include `i64`, but also potentially other types). When the last handle to a
-resource is dropped, the resource's `dtor` function will be called (if
-present), allowing the implementing component to perform clean-up like freeing
-linear memory allocations.
+resource is dropped, the resource's destructor function specified by the `dtor`
+immediate will be called (if present), allowing the implementing component to
+perform clean-up like freeing linear memory allocations.
 
 The `instance` type constructor describes a list of named, typed definitions
 that can be imported or exported by a component. Informally, instance types
@@ -1113,7 +1113,7 @@ isolation than otherwise achievable with a shared global namespace.
 ### Canonical Definitions
 
 From the perspective of Core WebAssembly running inside a component, the
-Component Model is an [Embedding]. As such, the Component Model defines the
+Component Model is an [embedder]. As such, the Component Model defines the
 Core WebAssembly imports passed to [`module_instantiate`] and how Core
 WebAssembly exports are called via [`func_invoke`]. This allows the Component
 Model to specify how core modules are linked together (as shown above) but it
@@ -1928,7 +1928,7 @@ and will be added over the coming months to complete the MVP proposal:
 [func-import-abbrev]: https://webassembly.github.io/spec/core/text/modules.html#text-func-abbrev
 [`core:version`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-version
 
-[Embedding]: https://webassembly.github.io/spec/core/appendix/embedding.html
+[Embedder]: https://webassembly.github.io/spec/core/appendix/embedding.html
 [`module_instantiate`]: https://webassembly.github.io/spec/core/appendix/embedding.html#mathrm-module-instantiate-xref-exec-runtime-syntax-store-mathit-store-xref-syntax-modules-syntax-module-mathit-module-xref-exec-runtime-syntax-externval-mathit-externval-ast-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-moduleinst-mathit-moduleinst-xref-appendix-embedding-embed-error-mathit-error
 [`func_invoke`]: https://webassembly.github.io/spec/core/appendix/embedding.html#mathrm-func-invoke-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-funcaddr-mathit-funcaddr-xref-exec-runtime-syntax-val-mathit-val-ast-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-val-mathit-val-ast-xref-appendix-embedding-embed-error-mathit-error
 [`func_alloc`]: https://webassembly.github.io/spec/core/appendix/embedding.html#mathrm-func-alloc-xref-exec-runtime-syntax-store-mathit-store-xref-syntax-types-syntax-functype-mathit-functype-xref-exec-runtime-syntax-hostfunc-mathit-hostfunc-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-funcaddr-mathit-funcaddr
