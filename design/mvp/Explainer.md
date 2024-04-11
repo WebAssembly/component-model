@@ -433,10 +433,10 @@ type and function definitions which are introduced in the next two sections.
 The syntax for defining core types extends the existing core type definition
 syntax, adding a `module` type constructor:
 ```ebnf
-core:type        ::= (type <id>? <core:deftype>)              (GC proposal)
-core:deftype     ::= <core:functype>                          (WebAssembly 1.0)
-                   | <core:structtype>                        (GC proposal)
-                   | <core:arraytype>                         (GC proposal)
+core:rectype     ::= ... from the Core WebAssembly spec
+core:typedef     ::= ... from the Core WebAssembly spec
+core:subtype     ::= ... from the Core WebAssembly spec
+core:comptype    ::= ... from the Core WebAssembly spec
                    | <core:moduletype>
 core:moduletype  ::= (module <core:moduledecl>*)
 core:moduledecl  ::= <core:importdecl>
@@ -452,8 +452,8 @@ core:exportdesc  ::= strip-id(<core:importdesc>)
 where strip-id(X) parses '(' sort Y ')' when X parses '(' sort <id>? Y ')'
 ```
 
-Here, `core:deftype` (short for "defined type") is inherited from the [gc]
-proposal and extended with a `module` type constructor. If [module-linking] is
+Here, `core:comptype` (short for "composite type") as defined in the [gc]
+proposal is extended with a `module` type constructor. If [module-linking] is
 added to Core WebAssembly, an `instance` type constructor would be added as
 well but, for now, it's left out since it's unnecessary. Also, in the MVP,
 validation will reject `core:moduletype` defining or aliasing other
@@ -571,6 +571,8 @@ typebound     ::= (eq <typeidx>)
 
 where bind-id(X) parses '(' sort <id>? Y ')' when X parses '(' sort Y ')'
 ```
+Because there is nothing in this type grammar analogous to the [gc] proposal's
+[`rectype`], none of these types are recursive.
 
 #### Fundamental value types
 
@@ -788,8 +790,8 @@ definitions:
     (export "h" (func (result $U)))
     (import "T" (type $T (sub resource)))
     (import "i" (func (param "x" (list (own $T)))))
-    (export $T' "T2" (type (eq $T)))
-    (export $U' "U" (type (sub resource)))
+    (export "T2" (type $T' (eq $T)))
+    (export "U" (type $U' (sub resource)))
     (export "j" (func (param "x" (borrow $T')) (result (own $U'))))
   ))
 )
@@ -960,7 +962,7 @@ as well. For example, in this component:
 (component
   (import "C" (component $C
     (export "T1" (type (sub resource)))
-    (export $T2 "T2" (type (sub resource)))
+    (export "T2" (type $T2 (sub resource)))
     (export "T3" (type (eq $T2)))
   ))
   (instance $c (instantiate $C))
@@ -1028,7 +1030,7 @@ following component:
 is assigned the following `componenttype`:
 ```wasm
 (component
-  (export $r1 "r1" (type (sub resource)))
+  (export "r1" (type $r1 (sub resource)))
   (export "r2" (type (eq $r1)))
 )
 ```
@@ -1039,7 +1041,7 @@ If a component wants to hide this fact and force clients to assume `r1` and
 `r2` are distinct types (thereby allowing the implementation to actually use
 separate types in the future without breaking clients), an explicit type can be
 ascribed to the export that replaces the `eq` bound with a less-precise `sub`
-bound.
+bound (using syntax introduced [below](#import-and-export-definitions)).
 ```wasm
 (component
   (type $r (resource (rep i32)))
@@ -2001,6 +2003,7 @@ and will be added over the coming months to complete the MVP proposal:
 [stack-switching]: https://github.com/WebAssembly/stack-switching/blob/main/proposals/stack-switching/Overview.md
 [esm-integration]: https://github.com/WebAssembly/esm-integration/tree/main/proposals/esm-integration
 [gc]: https://github.com/WebAssembly/gc/blob/main/proposals/gc/MVP.md
+[`rectype`]: https://webassembly.github.io/gc/core/text/types.html#text-rectype
 [shared-everything-threads]: https://github.com/WebAssembly/shared-everything-threads
 [WASI Preview 2]: https://github.com/WebAssembly/WASI/tree/main/preview2
 

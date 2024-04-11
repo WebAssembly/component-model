@@ -220,9 +220,9 @@ def alignment_flags(labels):
   if n <= 16: return 2
   return 4
 
-### Size
+### Element Size
 
-def size(t):
+def elem_size(t):
   match despecialize(t):
     case Bool()             : return 1
     case S8() | U8()        : return 1
@@ -233,33 +233,33 @@ def size(t):
     case F64()              : return 8
     case Char()             : return 4
     case String() | List(_) : return 8
-    case Record(fields)     : return size_record(fields)
-    case Variant(cases)     : return size_variant(cases)
-    case Flags(labels)      : return size_flags(labels)
+    case Record(fields)     : return elem_size_record(fields)
+    case Variant(cases)     : return elem_size_variant(cases)
+    case Flags(labels)      : return elem_size_flags(labels)
     case Own(_) | Borrow(_) : return 4
 
-def size_record(fields):
+def elem_size_record(fields):
   s = 0
   for f in fields:
     s = align_to(s, alignment(f.t))
-    s += size(f.t)
+    s += elem_size(f.t)
   assert(s > 0)
   return align_to(s, alignment_record(fields))
 
 def align_to(ptr, alignment):
   return math.ceil(ptr / alignment) * alignment
 
-def size_variant(cases):
-  s = size(discriminant_type(cases))
+def elem_size_variant(cases):
+  s = elem_size(discriminant_type(cases))
   s = align_to(s, max_case_alignment(cases))
   cs = 0
   for c in cases:
     if c.t is not None:
-      cs = max(cs, size(c.t))
+      cs = max(cs, elem_size(c.t))
   s += cs
   return align_to(s, alignment_variant(cases))
 
-def size_flags(labels):
+def elem_size_flags(labels):
   n = len(labels)
   assert(n > 0)
   if n <= 8: return 1
@@ -382,7 +382,7 @@ class HandleElem:
 
 def load(cx, ptr, t):
   assert(ptr == align_to(ptr, alignment(t)))
-  assert(ptr + size(t) <= len(cx.opts.memory))
+  assert(ptr + elem_size(t) <= len(cx.opts.memory))
   match despecialize(t):
     case Bool()         : return convert_int_to_bool(load_int(cx, ptr, 1))
     case U8()           : return load_int(cx, ptr, 1)
@@ -440,6 +440,7 @@ def core_f64_reinterpret_i64(i):
   return struct.unpack('<d', struct.pack('<Q', i))[0] # f64.reinterpret_i64
 
 def convert_i32_to_char(cx, i):
+  assert(i >= 0)
   trap_if(i >= 0x110000)
   trap_if(0xD800 <= i <= 0xDFFF)
   return chr(i)
@@ -486,10 +487,10 @@ def load_list(cx, ptr, elem_type):
 
 def load_list_from_range(cx, ptr, length, elem_type):
   trap_if(ptr != align_to(ptr, alignment(elem_type)))
-  trap_if(ptr + length * size(elem_type) > len(cx.opts.memory))
+  trap_if(ptr + length * elem_size(elem_type) > len(cx.opts.memory))
   a = []
   for i in range(length):
-    a.append(load(cx, ptr + i * size(elem_type), elem_type))
+    a.append(load(cx, ptr + i * elem_size(elem_type), elem_type))
   return a
 
 def load_record(cx, ptr, fields):
@@ -497,11 +498,11 @@ def load_record(cx, ptr, fields):
   for field in fields:
     ptr = align_to(ptr, alignment(field.t))
     record[field.label] = load(cx, ptr, field.t)
-    ptr += size(field.t)
+    ptr += elem_size(field.t)
   return record
 
 def load_variant(cx, ptr, cases):
-  disc_size = size(discriminant_type(cases))
+  disc_size = elem_size(discriminant_type(cases))
   case_index = load_int(cx, ptr, disc_size)
   ptr += disc_size
   trap_if(case_index >= len(cases))
@@ -527,7 +528,7 @@ def find_case(label, cases):
   return -1
 
 def load_flags(cx, ptr, labels):
-  i = load_int(cx, ptr, size_flags(labels))
+  i = load_int(cx, ptr, elem_size_flags(labels))
   return unpack_flags_from_int(i, labels)
 
 def unpack_flags_from_int(i, labels):
@@ -553,7 +554,7 @@ def lift_borrow(cx, i, t):
 
 def store(cx, v, t, ptr):
   assert(ptr == align_to(ptr, alignment(t)))
-  assert(ptr + size(t) <= len(cx.opts.memory))
+  assert(ptr + elem_size(t) <= len(cx.opts.memory))
   match despecialize(t):
     case Bool()         : store_int(cx, int(bool(v)), ptr, 1)
     case U8()           : store_int(cx, v, ptr, 1)
@@ -769,24 +770,24 @@ def store_list(cx, v, ptr, elem_type):
   store_int(cx, length, ptr + 4, 4)
 
 def store_list_into_range(cx, v, elem_type):
-  byte_length = len(v) * size(elem_type)
+  byte_length = len(v) * elem_size(elem_type)
   trap_if(byte_length >= (1 << 32))
   ptr = cx.opts.realloc(0, 0, alignment(elem_type), byte_length)
   trap_if(ptr != align_to(ptr, alignment(elem_type)))
   trap_if(ptr + byte_length > len(cx.opts.memory))
   for i,e in enumerate(v):
-    store(cx, e, elem_type, ptr + i * size(elem_type))
+    store(cx, e, elem_type, ptr + i * elem_size(elem_type))
   return (ptr, len(v))
 
 def store_record(cx, v, ptr, fields):
   for f in fields:
     ptr = align_to(ptr, alignment(f.t))
     store(cx, v[f.label], f.t, ptr)
-    ptr += size(f.t)
+    ptr += elem_size(f.t)
 
 def store_variant(cx, v, ptr, cases):
   case_index, case_value = match_case(v, cases)
-  disc_size = size(discriminant_type(cases))
+  disc_size = elem_size(discriminant_type(cases))
   store_int(cx, case_index, ptr, disc_size)
   ptr += disc_size
   ptr = align_to(ptr, max_case_alignment(cases))
@@ -805,7 +806,7 @@ def match_case(v, cases):
 
 def store_flags(cx, v, ptr, labels):
   i = pack_flags_into_int(v, labels)
-  store_int(cx, i, ptr, size_flags(labels))
+  store_int(cx, i, ptr, elem_size_flags(labels))
 
 def pack_flags_into_int(v, labels):
   i = 0
@@ -969,7 +970,7 @@ def lift_flat_variant(cx, vi, cases):
         case ('i64', 'i32') : return wrap_i64_to_i32(x)
         case ('i64', 'f32') : return decode_i32_as_float(wrap_i64_to_i32(x))
         case ('i64', 'f64') : return decode_i64_as_float(x)
-        case _              : return x
+        case _              : assert(have == want); return x
   c = cases[case_index]
   if c.t is None:
     v = None
@@ -1050,7 +1051,7 @@ def lower_flat_variant(cx, v, cases):
         case ('i32', 'i64') : payload[i] = fv
         case ('f32', 'i64') : payload[i] = encode_float_as_i32(fv)
         case ('f64', 'i64') : payload[i] = encode_float_as_i64(fv)
-        case _              : pass
+        case _              : assert(have == want)
   for _ in flat_types:
     payload.append(0)
   return [case_index] + payload
@@ -1072,7 +1073,7 @@ def lift_values(cx, max_flat, vi, ts):
     ptr = vi.next('i32')
     tuple_type = Tuple(ts)
     trap_if(ptr != align_to(ptr, alignment(tuple_type)))
-    trap_if(ptr + size(tuple_type) > len(cx.opts.memory))
+    trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
     return list(load(cx, ptr, tuple_type).values())
   else:
     return [ lift_flat(cx, vi, t) for t in ts ]
@@ -1083,11 +1084,11 @@ def lower_values(cx, max_flat, vs, ts, out_param = None):
     tuple_type = Tuple(ts)
     tuple_value = {str(i): v for i,v in enumerate(vs)}
     if out_param is None:
-      ptr = cx.opts.realloc(0, 0, alignment(tuple_type), size(tuple_type))
+      ptr = cx.opts.realloc(0, 0, alignment(tuple_type), elem_size(tuple_type))
     else:
       ptr = out_param.next('i32')
     trap_if(ptr != align_to(ptr, alignment(tuple_type)))
-    trap_if(ptr + size(tuple_type) > len(cx.opts.memory))
+    trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
     store(cx, tuple_value, tuple_type, ptr)
     return [ptr]
   else:
