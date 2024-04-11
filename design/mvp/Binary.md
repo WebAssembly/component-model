@@ -48,7 +48,10 @@ Notes:
   WebAssembly 1.0 spec.)
 * The `layer` field is meant to distinguish modules from components early in
   the binary format. (Core WebAssembly modules already implicitly have a
-  `layer` field of `0x0` in their 4 byte [`core:version`] field.)
+  `layer` field of `0x0` if the existing 4-byte [`core:version`] field is
+  reinterpreted as two 2-byte fields. This implies that the Core WebAssembly
+  spec needs to make a backwards-compatible spec change to split `core:version`
+  and fix `layer` to forever be `0x0`.)
 
 
 ## Instance Definitions
