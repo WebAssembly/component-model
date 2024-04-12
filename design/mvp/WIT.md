@@ -61,9 +61,22 @@ or
 package wasi:clocks@1.2.0;
 ```
 
-WIT packages can be defined in a collection of files and at least one of them
-must specify a package name. Multiple files can specify a `package` and
-they must all agree on what the package name is.
+WIT packages can be defined in a collection of files. At least one of these
+files must specify a package name. Multiple files can specify the `package`,
+though they must all agree on what the package name is.
+
+Alternatively, many packages can be declared consecutively in one or more
+files, if the "explicit" package notation is used:
+
+```wit
+package local:a {
+  interface foo {}
+}
+
+package local:b {
+  interface bar {}
+}
+```
 
 Package names are used to generate the [names of imports and exports]
 in the Component Model's representation of [`interface`s][interfaces] and
@@ -877,7 +890,34 @@ readability but this isn't required.
 Concretely, the structure of a `wit` file is:
 
 ```ebnf
-wit-file ::= package-decl? (toplevel-use-item | interface-item | world-item)*
+wit-file ::= explicit-package-list | implicit-package-definition
+```
+
+Files may be organized in two arrangements. The first of these is as a series
+of multiple consecutive "explicit" `package ... {...}` declarations, with the
+package's contents contained within the brackets.
+
+```ebnf
+explicit-package-list ::= explicit-package-definition*
+
+explicit-package-definition ::= package-decl '{' package-items* '}'
+```
+
+Alternatively, a file may "implicitly" consist of an optional `package ...;`
+declaration, followed by a list of package items.
+
+```ebnf
+implicit-package-definition ::= package-decl? package-items*
+```
+
+These two structures cannot be mixed: a file may be written in either in the
+explicit or implicit styles, but not both at once.
+
+All other declarations in a `wit` document are tied to a package, and defined
+as follows. A package definition consists of one or more such items:
+
+```ebnf
+package-items ::= toplevel-use-item | interface-item | world-item
 ```
 
 ### Feature Gates
