@@ -234,9 +234,10 @@ world command {
 }
 ```
 
-Kebab names cannot overlap and must be unique, even between imports and exports.
-IDs, however, can be both imported and exported. The same interface cannot be
-explicitly imported or exported twice.
+Each name must be case-insensitively unique in the scope in which it is
+declared. In the case of worlds, all imported names are in the same scope,
+but separate from all the export names, and thus the same name can *not* be
+imported twice, but *can* be both imported and exported.
 
 [Plain Name]: Explainer.md#import-and-export-definitions
 
@@ -647,7 +648,7 @@ import unless it's explicitly listed as an export.
 
 Functions are defined in an [`interface`][interfaces] or are listed as an
 `import` or `export` from a [`world`][worlds]. Parameters to a function must all
-be named and have unique names:
+be named and have case-insensitively unique names:
 
 ```wit
 package local:demo;
