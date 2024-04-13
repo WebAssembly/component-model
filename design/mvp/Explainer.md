@@ -311,10 +311,11 @@ there are three kinds of "targets" for an alias: the `export` of a component
 instance, the `core export` of a core module instance and a definition of an
 `outer` component (containing the current component):
 ```ebnf
-alias            ::= (alias <aliastarget> (<sort> <id>?))
+alias            ::= (alias <aliastarget> bind-id(<sortexpr>))
 aliastarget      ::= export <instanceidx> <string>
                    | core export <core:instanceidx> <core:name>
                    | outer <u32> <u32>
+sortexpr         ::= (<sort>)
 ```
 If present, the `id` of the alias is bound to the new index added by the alias
 and can be used anywhere a normal `id` can be used.
@@ -758,7 +759,7 @@ declarators to be used by subsequent declarators in the type:
 ```wasm
 (component
   (import "fancy-fs" (instance $fancy-fs
-    (export $fs "fs" (instance
+    (export "fs" (instance $fs
       (export "file" (type (sub resource)))
       ;; ...
     ))
@@ -788,8 +789,8 @@ definitions:
     (export "h" (func (result $U)))
     (import "T" (type $T (sub resource)))
     (import "i" (func (param "x" (list (own $T)))))
-    (export $T' "T2" (type (eq $T)))
-    (export $U' "U" (type (sub resource)))
+    (export "T2" (type $T' (eq $T)))
+    (export "U" (type $U' (sub resource)))
     (export "j" (func (param "x" (borrow $T')) (result (own $U'))))
   ))
 )
@@ -960,7 +961,7 @@ as well. For example, in this component:
 (component
   (import "C" (component $C
     (export "T1" (type (sub resource)))
-    (export $T2 "T2" (type (sub resource)))
+    (export "T2" (type $T2 (sub resource)))
     (export "T3" (type (eq $T2)))
   ))
   (instance $c (instantiate $C))
@@ -1028,7 +1029,7 @@ following component:
 is assigned the following `componenttype`:
 ```wasm
 (component
-  (export $r1 "r1" (type (sub resource)))
+  (export "r1" (type $r1 (sub resource)))
   (export "r2" (type (eq $r1)))
 )
 ```
@@ -1314,7 +1315,7 @@ allowing it to create and return new resources to its client:
   (core instance $main (instantiate $Main
     (with "canon" (instance (export "R_new" (func $R_new))))
   ))
-  (export $R' "r" (type $R))
+  (export "r" (type $R) (type $R'))
   (func (export "make-r") (param ...) (result (own $R'))
     (canon lift (core func $main "make_R"))
   )
@@ -1400,16 +1401,36 @@ of core linear memory.
 
 Both import and export definitions append a new element to the index space of
 the imported/exported `sort` which can be optionally bound to an identifier in
-the text format. In the case of imports, the identifier is bound just like Core
-WebAssembly, as part of the `externdesc` (e.g., `(import "x" (func $x))` binds
-the identifier `$x`). In the case of exports, the `<id>?` right after the
-`export` is bound while the `<id>` inside the `<sortidx>` is a reference to the
-preceding definition being exported (e.g., `(export $x "x" (func $f))` binds a
-new identifier `$x`).
+the text format.
 ```ebnf
-import ::= (import "<importname>" bind-id(<externdesc>))
-export ::= (export <id>? "<exportname>" <sortidx> <externdesc>?)
+import    ::= (import "<importname>" bind-id(<externdesc>))
+export    ::= (export "<exportname>" <sortidx> bind-id(<exportopt>)?)
+exportopt ::= <sortexpr>
+            | <externdesc>
 ```
+In the case of imports, the type of the imported definition must always be
+declared explicitly. In the case of exports, the type can optionally be
+inferred from the definition being exported without having to explicitly
+declare the type as part of the export definition. For example, in the
+following component:
+```wat
+(component
+  (import "f" (type $f (sub resource)))              ;; typeidx 0 = $f
+  (type $r (resource (rep i32)))                     ;; typeidx 1 = $r
+  (export "r1" (type $r))                            ;; typeidx 2
+  (export "r2" (type $r) (type (sub resource)))      ;; typeidx 3
+  (export "r3" (type $r) (type $r3))                 ;; typeidx 4 = $r3
+  (export "r4" (type $r) (type $r4 (sub resource)))  ;; typeidx 5 = $r4
+```
+The first export infers the type of `r1` while the second export explicitly
+declares the type of `r2`.  The third and fourth exports do likewise, but
+additionally bind WAT-level identifiers to the introduced type indices.
+According to the type checking rules described [above](#type-checking), the
+inferred types of `r1` and `r3` are equal (since they export the same
+underlying resource type `$r`) while the types of `r2` and `r4` are unequal (to
+each other and to `r1` and `r3`) since they are explicitly given a fresh
+abstract type.
+
 All import names are required to be unique and all export names are required to
 be unique. The rest of the grammar for imports and exports defines a structured
 syntax for the contents of import and export names. Syntactically, these names
@@ -1617,7 +1638,7 @@ For example, in the following component:
 (component
   (import "R1" (type $R1 (sub resource)))
   (type $R2 (resource (rep i32)))
-  (export $R2' "R2" (type $R2))
+  (export "R2" (type $R2) (type $R2'))
   (func $f1 (result (own $R1)) (canon lift ...))
   (func $f2 (result (own $R2)) (canon lift ...))
   (func $f2' (result (own $R2')) (canon lift ...))

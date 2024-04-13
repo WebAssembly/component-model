@@ -620,7 +620,7 @@ would generate this component:
   ))
   (alias export $shared "metadata" (type $metadata_from_shared))
   (import "host" (instance $host
-    (export $metadata_in_host "metadata" (type (eq $metadata_from_shared)))
+    (export "metadata" (type $metadata_in_host (eq $metadata_from_shared)))
     (export "get" (func (result $metadata_in_host)))
   ))
 )
@@ -1414,7 +1414,7 @@ can be packaged into a component as:
 (component
   (type (export "types") (component
     (export "local:demo/types" (instance
-      (export $file "file" (type (sub resource)))
+      (export "file" (type $file (sub resource)))
       (export "[method]file.read" (func
         (param "self" (borrow $file)) (param "off" u32) (param "n" u32)
         (result (list u8))
