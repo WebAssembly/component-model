@@ -612,8 +612,26 @@ imported into the component as well.
 Note that the name `"local:demo/shared"` here is derived from the name of the
 `interface` plus the package ID `local:demo`.
 
-For `export`ed interfaces any transitively `use`d interface is assumed to be an
-import unless it's explicitly listed as an export.
+For `export`ed interfaces, any transitively `use`d interface is assumed to be an
+import unless it's explicitly listed as an export. For example, here `w1` is
+equivalent to `w2`:
+```wit
+interface a {
+  resource r;
+}
+interface b {
+  use a.{r}; 
+  foo: func() -> r;
+}
+
+world w1 {
+  export b;
+}
+world w2 {
+  import a;
+  export b;
+}
+```
 
 > **Note**: It's planned in the future to have "power user syntax" to configure
 > this on a more fine-grained basis for exports, for example being able to
