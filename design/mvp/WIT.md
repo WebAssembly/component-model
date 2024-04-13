@@ -16,8 +16,9 @@ The Wasm Interface Type (WIT) format is an [IDL] to provide tooling for the
 A WIT package is a collection of WIT [`interface`s][interfaces] and
 [`world`s][worlds] defined in files in the same directory that all use the
 file extension `wit`, for example `foo.wit`. Files are encoded as valid utf-8
-bytes. Types can be imported between interfaces within a package and
-additionally from other packages through IDs.
+bytes. Types can be imported between interfaces within a package using
+unqualified names and additionally from other packages through namespace-
+and-package-qualified names.
 
 This document will go through the purpose of the syntactic constructs of a WIT
 document, a pseudo-formal [grammar specification][lexical-structure], and
@@ -223,10 +224,10 @@ interface my-interface {
 }
 
 world command {
-  // generates an import of the ID `local:demo/my-interface`
+  // generates an import of the name `local:demo/my-interface`
   import my-interface;
 
-  // generates an import of the ID `wasi:filesystem/types`
+  // generates an import of the name `wasi:filesystem/types`
   import wasi:filesystem/types;
 
   // generates an import of the plain name `foo`
@@ -290,9 +291,12 @@ world union-my-world {
 }
 ```
 
-### De-duplication of IDs
+### De-duplication of interfaces
 
-If two worlds shared the same set of import and export IDs, then the union of the two worlds will only contain one copy of this set. For example, the following two worlds `union-my-world-a` and `union-my-world-b` are equivalent:
+If two worlds share an imported or exported [interface name], then the union of
+the two worlds will only contain one copy of that imported or exported name.
+For example, the following two worlds `union-my-world-a` and `union-my-world-b`
+are equivalent:
 
 ```wit
 package local:demo;
@@ -320,9 +324,14 @@ world union-my-world-b {
 
 ### Name Conflicts and `with`
 
-When two or more included Worlds have the same name for an import or export that does *not* have an ID, automatic de-duplication cannot be used (because the two same-named imports/exports might have different meanings in the different worlds) and thus the conflict has to be resolved manually using the `with` keyword:
-The following example shows how to resolve name conflicts where `union-my-world-a` and `union-my-world-b` are equivalent:
+When two or more included Worlds have the same name for an import or export
+with a *plain* name, automatic de-duplication cannot be used (because the two
+same-named imports/exports might have different meanings in the different
+worlds) and thus the conflict has to be resolved manually using the `with`
+keyword.
 
+The following example shows how to resolve name conflicts where
+`union-my-world-a` and `union-my-world-b` are equivalent:
 ```wit
 package local:demo;
 
@@ -340,8 +349,8 @@ world union-my-world-b {
 }
 ```
 
-`with` cannot be used to rename IDs, however, so the following world would be invalid:
-
+`with` cannot be used to rename interface names, however, so the following
+world would be invalid:
 ```wit
 package local:demo;
 
@@ -354,7 +363,7 @@ world world-using-a {
 }
 
 world invalid-union-world {
-    include my-using-a with { a as b }  // invalid: 'a', which is short for 'local:demo/a', is an ID
+    include my-using-a with { a as b }  // invalid: 'a', which is short for 'local:demo/a', is an interface name
 }
 
 ```
@@ -462,9 +471,8 @@ interface another-interface {
 }
 ```
 
-When referring to an interface an ID form can additionally be used to refer to
-dependencies. For example above it was seen:
-
+When referring to an interface, a fully-qualified [interface name] can be used.
+For example, in this WIT document:
 ```wit
 package local:demo;
 
@@ -472,11 +480,8 @@ world my-world {
   import wasi:clocks/monotonic-clock;
 }
 ```
-
-Here the interface being referred to is the ID `wasi:clocks/monotonic-clock`.
-This is the package identified by `wasi:clocks` and the interface
-`monotonic-clock` within that package. This same syntax can be used in `use` as
-well:
+The `monotonic-clock` interface of the `wasi:clocks` package is being imported.
+This same syntax can be used in `use` as well:
 
 ```wit
 package local:demo;
@@ -549,7 +554,7 @@ use wasi:http/handler as http-handler;
 ```
 
 Note that these can all be combined to additionally import packages with
-multiple versions and renaming as different identifiers.
+multiple versions and renaming as different WIT identifiers.
 
 ```wit
 package local:demo;
@@ -610,7 +615,7 @@ to the fact that the `use shared.{ ... }` implicitly requires that `shared` is
 imported into the component as well.
 
 Note that the name `"local:demo/shared"` here is derived from the name of the
-`interface` plus the package ID `local:demo`.
+`interface` plus the package name `local:demo`.
 
 For `export`ed interfaces, any transitively `use`d interface is assumed to be an
 import unless it's explicitly listed as an export. For example, here `w1` is
@@ -744,8 +749,32 @@ defined within each language as well.
 ## WIT Identifiers
 [identifiers]: #wit-identifiers
 
-Identifiers in WIT documents are required to be valid plain or interface
-names, as defined by the [component model text format](Explainer.md#import-and-export-definitions).
+Identifiers in WIT can be defined with two different forms. The first is the
+[kebab-case] [`label`](Explainer.md#import-and-export-names) production in the
+Component Model text format.
+
+```wit
+foo: func(bar: u32);
+
+red-green-blue: func(r: u32, g: u32, b: u32);
+
+resource XML { ... }
+parse-XML-document: func(s: string) -> XML;
+```
+
+This form can't lexically represent WIT keywords, so the second form is the
+same syntax with the same restrictions as the first, but prefixed with '%':
+
+```wit
+%foo: func(%bar: u32);
+
+%red-green-blue: func(%r: u32, %g: u32, %b: u32);
+
+// This form also supports identifiers that would otherwise be keywords.
+%variant: func(%enum: s32);
+```
+
+[kebab-case]: https://en.wikipedia.org/wiki/Letter_case#Kebab_case
 
 # Lexical structure
 [lexical-structure]: #lexical-structure
@@ -804,7 +833,7 @@ operator ::= '=' | ',' | ':' | ';' | '(' | ')' | '{' | '}' | '<' | '>' | '*' | '
 
 ### Keywords
 
-Certain identifiers are reserved for use in `wit` documents and cannot be used
+Certain identifiers are reserved for use in WIT documents and cannot be used
 bare as an identifier. These are used to help parse the format, and the list of
 keywords is still in flux at this time but the current set is:
 
@@ -850,7 +879,7 @@ wit-file ::= package-decl? (toplevel-use-item | interface-item | world-item)*
 ## Package declaration
 [package declaration]: #package-declaration
 
-WIT files optionally start with a package declaration which defines the ID of
+WIT files optionally start with a package declaration which defines the name of
 the package.
 
 ```ebnf
@@ -874,7 +903,7 @@ use-path ::= id
            | ( id ':' )+ id ( '/' id )+ ('@' valid-semver)? 🪺
 ```
 
-Here `use-path` is the ID used to refer to interfaces. The bare form `id`
+Here `use-path` is an [interface name]. The bare form `id`
 refers to interfaces defined within the current package, and the full form
 refers to interfaces in package dependencies.
 
@@ -884,6 +913,8 @@ to the interface. Otherwise the name is inferred from `use-path`.
 As a future extension, WIT, components and component registries may allow
 nesting both namespaces and packages, which would then generalize the syntax of
 `use-path` as suggested by the 🪺 suffixed rule.
+
+[Interface Name]: Explainer.md#import-and-export-definitions
 
 ## Item: `world`
 
@@ -1292,33 +1323,6 @@ where `%[method]file.read` is the desugared name of a method according to the
 Component Model's definition of [`name`](Explainer.md).
 
 
-## Identifiers
-
-Identifiers in `wit` can be defined with two different forms. The first is a
-[kebab-case] [`label`](Explainer.md#import-and-export-names) production in the
-Component Model text format.
-
-```wit
-foo: func(bar: u32);
-
-red-green-blue: func(r: u32, g: u32, b: u32);
-```
-
-This form can't name identifiers which have the same name as wit keywords, so
-the second form is the same syntax with the same restrictions as the first, but
-prefixed with '%':
-
-```wit
-%foo: func(%bar: u32);
-
-%red-green-blue: func(%r: u32, %g: u32, %b: u32);
-
-// This form also supports identifiers that would otherwise be keywords.
-%variant: func(%enum: s32);
-```
-
-[kebab-case]: https://en.wikipedia.org/wiki/Letter_case#Kebab_case
-
 ## Name resolution
 
 A `wit` document is resolved after parsing to ensure that all names resolve
@@ -1437,7 +1441,7 @@ This example illustrates the basic structure of interfaces:
 * Each top-level WIT definition (in this example: `types` and `namespace`)
   turns into a type export of the same kebab-name.
 * Each WIT interface is mapped to a component-type that exports an
-  instance with a fully-qualified interface name (in this example:
+  instance with a fully-qualified [interface name]  (in this example:
   `local:demo/types` and `local:demo/namespace`). Note that this nested
   scheme allows a single component to both define and implement a WIT interface
   without name conflict.
