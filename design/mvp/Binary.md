@@ -251,7 +251,8 @@ Notes:
 * All parameter labels, result labels, record field labels, variant case
   labels, flag labels, enum case labels, component import names, component
   export names, instance import names and instance export names must be
-  unique in their containing scope.
+  unique in their containing scope, considering two labels that differ only in
+  case to be equal and thus rejected.
 * Validation of `externdesc` requires the various `typeidx` type constructors
   to match the preceding `sort`.
 * (The `0x00` immediate of `case` may be reinterpreted in the future as the

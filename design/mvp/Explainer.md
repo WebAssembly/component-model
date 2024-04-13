@@ -1562,6 +1562,12 @@ mapped to `isXML`, `IsXml`, `is_XML` or `is_xml`, depending on the target
 language/convention. The highly-restricted character set ensures that
 capitalization is trivial and does not require consulting Unicode tables.
 
+Because some casing schemes (such as all-lowercase) would lead to clashes if
+two `label`s differed only in case, in all cases where "uniquness" is required
+between a set of names (viz., import/export names, record field labels, variant
+case labels, and function parameter/result names), two `label`s that differ
+only in case are considered equal and thus rejected.
+
 Components provide two options for naming exports, symmetric to the first two
 options for naming imports:
 * a **plain name** that leaves it up to the developer to "read the docs"
