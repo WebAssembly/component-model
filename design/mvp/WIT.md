@@ -290,34 +290,6 @@ world union-my-world {
 }
 ```
 
-The `include` statement also works with [WIT package](#wit-packages-and-use) defined below with the same semantics. For example, the following World `union-my-world-a` is equivalent to `union-my-world-b`:
-
-```wit
-package local:demo;
-
-interface b { ... }
-interface a { ... }
-
-world my-world-a {
-    import a;
-    import b;
-    import wasi:io/c;
-    export d: interface { ... }
-}
-
-world union-my-world-a {
-    include my-world-a;
-}
-
-world union-my-world-b {
-    import a;
-    import b;
-    import wasi:io/c;
-
-    export d: interface { ... }
-}
-```
-
 ### De-duplication of IDs
 
 If two worlds shared the same set of import and export IDs, then the union of the two worlds will only contain one copy of this set. For example, the following two worlds `union-my-world-a` and `union-my-world-b` are equivalent:
