@@ -42,6 +42,11 @@ All WIT packages are assigned a *package name*. Package names look like
 
 * An optional *version field*, specified as [full semver](https://semver.org/).
 
+🪺 With "nested namespaces and packages", package names are generalized to look
+like `foo:bar:baz/quux`, where `bar` is a nested namespace of `foo` and `quux`
+is a nested package of `baz`. See the [package declaration] section for more
+details.
+
 Package names are specified at the top of a WIT file via a `package`
 declaration:
 
@@ -853,6 +858,7 @@ wit-file ::= package-decl? (toplevel-use-item | interface-item | world-item)*
 ```
 
 ## Package declaration
+[package declaration]: #package-declaration
 
 WIT files optionally start with a package declaration which defines the ID of
 the package.
