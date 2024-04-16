@@ -1431,21 +1431,25 @@ plainname     ::= <label>
                 | '[constructor]' <label>
                 | '[method]' <label> '.' <label>
                 | '[static]' <label> '.' <label>
-label         ::= <word>
-                | <label> '-' <word>
+label         ::= <fragment>
+                | <label> '-' <fragment>
+fragment      ::= <word>
+                | <acronym>
 word          ::= [a-z] [0-9a-z]*
-                | [A-Z] [0-9A-Z]*
+acronym       ::= [A-Z] [0-9A-Z]*
 interfacename ::= <namespace> <label> <projection> <version>?
                 | <namespace>+ <label> <projection>+ <version>? 🪺
-namespace     ::= <label> ':'
+namespace     ::= <words> ':'
+words         ::= <word>
+                | <words> '-' <word>
 projection    ::= '/' <label>
 version       ::= '@' <valid semver>
 depname       ::= 'unlocked-dep=<' <pkgnamequery> '>'
                 | 'locked-dep=<' <pkgname> '>' ( ',' <hashname> )?
 pkgnamequery  ::= <pkgpath> <verrange>?
 pkgname       ::= <pkgpath> <version>?
-pkgpath       ::= <namespace> <label>
-                | <namespace>+ <label> <projection>* 🪺
+pkgpath       ::= <namespace> <words>
+                | <namespace>+ <words> <projection>* 🪺
 verrange      ::= '@*'
                 | '@{' <verlower> '}'
                 | '@{' <verupper> '}'
