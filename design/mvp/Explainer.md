@@ -777,8 +777,10 @@ declarators to be used by subsequent declarators in the type:
 ```
 
 The `type` declarator is restricted by validation to disallow `resource` type
-definitions. Thus, the only resource types possible in an `instancetype` or
-`componenttype` are introduced by `importdecl` or `exportdecl`.
+definitions, thereby preventing "private" resource type definitions from
+appearing in component types and avoiding the [avoidance problem]. Thus, the
+only resource types possible in an `instancetype` or `componenttype` are
+introduced by `importdecl` or `exportdecl`.
 
 With what's defined so far, we can define component types using a mix of type
 definitions:
