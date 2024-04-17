@@ -380,7 +380,7 @@ free list in the free elements of `array`.
       self.array.append(h)
     return i
 
-  def remove(self, rt, i):
+  def remove(self, i):
     h = self.get(i)
     self.array[i] = None
     self.free.append(i)
@@ -409,7 +409,7 @@ class HandleTables:
   def add(self, rt, h):
     return self.table(rt).add(h)
   def remove(self, rt, i):
-    return self.table(rt).remove(rt, i)
+    return self.table(rt).remove(i)
 ```
 While this Python code performs a dynamic hash-table lookup on each handle
 table access, as we'll see below, the `rt` parameter is always statically
