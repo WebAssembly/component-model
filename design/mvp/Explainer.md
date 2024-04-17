@@ -628,14 +628,20 @@ contain the opaque address of a resource and avoid copying the resource when
 passed across component boundaries. By way of metaphor to operating systems,
 handles are analogous to file descriptors, which are stored in a table and may
 only be used indirectly by untrusted user-mode processes via their integer
-index in the table. In the Component Model, handles are lifted-from and
-lowered-into `i32` values that index an encapsulated per-component-instance
-*handle table* that is maintained by the canonical function definitions
-described [below](#canonical-definitions). The uniqueness and dropping
-conditions mentioned above are enforced at runtime by the Component Model
-through these canonical definitions. The `typeidx` immediate of a handle type
-must refer to a `resource` type (described below) that statically classifies
-the particular kinds of resources the handle can point to.
+index in the table.
+
+In the Component Model, handles are lifted-from and lowered-into `i32` values
+that index an encapsulated per-component-instance *handle table* that is
+maintained by the canonical function definitions described
+[below](#canonical-definitions). In the future, handles could be
+backwards-compatibly lifted and lowered from [reference types]  (via the
+addition of a new `canonopt`, as introduced [below](#canonical-abi)).
+
+The uniqueness and dropping conditions mentioned above are enforced at runtime
+by the Component Model through these canonical definitions. The `typeidx`
+immediate of a handle type must refer to a `resource` type (described below)
+that statically classifies the particular kinds of resources the handle can
+point to.
 
 #### Specialized value types
 
