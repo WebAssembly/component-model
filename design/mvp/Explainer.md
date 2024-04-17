@@ -269,9 +269,9 @@ instances, but with an expanded component-level definition of `sort`:
 instance       ::= (instance <id>? <instanceexpr>)
 instanceexpr   ::= (instantiate <componentidx> <instantiatearg>*)
                  | <inlineexport>*
-instantiatearg ::= (with <string> <sortidx>)
-                 | (with <string> (instance <inlineexport>*))
-string         ::= <core:name>
+instantiatearg ::= (with <name> <sortidx>)
+                 | (with <name> (instance <inlineexport>*))
+name           ::= <core:name>
 sortidx        ::= (<sort> <u32>)
 sort           ::= core <core:sort>
                  | func
@@ -290,7 +290,7 @@ future include `data`). Thus, component-level `sort` injects the full set
 of `core:sort`, so that they may be referenced (leaving it up to validation
 rules to throw out the core sorts that aren't allowed in various contexts).
 
-The `string` production reuses the `core:name` quoted-string-literal syntax of
+The `name` production reuses the `core:name` quoted-string-literal syntax of
 Core WebAssembly (which appears in core module imports and exports and can
 contain any valid UTF-8 string).
 
@@ -312,14 +312,14 @@ instance, the `core export` of a core module instance and a definition of an
 `outer` component (containing the current component):
 ```ebnf
 alias            ::= (alias <aliastarget> (<sort> <id>?))
-aliastarget      ::= export <instanceidx> <string>
+aliastarget      ::= export <instanceidx> <name>
                    | core export <core:instanceidx> <core:name>
                    | outer <u32> <u32>
 ```
 If present, the `id` of the alias is bound to the new index added by the alias
 and can be used anywhere a normal `id` can be used.
 
-In the case of `export` aliases, validation ensures `string` is an export in the
+In the case of `export` aliases, validation ensures `name` is an export in the
 target instance and has a matching sort.
 
 In the case of `outer` aliases, the `u32` pair serves as a [de Bruijn
@@ -347,7 +347,7 @@ sortidx     ::= (<sort> <u32>)          ;; as above
               | <inlinealias>
 Xidx        ::= <u32>                   ;; as above
               | <inlinealias>
-inlinealias ::= (<sort> <u32> <string>+)
+inlinealias ::= (<sort> <u32> <name>+)
 ```
 If `<sort>` refers to a `<core:sort>`, then the `<u32>` of `inlinealias` is a
 `<core:instanceidx>`; otherwise it's an `<instanceidx>`. For example, the

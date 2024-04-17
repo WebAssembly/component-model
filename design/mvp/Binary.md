@@ -75,8 +75,8 @@ core:inlineexport   ::= n:<core:name> si:<core:sortidx>                    => (e
 instance            ::= ie:<instanceexpr>                                  => (instance ie)
 instanceexpr        ::= 0x00 c:<componentidx> arg*:vec(<instantiatearg>)   => (instantiate c arg*)
                       | 0x01 e*:vec(<inlineexport>)                        => e*
-instantiatearg      ::= n:<string>  si:<sortidx>                           => (with n si)
-string              ::= s:<core:name>                                      => s
+instantiatearg      ::= n:<name>  si:<sortidx>                             => (with n si)
+name                ::= n:<core:name>                                      => n
 sortidx             ::= sort:<sort> idx:<u32>                              => (sort idx)
 sort                ::= 0x00 cs:<core:sort>                                => core cs
                       | 0x01                                               => func
@@ -99,7 +99,7 @@ Notes:
 * Validation of `core:instantiatearg` initially only allows the `instance`
   sort, but would be extended to accept other sorts as core wasm is extended.
 * Validation of `instantiate` requires each `<importname>` in `c` to match a
-  `string` in a `with` argument (compared as strings) and for the types to
+  `name` in a `with` argument (compared as strings) and for the types to
   match.
 * When validating `instantiate`, after each individual type-import is supplied
   via `with`, the actual type supplied is immediately substituted for all uses
@@ -114,7 +114,7 @@ Notes:
 (See [Alias Definitions](Explainer.md#alias-definitions) in the explainer.)
 ```ebnf
 alias       ::= s:<sort> t:<aliastarget>                => (alias t (s))
-aliastarget ::= 0x00 i:<instanceidx> n:<string>         => export i n
+aliastarget ::= 0x00 i:<instanceidx> n:<name>           => export i n
               | 0x01 i:<core:instanceidx> n:<core:name> => core export i n
               | 0x02 ct:<u32> idx:<u32>                 => outer ct idx
 ```
