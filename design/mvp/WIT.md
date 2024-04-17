@@ -446,7 +446,11 @@ interface my-host-functions {
 ```
 
 Here the `types` interface is not defined in `host.wit` but lookup will find it
-as it's defined in the same package, just instead in a different file.
+as it's defined in the same package, just instead in a different file. Since
+files are not ordered, but type definitions in the Component Model are ordered
+and acyclic, the WIT parser will perform an implicit topological sort of all
+parsed WIT definitions to find an acyclic definition order (or produce an error
+if there is none).
 
 When importing or exporting an [interface][interfaces] in a [world][worlds]
 the same syntax is used in `import` and `export` directives:
