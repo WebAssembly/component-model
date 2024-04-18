@@ -824,11 +824,11 @@ example, in the following compound component:
   (type $ListListString1 (list $ListString1))
   (type $ListListString2 (list $ListString1))
   (component $B
-    (type $ListString3 (list string))
-    (type $ListListString3 (list $ListString3))
-    (type $ListString4 (alias outer $A $ListString))
-    (type $ListListString4 (list $ListString4))
-    (type $ListListString5 (alias outer $A $ListString2))
+    (type $ListString2 (list string))
+    (type $ListListString3 (list $ListString2))
+    (type $ListString3 (alias outer $A $ListString1))
+    (type $ListListString4 (list $ListString3))
+    (type $ListListString5 (alias outer $A $ListListString1))
   )
 )
 ```
