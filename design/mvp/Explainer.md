@@ -1043,7 +1043,7 @@ bound.
 ```wasm
 (component
   (type $r (resource (rep i32)))
-  (export "r1" (type $r)
+  (export "r1" (type $r))
   (export "r2" (type $r) (type (sub resource)))
 )
 ```
