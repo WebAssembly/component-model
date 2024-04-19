@@ -1689,10 +1689,15 @@ For example, the following WIT document:
 package ns:p@1.1.0;
 
 interface i {
-  f: func()
+  f: func();
 
   @since(version = "1.1.0")
-  g: func()
+  g: func();
+
+  @since(version = "1.1.0")
+  type t1 = u32;
+
+  type t2 = t1
 }
 ```
 is encoded as the following component when the target version is `1.0.0`:
@@ -1705,6 +1710,7 @@ is encoded as the following component when the target version is `1.0.0`:
   ))
 )
 ```
+Note that `t2` is transitively disabled since it relied on the gated `t1`.
 If the target version was instead `1.1.0`, the same WIT document would be
 encoded as:
 ```wat
@@ -1713,6 +1719,8 @@ encoded as:
     (export "ns:p/i@1.1.0" (instance
       (export "f" (func))
       (export "g" (func))
+      (export $t1 "t1" (type (eq u32)))
+      (export "t2" (type (eq $t1)))
     ))
   ))
 )
