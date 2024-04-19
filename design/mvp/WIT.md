@@ -989,8 +989,7 @@ include-names-item ::= id 'as' id
 ## Item: `interface`
 
 Interfaces can be defined in a `wit` file. Interfaces have a name and a
-sequence of items and functions, all of which can be gated on an `id` or a
-semantic version.
+sequence of items and functions, all of which can be gated.
 
 Specifically interfaces have the structure:
 
