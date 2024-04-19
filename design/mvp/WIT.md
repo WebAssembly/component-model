@@ -945,14 +945,21 @@ nesting both namespaces and packages, which would then generalize the syntax of
 
 ## Item: `world`
 
-Worlds define a [componenttype](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#type-definitions) as a collection of imports and exports.
+Worlds define a [`componenttype`] as a collection of imports and exports, all
+of which can be gated.
 
 Concretely, the structure of a world is:
 
 ```ebnf
 world-item ::= gate 'world' id '{' world-items* '}'
 
-world-items ::= export-item | import-item | use-item | typedef-item | include-item
+world-items ::= gate world-definition
+
+world-definition ::= export-item
+                   | import-item
+                   | use-item
+                   | typedef-item
+                   | include-item
 
 export-item ::= 'export' id ':' extern-type
               | 'export' use-path ';'
@@ -966,6 +973,8 @@ Note that worlds can import types and define their own types to be exported
 from the root of a component and used within functions imported and exported.
 The `interface` item here additionally defines the grammar for IDs used to refer
 to `interface` items.
+
+[`componenttype`]: Explainer.md#type-definitions
 
 ## Item: `include`
 
