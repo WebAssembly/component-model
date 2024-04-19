@@ -865,10 +865,10 @@ interface foo {
   @since(version = "0.2.1")
   b: func();
 
-  @since(version = "0.2.2", feature = "fancy-foo")
+  @since(version = "0.2.2", feature = fancy-foo)
   c: func();
 
-  @unstable(feature = "fancier-foo")
+  @unstable(feature = fancier-foo)
   d: func();
 }
 ```
@@ -902,7 +902,7 @@ Specifically, the syntax for feature gates is:
 gate ::= unstable-gate
        | since-gate
 unstable-gate ::= '@unstable' '(' feature-field ')'
-feature-field ::= 'feature' '=' '"' id '"'
+feature-field ::= 'feature' '=' id
 since-gate ::= '@since' '(' 'version' '=' '"' <valid semver> '"' ( ',' feature-field )? ')'
 ```
 
