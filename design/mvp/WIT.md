@@ -862,10 +862,10 @@ For example, the following interface has 4 items, 3 of which are gated:
 interface foo {
   a: func();
 
-  @since(version = "0.2.1")
+  @since(version = 0.2.1)
   b: func();
 
-  @since(version = "0.2.2", feature = fancy-foo)
+  @since(version = 0.2.2, feature = fancy-foo)
   c: func();
 
   @unstable(feature = fancier-foo)
@@ -903,14 +903,14 @@ gate ::= unstable-gate
        | since-gate
 unstable-gate ::= '@unstable' '(' feature-field ')'
 feature-field ::= 'feature' '=' id
-since-gate ::= '@since' '(' 'version' '=' '"' <valid semver> '"' ( ',' feature-field )? ')'
+since-gate ::= '@since' '(' 'version' '=' <valid semver> ( ',' feature-field )? ')'
 ```
 
 As part of WIT validation, any item that refers to another gated item must also
 be compatibly gated. For example, this is an error:
 ```wit
 interface i {
-  @since("1.0.1")
+  @since(version = 1.0.1)
   type t1 = u32;
 
   type t2 = t1; // error
@@ -919,11 +919,11 @@ interface i {
 Additionally, if an item is *contained* by a gated item, it must also be
 compatibly gated. For example, this is an error:
 ```wit
-@since("1.0.2")
+@since(version = 1.0.2)
 interface i {
   foo: func();  // error: no gate
 
-  @since("1.0.1")
+  @since(version = 1.0.1)
   bar: func();  // also error: weaker gate
 }
 ```
@@ -1730,7 +1730,7 @@ package ns:p@1.1.0;
 interface i {
   f: func();
 
-  @since(version = "1.1.0")
+  @since(version = 1.1.0)
   g: func();
 }
 ```
