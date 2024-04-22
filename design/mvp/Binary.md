@@ -22,7 +22,7 @@ See the [explainer introduction](Explainer.md) for an explanation of 🪙.
 component ::= <preamble> s*:<section>*            => (component flatten(s*))
 preamble  ::= <magic> <version> <layer>
 magic     ::= 0x00 0x61 0x73 0x6D
-version   ::= 0x0a 0x00
+version   ::= 0x0d 0x00
 layer     ::= 0x01 0x00
 section   ::=    section_0(<core:custom>)         => ϵ
             | m:section_1(<core:module>)          => [core-prefix(m)]
@@ -42,7 +42,7 @@ Notes:
 * The `core-prefix(t)` meta-function inserts a `core` token after the leftmost
   paren of `t` (e.g., `core-prefix( (module (func)) )` is `(core module (func))`).
 * The `version` given above is pre-standard. As the proposal changes before
-  final standardization, `version` will be bumped from `0xa` upwards to
+  final standardization, `version` will be bumped from `0x0d` upwards to
   coordinate prototypes. When the standard is finalized, `version` will be
   changed one last time to `0x1`. (This mirrors the path taken for the Core
   WebAssembly 1.0 spec.)
