@@ -182,11 +182,11 @@ primvaltype   ::= 0x7f                                    => bool
                 | 0x73                                    => string
 defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x72 lt*:vec(<labelvaltype>)            => (record (field lt)*)    (if |lt*| > 0)
-                | 0x71 case*:vec(<case>)                  => (variant case*)
+                | 0x71 case*:vec(<case>)                  => (variant case+) (if |case*| > 0)
                 | 0x70 t:<valtype>                        => (list t)
                 | 0x6f t*:vec(<valtype>)                  => (tuple t+)    (if |t*| > 0)
                 | 0x6e l*:vec(<label'>)                   => (flags l+)    (if |l*| > 0)
-                | 0x6d l*:vec(<label'>)                   => (enum l*)
+                | 0x6d l*:vec(<label'>)                   => (enum l+)     (if |l*| > 0)
                 | 0x6b t:<valtype>                        => (option t)
                 | 0x6a t?:<valtype>? u?:<valtype>?        => (result t? (error u)?)
                 | 0x69 i:<typeidx>                        => (own i)
