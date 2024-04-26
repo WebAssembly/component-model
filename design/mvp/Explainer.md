@@ -1369,20 +1369,21 @@ once at instantiation-time (i.e., they are [linear]).
 Components may define values in the value index space using following syntax:
 
 ```ebnf
-value ::= (value <id>? <valtype> <val>)
-val   ::= false | true
-        | <core:i64>
-        | <core:f64> | NaN
-        | '<core:char>'
-        | <core:name>
-        | (record <val>+)
-        | (variant "<label>" <val>?)
-        | (list <val>*)
-        | (tuple <val>+)
-        | (flags "<label>"*)
-        | (enum "<label>")
-        | none | (some <val>)
-        | ok | (ok <val>) | error | (error <val>)
+value    ::= (value <id>? <valtype> <val>)
+val      ::= false | true
+           | <core:i64>
+           | <f64canon>
+           | '<core:char>'
+           | <core:name>
+           | (record <val>+)
+           | (variant "<label>" <val>?)
+           | (list <val>*)
+           | (tuple <val>+)
+           | (flags "<label>"*)
+           | (enum "<label>")
+           | none | (some <val>)
+           | ok | (ok <val>) | error | (error <val>)
+f64canon ::= <core:f64> without the `nan:0x` case.
 ```
 
 The validation rules for `value` require the `val` to match the `valtype`.  For example:
