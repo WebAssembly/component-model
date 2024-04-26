@@ -563,6 +563,7 @@ instancedecl  ::= core-prefix(<core:type>)
                 | <type>
                 | <alias>
                 | <exportdecl>
+                | <value> 🪙
 importdecl    ::= (import <importname> bind-id(<externdesc>))
 exportdecl    ::= (export <exportname> bind-id(<externdesc>))
 externdesc    ::= (<sort> (type <u32>) )
