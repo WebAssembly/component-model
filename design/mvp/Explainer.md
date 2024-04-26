@@ -452,12 +452,16 @@ core:exportdesc  ::= strip-id(<core:importdesc>)
 where strip-id(X) parses '(' sort Y ')' when X parses '(' sort <id>? Y ')'
 ```
 
-Here, `core:comptype` (short for "composite type") as defined in the [gc]
-proposal is extended with a `module` type constructor. If [module-linking] is
-added to Core WebAssembly, an `instance` type constructor would be added as
-well but, for now, it's left out since it's unnecessary. Also, in the MVP,
-validation will reject `core:moduletype` defining or aliasing other
-`core:moduletype`s, since, before module-linking, core modules cannot
+Here, `core:comptype` (short for "composite type") as defined in the [GC]
+proposal is extended with a `module` type constructor. The GC proposal also
+adds recursion and explicit subtyping between core wasm types. Owing to
+their different requirements and intended modes of usage, module types
+support implicit subtyping and are not recursive. Thus, the existing core
+validation rules would require the declared supertypes of module types to be
+empty and disallow recursive use of module types.
+
+In the MVP, validation will also reject `core:moduletype` defining or aliasing
+other `core:moduletype`s, since, before module-linking, core modules cannot
 themselves import or export other core modules.
 
 The body of a module type contains an ordered list of "module declarators"
