@@ -2,7 +2,7 @@
 
 This explainer walks through the assembly-level definition of a
 [component](../high-level) and the proposed embedding of components into native
-JavaScript runtimes. For a more user-focussed explanation, take a look at the
+JavaScript runtimes. For a more user-focused explanation, take a look at the
 **[Component Model Documentation]**.
 
 * [Gated features](#gated-features)
