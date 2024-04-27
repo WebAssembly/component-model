@@ -5,13 +5,11 @@
 ### Boilerplate
 
 from __future__ import annotations
+from dataclasses import dataclass
+from typing import Optional, Callable, MutableMapping, TypeVar, Generic
 import math
 import struct
 import random
-from dataclasses import dataclass
-from typing import Optional
-from typing import Callable
-from typing import MutableMapping
 
 class Trap(BaseException): pass
 class CoreWebAssemblyException(BaseException): pass
@@ -311,6 +309,24 @@ class ComponentInstance:
     self.may_enter = True
     self.handles = HandleTables()
 
+class HandleTables:
+  rt_to_table: MutableMapping[ResourceType, Table[HandleElem]]
+
+  def __init__(self):
+    self.rt_to_table = dict()
+
+  def table(self, rt):
+    if rt not in self.rt_to_table:
+      self.rt_to_table[rt] = Table[HandleElem]()
+    return self.rt_to_table[rt]
+
+  def get(self, rt, i):
+    return self.table(rt).get(i)
+  def add(self, rt, h):
+    return self.table(rt).add(h)
+  def remove(self, rt, i):
+    return self.table(rt).remove(i)
+
 class ResourceType(Type):
   impl: ComponentInstance
   dtor: Optional[Callable[[int],None]]
@@ -318,6 +334,37 @@ class ResourceType(Type):
   def __init__(self, impl, dtor = None):
     self.impl = impl
     self.dtor = dtor
+
+ElemT = TypeVar('ElemT')
+class Table(Generic[ElemT]):
+  array: list[Optional[ElemT]]
+  free: list[int]
+
+  def __init__(self):
+    self.array = [None]
+    self.free = []
+
+  def get(self, i):
+    trap_if(i >= len(self.array))
+    trap_if(self.array[i] is None)
+    return self.array[i]
+
+  def add(self, e):
+    if self.free:
+      i = self.free.pop()
+      assert(self.array[i] is None)
+      self.array[i] = e
+    else:
+      i = len(self.array)
+      trap_if(i >= 2**30)
+      self.array.append(e)
+    return i
+
+  def remove(self, i):
+    e = self.get(i)
+    self.array[i] = None
+    self.free.append(i)
+    return e
 
 class HandleElem:
   rep: int
@@ -330,54 +377,6 @@ class HandleElem:
     self.own = own
     self.scope = scope
     self.lend_count = 0
-
-class HandleTable:
-  array: list[Optional[HandleElem]]
-  free: list[int]
-
-  def __init__(self):
-    self.array = [None]
-    self.free = []
-
-  def get(self, i):
-    trap_if(i >= len(self.array))
-    trap_if(self.array[i] is None)
-    return self.array[i]
-
-  def add(self, h):
-    if self.free:
-      i = self.free.pop()
-      assert(self.array[i] is None)
-      self.array[i] = h
-    else:
-      i = len(self.array)
-      trap_if(i >= 2**30)
-      self.array.append(h)
-    return i
-
-  def remove(self, i):
-    h = self.get(i)
-    self.array[i] = None
-    self.free.append(i)
-    return h
-
-class HandleTables:
-  rt_to_table: MutableMapping[ResourceType, HandleTable]
-
-  def __init__(self):
-    self.rt_to_table = dict()
-
-  def table(self, rt):
-    if rt not in self.rt_to_table:
-      self.rt_to_table[rt] = HandleTable()
-    return self.rt_to_table[rt]
-
-  def get(self, rt, i):
-    return self.table(rt).get(i)
-  def add(self, rt, h):
-    return self.table(rt).add(h)
-  def remove(self, rt, i):
-    return self.table(rt).remove(i)
 
 ### Loading
 

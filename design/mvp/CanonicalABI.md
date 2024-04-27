@@ -152,8 +152,8 @@ def alignment_flags(labels):
   return 4
 ```
 
-Handle types are passed as `i32` indices into the `HandleTable` introduced
-below.
+Handle types are passed as `i32` indices into the `Table[HandleElem]`
+introduced below.
 
 
 ### Size
@@ -286,12 +286,41 @@ class ComponentInstance:
     self.may_enter = True
     self.handles = HandleTables()
 ```
-`HandleTables` is defined in terms of a collection of supporting runtime
-bookkeeping classes that we'll go through first.
+The `HandleTables` object held by `ComponentInstance` contains a mapping
+from `ResourceType` to `Table`s of `HandleElem`s (defined next), establishing
+a separate `i32`-indexed array per resource type.
+```python
+class HandleTables:
+  rt_to_table: MutableMapping[ResourceType, Table[HandleElem]]
 
-The `ResourceType` class represents a resource type that has been defined by
-the specific component instance pointed to by `impl` with a particular
-function closure as the `dtor`.
+  def __init__(self):
+    self.rt_to_table = dict()
+
+  def table(self, rt):
+    if rt not in self.rt_to_table:
+      self.rt_to_table[rt] = Table[HandleElem]()
+    return self.rt_to_table[rt]
+
+  def get(self, rt, i):
+    return self.table(rt).get(i)
+  def add(self, rt, h):
+    return self.table(rt).add(h)
+  def remove(self, rt, i):
+    return self.table(rt).remove(i)
+```
+While this Python code performs a dynamic hash-table lookup on each handle
+table access, as we'll see below, the `rt` parameter is always statically known
+such that a normal implementation can statically enumerate all `Table` objects
+at compile time and then route the calls to `get`, `add` and `remove` to the
+correct `Table` at the callsite. The net result is that each component instance
+will contain one handle table per resource type used by the component, with
+each compiled adapter function accessing the correct handle table as-if it were
+a global variable.
+
+The `ResourceType` class represents a concrete resource type that has been
+created by the component instance `impl`. `ResourceType` objects are used as
+keys by `HandleTables` above and thus we assume that Python object identity
+corresponds to resource type equality, as defined by [type checking] rules.
 ```python
 class ResourceType(Type):
   impl: ComponentInstance
@@ -301,9 +330,60 @@ class ResourceType(Type):
     self.impl = impl
     self.dtor = dtor
 ```
+The `Table` class, used by `HandleTables` above, encapsulates a single
+mutable, growable array of generic elements, indexed by Core WebAssembly
+`i32`s.
+```python
+ElemT = TypeVar('ElemT')
+class Table(Generic[ElemT]):
+  array: list[Optional[ElemT]]
+  free: list[int]
 
-The `HandleElem` class represents the elements of the per-component-instance
-handle tables (defined next).
+  def __init__(self):
+    self.array = [None]
+    self.free = []
+
+  def get(self, i):
+    trap_if(i >= len(self.array))
+    trap_if(self.array[i] is None)
+    return self.array[i]
+
+  def add(self, e):
+    if self.free:
+      i = self.free.pop()
+      assert(self.array[i] is None)
+      self.array[i] = e
+    else:
+      i = len(self.array)
+      trap_if(i >= 2**30)
+      self.array.append(e)
+    return i
+
+  def remove(self, i):
+    e = self.get(i)
+    self.array[i] = None
+    self.free.append(i)
+    return e
+```
+`Table` maintains a dense array of elements that can contain holes created by
+the `remove` method (defined below). When table elements are accessed (e.g., by
+`canon_lift` and `resource.rep`, below), there are thus both a bounds check and
+hole check necessary. Upon initialization, table element `0` is allocated and
+set to `None`, effectively reserving index `0` which is both useful for
+catching null/uninitialized accesses and allowing `0` to serve as a sentinel
+value.
+
+The `add` and `remove` methods work together to maintain a free list of holes
+that are used in preference to growing the table. The free list is represented
+as a Python list here, but an optimizing implementation could instead store the
+free list in the free elements of `array`.
+
+The limit of `2**30` ensures that the high 2 bits of table indices are unset
+and available for other use in guest code (e.g., for tagging, packed words or
+sentinel values).
+
+The `HandleElem` class defines the elements of the per-resource-type `Table`s
+stored in `HandleTables`:
 ```python
 class HandleElem:
   rep: int
@@ -339,86 +419,6 @@ in a component to statically determine that a given resource type's handle
 table only contains `own` or `borrow` handles and then, based on this,
 statically eliminate the `own` and the `lend_count` xor `scope` fields,
 and guards thereof.
-
-`HandleTable` (singular) encapsulates a single mutable, growable array
-of handles that all share the same `ResourceType`. Defining `HandleTable` in
-chunks, we start with the fields and `get` method:
-```python
-class HandleTable:
-  array: list[Optional[HandleElem]]
-  free: list[int]
-
-  def __init__(self):
-    self.array = [None]
-    self.free = []
-
-  def get(self, i):
-    trap_if(i >= len(self.array))
-    trap_if(self.array[i] is None)
-    return self.array[i]
-```
-The `HandleTable` class maintains a dense array of handles that can contain
-holes created by the `remove` method (defined below). When handles are accessed
-(by lifting and `resource.rep`), there are thus both a bounds check and hole
-check necessary. Upon initialization, table element `0` is allocated and set to
-`None`, effectively reserving index `0` which is both useful for catching
-null/uninitialized accesses and allowing `0` to serve as a sentinel value.
-
-The `add` and `remove` methods work together to maintain a free list of holes
-that are used in preference to growing the table. The free list is represented
-as a Python list here, but an optimizing implementation could instead store the
-free list in the free elements of `array`.
-```python
-  def add(self, h):
-    if self.free:
-      i = self.free.pop()
-      assert(self.array[i] is None)
-      self.array[i] = h
-    else:
-      i = len(self.array)
-      trap_if(i >= 2**30)
-      self.array.append(h)
-    return i
-
-  def remove(self, i):
-    h = self.get(i)
-    self.array[i] = None
-    self.free.append(i)
-    return h
-```
-The handle index limit of `2**30` ensures that the high 2 bits of handle
-indices are unset and available for other use in guest code (e.g., for tagging,
-packed words or sentinel values).
-
-Finally, we can define `HandleTables` (plural) as simply a wrapper around
-a mutable mapping from `ResourceType` to `HandleTable`:
-```python
-class HandleTables:
-  rt_to_table: MutableMapping[ResourceType, HandleTable]
-
-  def __init__(self):
-    self.rt_to_table = dict()
-
-  def table(self, rt):
-    if rt not in self.rt_to_table:
-      self.rt_to_table[rt] = HandleTable()
-    return self.rt_to_table[rt]
-
-  def get(self, rt, i):
-    return self.table(rt).get(i)
-  def add(self, rt, h):
-    return self.table(rt).add(h)
-  def remove(self, rt, i):
-    return self.table(rt).remove(i)
-```
-While this Python code performs a dynamic hash-table lookup on each handle
-table access, as we'll see below, the `rt` parameter is always statically
-known such that a normal implementation can statically enumerate all
-`HandleTable` objects at compile time and then route the calls to `get`,
-`add` and `remove` to the correct `HandleTable` at the callsite. The
-net result is that each component instance will contain one handle table per
-resource type used by the component, with each compiled adapter function
-accessing the correct handle table as-if it were a global variable.
 
 
 ### Loading
