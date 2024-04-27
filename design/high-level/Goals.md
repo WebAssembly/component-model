@@ -13,7 +13,7 @@
      language or family of languages.
    * *Embeddability*: design components to be embedded in a diverse set of
      host execution environments, including browsers, servers, intermediaries,
-     small devices and data-intensive systems.
+     small devices, and data-intensive systems.
    * *Optimizability*: maximize the static information available to
      Ahead-of-Time compilers to minimize the cost of instantiation and
      startup.
