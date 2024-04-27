@@ -31,7 +31,7 @@
 ## Non-goals
 
 1. Don't attempt to solve 100% of WebAssembly embedding scenarios.
-   * Some scenarios will require features in conflict with the above-mentioned goal.
+   * Some scenarios will require features in conflict with the above-mentioned goals.
    * With the layered approach to specification, unsupported embedding
      scenarios can be solved via alternative layered specifications or by
      directly embedding the existing WebAssembly core specification.
