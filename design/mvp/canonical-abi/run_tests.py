@@ -65,7 +65,7 @@ def test(t, vals_to_lift, v,
   def test_name():
     return "test({},{},{}):".format(t, vals_to_lift, v)
 
-  vi = ValueIter([Value(ft, v) for ft,v in zip(flatten_type(t), vals_to_lift, strict=True)])
+  vi = CoreValueIter(vals_to_lift)
 
   if v is None:
     try:
@@ -89,9 +89,8 @@ def test(t, vals_to_lift, v,
     dst_encoding = cx.opts.string_encoding
   cx = mk_cx(heap.memory, dst_encoding, heap.realloc)
   lowered_vals = lower_flat(cx, v, lower_t)
-  assert(flatten_type(lower_t) == list(map(lambda v: v.t, lowered_vals)))
 
-  vi = ValueIter(lowered_vals)
+  vi = CoreValueIter(lowered_vals)
   got = lift_flat(cx, vi, lower_t)
   if not equal_modulo_string_encoding(got, lower_v):
     fail("{} re-lift expected {} but got {}".format(test_name(), lower_v, got))
@@ -155,7 +154,7 @@ test_pairs(Enum(['a','b']), [(0,{'a':None}), (1,{'b':None}), (2,None)])
 
 def test_nan32(inbits, outbits):
   origf = decode_i32_as_float(inbits)
-  f = lift_flat(mk_cx(), ValueIter([Value('f32', origf)]), F32())
+  f = lift_flat(mk_cx(), CoreValueIter([origf]), F32())
   if DETERMINISTIC_PROFILE:
     assert(encode_float_as_i32(f) == outbits)
   else:
@@ -169,7 +168,7 @@ def test_nan32(inbits, outbits):
 
 def test_nan64(inbits, outbits):
   origf = decode_i64_as_float(inbits)
-  f = lift_flat(mk_cx(), ValueIter([Value('f64', origf)]), F64())
+  f = lift_flat(mk_cx(), CoreValueIter([origf]), F64())
   if DETERMINISTIC_PROFILE:
     assert(encode_float_as_i64(f) == outbits)
   else:
@@ -350,7 +349,7 @@ def test_roundtrip(t, v):
 
   flat_args = lower_flat(caller_cx, v, t)
   flat_results = canon_lower(caller_opts, caller_inst, lifted_callee, True, ft, flat_args)
-  got = lift_flat(caller_cx, ValueIter(flat_results), t)
+  got = lift_flat(caller_cx, CoreValueIter(flat_results), t)
 
   if got != v:
     fail("test_roundtrip({},{},{}) got {}".format(t, v, caller_args, got))
@@ -392,10 +391,10 @@ def test_handles():
     assert(len(args) == 4)
     assert(len(inst.handles.table(rt).array) == 4)
     assert(inst.handles.table(rt).array[0] is None)
-    assert(args[0].t == 'i32' and args[0].v == 1)
-    assert(args[1].t == 'i32' and args[1].v == 2)
-    assert(args[2].t == 'i32' and args[2].v == 3)
-    assert(args[3].t == 'i32' and args[3].v == 13)
+    assert(args[0] == 1)
+    assert(args[1] == 2)
+    assert(args[2] == 3)
+    assert(args[3] == 13)
     assert(canon_resource_rep(inst, rt, 1) == 42)
     assert(canon_resource_rep(inst, rt, 2) == 43)
     assert(canon_resource_rep(inst, rt, 3) == 44)
@@ -407,12 +406,12 @@ def test_handles():
       Own(rt)
     ])
     args = [
-      Value('i32',1),
-      Value('i32',3)
+      1,
+      3
     ]
     results = canon_lower(opts, inst, host_import, True, host_ft, args)
     assert(len(results) == 1)
-    assert(results[0].t == 'i32' and results[0].v == 4)
+    assert(results[0] == 4)
     assert(canon_resource_rep(inst, rt, 4) == 45)
 
     dtor_value = None
@@ -435,7 +434,7 @@ def test_handles():
     assert(inst.handles.table(rt).array[3] is None)
     assert(len(inst.handles.table(rt).free) == 1)
 
-    return [Value('i32', 1), Value('i32', 2), Value('i32', 4)]
+    return [1, 2, 4]
 
   ft = FuncType([
     Own(rt),

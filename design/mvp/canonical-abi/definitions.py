@@ -890,19 +890,19 @@ def join(a, b):
 ### Flat Lifting
 
 @dataclass
-class Value:
-  t: str # 'i32'|'i64'|'f32'|'f64'
-  v: int|float
-
-@dataclass
-class ValueIter:
-  values: list[Value]
+class CoreValueIter:
+  values: list[int|float]
   i = 0
   def next(self, t):
     v = self.values[self.i]
     self.i += 1
-    assert(v.t == t)
-    return v.v
+    match t:
+      case 'i32': assert(isinstance(v, int) and 0 <= v < 2**32)
+      case 'i64': assert(isinstance(v, int) and 0 <= v < 2**64)
+      case 'f32': assert(isinstance(v, (int,float)))
+      case 'f64': assert(isinstance(v, (int,float)))
+      case _    : assert(False)
+    return v
 
 def lift_flat(cx, vi, t):
   match despecialize(t):
@@ -995,38 +995,38 @@ def lift_flat_flags(vi, labels):
 
 def lower_flat(cx, v, t):
   match despecialize(t):
-    case Bool()         : return [Value('i32', int(v))]
-    case U8()           : return [Value('i32', v)]
-    case U16()          : return [Value('i32', v)]
-    case U32()          : return [Value('i32', v)]
-    case U64()          : return [Value('i64', v)]
+    case Bool()         : return [int(v)]
+    case U8()           : return [v]
+    case U16()          : return [v]
+    case U32()          : return [v]
+    case U64()          : return [v]
     case S8()           : return lower_flat_signed(v, 32)
     case S16()          : return lower_flat_signed(v, 32)
     case S32()          : return lower_flat_signed(v, 32)
     case S64()          : return lower_flat_signed(v, 64)
-    case F32()          : return [Value('f32', maybe_scramble_nan32(v))]
-    case F64()          : return [Value('f64', maybe_scramble_nan64(v))]
-    case Char()         : return [Value('i32', char_to_i32(v))]
+    case F32()          : return [maybe_scramble_nan32(v)]
+    case F64()          : return [maybe_scramble_nan64(v)]
+    case Char()         : return [char_to_i32(v)]
     case String()       : return lower_flat_string(cx, v)
     case List(t)        : return lower_flat_list(cx, v, t)
     case Record(fields) : return lower_flat_record(cx, v, fields)
     case Variant(cases) : return lower_flat_variant(cx, v, cases)
     case Flags(labels)  : return lower_flat_flags(v, labels)
-    case Own()          : return [Value('i32', lower_own(cx, v, t))]
-    case Borrow()       : return [Value('i32', lower_borrow(cx, v, t))]
+    case Own()          : return [lower_own(cx, v, t)]
+    case Borrow()       : return [lower_borrow(cx, v, t)]
 
 def lower_flat_signed(i, core_bits):
   if i < 0:
     i += (1 << core_bits)
-  return [Value('i' + str(core_bits), i)]
+  return [i]
 
 def lower_flat_string(cx, v):
   ptr, packed_length = store_string_into_range(cx, v)
-  return [Value('i32', ptr), Value('i32', packed_length)]
+  return [ptr, packed_length]
 
 def lower_flat_list(cx, v, elem_type):
   (ptr, length) = store_list_into_range(cx, v, elem_type)
-  return [Value('i32', ptr), Value('i32', length)]
+  return [ptr, length]
 
 def lower_flat_record(cx, v, fields):
   flat = []
@@ -1043,23 +1043,23 @@ def lower_flat_variant(cx, v, cases):
     payload = []
   else:
     payload = lower_flat(cx, case_value, c.t)
-  for i,have in enumerate(payload):
-    want = flat_types.pop(0)
-    match (have.t, want):
-      case ('f32', 'i32') : payload[i] = Value('i32', encode_float_as_i32(have.v))
-      case ('i32', 'i64') : payload[i] = Value('i64', have.v)
-      case ('f32', 'i64') : payload[i] = Value('i64', encode_float_as_i32(have.v))
-      case ('f64', 'i64') : payload[i] = Value('i64', encode_float_as_i64(have.v))
-      case _              : pass
-  for want in flat_types:
-    payload.append(Value(want, 0))
-  return [Value('i32', case_index)] + payload
+    for i,(fv,have) in enumerate(zip(payload, flatten_type(c.t))):
+      want = flat_types.pop(0)
+      match (have, want):
+        case ('f32', 'i32') : payload[i] = encode_float_as_i32(fv)
+        case ('i32', 'i64') : payload[i] = fv
+        case ('f32', 'i64') : payload[i] = encode_float_as_i32(fv)
+        case ('f64', 'i64') : payload[i] = encode_float_as_i64(fv)
+        case _              : pass
+  for _ in flat_types:
+    payload.append(0)
+  return [case_index] + payload
 
 def lower_flat_flags(v, labels):
   i = pack_flags_into_int(v, labels)
   flat = []
   for _ in range(num_i32_flags(labels)):
-    flat.append(Value('i32', i & 0xffffffff))
+    flat.append(i & 0xffffffff)
     i >>= 32
   assert(i == 0)
   return flat
@@ -1089,7 +1089,7 @@ def lower_values(cx, max_flat, vs, ts, out_param = None):
     trap_if(ptr != align_to(ptr, alignment(tuple_type)))
     trap_if(ptr + size(tuple_type) > len(cx.opts.memory))
     store(cx, tuple_value, tuple_type, ptr)
-    return [ Value('i32', ptr) ]
+    return [ptr]
   else:
     flat_vals = []
     for i in range(len(vs)):
@@ -1112,7 +1112,7 @@ def canon_lift(opts, inst, callee, ft, args):
   except CoreWebAssemblyException:
     trap()
 
-  results = lift_values(cx, MAX_FLAT_RESULTS, ValueIter(flat_results), ft.result_types())
+  results = lift_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types())
 
   def post_return():
     if opts.post_return is not None:
@@ -1131,7 +1131,7 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
   if calling_import:
     inst.may_enter = False
 
-  flat_args = ValueIter(flat_args)
+  flat_args = CoreValueIter(flat_args)
   args = lift_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
   results, post_return = callee(args)
