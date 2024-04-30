@@ -160,9 +160,6 @@ Notes:
   initially-empty type index space.
 * `alias` declarators currently only allow `outer` `type` aliases but
   would add `export` aliases when core wasm adds type exports.
-* Validation of `outer` aliases cannot see beyond the enclosing core type index
-  space. Since core modules and core module types cannot nest in the MVP, this
-  means that the maximum `ct` in an MVP `alias` declarator is `1`.
 
 ```ebnf
 type          ::= dt:<deftype>                            => (type dt)

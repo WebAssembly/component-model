@@ -493,17 +493,13 @@ implicitly-created `func` type referring to both.
 Lastly, the `core:alias` module declarator allows a module type definition to
 reuse (rather than redefine) type definitions in the enclosing component's core
 type index space via `outer` `type` alias. In the MVP, validation restricts
-`core:alias` module declarators to *only* allow `outer` `type` aliases but,
-in the future, more kinds of aliases would be meaningful and allowed.
+`core:alias` module declarators to *only* allow `outer` `type` aliases (into an
+enclosing component's or component-type's core type index space). In the
+future, more kinds of aliases would be meaningful and allowed.
 
 As an example, the following component defines two semantically-equivalent
 module types, where the former defines the function type via `type` declarator
-and the latter refers via `alias` declarator. Note that, since core type
-definitions are validated in a Core WebAssembly context that doesn't "know"
-anything about components, the module type `$C2` can't name `$C` directly in
-the text format but must instead use the appropriate [de Bruijn] index (`1`).
-In both cases, the defined/aliased function type is given index `0` since
-module types always start with an empty type index space.
+and the latter refers via `alias` declarator.
 ```wasm
 (component $C
   (core type $C1 (module
@@ -513,7 +509,7 @@ module types always start with an empty type index space.
   ))
   (core type $F (func (param i32) (result i32)))
   (core type $C2 (module
-    (alias outer 1 $F (type))
+    (alias outer $C $F (type))
     (import "a" "b" (func (type 0)))
     (export "c" (func (type 0)))
   ))
