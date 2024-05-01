@@ -6,10 +6,13 @@
 
 from __future__ import annotations
 from dataclasses import dataclass
+from functools import partial
 from typing import Optional, Callable, MutableMapping, TypeVar, Generic
+from enum import IntEnum
 import math
 import struct
 import random
+import asyncio
 
 class Trap(BaseException): pass
 class CoreWebAssemblyException(BaseException): pass
@@ -282,17 +285,29 @@ class CanonicalOptions:
   string_encoding: Optional[str] = None
   realloc: Optional[Callable] = None
   post_return: Optional[Callable] = None
+  sync: bool = True
+  callback: Optional[Callable] = None
 
 class ComponentInstance:
   # core module instance state
   may_leave: bool
-  may_enter: bool
+  may_enter_sync: bool
+  may_enter_async: bool
+  pending_sync_tasks: list[asyncio.Future]
+  pending_async_tasks: list[asyncio.Future]
   handles: HandleTables
+  async_subtasks: Table[AsyncSubtask]
+  thread: asyncio.Lock
 
   def __init__(self):
     self.may_leave = True
-    self.may_enter = True
+    self.may_enter_sync = True
+    self.may_enter_async = True
+    self.pending_sync_tasks = []
+    self.pending_async_tasks = []
     self.handles = HandleTables()
+    self.async_subtasks = Table[AsyncSubtask]()
+    self.thread = asyncio.Lock()
 
 class HandleTables:
   rt_to_table: MutableMapping[ResourceType, Table[HandleElem]]
@@ -315,10 +330,14 @@ class HandleTables:
 class ResourceType(Type):
   impl: ComponentInstance
   dtor: Optional[Callable]
+  dtor_sync: bool
+  dtor_callback: Optional[Callable]
 
-  def __init__(self, impl, dtor = None):
+  def __init__(self, impl, dtor = None, dtor_sync = True, dtor_callback = None):
     self.impl = impl
     self.dtor = dtor
+    self.dtor_sync = dtor_sync
+    self.dtor_callback = dtor_callback
 
 ElemT = TypeVar('ElemT')
 class Table(Generic[ElemT]):
@@ -354,7 +373,7 @@ class Table(Generic[ElemT]):
 class HandleElem:
   rep: int
   own: bool
-  scope: Optional[ExportCall]
+  scope: Optional[Task]
   lend_count: int
 
   def __init__(self, rep, own, scope = None):
@@ -363,12 +382,28 @@ class HandleElem:
     self.scope = scope
     self.lend_count = 0
 
-class ExportCall(CallContext):
+class Task(CallContext):
+  caller: Optional[Task]
   borrow_count: int
+  events: asyncio.Queue[AsyncSubtask]
+  num_async_subtasks: int
 
-  def __init__(self, opts, inst):
+  def __init__(self, opts, inst, caller):
     super().__init__(opts, inst)
+    self.caller = caller
     self.borrow_count = 0
+    self.events = asyncio.Queue[AsyncSubtask]()
+    self.num_async_subtasks = 0
+
+  async def enter(self):
+    await self.inst.thread.acquire()
+    self.trap_if_on_the_stack(self.inst)
+
+  def trap_if_on_the_stack(self, inst):
+    c = self.caller
+    while c is not None:
+      trap_if(c.inst is int)
+      c = c.caller
 
   def create_borrow(self):
     self.borrow_count += 1
@@ -377,10 +412,46 @@ class ExportCall(CallContext):
     assert(self.borrow_count > 0)
     self.borrow_count -= 1
 
-  def exit(self):
-    trap_if(self.borrow_count != 0)
+  def add_async_subtask(self, subtask):
+    assert(subtask.supertask is None and subtask.index is None)
+    subtask.supertask = self
+    subtask.index = self.inst.async_subtasks.add(subtask)
+    self.num_async_subtasks += 1
+    return subtask.index
 
-class ImportCall(CallContext):
+  def async_subtask_made_progress(self, subtask):
+    assert(subtask.supertask is self)
+    if subtask.enqueued:
+      return
+    subtask.enqueued = True
+    self.events.put_nowait(subtask)
+
+  async def wait(self):
+    self.inst.thread.release()
+    subtask = await self.events.get()
+    await self.inst.thread.acquire()
+    return self.process_event(subtask)
+
+  def process_event(self, subtask):
+    assert(subtask.supertask is self)
+    subtask.enqueued = False
+    if subtask.state == AsyncCallState.DONE:
+      self.inst.async_subtasks.remove(subtask.index)
+      self.num_async_subtasks -= 1
+    return (subtask.state, subtask.index)
+
+  def poll(self):
+    if self.events.empty():
+      return None
+    return self.process_event(self.events.get_nowait())
+
+  def exit(self):
+    assert(self.events.empty())
+    trap_if(self.borrow_count != 0)
+    trap_if(self.num_async_subtasks != 0)
+    self.inst.thread.release()
+
+class Subtask(CallContext):
   lenders: list[HandleElem]
 
   def __init__(self, opts, inst):
@@ -392,9 +463,119 @@ class ImportCall(CallContext):
     lending_handle.lend_count += 1
     self.lenders.append(lending_handle)
 
-  def exit(self):
+  def finish(self):
     for h in self.lenders:
       h.lend_count -= 1
+
+class SyncTask(Task):
+  async def enter(self):
+    if not self.inst.may_enter_sync:
+      f = asyncio.Future()
+      self.inst.pending_sync_tasks.append(f)
+      await f
+      assert(self.inst.may_enter_sync)
+    self.inst.may_enter_sync = False
+    await super().enter()
+
+  def exit(self):
+    super().exit()
+    assert(not self.inst.may_enter_sync)
+    self.inst.may_enter_sync = True
+    if self.inst.pending_sync_tasks:
+      self.inst.pending_sync_tasks.pop(0).set_result(None)
+
+class AsyncCallState(IntEnum):
+  STARTING = 0
+  STARTED = 1
+  RETURNED = 2
+  DONE = 3
+
+class AsyncTask(Task):
+  ft: FuncType
+  start_thunk: Callable
+  return_thunk: Callable
+  state: AsyncCallState
+  unblock_next_pending: bool
+
+  def __init__(self, opts, inst, caller, ft, start_thunk, return_thunk):
+    super().__init__(opts, inst, caller)
+    self.ft = ft
+    self.start_thunk = start_thunk
+    self.return_thunk = return_thunk
+    self.state = AsyncCallState.STARTING
+    self.unblock_next_pending = False
+
+  async def enter(self):
+    if not self.inst.may_enter_async or self.inst.pending_async_tasks:
+      f = asyncio.Future()
+      self.inst.pending_async_tasks.append(f)
+      await f
+      assert(self.inst.may_enter_async)
+      self.unblock_next_pending = len(self.inst.pending_async_tasks) > 0
+    await super().enter()
+
+  async def wait(self):
+    if self.state == AsyncCallState.STARTING:
+      self.inst.may_enter_async = False
+      self.inst.unblock_next_pending = False
+    else:
+      self.maybe_unblock_next_pending()
+    return await super().wait()
+
+  def maybe_unblock_next_pending(self):
+    if self.unblock_next_pending:
+      self.unblock_next_pending = False
+      assert(self.inst.may_enter_async)
+      self.inst.pending_async_tasks.pop(0).set_result(None)
+
+  def start(self):
+    trap_if(self.state != AsyncCallState.STARTING)
+    self.state = AsyncCallState.STARTED
+    if not self.inst.may_enter_async:
+      self.inst.may_enter_async = True
+      self.unblock_next_pending = len(self.inst.pending_async_tasks) > 0
+
+  def return_(self):
+    trap_if(self.state != AsyncCallState.STARTED)
+    self.state = AsyncCallState.RETURNED
+
+  def exit(self):
+    super().exit()
+    trap_if(self.state != AsyncCallState.RETURNED)
+    self.state = AsyncCallState.DONE
+    self.maybe_unblock_next_pending()
+
+class AsyncSubtask(Subtask):
+  state: AsyncCallState
+  supertask: Optional[Task]
+  index: Optional[int]
+  enqueued: bool
+
+  def __init__(self, opts, inst):
+    super().__init__(opts, inst)
+    self.state = AsyncCallState.STARTING
+    self.supertask = None
+    self.index = None
+    self.enqueued = False
+
+  def start(self):
+    assert(self.state == AsyncCallState.STARTING)
+    self.state = AsyncCallState.STARTED
+    if self.supertask is not None:
+      self.supertask.async_subtask_made_progress(self)
+
+  def return_(self):
+    assert(self.state == AsyncCallState.STARTED)
+    self.state = AsyncCallState.RETURNED
+    if self.supertask is not None:
+      self.supertask.async_subtask_made_progress(self)
+
+  def finish(self):
+    super().finish()
+    assert(self.state == AsyncCallState.RETURNED)
+    self.state = AsyncCallState.DONE
+    if self.supertask is not None:
+      self.supertask.async_subtask_made_progress(self)
 
 ### Loading
 
@@ -563,7 +744,7 @@ def lift_own(cx, i, t):
   return h.rep
 
 def lift_borrow(cx, i, t):
-  assert(isinstance(cx, ImportCall))
+  assert(isinstance(cx, Subtask))
   h = cx.inst.handles.get(t.rt, i)
   if h.own:
     cx.track_owning_lend(h)
@@ -842,7 +1023,7 @@ def lower_own(cx, rep, t):
   return cx.inst.handles.add(t.rt, h)
 
 def lower_borrow(cx, rep, t):
-  assert(isinstance(cx, ExportCall))
+  assert(isinstance(cx, Task))
   if cx.inst is t.rt.impl:
     return rep
   h = HandleElem(rep, own=False, scope=cx)
@@ -854,21 +1035,31 @@ def lower_borrow(cx, rep, t):
 MAX_FLAT_PARAMS = 16
 MAX_FLAT_RESULTS = 1
 
-def flatten_functype(ft, context):
-  flat_params = flatten_types(ft.param_types())
-  if len(flat_params) > MAX_FLAT_PARAMS:
-    flat_params = ['i32']
+def flatten_functype(opts, ft, context):
+  if opts.sync:
+    flat_params = flatten_types(ft.param_types())
+    if len(flat_params) > MAX_FLAT_PARAMS:
+      flat_params = ['i32']
 
-  flat_results = flatten_types(ft.result_types())
-  if len(flat_results) > MAX_FLAT_RESULTS:
+    flat_results = flatten_types(ft.result_types())
+    if len(flat_results) > MAX_FLAT_RESULTS:
+      match context:
+        case 'lift':
+          flat_results = ['i32']
+        case 'lower':
+          flat_params += ['i32']
+          flat_results = []
+
+    return CoreFuncType(flat_params, flat_results)
+  else:
     match context:
       case 'lift':
-        flat_results = ['i32']
-      case 'lower':
-        flat_params += ['i32']
+        flat_params = []
         flat_results = []
-
-  return CoreFuncType(flat_params, flat_results)
+      case 'lower':
+        flat_params = ['i32', 'i32']
+        flat_results = ['i32']
+    return CoreFuncType(flat_params, flat_results)
 
 def flatten_types(ts):
   return [ft for t in ts for ft in flatten_type(t)]
@@ -1089,110 +1280,229 @@ def lower_flat_flags(v, labels):
 
 ### Lifting and Lowering Values
 
-def lift_values(cx, max_flat, vi, ts):
+def lift_sync_values(cx, max_flat, vi, ts):
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
-    ptr = vi.next('i32')
-    tuple_type = Tuple(ts)
-    trap_if(ptr != align_to(ptr, alignment(tuple_type)))
-    trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
-    return list(load(cx, ptr, tuple_type).values())
+    return lift_heap_values(cx, vi, ts)
   else:
     return [ lift_flat(cx, vi, t) for t in ts ]
 
-def lower_values(cx, max_flat, vs, ts, out_param = None):
+def lift_async_values(cx, vi, ts):
+  if len(ts) == 0:
+    _ = vi.next('i32')
+    return []
+  flat_types = flatten_types(ts)
+  if len(flat_types) == 1 and flat_types[0] == 'i32':
+    assert(len(ts) == 1)
+    return [ lift_flat(cx, vi, ts[0]) ]
+  else:
+    return lift_heap_values(cx, vi, ts)
+
+def lift_heap_values(cx, vi, ts):
+  ptr = vi.next('i32')
+  tuple_type = Tuple(ts)
+  trap_if(ptr != align_to(ptr, alignment(tuple_type)))
+  trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
+  return list(load(cx, ptr, tuple_type).values())
+
+def lower_sync_values(cx, max_flat, vs, ts, out_param = None):
   inst = cx.inst
   assert(inst.may_leave)
   inst.may_leave = False
-
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
-    tuple_type = Tuple(ts)
-    tuple_value = {str(i): v for i,v in enumerate(vs)}
-    if out_param is None:
-      ptr = cx.opts.realloc(0, 0, alignment(tuple_type), elem_size(tuple_type))
-    else:
-      ptr = out_param.next('i32')
-    trap_if(ptr != align_to(ptr, alignment(tuple_type)))
-    trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
-    store(cx, tuple_value, tuple_type, ptr)
-    flat_vals = [ptr]
+    flat_vals = lower_heap_values(cx, vs, ts, out_param)
   else:
     flat_vals = []
     for i in range(len(vs)):
       flat_vals += lower_flat(cx, vs[i], ts[i])
-
   inst.may_leave = True
   return flat_vals
 
+def lower_async_values(cx, vs, ts, out_param):
+  if len(ts) == 0:
+    _ = out_param.next('i32')
+    return
+  inst = cx.inst
+  assert(inst.may_leave)
+  inst.may_leave = False
+  lower_heap_values(cx, vs, ts, out_param)
+  inst.may_leave = True
+
+def lower_heap_values(cx, vs, ts, out_param):
+  tuple_type = Tuple(ts)
+  tuple_value = {str(i): v for i,v in enumerate(vs)}
+  if out_param is None:
+    ptr = cx.opts.realloc(0, 0, alignment(tuple_type), elem_size(tuple_type))
+  else:
+    ptr = out_param.next('i32')
+  trap_if(ptr != align_to(ptr, alignment(tuple_type)))
+  trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
+  store(cx, tuple_value, tuple_type, ptr)
+  return [ptr]
+
 ### `canon lift`
 
-def canon_lift(opts, inst, callee, ft, start_thunk, return_thunk):
-  export_call = ExportCall(opts, inst)
-  trap_if(not inst.may_enter)
+async def canon_lift(opts, inst, callee, ft, caller, start_thunk, return_thunk):
+  if opts.sync:
+    task = SyncTask(opts, inst, caller)
+    await task.enter()
 
-  flat_args = lower_values(export_call, MAX_FLAT_PARAMS, start_thunk(), ft.param_types())
-  flat_results = call_and_trap_on_throw(callee, flat_args)
-  return_thunk(lift_values(export_call, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types()))
+    flat_args = lower_sync_values(task, MAX_FLAT_PARAMS, start_thunk(), ft.param_types())
+    flat_results = await call_and_trap_on_throw(callee, task, flat_args)
+    return_thunk(lift_sync_values(task, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types()))
 
-  if opts.post_return is not None:
-    call_and_trap_on_throw(opts.post_return, flat_results)
+    if opts.post_return is not None:
+      [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
 
-  export_call.exit()
+    task.exit()
+  else:
+    task = AsyncTask(opts, inst, caller, ft, start_thunk, return_thunk)
+    await task.enter()
 
-def call_and_trap_on_throw(callee, args):
+    if not opts.callback:
+      [] = await call_and_trap_on_throw(callee, task, [])
+    else:
+      [ctx] = await call_and_trap_on_throw(callee, task, [])
+      while ctx != 0:
+        event, payload = await task.wait()
+        [ctx] = await call_and_trap_on_throw(opts.callback, task, [ctx, event, payload])
+
+    assert(opts.post_return is None)
+    task.exit()
+
+async def call_and_trap_on_throw(callee, task, args):
   try:
-    return callee(args)
+    return await callee(task, args)
   except CoreWebAssemblyException:
     trap()
 
 ### `canon lower`
 
-def canon_lower(opts, inst, callee, ft, flat_args):
-  import_call = ImportCall(opts, inst)
+async def canon_lower(opts, callee, ft, task, flat_args):
+  inst = task.inst
   trap_if(not inst.may_leave)
-  assert(inst.may_enter)
-  inst.may_enter = False
-
   flat_args = CoreValueIter(flat_args)
-  flat_results = None
 
-  def start_thunk():
-    return lift_values(import_call, MAX_FLAT_PARAMS, flat_args, ft.param_types())
+  if opts.sync:
+    subtask = Subtask(opts, inst)
 
-  def return_thunk(results):
-    nonlocal flat_results
-    flat_results = lower_values(import_call, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
+    def start_thunk():
+      return lift_sync_values(subtask, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
-  callee(start_thunk, return_thunk)
+    flat_results = None
+    def return_thunk(results):
+      nonlocal flat_results
+      flat_results = lower_sync_values(subtask, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
 
-  inst.may_enter = True
-  import_call.exit()
+    inst.thread.release()
+    await callee(task, start_thunk, return_thunk)
+    await inst.thread.acquire()
+
+    subtask.finish()
+  else:
+    subtask = AsyncSubtask(opts, inst)
+
+    async def do_call():
+      def start_thunk():
+        subtask.start()
+        return lift_async_values(subtask, flat_args, ft.param_types())
+
+      def return_thunk(results):
+        subtask.return_()
+        lower_async_values(subtask, results, ft.result_types(), flat_args)
+
+      await callee(task, start_thunk, return_thunk)
+      subtask.finish()
+
+    asyncio.create_task(do_call())
+    await asyncio.sleep(0) # start do_call eagerly
+
+    if subtask.state == AsyncCallState.DONE:
+      flat_results = [0]
+    else:
+      i = task.add_async_subtask(subtask)
+      assert(0 < i < 2**30)
+      assert(0 <= int(subtask.state) < 2**2)
+      flat_results = [ i | (int(subtask.state) << 30) ]
+
   return flat_results
 
 ### `canon resource.new`
 
-def canon_resource_new(inst, rt, rep):
+async def canon_resource_new(rt, task, rep):
   h = HandleElem(rep, own=True)
-  i = inst.handles.add(rt, h)
+  i = task.inst.handles.add(rt, h)
   return [i]
 
 ### `canon resource.drop`
 
-def canon_resource_drop(inst, rt, i):
+async def canon_resource_drop(rt, sync, task, i):
+  inst = task.inst
   h = inst.handles.remove(rt, i)
+  flat_results = [] if sync else [0]
   if h.own:
     assert(h.scope is None)
     trap_if(h.lend_count != 0)
-    trap_if(inst is not rt.impl and not rt.impl.may_enter)
-    if rt.dtor:
-      rt.dtor(h.rep)
+    if inst is rt.impl:
+      if rt.dtor:
+        await rt.dtor(h.rep)
+    else:
+      if rt.dtor:
+        caller_opts = CanonicalOptions(sync = sync)
+        callee_opts = CanonicalOptions(sync = rt.dtor_sync, callback = rt.dtor_callback)
+        ft = FuncType([U32()],[])
+        callee = partial(canon_lift, callee_opts, rt.impl, rt.dtor, ft)
+        flat_results = await canon_lower(caller_opts, callee, ft, task, [h.rep, 0])
+      else:
+        task.trap_if_on_the_stack(rt.impl)
   else:
     h.scope.drop_borrow()
-  return []
+  return flat_results
 
 ### `canon resource.rep`
 
-def canon_resource_rep(inst, rt, i):
-  h = inst.handles.get(rt, i)
+async def canon_resource_rep(rt, task, i):
+  h = task.inst.handles.get(rt, i)
   return [h.rep]
+
+### `canon task.start`
+
+async def canon_task_start(task, i):
+  trap_if(task.opts.sync)
+  task.start()
+  lower_async_values(task, task.start_thunk(), task.ft.param_types(), CoreValueIter([i]))
+  return []
+
+### `canon task.return`
+
+async def canon_task_return(task, i):
+  trap_if(task.opts.sync)
+  task.return_()
+  task.return_thunk(lift_async_values(task, CoreValueIter([i]), task.ft.result_types()))
+  return []
+
+### `canon task.wait`
+
+async def canon_task_wait(task, ptr):
+  trap_if(task.opts.callback is not None)
+  event, payload = await task.wait()
+  store(task, payload, U32(), ptr)
+  return [event]
+
+### `canon task.poll`
+
+async def canon_task_poll(task, ptr):
+  ret = task.poll()
+  if ret is None:
+    return [0]
+  store(task, ret, Tuple([U32(), U32()]), ptr)
+  return [1]
+
+### `canon task.yield`
+
+async def canon_task_yield(task):
+  task.inst.thread.release()
+  await asyncio.sleep(0)
+  await task.inst.thread.acquire()
+  return []

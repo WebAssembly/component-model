@@ -1,8 +1,8 @@
-# Component Model Explainer
+# Component Model AST Explainer
 
-This explainer walks through the assembly-level definition of a
-[component](../high-level) and the proposed embedding of components into native
-JavaScript runtimes. For a more user-focused explanation, take a look at the
+This explainer walks through the grammar of a [component](../high-level) and
+the proposed embedding of components into native JavaScript runtimes. For a
+more user-focused explanation, take a look at the
 **[Component Model Documentation]**.
 
 * [Gated features](#gated-features)
@@ -21,17 +21,19 @@ JavaScript runtimes. For a more user-focused explanation, take a look at the
     * [Declarators](#declarators)
     * [Type checking](#type-checking)
   * [Canonical definitions](#canonical-definitions)
-    * [Canonical ABI](#canonical-built-ins)
+    * [Canonical ABI](#canonical-abi)
     * [Canonical built-ins](#canonical-built-ins)
-  * [Value definitions](#value-definitions)
-  * [Start definitions](#start-definitions)
+      * [Resource built-ins](#resource-built-ins)
+      * [Async built-ins](#-async-built-ins)
+      * [Threading built-ins](#-threading-built-ins)
+  * [Value definitions](#-value-definitions)
+  * [Start definitions](#-start-definitions)
   * [Import and export definitions](#import-and-export-definitions)
 * [Component invariants](#component-invariants)
 * [JavaScript embedding](#JavaScript-embedding)
   * [JS API](#JS-API)
   * [ESM-integration](#ESM-integration)
 * [Examples](#examples)
-* [TODO](#TODO)
 
 ## Gated Features
 
@@ -43,6 +45,7 @@ emoji symbols listed below; these emojis will be removed once they are
 implemented, considered stable and included in a future milestone:
 * 🪙: value imports/exports and component-level start function
 * 🪺: nested namespaces and packages in import/export names
+* 🔀: async
 * 🧵: threading built-ins
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
@@ -548,7 +551,7 @@ defvaltype    ::= bool
                 | (borrow <typeidx>)
 valtype       ::= <typeidx>
                 | <defvaltype>
-resourcetype  ::= (resource (rep i32) (dtor <funcidx>)?)
+resourcetype  ::= (resource (rep i32) (dtor async? <funcidx> (callback <funcidx>)?)?)
 functype      ::= (func <paramlist> <resultlist>)
 paramlist     ::= (param "<label>" <valtype>)*
 resultlist    ::= (result "<label>" <valtype>)*
@@ -705,7 +708,9 @@ is currently fixed to `i32`, but will be relaxed in the future (to at least
 include `i64`, but also potentially other types). When the last handle to a
 resource is dropped, the resource's destructor function specified by the `dtor`
 immediate will be called (if present), allowing the implementing component to
-perform clean-up like freeing linear memory allocations.
+perform clean-up like freeing linear memory allocations. Destructors can be
+declared `async`, with the same meaning for the `async` and `callback`
+immediates as described below for `canon lift`.
 
 The `instance` type constructor describes a list of named, typed definitions
 that can be imported or exported by a component. Informally, instance types
@@ -1170,6 +1175,8 @@ canonopt ::= string-encoding=utf8
            | (memory <core:memidx>)
            | (realloc <core:funcidx>)
            | (post-return <core:funcidx>)
+           | async 🔀
+           | (callback <core:funcidx>) 🔀
 ```
 While the production `externdesc` accepts any `sort`, the validation rules
 for `canon lift` would only allow the `func` sort. In the future, other sorts
@@ -1208,9 +1215,25 @@ destructors called. This immediate is always optional but, if present, is
 validated to have parameters matching the callee's return type and empty
 results.
 
-Based on this description of the AST, the [Canonical ABI explainer][Canonical
-ABI] gives a detailed walkthrough of the static and dynamic semantics of `lift`
-and `lower`.
+🔀 The `async` option specifies that the component wants to make (for imports)
+or support (for exports) multiple concurrent (asynchronous) calls. This option
+can be applied to any component-level function type and changes the derived
+Canonical ABI significantly. See the [async explainer](Async.md) for more
+details.
+
+🔀 The `(callback ...)` option may only be present in `canon lift` when the
+`async` option has also been set and specifies a core function that is
+validated to have the following core function type:
+```wasm
+(func (param $ctx i32)
+      (param $event i32)
+      (param $payload i32)
+      (result $done i32))
+```
+Again, see the [async explainer](Async.md) for more details.
+
+Based on this description of the AST, the [Canonical ABI explainer] gives a
+detailed walkthrough of the static and dynamic semantics of `lift` and `lower`.
 
 One high-level consequence of the dynamic semantics of `canon lift` given in
 the Canonical ABI explainer is that component functions are different from core
@@ -1288,22 +1311,30 @@ async is added to the proposal, [tasks][Future and Stream Types]).
 ```ebnf
 canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
-        | (canon resource.drop <typeidx> (core func <id>?))
+        | (canon resource.drop <typeidx> async? (core func <id>?))
         | (canon resource.rep <typeidx> (core func <id>?))
+        | (canon task.start (core func <id>?)) 🔀
+        | (canon task.return (core func <id>?)) 🔀
+        | (canon task.wait (core func <id>?)) 🔀
+        | (canon task.poll (core func <id>?)) 🔀
+        | (canon task.yield (core func <id>?)) 🔀
         | (canon thread.spawn <typeidx> (core func <id>?)) 🧵
         | (canon thread.hw_concurrency (core func <id>?)) 🧵
 ```
 
-##### Resources
+##### Resource built-ins
 
 The `resource.new` built-in has type `[i32] -> [i32]` and creates a new
 resource (with resource type `typeidx`) with the given `i32` value as its
 representation and returning the `i32` index of a new handle pointing to this
 resource.
 
-The `resource.drop` built-in has type `[i32] -> []` and drops a resource handle
-(with resource type `typeidx`) at the given `i32` index. If the dropped handle
-owns the resource, the resource's `dtor` is called, if present.
+The `resource.drop` drops a resource handle (with resource type `typeidx`) at
+a given `i32` index. If the dropped handle owns the resource, the resource's
+`dtor` is called, if present. If `async` is not specified, the core function
+type of `resource.drop` is `[i32] -> []`. Otherwise, the core function type
+of `async` `drop` is `[i32] -> [i32]`, where the returned `i32` is either `0`
+(if the drop completed eagerly) or the index of the in-progress drop.
 
 The `resource.rep` built-in has type `[i32] -> [i32]` and returns the `i32`
 representation of the resource (with resource type `typeidx`) pointed to by the
@@ -1338,7 +1369,45 @@ Here, the `i32` returned by `resource.new`, which is an index into the
 component's handle-table, is immediately returned by `make_R`, thereby
 transferring ownership of the newly-created resource to the export's caller.
 
-##### 🧵 Threads
+##### 🔀 Async built-ins
+
+See the [async explainer](Async.md) for high-level context and terminology
+and the [Canonical ABI explainer] for detailed runtime semantics.
+
+The `task.start` built-in has type `[i32] -> []` where the `i32` is a pointer
+into a linear memory buffer that will receive the arguments of the call to
+the current task. This built-in must be called from an `async`-lifted export
+exactly once per export activation. Delaying the call to `task.start` allows
+the async callee to exert *backpressure* on the caller. (See also
+[Starting](Async.md#starting) in the async explainer and [`canon_task_start`]
+in the Canonical ABI explainer.)
+
+The `task.return` built-in has type `[i32] -> []` where the `i32` is a pointer
+to a linear memory buffer containing the value to be returned from the current
+task. This built-in must be called from an `async`-lifted export exactly once
+per export activation after `task.start`. After calling `task.return`, the
+callee can continue executing for an arbitrary amount of time before returning
+to the caller. (See also [Returning](Async.md#returning) in the async explainer
+and [`canon_task_return`] in the Canonical ABI explainer.)
+
+The `task.wait` built-in has type `[i32] -> [i32]`, returning an event and
+storing the 4-byte payload of the event at the address passed as parameter.
+`task.wait` can be called whether or not `async` was present, allowing any sort
+of code to synchronously wait for progress on any of the currently-executing
+subtasks. (See also [Waiting](Async.md#waiting) in the async explainer and
+[`canon_task_wait`] in the Canonical ABI explainer.)
+
+The `task.poll` built-in has type `[i32] -> [i32]`, returning whether or not
+an event was immediately available as a boolean and, if true, storing the
+event and its payload in the buffer pointed to by the `i32` parameter.
+(See also [`canon_task_poll`] in the Canonical ABI explainer.)
+
+The `task.yield` built-in has type `[] -> []` and simply allows the runtime to
+switch to another task, allowing a long-running computation to cooperatively
+interleave with other tasks. (See also [`canon_task_yield`] in the Canonical
+ABI explainer.)
+
+##### 🧵 Threading built-ins
 
 The [shared-everything-threads] proposal adds component model built-ins for
 thread management. These are specified as built-ins and not core WebAssembly
@@ -1831,8 +1900,7 @@ three runtime invariants:
    the interim. This establishes a clear contract between separate components
    that both prevents obscure composition-time bugs and also enables
    more-efficient non-reentrant runtime glue code (particularly in the middle
-   of the [Canonical ABI](CanonicalABI.md)). This implies that components by
-   default don't allow concurrency and multi-threaded access will trap.
+   of the [Canonical ABI](CanonicalABI.md)).
 
 
 ## JavaScript Embedding
@@ -2069,16 +2137,6 @@ For some use-case-focused, worked examples, see:
 * [Component Examples presentation](https://docs.google.com/presentation/d/11lY9GBghZJ5nCFrf4MKWVrecQude0xy_buE--tnO9kQ)
 
 
-## TODO
-
-The following features are needed to address the [MVP Use Cases](../high-level/UseCases.md)
-and will be added over the coming months to complete the MVP proposal:
-* concurrency support ([slides][Future And Stream Types])
-* optional imports, definitions and exports (subsuming
-  [WASI Optional Imports](https://github.com/WebAssembly/WASI/blob/main/legacy/optional-imports.md)
-  and maybe [conditional-sections](https://github.com/WebAssembly/conditional-sections/issues/22))
-
-
 
 [Structure Section]: https://webassembly.github.io/spec/core/syntax/index.html
 [Text Format Section]: https://webassembly.github.io/spec/core/text/index.html
@@ -2173,7 +2231,12 @@ and will be added over the coming months to complete the MVP proposal:
 [WASI Preview 2]: https://github.com/WebAssembly/WASI/tree/main/preview2
 
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
-[Canonical ABI]: CanonicalABI.md
+[Canonical ABI explainer]: CanonicalABI.md
+[`canon_task_start`]: CanonicalABI.md#-canon-taskstart
+[`canon_task_return`]: CanonicalABI.md#-canon-taskreturn
+[`canon_task_wait`]: CanonicalABI.md#-canon-taskwait
+[`canon_task_poll`]: CanonicalABI.md#-canon-taskpoll
+[`canon_task_yield`]: CanonicalABI.md#-canon-taskyield
 [Shared-Nothing]: ../high-level/Choices.md
 [Use Cases]: ../high-level/UseCases.md
 [Host Embeddings]: ../high-level/UseCases.md#hosts-embedding-components
