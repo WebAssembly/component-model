@@ -200,6 +200,7 @@ label'        ::= len:<u32> l:<label>                     => l    (if len = |l|)
 valtype       ::= i:<typeidx>                             => i
                 | pvt:<primvaltype>                       => pvt
 resourcetype  ::= 0x3f 0x7f f?:<funcidx>?                 => (resource (rep i32) (dtor f)?)
+                | 0x3e 0x7f f:<funcidx> cb?:<funcidx>?    => (resource (rep i32) (dtor async f (callback cb)?))
 functype      ::= 0x40 ps:<paramlist> rs:<resultlist>     => (func ps rs)
 paramlist     ::= lt*:vec(<labelvaltype>)                 => (param lt)*
 resultlist    ::= 0x00 t:<valtype>                        => (result t)
@@ -270,9 +271,15 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x01 0x00 f:<funcidx> opts:<opts>                   => (canon lower f opts (core func))
            | 0x02 rt:<typeidx>                                   => (canon resource.new rt (core func))
            | 0x03 rt:<typeidx>                                   => (canon resource.drop rt (core func))
+           | 0x07 rt:<typdidx>                                   => (canon resource.drop rt async (core func))
            | 0x04 rt:<typeidx>                                   => (canon resource.rep rt (core func))
            | 0x05 ft:<typeidx>                                   => (canon thread.spawn ft (core func))
            | 0x06                                                => (canon thread.hw_concurrency (core func))
+           | 0x08                                                => (canon task.start (core func))
+           | 0x09                                                => (canon task.return (core func))
+           | 0x0a                                                => (canon task.wait (core func))
+           | 0x0b                                                => (canon task.poll (core func))
+           | 0x0c                                                => (canon task.yield (core func))
 opts     ::= opt*:vec(<canonopt>)                                => opt*
 canonopt ::= 0x00                                                => string-encoding=utf8
            | 0x01                                                => string-encoding=utf16
@@ -280,6 +287,8 @@ canonopt ::= 0x00                                                => string-encod
            | 0x03 m:<core:memidx>                                => (memory m)
            | 0x04 f:<core:funcidx>                               => (realloc f)
            | 0x05 f:<core:funcidx>                               => (post-return f)
+           | 0x06                                                => async
+           | 0x07 f:<core:funcidx>                               => (callback f)
 ```
 Notes:
 * The second `0x00` byte in `canon` stands for the `func` sort and thus the
