@@ -1153,7 +1153,8 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
 
 def canon_resource_new(inst, rt, rep):
   h = HandleElem(rep, own=True)
-  return inst.handles.add(rt, h)
+  i = inst.handles.add(rt, h)
+  return [i]
 
 ### `canon resource.drop`
 
@@ -1169,9 +1170,10 @@ def canon_resource_drop(inst, rt, i):
     assert(h.scope is not None)
     assert(h.scope.borrow_count > 0)
     h.scope.borrow_count -= 1
+  return []
 
 ### `canon resource.rep`
 
 def canon_resource_rep(inst, rt, i):
   h = inst.handles.get(rt, i)
-  return h.rep
+  return [h.rep]

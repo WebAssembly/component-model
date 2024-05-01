@@ -395,9 +395,9 @@ def test_handles():
     assert(args[1] == 2)
     assert(args[2] == 3)
     assert(args[3] == 13)
-    assert(canon_resource_rep(inst, rt, 1) == 42)
-    assert(canon_resource_rep(inst, rt, 2) == 43)
-    assert(canon_resource_rep(inst, rt, 3) == 44)
+    assert(canon_resource_rep(inst, rt, 1)[0] == 42)
+    assert(canon_resource_rep(inst, rt, 2)[0] == 43)
+    assert(canon_resource_rep(inst, rt, 3)[0] == 44)
 
     host_ft = FuncType([
       Borrow(rt),
@@ -412,7 +412,7 @@ def test_handles():
     results = canon_lower(opts, inst, host_import, True, host_ft, args)
     assert(len(results) == 1)
     assert(results[0] == 4)
-    assert(canon_resource_rep(inst, rt, 4) == 45)
+    assert(canon_resource_rep(inst, rt, 4)[0] == 45)
 
     dtor_value = None
     canon_resource_drop(inst, rt, 1)
@@ -421,7 +421,7 @@ def test_handles():
     assert(inst.handles.table(rt).array[1] is None)
     assert(len(inst.handles.table(rt).free) == 1)
 
-    h = canon_resource_new(inst, rt, 46)
+    h = canon_resource_new(inst, rt, 46)[0]
     assert(h == 1)
     assert(len(inst.handles.table(rt).array) == 5)
     assert(inst.handles.table(rt).array[1] is not None)

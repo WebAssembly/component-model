@@ -1657,7 +1657,8 @@ instance's handle table:
 ```python
 def canon_resource_new(inst, rt, rep):
   h = HandleElem(rep, own=True)
-  return inst.handles.add(rt, h)
+  i = inst.handles.add(rt, h)
+  return [i]
 ```
 
 ### `canon resource.drop`
@@ -1686,6 +1687,7 @@ def canon_resource_drop(inst, rt, i):
     assert(h.scope is not None)
     assert(h.scope.borrow_count > 0)
     h.scope.borrow_count -= 1
+  return []
 ```
 The `may_enter` guard ensures the non-reentrance [component invariant], since
 a destructor call is analogous to a call to an export.
@@ -1706,7 +1708,7 @@ representation from the handle.
 ```python
 def canon_resource_rep(inst, rt, i):
   h = inst.handles.get(rt, i)
-  return h.rep
+  return [h.rep]
 ```
 Note that the "locally-defined" requirement above ensures that only the
 component instance defining a resource can access its representation.
@@ -1743,7 +1745,7 @@ In pseudocode, `$st` looks like:
 def canon_thread_spawn(f, c):
   trap_if(f is None)
   if DETERMINISTIC_PROFILE:
-    return -1
+    return [-1]
 
   def thread_start():
     try:
@@ -1752,9 +1754,9 @@ def canon_thread_spawn(f, c):
       trap()
 
   if spawn(thread_start):
-    return 0
+    return [0]
   else:
-    return -1
+    return [-1]
 ```
 
 ### 🧵 `canon thread.hw_concurrency`
@@ -1774,9 +1776,9 @@ component instance.
 ```python
 def canon_thread_hw_concurrency():
   if DETERMINISTIC_PROFILE:
-    return 1
+    return [1]
   else:
-    return NUM_ALLOWED_THREADS
+    return [NUM_ALLOWED_THREADS]
 ```
 
 [Canonical Definitions]: Explainer.md#canonical-definitions
