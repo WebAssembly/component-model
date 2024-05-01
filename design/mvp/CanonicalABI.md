@@ -1537,7 +1537,7 @@ validation specifies:
 * if a `post-return` is present, it has type `(func (param flatten_functype($ft).results))`
 
 When instantiating component instance `$inst`:
-* Define `$f` to be the closure `lambda args: canon_lift($opts, $inst, $callee, $ft, args)`
+* Define `$f` to be the partially-bound closure `canon_lift($opts, $inst, $callee, $ft)`
 
 Thus, `$f` captures `$opts`, `$inst`, `$callee` and `$ft` in a closure which
 can be subsequently exported or passed into a child instance (via `with`). If
@@ -1555,20 +1555,18 @@ component*.
 
 Given the above closure arguments, `canon_lift` is defined:
 ```python
-def canon_lift(opts, inst, callee, ft, args):
+def canon_lift(opts, inst, callee, ft, start_thunk, return_thunk):
   export_call = ExportCall(opts, inst)
   trap_if(not inst.may_enter)
 
-  flat_args = lower_values(export_call, MAX_FLAT_PARAMS, args, ft.param_types())
+  flat_args = lower_values(export_call, MAX_FLAT_PARAMS, start_thunk(), ft.param_types())
   flat_results = call_and_trap_on_throw(callee, flat_args)
-  results = lift_values(export_call, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types())
+  return_thunk(lift_values(export_call, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types()))
 
-  def post_return():
-    if opts.post_return is not None:
-      call_and_trap_on_throw(opts.post_return, flat_results)
-    export_call.exit()
+  if opts.post_return is not None:
+    call_and_trap_on_throw(opts.post_return, flat_results)
 
-  return (results, post_return)
+  export_call.exit()
 
 def call_and_trap_on_throw(callee, args):
   try:
@@ -1581,10 +1579,11 @@ boundaries. Thus, if a component wishes to signal an error, it must use some
 sort of explicit type such as `result` (whose `error` case particular language
 bindings may choose to map to and from exceptions).
 
-The contract assumed by `canon_lift` (and ensured by `canon_lower` below) is
-that the caller of `canon_lift` *must* call `post_return` right after lowering
-`result`. This ensures that `post_return` can be used to perform cleanup
-actions after the lowering is complete.
+The `start_thunk` and `return_thunk` are used to model the interleaving of
+reading arguments out of the caller's stack and memory and writing results
+back into the caller's stack and memory. After the results have been copied
+from the callee's memory into the caller's memory, the callee's `post_return`
+function is called to allow the callee to reclaim any memory.
 
 
 ### `canon lower`
@@ -1600,11 +1599,9 @@ where `$callee` has type `$ft`, validation specifies:
 * there is no `post-return` in `$opts`
 
 When instantiating component instance `$inst`:
-* Define `$f` to be the closure: `lambda args: canon_lower($opts, $inst, $callee, $ft, args)`
+* Define `$f` to be the partially-bound closure: `canon_lower($opts, $inst, $callee, $ft)`
 
-Thus, from the perspective of Core WebAssembly, `$f` is a [function instance]
-containing a `hostfunc` that closes over `$opts`, `$inst`, `$callee` and `$ft`
-and, when called from Core WebAssembly code, calls `canon_lower`, which is defined as:
+where `canon_lower` is defined:
 ```python
 def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
   import_call = ImportCall(opts, inst)
@@ -1615,30 +1612,23 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
     inst.may_enter = False
 
   flat_args = CoreValueIter(flat_args)
-  args = lift_values(import_call, MAX_FLAT_PARAMS, flat_args, ft.param_types())
+  flat_results = None
 
-  results, post_return = callee(args)
+  def start_thunk():
+    return lift_values(import_call, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
-  flat_results = lower_values(import_call, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
+  def return_thunk(results):
+    nonlocal flat_results
+    flat_results = lower_values(import_call, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
 
-  post_return()
-  import_call.exit()
+  callee(start_thunk, return_thunk)
 
   if calling_import:
     inst.may_enter = True
 
+  import_call.exit()
   return flat_results
 ```
-The definitions of `canon_lift` and `canon_lower` are mostly symmetric
-(swapping lifting and lowering), with a few exceptions (in `flatten_functype`,
-as defined above):
-* The caller does not need a `post-return` function since the Core WebAssembly
-  caller simply regains control when `canon_lower` returns, allowing it to free
-  (or not) any memory passed as `flat_args`.
-* When handling the too-many-flat-values case, instead of relying on `realloc`,
-  the caller pass in a pointer to caller-allocated memory as a final
-  `i32` parameter.
-
 Since any cross-component call necessarily transits through a statically-known
 `canon_lower`+`canon_lift` call pair, an AOT compiler can fuse `canon_lift` and
 `canon_lower` into a single, efficient trampoline. In the future this may allow

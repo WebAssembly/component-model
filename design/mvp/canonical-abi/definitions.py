@@ -1125,20 +1125,18 @@ def lower_values(cx, max_flat, vs, ts, out_param = None):
 
 ### `canon lift`
 
-def canon_lift(opts, inst, callee, ft, args):
+def canon_lift(opts, inst, callee, ft, start_thunk, return_thunk):
   export_call = ExportCall(opts, inst)
   trap_if(not inst.may_enter)
 
-  flat_args = lower_values(export_call, MAX_FLAT_PARAMS, args, ft.param_types())
+  flat_args = lower_values(export_call, MAX_FLAT_PARAMS, start_thunk(), ft.param_types())
   flat_results = call_and_trap_on_throw(callee, flat_args)
-  results = lift_values(export_call, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types())
+  return_thunk(lift_values(export_call, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types()))
 
-  def post_return():
-    if opts.post_return is not None:
-      call_and_trap_on_throw(opts.post_return, flat_results)
-    export_call.exit()
+  if opts.post_return is not None:
+    call_and_trap_on_throw(opts.post_return, flat_results)
 
-  return (results, post_return)
+  export_call.exit()
 
 def call_and_trap_on_throw(callee, args):
   try:
@@ -1157,18 +1155,21 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
     inst.may_enter = False
 
   flat_args = CoreValueIter(flat_args)
-  args = lift_values(import_call, MAX_FLAT_PARAMS, flat_args, ft.param_types())
+  flat_results = None
 
-  results, post_return = callee(args)
+  def start_thunk():
+    return lift_values(import_call, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
-  flat_results = lower_values(import_call, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
+  def return_thunk(results):
+    nonlocal flat_results
+    flat_results = lower_values(import_call, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
 
-  post_return()
-  import_call.exit()
+  callee(start_thunk, return_thunk)
 
   if calling_import:
     inst.may_enter = True
 
+  import_call.exit()
   return flat_results
 
 ### `canon resource.new`

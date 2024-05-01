@@ -1,4 +1,5 @@
 import definitions
+from functools import partial
 from definitions import *
 
 def equal_modulo_string_encoding(s, t):
@@ -340,7 +341,7 @@ def test_roundtrip(t, v):
   callee_heap = Heap(1000)
   callee_opts = mk_opts(callee_heap.memory, 'utf8', callee_heap.realloc, lambda x: () )
   callee_inst = ComponentInstance()
-  lifted_callee = lambda args: canon_lift(callee_opts, callee_inst, callee, ft, args)
+  lifted_callee = partial(canon_lift, callee_opts, callee_inst, callee, ft)
 
   caller_heap = Heap(1000)
   caller_opts = mk_opts(caller_heap.memory, 'utf8', caller_heap.realloc)
@@ -379,11 +380,12 @@ def test_handles():
   rt2 = ResourceType(inst, dtor) # only usable in exports
   opts = mk_opts()
 
-  def host_import(args):
+  def host_import(start_thunk, return_thunk):
+    args = start_thunk()
     assert(len(args) == 2)
     assert(args[0] == 42)
     assert(args[1] == 44)
-    return ([45], lambda:())
+    return_thunk([45])
 
   def core_wasm(args):
     nonlocal dtor_value
@@ -446,13 +448,16 @@ def test_handles():
     Own(rt),
     Own(rt)
   ])
-  args = [
-    42,
-    43,
-    44,
-    13
-  ]
-  got,post_return = canon_lift(opts, inst, core_wasm, ft, args)
+
+  def arg_thunk():
+    return [ 42, 43, 44, 13 ]
+
+  got = None
+  def return_thunk(results):
+    nonlocal got
+    got = results
+
+  canon_lift(opts, inst, core_wasm, ft, arg_thunk, return_thunk)
 
   assert(len(got) == 3)
   assert(got[0] == 46)
