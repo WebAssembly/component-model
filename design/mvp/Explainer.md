@@ -1467,11 +1467,10 @@ verrange      ::= '@*'
 verlower      ::= '>=' <valid semver>
 verupper      ::= '<' <valid semver>
 urlname       ::= 'url=<' <nonbrackets> '>' (',' <hashname>)?
-                | 'relative-url=<' <nonbrackets> '>' (',' <hashname>)?
 nonbrackets   ::= [^<>]*
 hashname      ::= 'integrity=<' <integrity-metadata> '>'
 ```
-Components provide seven options for naming imports:
+Components provide six options for naming imports:
 * a **plain name** that leaves it up to the developer to "read the docs"
   or otherwise figure out what to supply for the import;
 * an **interface name** that is assumed to uniquely identify a higher-level
@@ -1479,9 +1478,6 @@ Components provide seven options for naming imports:
   or native implementation of;
 * a **URL name** that the component is requesting be resolved to a *particular*
   wasm implementation by [fetching] the URL.
-* a **relative URL name** that the component is requesting be resolved to a
-  *particular* wasm implementation by [fetching] the URL using the importing
-  component's URL as the [base URL];
 * a **hash name** containing a content-hash of the bytes of a *particular*
   wasm implemenentation but not specifying location of the bytes.
 * a **locked dependency name** that the component is requesting be resolved via
@@ -1491,7 +1487,7 @@ Components provide seven options for naming imports:
   via some contextually-supplied registry to *one of a set of possible* of wasm
   implementations using the given hierarchical name and version range.
 
-Not all hosts are expected to support all seven import naming options and, in
+Not all hosts are expected to support all six import naming options and, in
 general, build tools may need to wrap a to-be-deployed component with an outer
 component that only uses import names that are understood by the target host.
 For example:
@@ -1514,8 +1510,12 @@ For example:
 The grammar and validation of URL names allows the embedded URLs to contain any
 sequence of UTF-8 characters (other than angle brackets, which are used to
 [delimit the URL]), leaving the well-formedness of the URL to be checked as
-part of the process of fetching the URL (which can fail for any number of
-additional reasons beyond validation).
+part of the process of [parsing] the URL in preparation for [fetching] the URL.
+The [base URL] operand passed to the URL spec's parsing algorithm is determined
+by the host and may be absent, thereby disallowing relative URLs. Thus, the
+parsing and fetching of a URL import are host-defined operations that happen
+after the decoding and validation of a component, but before instantiation of
+that component.
 
 When a particular implementation is indicated via URL or dependency name,
 `importname` allows the component to additionally specify a cryptographic hash
@@ -1600,7 +1600,7 @@ As an example, the following component uses all 9 cases of imports and exports:
     (export "handle" (func (param (own $request)) (result (own $response))))
   ))
   (import "url=<https://mycdn.com/my-component.wasm>" (component ...))
-  (import "relative-url=<./other-component.wasm>,integrity=<sha256-X9ArH3k...>" (component ...))
+  (import "url=<./other-component.wasm>,integrity=<sha256-X9ArH3k...>" (component ...))
   (import "locked-dep=<my-registry:sqlite@1.2.3>,integrity=<sha256-H8BRh8j...>" (component ...))
   (import "unlocked-dep=<my-registry:imagemagick@{>=1.0.0}>" (instance ...))
   (import "integrity=<sha256-Y3BsI4l...>" (component ...))
@@ -1955,8 +1955,9 @@ and will be added over the coming months to complete the MVP proposal:
 
 [`WebAssembly.instantiate()`]: https://developer.mozilla.org/en-US/docs/WebAssembly/JavaScript_interface/instantiate
 [`FinalizationRegistry`]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry
-[Fetching]: https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API
-[base URL]: https://developer.mozilla.org/en-US/docs/Web/API/URL/URL
+[Fetching]: https://fetch.spec.whatwg.org/
+[Parsing]: https://url.spec.whatwg.org/#url-parsing
+[Base URL]: https://url.spec.whatwg.org/#concept-base-url
 [`integrity-metadata`]: https://www.w3.org/TR/SRI/#the-integrity-attribute
 [Semantic Versioning 2.0]: https://semver.org/spec/v2.0.0.html
 [Delimit The URL]: https://www.rfc-editor.org/rfc/rfc3986#appendix-C
