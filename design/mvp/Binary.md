@@ -358,7 +358,7 @@ Notes:
 (See [Value Definitions](Explainer.md#value-definitions) in the explainer.)
 
 ```ebnf
-value                      ::= t:<valtype> len:<uN> v:<val(t)>         => (value t v) (where len = |v+|)
+value                      ::= t:<valtype> len:<uN> v:<val(t)>         => (value t v) (where len = ||v||)
 val(bool)                  ::= 0x00                                    => false
                              | 0x01                                    => true
 val(u8)                    ::= v:<core:byte>                           => v
@@ -410,6 +410,7 @@ Notes:
     - [`core:f64`]
 * `&` operator is used to denote bitwise AND operation, which performs AND on every bit of two numbers in their binary form
 * `isnan` is a function, which takes a floating point number as a parameter and returns `true` iff it represents a NaN as defined in [IEEE 754 standard]
+* `||B||` is the length of the byte sequence generated from the production `B` in a derivation as defined in [Core convention auxilary notation]
 
 ## Name Section
 
@@ -464,3 +465,4 @@ named once.
 [module-linking]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md
 
 [IEEE 754 standard]: https://ieeexplore.ieee.org/document/8766229
+[Core convention auxilary notation]: https://webassembly.github.io/spec/core/binary/conventions.html#auxiliary-notation
