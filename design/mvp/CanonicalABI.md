@@ -220,67 +220,30 @@ The subsequent definitions of loading and storing a value from linear memory
 require additional runtime state, which is threaded through most subsequent
 definitions via the `cx` parameter of type `CallContext`:
 ```python
+@dataclass
 class CallContext:
   opts: CanonicalOptions
   inst: ComponentInstance
-  lenders: list[HandleElem]
-  borrow_count: int
-
-  def __init__(self, opts, inst):
-    self.opts = opts
-    self.inst = inst
-    self.lenders = []
-    self.borrow_count = 0
 ```
-One `CallContext` is created for each call for both the component caller and
-callee (defined below in `canon_lower` and `canon_lift`, resp.). Thus, a
-cross-component call will create 2 `CallContext` objects for the call, while a
-component-to-host or host-to-component call will create a single `CallContext`
-for the component caller or callee, resp.
 
-The meaning of the `opts` and `inst` fields are described with their associated
-types below.
-
-The `lenders` and `borrow_count` fields are used by the following helper
-methods of `CallContext` plus the `{lift,lower}_{own,borrow}` operations. These
-fields are updated at the appropriate points in the lifecycle of a call (below)
-and maintain the bookkeeping to dynamically ensure that `own` handles are not
-dropped while they have been `borrow`ed and that all `borrow` handles created
-for a call are dropped before the end of the call.
+The `opts` field of `CallContext` contains all the possible `canonopt`
+immediates that can be passed to the `canon` definition being implemented.
 ```python
-  def track_owning_lend(self, lending_handle):
-    assert(lending_handle.own)
-    lending_handle.lend_count += 1
-    self.lenders.append(lending_handle)
-
-  def exit_call(self):
-    trap_if(self.borrow_count != 0)
-    for h in self.lenders:
-      h.lend_count -= 1
-```
-Note, the `lenders` list usually has a fixed size (in all cases except when a
-function signature has `borrow`s in `list`s) and thus can be stored inline in
-the native stack frame.
-
-The `CanonicalOptions` class implements the `opts` field of `CallContext` and
-represents the [`canonopt`] values supplied to currently-executing `canon lift`
-or `canon lower`:
-```python
+@dataclass
 class CanonicalOptions:
-  memory: bytearray
-  string_encoding: str
-  realloc: Callable[[int,int,int,int],int]
-  post_return: Callable[[],None]
+  memory: Optional[bytearray] = None
+  string_encoding: Optional[str] = None
+  realloc: Optional[Callable[[int,int,int,int],int]] = None
+  post_return: Optional[Callable[[],None]] = None
 ```
 
-The `ComponentInstance` class implements the `inst` field of `CallContext` and
-represents the component instance that the currently-executing canonical
-definition is defined to execute inside. The `may_enter` and `may_leave` fields
-are used to enforce the [component invariants]: `may_leave` indicates whether
-the instance may call out to an import and the `may_enter` state indicates
-whether the instance may be called from the outside world through an export.
+The `inst` field of `CallContext` points to the component instance which the
+`canon`-generated function is closed over. Component instances contain all the
+core wasm instance as well as some extra state that is used exclusively by the
+Canonical ABI:
 ```python
 class ComponentInstance:
+  # core module instance state
   may_leave: bool
   may_enter: bool
   handles: HandleTables
@@ -290,9 +253,14 @@ class ComponentInstance:
     self.may_enter = True
     self.handles = HandleTables()
 ```
-The `HandleTables` object held by `ComponentInstance` contains a mapping
-from `ResourceType` to `Table`s of `HandleElem`s (defined next), establishing
-a separate `i32`-indexed array per resource type.
+The `may_enter` and `may_leave` fields are used to enforce the [component
+invariants]: `may_leave` indicates whether the instance may call out to an
+import and the `may_enter` state indicates whether the instance may be called
+from the outside world through an export.
+
+The `handles` field of `ComponentInstance` contains a mapping from
+`ResourceType` to `Table`s of `HandleElem`s (defined next), establishing a
+separate `i32`-indexed array per resource type.
 ```python
 class HandleTables:
   rt_to_table: MutableMapping[ResourceType, Table[HandleElem]]
@@ -392,7 +360,7 @@ stored in `HandleTables`:
 class HandleElem:
   rep: int
   own: bool
-  scope: Optional[CallContext]
+  scope: Optional[ExportCall]
   lend_count: int
 
   def __init__(self, rep, own, scope = None):
@@ -407,15 +375,14 @@ fixed to be an `i32`) passed to `resource.new`.
 The `own` field indicates whether this element was created from an `own` type
 (or, if false, a `borrow` type).
 
-The `scope` field optionally stores the `CallContext` of the call that created
-this handle if the handle type was `borrow`. Until async is added to the
-Component Model, because of the non-reentrancy of components, there is at most
-one `CallContext` alive for a given component at a time and thus this field
-does not actually need to be stored per `HandleElem`.
+The `scope` field stores the `ExportCall` that created the borrowed handle.
+Until async is added to the Component Model, because of the non-reentrancy of
+components, there is at most one `ExportCall` alive for a given component at a
+time and thus this field does not actually need to be stored per `HandleElem`.
 
 The `lend_count` field maintains a conservative approximation of the number of
 live handles that were lent from this `own` handle (by calls to `borrow`-taking
-functions). This count is maintained by the `CallContext` bookkeeping functions
+functions). This count is maintained by the `ImportCall` bookkeeping functions
 (above) and is ensured to be zero when an `own` handle is dropped.
 
 An optimizing implementation can enumerate the canonical definitions present
@@ -423,6 +390,64 @@ in a component to statically determine that a given resource type's handle
 table only contains `own` or `borrow` handles and then, based on this,
 statically eliminate the `own` and the `lend_count` xor `scope` fields,
 and guards thereof.
+
+One `CallContext` is created for each call for both the component caller and
+callee (in `canon_lower` and `canon_lift`, resp., as defined below). Thus, a
+cross-component call will create 2 `CallContext` objects for the call, while a
+component-to-host or host-to-component call will create a single `CallContext`
+for the component caller or callee, resp.
+
+Additional per-call state is required to check that callers and callees uphold
+their respective parts of the call contract:
+
+The `ExportCall` subclass of `CallContext` tracks the number of borrowed
+handles that were passed as parameters to the export that have not yet been
+dropped (which might dangle if the caller destroys the resource after the
+call):
+```python
+class ExportCall(CallContext):
+  borrow_count: int
+
+  def __init__(self, opts, inst):
+    super().__init__(opts, inst)
+    self.borrow_count = 0
+
+  def create_borrow(self):
+    self.borrow_count += 1
+
+  def drop_borrow(self):
+    assert(self.borrow_count > 0)
+    self.borrow_count -= 1
+
+  def exit(self):
+    trap_if(self.borrow_count != 0)
+```
+
+The `ImportCall` subclass of `CallContext` tracks the owned handles that have
+been lent for the duration of an import call, ensuring that they aren't dropped
+during the call (which might create a dangling borrowed handle):
+```python
+class ImportCall(CallContext):
+  lenders: list[HandleElem]
+
+  def __init__(self, opts, inst):
+    assert(inst.entered)
+    super().__init__(opts, inst)
+    self.lenders = []
+
+  def track_owning_lend(self, lending_handle):
+    assert(lending_handle.own)
+    lending_handle.lend_count += 1
+    self.lenders.append(lending_handle)
+
+  def exit(self):
+    assert(self.inst.entered)
+    for h in self.lenders:
+      h.lend_count -= 1
+```
+Note, the `lenders` list usually has a fixed size (in all cases except when a
+function signature has `borrow`s in `list`s) and thus can be stored inline in
+the native stack frame.
 
 
 ### Loading
@@ -670,6 +695,7 @@ from the source handle, leaving the source handle intact in the current
 component instance's handle table:
 ```python
 def lift_borrow(cx, i, t):
+  assert(isinstance(cx, ImportCall))
   h = cx.inst.handles.get(t.rt, i)
   if h.own:
     cx.track_owning_lend(h)
@@ -1071,10 +1097,11 @@ def lower_own(cx, rep, t):
   return cx.inst.handles.add(t.rt, h)
 
 def lower_borrow(cx, rep, t):
+  assert(isinstance(cx, ExportCall))
   if cx.inst is t.rt.impl:
     return rep
   h = HandleElem(rep, own=False, scope=cx)
-  cx.borrow_count += 1
+  cx.create_borrow()
   return cx.inst.handles.add(t.rt, h)
 ```
 The special case in `lower_borrow` is an optimization, recognizing that, when
@@ -1082,7 +1109,6 @@ a borrowed handle is passed to the component that implemented the resource
 type, the only thing the borrowed handle is good for is calling
 `resource.rep`, so lowering might as well avoid the overhead of creating an
 intermediate borrow handle.
-
 
 ### Flattening
 
@@ -1460,6 +1486,10 @@ greater-than-`max_flat` case by either allocating storage with `realloc` or
 accepting a caller-allocated buffer as an out-param:
 ```python
 def lower_values(cx, max_flat, vs, ts, out_param = None):
+  inst = cx.inst
+  assert(inst.may_leave)
+  inst.may_leave = False
+
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
     tuple_type = Tuple(ts)
@@ -1471,13 +1501,21 @@ def lower_values(cx, max_flat, vs, ts, out_param = None):
     trap_if(ptr != align_to(ptr, alignment(tuple_type)))
     trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
     store(cx, tuple_value, tuple_type, ptr)
-    return [ptr]
+    flat_vales = [ptr]
   else:
     flat_vals = []
     for i in range(len(vs)):
       flat_vals += lower_flat(cx, vs[i], ts[i])
-    return flat_vals
+
+  inst.may_leave = True
+  return flat_vals
 ```
+The `may_leave` flag is used by `canon_lower` below to prevent a component from
+calling out of the component while in the middle of lowering, ensuring that the
+relative ordering of the side effects of `lift_values` and `lower_values`
+cannot be observed and thus an implementation may reliably fuse `lift_values`
+with `lower_values` when making a cross-component call, avoiding any
+intermediate copy.
 
 ## Canonical Definitions
 
@@ -1518,27 +1556,25 @@ component*.
 Given the above closure arguments, `canon_lift` is defined:
 ```python
 def canon_lift(opts, inst, callee, ft, args):
-  cx = CallContext(opts, inst)
+  export_call = ExportCall(opts, inst)
   trap_if(not inst.may_enter)
 
-  assert(inst.may_leave)
-  inst.may_leave = False
-  flat_args = lower_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
-  inst.may_leave = True
-
-  try:
-    flat_results = callee(flat_args)
-  except CoreWebAssemblyException:
-    trap()
-
-  results = lift_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types())
+  flat_args = lower_values(export_call, MAX_FLAT_PARAMS, args, ft.param_types())
+  flat_results = call_and_trap_on_throw(callee, flat_args)
+  results = lift_values(export_call, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types())
 
   def post_return():
     if opts.post_return is not None:
-      opts.post_return(flat_results)
-    cx.exit_call()
+      call_and_trap_on_throw(opts.post_return, flat_results)
+    export_call.exit()
 
   return (results, post_return)
+
+def call_and_trap_on_throw(callee, args):
+  try:
+    return callee(args)
+  except CoreWebAssemblyException:
+    trap()
 ```
 Uncaught Core WebAssembly [exceptions] result in a trap at component
 boundaries. Thus, if a component wishes to signal an error, it must use some
@@ -1571,7 +1607,7 @@ containing a `hostfunc` that closes over `$opts`, `$inst`, `$callee` and `$ft`
 and, when called from Core WebAssembly code, calls `canon_lower`, which is defined as:
 ```python
 def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
-  cx = CallContext(opts, inst)
+  import_call = ImportCall(opts, inst)
   trap_if(not inst.may_leave)
 
   assert(inst.may_enter)
@@ -1579,16 +1615,14 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
     inst.may_enter = False
 
   flat_args = CoreValueIter(flat_args)
-  args = lift_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
+  args = lift_values(import_call, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
   results, post_return = callee(args)
 
-  inst.may_leave = False
-  flat_results = lower_values(cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
-  inst.may_leave = True
+  flat_results = lower_values(import_call, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
 
   post_return()
-  cx.exit_call()
+  import_call.exit()
 
   if calling_import:
     inst.may_enter = True
@@ -1625,20 +1659,6 @@ Because `may_enter` is not cleared on the exceptional exit path taken by
 `trap()`, if there is a trap during Core WebAssembly execution of lifting or
 lowering, the component is left permanently un-enterable, ensuring the
 lockdown-after-trap [component invariant].
-
-The `may_leave` flag set during lowering in `canon_lift` and `canon_lower`
-ensures that the relative ordering of the side effects of `lift` and `lower`
-cannot be observed via import calls and thus an implementation may reliably
-interleave `lift` and `lower` whenever making a cross-component call to avoid
-the intermediate copy performed by `lift`. This unobservability of interleaving
-depends on the shared-nothing property of components which guarantees that all
-the low-level state touched by `lift` and `lower` are disjoint. Though it
-should be rare, same-component-instance `canon_lift`+`canon_lower` call pairs
-are technically allowed by the above rules (and may arise unintentionally in
-component reexport scenarios). Such cases can be statically distinguished by
-the AOT compiler as requiring an intermediate copy to implement the above
-`lift`-then-`lower` semantics.
-
 
 ### `canon resource.new`
 
@@ -1684,9 +1704,7 @@ def canon_resource_drop(inst, rt, i):
     if rt.dtor:
       rt.dtor(h.rep)
   else:
-    assert(h.scope is not None)
-    assert(h.scope.borrow_count > 0)
-    h.scope.borrow_count -= 1
+    h.scope.drop_borrow()
   return []
 ```
 The `may_enter` guard ensures the non-reentrance [component invariant], since

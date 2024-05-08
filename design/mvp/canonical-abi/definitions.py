@@ -271,35 +271,20 @@ def num_i32_flags(labels):
 
 ### Runtime State
 
+@dataclass
 class CallContext:
   opts: CanonicalOptions
   inst: ComponentInstance
-  lenders: list[HandleElem]
-  borrow_count: int
 
-  def __init__(self, opts, inst):
-    self.opts = opts
-    self.inst = inst
-    self.lenders = []
-    self.borrow_count = 0
-
-  def track_owning_lend(self, lending_handle):
-    assert(lending_handle.own)
-    lending_handle.lend_count += 1
-    self.lenders.append(lending_handle)
-
-  def exit_call(self):
-    trap_if(self.borrow_count != 0)
-    for h in self.lenders:
-      h.lend_count -= 1
-
+@dataclass
 class CanonicalOptions:
-  memory: bytearray
-  string_encoding: str
-  realloc: Callable[[int,int,int,int],int]
-  post_return: Callable[[],None]
+  memory: Optional[bytearray] = None
+  string_encoding: Optional[str] = None
+  realloc: Optional[Callable[[int,int,int,int],int]] = None
+  post_return: Optional[Callable[[],None]] = None
 
 class ComponentInstance:
+  # core module instance state
   may_leave: bool
   may_enter: bool
   handles: HandleTables
@@ -369,7 +354,7 @@ class Table(Generic[ElemT]):
 class HandleElem:
   rep: int
   own: bool
-  scope: Optional[CallContext]
+  scope: Optional[ExportCall]
   lend_count: int
 
   def __init__(self, rep, own, scope = None):
@@ -377,6 +362,39 @@ class HandleElem:
     self.own = own
     self.scope = scope
     self.lend_count = 0
+
+class ExportCall(CallContext):
+  borrow_count: int
+
+  def __init__(self, opts, inst):
+    super().__init__(opts, inst)
+    self.borrow_count = 0
+
+  def create_borrow(self):
+    self.borrow_count += 1
+
+  def drop_borrow(self):
+    assert(self.borrow_count > 0)
+    self.borrow_count -= 1
+
+  def exit(self):
+    trap_if(self.borrow_count != 0)
+
+class ImportCall(CallContext):
+  lenders: list[HandleElem]
+
+  def __init__(self, opts, inst):
+    super().__init__(opts, inst)
+    self.lenders = []
+
+  def track_owning_lend(self, lending_handle):
+    assert(lending_handle.own)
+    lending_handle.lend_count += 1
+    self.lenders.append(lending_handle)
+
+  def exit(self):
+    for h in self.lenders:
+      h.lend_count -= 1
 
 ### Loading
 
@@ -545,6 +563,7 @@ def lift_own(cx, i, t):
   return h.rep
 
 def lift_borrow(cx, i, t):
+  assert(isinstance(cx, ImportCall))
   h = cx.inst.handles.get(t.rt, i)
   if h.own:
     cx.track_owning_lend(h)
@@ -821,10 +840,11 @@ def lower_own(cx, rep, t):
   return cx.inst.handles.add(t.rt, h)
 
 def lower_borrow(cx, rep, t):
+  assert(isinstance(cx, ExportCall))
   if cx.inst is t.rt.impl:
     return rep
   h = HandleElem(rep, own=False, scope=cx)
-  cx.borrow_count += 1
+  cx.create_borrow()
   return cx.inst.handles.add(t.rt, h)
 
 ### Flattening
@@ -1079,6 +1099,10 @@ def lift_values(cx, max_flat, vi, ts):
     return [ lift_flat(cx, vi, t) for t in ts ]
 
 def lower_values(cx, max_flat, vs, ts, out_param = None):
+  inst = cx.inst
+  assert(inst.may_leave)
+  inst.may_leave = False
+
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
     tuple_type = Tuple(ts)
@@ -1090,42 +1114,42 @@ def lower_values(cx, max_flat, vs, ts, out_param = None):
     trap_if(ptr != align_to(ptr, alignment(tuple_type)))
     trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
     store(cx, tuple_value, tuple_type, ptr)
-    return [ptr]
+    flat_vales = [ptr]
   else:
     flat_vals = []
     for i in range(len(vs)):
       flat_vals += lower_flat(cx, vs[i], ts[i])
-    return flat_vals
+
+  inst.may_leave = True
+  return flat_vals
 
 ### `canon lift`
 
 def canon_lift(opts, inst, callee, ft, args):
-  cx = CallContext(opts, inst)
+  export_call = ExportCall(opts, inst)
   trap_if(not inst.may_enter)
 
-  assert(inst.may_leave)
-  inst.may_leave = False
-  flat_args = lower_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
-  inst.may_leave = True
-
-  try:
-    flat_results = callee(flat_args)
-  except CoreWebAssemblyException:
-    trap()
-
-  results = lift_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types())
+  flat_args = lower_values(export_call, MAX_FLAT_PARAMS, args, ft.param_types())
+  flat_results = call_and_trap_on_throw(callee, flat_args)
+  results = lift_values(export_call, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types())
 
   def post_return():
     if opts.post_return is not None:
-      opts.post_return(flat_results)
-    cx.exit_call()
+      call_and_trap_on_throw(opts.post_return, flat_results)
+    export_call.exit()
 
   return (results, post_return)
+
+def call_and_trap_on_throw(callee, args):
+  try:
+    return callee(args)
+  except CoreWebAssemblyException:
+    trap()
 
 ### `canon lower`
 
 def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
-  cx = CallContext(opts, inst)
+  import_call = ImportCall(opts, inst)
   trap_if(not inst.may_leave)
 
   assert(inst.may_enter)
@@ -1133,16 +1157,14 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
     inst.may_enter = False
 
   flat_args = CoreValueIter(flat_args)
-  args = lift_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
+  args = lift_values(import_call, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
   results, post_return = callee(args)
 
-  inst.may_leave = False
-  flat_results = lower_values(cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
-  inst.may_leave = True
+  flat_results = lower_values(import_call, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
 
   post_return()
-  cx.exit_call()
+  import_call.exit()
 
   if calling_import:
     inst.may_enter = True
@@ -1167,9 +1189,7 @@ def canon_resource_drop(inst, rt, i):
     if rt.dtor:
       rt.dtor(h.rep)
   else:
-    assert(h.scope is not None)
-    assert(h.scope.borrow_count > 0)
-    h.scope.borrow_count -= 1
+    h.scope.drop_borrow()
   return []
 
 ### `canon resource.rep`
