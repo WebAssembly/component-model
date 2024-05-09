@@ -1148,13 +1148,11 @@ def call_and_trap_on_throw(callee, args):
 
 ### `canon lower`
 
-def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
+def canon_lower(opts, inst, callee, ft, flat_args):
   import_call = ImportCall(opts, inst)
   trap_if(not inst.may_leave)
-
   assert(inst.may_enter)
-  if calling_import:
-    inst.may_enter = False
+  inst.may_enter = False
 
   flat_args = CoreValueIter(flat_args)
   flat_results = None
@@ -1168,9 +1166,7 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
 
   callee(start_thunk, return_thunk)
 
-  if calling_import:
-    inst.may_enter = True
-
+  inst.may_enter = True
   import_call.exit()
   return flat_results
 
