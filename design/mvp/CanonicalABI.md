@@ -1603,13 +1603,11 @@ When instantiating component instance `$inst`:
 
 where `canon_lower` is defined:
 ```python
-def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
+def canon_lower(opts, inst, callee, ft, flat_args):
   import_call = ImportCall(opts, inst)
   trap_if(not inst.may_leave)
-
   assert(inst.may_enter)
-  if calling_import:
-    inst.may_enter = False
+  inst.may_enter = False
 
   flat_args = CoreValueIter(flat_args)
   flat_results = None
@@ -1623,9 +1621,7 @@ def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
 
   callee(start_thunk, return_thunk)
 
-  if calling_import:
-    inst.may_enter = True
-
+  inst.may_enter = True
   import_call.exit()
   return flat_results
 ```
@@ -1638,17 +1634,10 @@ as post-MVP [adapter functions].
 
 By clearing `may_enter` for the duration of calls to imports, the `may_enter`
 guard in `canon_lift` ensures that components cannot be externally reentered,
-which is part of the [component invariants]. The `calling_import` condition
-allows a parent component to call into a child component (which is, by
-definition, not a call to an import) and for the child to then reenter the
-parent through a function the parent explicitly supplied to the child's
-`instantiate`. This form of internal reentrance allows the parent to fully
-virtualize the child's imports.
-
-Because `may_enter` is not cleared on the exceptional exit path taken by
-`trap()`, if there is a trap during Core WebAssembly execution of lifting or
-lowering, the component is left permanently un-enterable, ensuring the
-lockdown-after-trap [component invariant].
+which is part of the [component invariants]. Because `may_enter` is not cleared
+on the exceptional exit path taken by `trap()`, if there is a trap during Core
+WebAssembly execution of lifting or lowering, the component is left permanently
+un-enterable, ensuring the lockdown-after-trap [component invariant].
 
 ### `canon resource.new`
 

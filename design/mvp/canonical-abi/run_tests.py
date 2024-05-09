@@ -1,6 +1,6 @@
 import definitions
-from functools import partial
 from definitions import *
+from functools import partial
 
 def equal_modulo_string_encoding(s, t):
   if s is None and t is None:
@@ -353,7 +353,7 @@ def test_roundtrip(t, v):
   flat_args = lower_values(caller_cx, definitions.MAX_FLAT_PARAMS, [v], [t])
   if return_in_heap:
     flat_args += [ caller_heap.realloc(0, 0, alignment(t), elem_size(t)) ]
-  flat_results = canon_lower(caller_opts, caller_inst, lifted_callee, True, ft, flat_args)
+  flat_results = canon_lower(caller_opts, caller_inst, lifted_callee, ft, flat_args)
   if return_in_heap:
     flat_results = [ flat_args[-1] ]
   [got] = lift_values(caller_cx, definitions.MAX_FLAT_PARAMS, CoreValueIter(flat_results), [t])
@@ -420,7 +420,7 @@ def test_handles():
       1,
       3
     ]
-    results = canon_lower(opts, inst, host_import, True, host_ft, args)
+    results = canon_lower(opts, inst, host_import, host_ft, args)
     assert(len(results) == 1)
     assert(results[0] == 4)
     assert(canon_resource_rep(inst, rt, 4)[0] == 45)
