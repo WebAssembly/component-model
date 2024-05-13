@@ -233,8 +233,8 @@ immediates that can be passed to the `canon` definition being implemented.
 class CanonicalOptions:
   memory: Optional[bytearray] = None
   string_encoding: Optional[str] = None
-  realloc: Optional[Callable[[int,int,int,int],int]] = None
-  post_return: Optional[Callable[[],None]] = None
+  realloc: Optional[Callable] = None
+  post_return: Optional[Callable] = None
 ```
 
 The `inst` field of `CallContext` points to the component instance which the
@@ -296,7 +296,7 @@ corresponds to resource type equality, as defined by [type checking] rules.
 ```python
 class ResourceType(Type):
   impl: ComponentInstance
-  dtor: Optional[Callable[[int],None]]
+  dtor: Optional[Callable]
 
   def __init__(self, impl, dtor = None):
     self.impl = impl
@@ -431,7 +431,6 @@ class ImportCall(CallContext):
   lenders: list[HandleElem]
 
   def __init__(self, opts, inst):
-    assert(inst.entered)
     super().__init__(opts, inst)
     self.lenders = []
 
@@ -441,7 +440,6 @@ class ImportCall(CallContext):
     self.lenders.append(lending_handle)
 
   def exit(self):
-    assert(self.inst.entered)
     for h in self.lenders:
       h.lend_count -= 1
 ```
