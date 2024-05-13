@@ -358,18 +358,18 @@ Notes:
 value                      ::= t:<valtype> len:<uN> v:<val(t)>         => (value t v) (where len = ||v||)
 val(bool)                  ::= 0x00                                    => false
                              | 0x01                                    => true
-val(u8)                    ::= v:<core:byte>                           => v
-val(s8)                    ::= v:<core:byte>                           => v if v < 128 else (v - 256)
-val(s16)                   ::= v:<core:s16>                            => v
-val(u16)                   ::= v:<core:u16>                            => v
-val(s32)                   ::= v:<core:s32>                            => v
-val(u32)                   ::= v:<core:u32>                            => v
-val(s64)                   ::= v:<core:s64>                            => v
-val(u64)                   ::= v:<core:u64>                            => v
-val(f32)                   ::= v:<core:f32>                            => v (if !isnan(v))
-                             | 0x00 0x00 0xC0 0x7F                     => nan
-val(f64)                   ::= v:<core:f64>                            => v (if !isnan(v))
-                             | 0x00 0x00 0x00 0x00 0x00 0x00 0xF8 0x7F => nan
+val(u8)                    ::= v:<core:byte>                           => (u8 v)
+val(s8)                    ::= v:<core:byte>                           => (s8 v) if v < 128 else (v - 256)
+val(s16)                   ::= v:<core:s16>                            => (s16 v)
+val(u16)                   ::= v:<core:u16>                            => (u16 v)
+val(s32)                   ::= v:<core:s32>                            => (s32 v)
+val(u32)                   ::= v:<core:u32>                            => (u32 v)
+val(s64)                   ::= v:<core:s64>                            => (s64 v)
+val(u64)                   ::= v:<core:u64>                            => (u64 v)
+val(f32)                   ::= v:<core:f32>                            => (f32 v) (if !isnan(v))
+                             | 0x00 0x00 0xC0 0x7F                     => (f32 nan)
+val(f64)                   ::= v:<core:f64>                            => (f64 v) (if !isnan(v))
+                             | 0x00 0x00 0x00 0x00 0x00 0x00 0xF8 0x7F => (f64 nan)
 val(char)                  ::= v:<core:u32>                            => v (if v < 0xD800 or 0xE000 <= v <= 0x10FFFF)
 val(string)                ::= v:<core:name>                           => v
 val(i:<typeidx>)           ::= v:<val(type-index-space[i])>            => v
