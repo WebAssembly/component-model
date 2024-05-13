@@ -280,8 +280,8 @@ class CallContext:
 class CanonicalOptions:
   memory: Optional[bytearray] = None
   string_encoding: Optional[str] = None
-  realloc: Optional[Callable[[int,int,int,int],int]] = None
-  post_return: Optional[Callable[[],None]] = None
+  realloc: Optional[Callable] = None
+  post_return: Optional[Callable] = None
 
 class ComponentInstance:
   # core module instance state
@@ -314,7 +314,7 @@ class HandleTables:
 
 class ResourceType(Type):
   impl: ComponentInstance
-  dtor: Optional[Callable[[int],None]]
+  dtor: Optional[Callable]
 
   def __init__(self, impl, dtor = None):
     self.impl = impl
