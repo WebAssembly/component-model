@@ -110,7 +110,7 @@ and [function][functions] definitions. For example:
 package wasi:filesystem;
 
 interface types {
-  use wasi:clocks.wall-clock.{datetime};
+  use wasi:clocks/wall-clock.{datetime};
 
   record stat {
     ino: u64,
