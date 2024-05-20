@@ -1364,8 +1364,18 @@ Components may define values in the value index space using following syntax:
 ```ebnf
 value    ::= (value <id>? <valtype> <val>)
 val      ::= false | true
-           | <core:i64>
-           | <f64canon>
+           | (u8  <core:u8>)
+           | (u16 <core:u16>)
+           | (u32 <core:u32>)
+           | (u64 <core:u64>)
+           | (s8  <core:s8>)
+           | (s16 <core:s16>)
+           | (s32 <core:s32>)
+           | (s64 <core:s64>)
+           | (f32 <f32canon>)
+           | (f32 nan)
+           | (f64 <f64canon>)
+           | (f64 nan)
            | '<core:char>'
            | <core:name>
            | (record <val>+)
@@ -1376,6 +1386,7 @@ val      ::= false | true
            | (enum "<label>")
            | none | (some <val>)
            | ok | (ok <val>) | error | (error <val>)
+f32canon ::= <core:f32> without the `nan:0x` case.
 f64canon ::= <core:f64> without the `nan:0x` case.
 ```
 
