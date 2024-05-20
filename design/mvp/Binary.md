@@ -380,7 +380,7 @@ val((record (field l t)+)) ::= v+:<val(t)>+                            => (recor
 val((variant (case l t?)+) ::= i:<core:u32> v?:<val(t[i])>?            => (variant l[i] v?)
 val((list t))              ::= v:vec(<val(t)>)                         => (list v)
 val((tuple t+))            ::= v+:<val(t)>+                            => (tuple v+)
-val((flags l+))            ::= v:<core:uN>                             => (flags (l[i] for i in 0..N-1 if v & 2^i > 0)) (where N = |l+|)
+val((flags l+))            ::= (v:<core:byte>)^N                       => (flags (l[i] for i in 0..N-1 if v & 2^i > 0)) (where N = ceil(|l+| / 8))
 val((enum l+))             ::= i:<core:u32>                            => (enum l[i])
 val((option t))            ::= 0x00                                    => none
                              | 0x01 v:<val(t)>                         => (some v)
