@@ -880,6 +880,83 @@ Concretely, the structure of a `wit` file is:
 wit-file ::= package-decl? (toplevel-use-item | interface-item | world-item)*
 ```
 
+### Feature Gates
+
+Various WIT items can be "gated", to reflect the fact that the item is part of
+an unstable feature or that the item was added as part of a minor version
+update and shouldn't be used when targeting an earlier minor version.
+
+For example, the following interface has 4 items, 3 of which are gated:
+```wit
+interface foo {
+  a: func();
+
+  @since(version = 0.2.1)
+  b: func();
+
+  @since(version = 0.2.2, feature = fancy-foo)
+  c: func();
+
+  @unstable(feature = fancier-foo)
+  d: func();
+}
+```
+The `@since` gate indicates that `b` and `c` were added as part of the `0.2.1`
+and `0.2.2` releases, resp. Thus, when building a component targeting, e.g.,
+`0.2.1`, `b` can be used, but `c` cannot. An important expectation set by the
+`@since` gate is that, once applied to an item, the item is not modified
+incompatibly going forward (according to general semantic versioning rules).
+
+In contrast, the `@unstable` gate on `d` indicates that `d` is part of the
+`fancier-foo` feature that is still under active development and thus `d` may
+change type or be removed at any time. An important expectation set by the
+`@unstable` gate is that toolchains will not expose `@unstable` features by
+default unless explicitly opted-into by the developer.
+
+Together, these gates support a development flow in which new features start
+with an `@unstable` gate while the details are still being hashed out. Then,
+once the feature is stable (and, in a WASI context, voted upon), the
+`@unstable` gate is switched to a `@since` gate. To enable a smooth transition
+(during which producer toolchains are targeting a version earlier than the
+`@since`-specified `version`), the `@since` gate contains an optional `feature`
+field that, when present, says to enable the feature when *either* the target
+version is greator-or-equal *or* the feature name is explicitly enabled by the
+developer. Thus, `c` is enabled if the version is `0.2.2` or newer or the
+`fancy-foo` feature is explicitly enabled by the developer. The `feature` field
+can be removed once producer toolchains have updated their default version to
+enable the feature by default.
+
+Specifically, the syntax for feature gates is:
+```wit
+gate ::= unstable-gate
+       | since-gate
+unstable-gate ::= '@unstable' '(' feature-field ')'
+feature-field ::= 'feature' '=' id
+since-gate ::= '@since' '(' 'version' '=' <valid semver> ( ',' feature-field )? ')'
+```
+
+As part of WIT validation, any item that refers to another gated item must also
+be compatibly gated. For example, this is an error:
+```wit
+interface i {
+  @since(version = 1.0.1)
+  type t1 = u32;
+
+  type t2 = t1; // error
+}
+```
+Additionally, if an item is *contained* by a gated item, it must also be
+compatibly gated. For example, this is an error:
+```wit
+@since(version = 1.0.2)
+interface i {
+  foo: func();  // error: no gate
+
+  @since(version = 1.0.1)
+  bar: func();  // also error: weaker gate
+}
+```
+
 ## Package declaration
 [package declaration]: #package-declaration
 
@@ -922,14 +999,21 @@ nesting both namespaces and packages, which would then generalize the syntax of
 
 ## Item: `world`
 
-Worlds define a [componenttype](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#type-definitions) as a collection of imports and exports.
+Worlds define a [`componenttype`] as a collection of imports and exports, all
+of which can be gated.
 
 Concretely, the structure of a world is:
 
 ```ebnf
-world-item ::= 'world' id '{' world-items* '}'
+world-item ::= gate 'world' id '{' world-items* '}'
 
-world-items ::= export-item | import-item | use-item | typedef-item | include-item
+world-items ::= gate world-definition
+
+world-definition ::= export-item
+                   | import-item
+                   | use-item
+                   | typedef-item
+                   | include-item
 
 export-item ::= 'export' id ':' extern-type
               | 'export' use-path ';'
@@ -943,6 +1027,8 @@ Note that worlds can import types and define their own types to be exported
 from the root of a component and used within functions imported and exported.
 The `interface` item here additionally defines the grammar for IDs used to refer
 to `interface` items.
+
+[`componenttype`]: Explainer.md#type-definitions
 
 ## Item: `include`
 
@@ -966,18 +1052,20 @@ include-names-item ::= id 'as' id
 ## Item: `interface`
 
 Interfaces can be defined in a `wit` file. Interfaces have a name and a
-sequence of items and functions.
+sequence of items and functions, all of which can be gated.
 
 Specifically interfaces have the structure:
 
 > **Note**: The symbol `ε`, also known as Epsilon, denotes an empty string.
 
 ```ebnf
-interface-item ::= 'interface' id '{' interface-items* '}'
+interface-item ::= gate 'interface' id '{' interface-items* '}'
 
-interface-items ::= typedef-item
-                  | use-item
-                  | func-item
+interface-items ::= gate interface-definition
+
+interface-definition ::= typedef-item
+                       | use-item
+                       | func-item
 
 typedef-item ::= resource-item
                | variant-items
@@ -1001,6 +1089,7 @@ named-type-list ::= ϵ
 
 named-type ::= id ':' ty
 ```
+
 
 ## Item: `use`
 
@@ -1631,3 +1720,46 @@ standalone interface definitions (such `wasi:http/handler`) are no longer in a
 `use`s are replaced by direct aliases to preceding type imports as determined
 by the WIT resolution process.
 
+Unlike most other WIT constructs, the `@since` and `@unstable` gates are not
+represented in the component binary. Instead, they are considered "macro"
+constructs that take the place of maintaining two copies of a single WIT
+document. In particular, when encoding a collection of WIT documents into a
+binary, the target version and set of explicitly-enabled feature names
+determine whether individual gated features are included in the encoded type or
+not.
+
+For example, the following WIT document:
+```wit
+package ns:p@1.1.0;
+
+interface i {
+  f: func();
+
+  @since(version = 1.1.0)
+  g: func();
+}
+```
+is encoded as the following component when the target version is `1.0.0`:
+```wat
+(component
+  (type (export "i") (component
+    (export "ns:p/i@1.0.0" (instance
+      (export "f" (func))
+    ))
+  ))
+)
+```
+If the target version was instead `1.1.0`, the same WIT document would be
+encoded as:
+```wat
+(component
+  (type (export "i") (component
+    (export "ns:p/i@1.1.0" (instance
+      (export "f" (func))
+      (export "g" (func))
+    ))
+  ))
+)
+```
+Thus, `@since` and `@unstable` gates are not part of the runtime semantics of
+components, just part of the source-level tooling for producing components.
