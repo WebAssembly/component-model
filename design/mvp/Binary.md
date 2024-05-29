@@ -370,7 +370,7 @@ val(f32)                   ::= v:<core:f32>                            => (f32 v
                              | 0x00 0x00 0xC0 0x7F                     => (f32 nan)
 val(f64)                   ::= v:<core:f64>                            => (f64 v) (if !isnan(v))
                              | 0x00 0x00 0x00 0x00 0x00 0x00 0xF8 0x7F => (f64 nan)
-val(char)                  ::= v:<core:u32>                            => v (if v < 0xD800 or 0xE000 <= v <= 0x10FFFF)
+val(char)                  ::= b*:<core:byte>*                         => c (where b* = core:utf8(c))
 val(string)                ::= v:<core:name>                           => v
 val(i:<typeidx>)           ::= v:<val(type-index-space[i])>            => v
 val((record (field l t)+)) ::= v+:<val(t)>+                            => (record v+)
@@ -392,7 +392,7 @@ val((result t (error u)))  ::= 0x00 v:<val(t)>                         => (ok v)
 ```
 
 Notes:
-* Reused Core binary rules:
+* Reused Core binary rules and functions:
     - [`core:name`]
     - [`core:s8`]
     - [`core:s16`]
@@ -405,6 +405,7 @@ Notes:
     - [`core:uN`]
     - [`core:f32`]
     - [`core:f64`]
+    - [`core:utf8`]
 * `&` operator is used to denote bitwise AND operation, which performs AND on every bit of two numbers in their binary form
 * `isnan` is a function, which takes a floating point number as a parameter and returns `true` iff it represents a NaN as defined in [IEEE 754 standard]
 * `||B||` is the length of the byte sequence generated from the production `B` in a derivation as defined in [Core convention auxilary notation]
@@ -449,6 +450,7 @@ named once.
 [`core:uN`]: https://webassembly.github.io/spec/core/binary/values.html#integers
 [`core:f32`]: https://webassembly.github.io/spec/core/binary/values.html#floating-point
 [`core:f64`]: https://webassembly.github.io/spec/core/binary/values.html#floating-point
+[`core:utf8`]: https://webassembly.github.io/spec/core/binary/values.html#binary-utf8
 [`core:section`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-section
 [`core:custom`]: https://webassembly.github.io/spec/core/binary/modules.html#custom-section
 [`core:module`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-module
