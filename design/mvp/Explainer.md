@@ -1364,18 +1364,18 @@ Components may define values in the value index space using following syntax:
 ```ebnf
 value    ::= (value <id>? <valtype> <val>)
 val      ::= false | true
-           | (u8  <core:u8>)
-           | (u16 <core:u16>)
-           | (u32 <core:u32>)
-           | (u64 <core:u64>)
-           | (s8  <core:s8>)
-           | (s16 <core:s16>)
-           | (s32 <core:s32>)
-           | (s64 <core:s64>)
-           | (f32 <f32canon>)
-           | (f32 nan)
-           | (f64 <f64canon>)
-           | (f64 nan)
+           | <core:u8>
+           | <core:u16>
+           | <core:u32>
+           | <core:u64>
+           | <core:s8>
+           | <core:s16>
+           | <core:s32>
+           | <core:s64>
+           | <f32canon>
+           | nan
+           | <f64canon>
+           | nan
            | '<core:stringchar>'
            | <core:name>
            | (record <val>+)
@@ -1394,30 +1394,30 @@ The validation rules for `value` require the `val` to match the `valtype`.  For 
 ```wasm
 (component
   (value $a bool true)
-  (value $b u8 (u8 1))
-  (value $c u16 (u16 2))
-  (value $d u32 (u32 3))
-  (value $e u64 (u64 4))
-  (value $f s8 (s8 5))
-  (value $g s16 (s16 6))
-  (value $h s32 (s32 7))
-  (value $i s64 (s64 8))
-  (value $j f32 (f32 9.1))
-  (value $k f64 (f64 9.2))
+  (value $b u8  1)
+  (value $c u16 2)
+  (value $d u32 3)
+  (value $e u64 4)
+  (value $f s8  5)
+  (value $g s16 6)
+  (value $h s32 7)
+  (value $i s64 8)
+  (value $j f32 9.1)
+  (value $k f64 9.2)
   (value $l char 'a')
   (value $m string "hello")
-  (value $n (record (field "a" bool) (field "b" u8)) (record true (u8 1)))
-  (value $o (variant (case "a" bool) (case "b" u8)) (variant "b" (u8 1)))
+  (value $n (record (field "a" bool) (field "b" u8)) (record true 1))
+  (value $o (variant (case "a" bool) (case "b" u8)) (variant "b" 1))
   (value $p (list (result (option u8)))
     (list
       error
-      (ok (some (u8 1)))
+      (ok (some 1))
       (ok none)
       error
-      (ok (some (u8 2)))
+      (ok (some 2))
     )
   )
-  (value $q (tuple u8 u16 u32) (tuple (u8 1) (u16 2) (u32 3)))
+  (value $q (tuple u8 u16 u32) (tuple 1 2 3))
 
   (type $abc (flags "a" "b" "c"))
   (value $r $abc (flags "a" "c"))
@@ -1450,7 +1450,7 @@ The validation rules for `value` require the `val` to match the `valtype`.  For 
     (tuple
       (record
         (some "example")
-        (tuple (some (u8 42)) "hello")
+        (tuple (some 42) "hello")
       )
       (list 'a' 'b' 'c')
       (flags "b" "a")
