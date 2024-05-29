@@ -1393,6 +1393,7 @@ val      ::= false | true
            | (enum "<label>")
            | none | (some <val>)
            | ok | (ok <val>) | error | (error <val>)
+           | (binary <core:datastring>)
 f32canon ::= <core:f32> without the `nan:0x` case.
 f64canon ::= <core:f64> without the `nan:0x` case.
 ```
@@ -1430,6 +1431,9 @@ The validation rules for `value` require the `val` to match the `valtype`.  For 
   (value $r $abc (flags "a" "c"))
 
   (value $s (enum "a" "b" "c") (enum "b"))
+
+  (value $t bool (binary "\00"))
+  (value $u string (binary "\07example"))
 
   (type $complex
     (tuple
@@ -2105,6 +2109,7 @@ and will be added over the coming months to complete the MVP proposal:
 [`core:valtype`]: https://webassembly.github.io/spec/core/text/types.html#value-types
 [`core:typeuse`]: https://webassembly.github.io/spec/core/text/modules.html#type-uses
 [`core:functype`]: https://webassembly.github.io/spec/core/text/types.html#function-types
+[`core:datastring`]: https://webassembly.github.io/spec/core/text/modules.html#text-datastring
 [func-import-abbrev]: https://webassembly.github.io/spec/core/text/modules.html#text-func-abbrev
 [`core:version`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-version
 
