@@ -1383,7 +1383,7 @@ val      ::= false | true
            | (f32 nan)
            | (f64 <f64canon>)
            | (f64 nan)
-           | '<core:char>'
+           | '<core:stringchar>'
            | <core:name>
            | (record <val>+)
            | (variant "<label>" <val>?)
