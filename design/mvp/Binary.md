@@ -358,46 +358,40 @@ Notes:
 (See [Value Definitions](Explainer.md#value-definitions) in the explainer.)
 
 ```ebnf
-value                      ::= t:<valtype> len:<uN> v:<val(t)>                                         => (value t v) (where len = ||v||)
-val(bool)                  ::= 0x00                                                                    => false
-                             | 0x01                                                                    => true
-val(u8)                    ::= v:<core:byte>                                                           => (u8 v)
-val(s8)                    ::= v:<core:byte>                                                           => (s8 v) if v < 128 else (v - 256)
-val(s16)                   ::= v:<core:s16>                                                            => (s16 v)
-val(u16)                   ::= v:<core:u16>                                                            => (u16 v)
-val(s32)                   ::= v:<core:s32>                                                            => (s32 v)
-val(u32)                   ::= v:<core:u32>                                                            => (u32 v)
-val(s64)                   ::= v:<core:s64>                                                            => (s64 v)
-val(u64)                   ::= v:<core:u64>                                                            => (u64 v)
-val(f32)                   ::= v:<core:f32>                                                            => (f32 v) (if !isnan(v))
-                             | 0x00 0x00 0xC0 0x7F                                                     => (f32 nan)
-val(f64)                   ::= v:<core:f64>                                                            => (f64 v) (if !isnan(v))
-                             | 0x00 0x00 0x00 0x00 0x00 0x00 0xF8 0x7F                                 => (f64 nan)
-val(char)                  ::= v:<core:u32>                                                            => v (if v < 0xD800 or 0xE000 <= v <= 0x10FFFF)
-val(string)                ::= v:<core:name>                                                           => v
-val(i:<typeidx>)           ::= v:<val(type-index-space[i])>                                            => v
-val((record (field l t)+)) ::= v+:<val(t)>+                                                            => (record v+)
-val((variant (case l t?)+) ::= a:<core:byte> v?:<val(t[i])>?                                           => (variant l[a] v?)                              (if |l| <= 255)
-                             | a:<core:byte> b:<core:byte> v?:<val(t[i])>?                             => (variant l[a | b << 8] v?)                     (if |l| <= 65535)
-                             | a:<core:byte> b:<core:byte> c:<core:byte> v?:<val(t[i])>?               => (variant l[a | b << 8 | c << 16] v?)           (if |l| <= 16777215)
-                             | a:<core:byte> b:<core:byte> c:<core:byte> d:<core:byte> v?:<val(t[i])>? => (variant l[a | b << 8 | c << 16 | d << 24] v?) (if |l| > 16777215)
-val((list t))              ::= v:vec(<val(t)>)                                                         => (list v)
-val((tuple t+))            ::= v+:<val(t)>+                                                            => (tuple v+)
-val((flags l+))            ::= (v:<core:byte>)^N                                                       => (flags (l[i] for i in 0..N-1 if v & 2^i > 0)) (where N = ceil(|l+| / 8))
-val((enum l+))             ::= a:<core:byte>                                                           => (enum l[a])                              (if |l| <= 255)
-                             | a:<core:byte> b:<core:byte>                                             => (enum l[a | b << 8])                     (if |l| <= 65535)
-                             | a:<core:byte> b:<core:byte> c:<core:byte>                               => (enum l[a | b << 8 | c << 16])           (if |l| <= 16777215)
-                             | a:<core:byte> b:<core:byte> c:<core:byte> d:<core:byte>                 => (enum l[a | b << 8 | c << 16 | d << 24]) (if |l| > 16777215)
-val((option t))            ::= 0x00                                                                    => none
-                             | 0x01 v:<val(t)>                                                         => (some v)
-val((result))              ::= 0x00                                                                    => ok
-                             | 0x01                                                                    => error
-val((result t))            ::= 0x00 v:<val(t)>                                                         => (ok v)
-                             | 0x01                                                                    => error
-val((result (error u)))    ::= 0x00                                                                    => ok
-                             | 0x01 v:<val(u)>                                                         => (error v)
-val((result t (error u)))  ::= 0x00 v:<val(t)>                                                         => (ok v)
-                             | 0x01 v:<val(u)>                                                         => (error v)
+value                      ::= t:<valtype> len:<uN> v:<val(t)>         => (value t v) (where len = ||v||)
+val(bool)                  ::= 0x00                                    => false
+                             | 0x01                                    => true
+val(u8)                    ::= v:<core:byte>                           => (u8 v)
+val(s8)                    ::= v:<core:byte>                           => (s8 v) if v < 128 else (v - 256)
+val(s16)                   ::= v:<core:s16>                            => (s16 v)
+val(u16)                   ::= v:<core:u16>                            => (u16 v)
+val(s32)                   ::= v:<core:s32>                            => (s32 v)
+val(u32)                   ::= v:<core:u32>                            => (u32 v)
+val(s64)                   ::= v:<core:s64>                            => (s64 v)
+val(u64)                   ::= v:<core:u64>                            => (u64 v)
+val(f32)                   ::= v:<core:f32>                            => (f32 v) (if !isnan(v))
+                             | 0x00 0x00 0xC0 0x7F                     => (f32 nan)
+val(f64)                   ::= v:<core:f64>                            => (f64 v) (if !isnan(v))
+                             | 0x00 0x00 0x00 0x00 0x00 0x00 0xF8 0x7F => (f64 nan)
+val(char)                  ::= v:<core:u32>                            => v (if v < 0xD800 or 0xE000 <= v <= 0x10FFFF)
+val(string)                ::= v:<core:name>                           => v
+val(i:<typeidx>)           ::= v:<val(type-index-space[i])>            => v
+val((record (field l t)+)) ::= v+:<val(t)>+                            => (record v+)
+val((variant (case l t?)+) ::= i:<core:u32> v?:<val(t[i])>?            => (variant l[i] v?)
+val((list t))              ::= v:vec(<val(t)>)                         => (list v)
+val((tuple t+))            ::= v+:<val(t)>+                            => (tuple v+)
+val((flags l+))            ::= (v:<core:byte>)^N                       => (flags (l[i] for i in 0..N-1 if v & 2^i > 0)) (where N = ceil(|l+| / 8))
+val((enum l+))             ::= i:<core:u32>                            => (enum l[i])
+val((option t))            ::= 0x00                                    => none
+                             | 0x01 v:<val(t)>                         => (some v)
+val((result))              ::= 0x00                                    => ok
+                             | 0x01                                    => error
+val((result t))            ::= 0x00 v:<val(t)>                         => (ok v)
+                             | 0x01                                    => error
+val((result (error u)))    ::= 0x00                                    => ok
+                             | 0x01 v:<val(u)>                         => (error v)
+val((result t (error u)))  ::= 0x00 v:<val(t)>                         => (ok v)
+                             | 0x01 v:<val(u)>                         => (error v)
 ```
 
 Notes:
@@ -414,9 +408,7 @@ Notes:
     - [`core:uN`]
     - [`core:f32`]
     - [`core:f64`]
-* `|` operator is used to denote bitwise OR operation, which performs OR on every bit of two numbers in their binary form
 * `&` operator is used to denote bitwise AND operation, which performs AND on every bit of two numbers in their binary form
-* `<<` operator is used to denote a bitwise left shift operation, which appends `0` at LSB position
 * `isnan` is a function, which takes a floating point number as a parameter and returns `true` iff it represents a NaN as defined in [IEEE 754 standard]
 * `||B||` is the length of the byte sequence generated from the production `B` in a derivation as defined in [Core convention auxilary notation]
 
