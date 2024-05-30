@@ -358,7 +358,7 @@ Notes:
 (See [Value Definitions](Explainer.md#value-definitions) in the explainer.)
 
 ```ebnf
-value                      ::= t:<valtype> len:<uN> v:<val(t)>         => (value t v) (where len = ||v||)
+value                      ::= t:<valtype> len:<uN> v:<val(t)>         => (value t v) (where len = ||v|| and N = ceil(sqrt(||v||)))
 val(bool)                  ::= 0x00                                    => false
                              | 0x01                                    => true
 val(u8)                    ::= v:<core:byte>                           => v
