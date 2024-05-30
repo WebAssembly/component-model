@@ -394,11 +394,10 @@ val((result t (error u)))  ::= 0x00 v:<val(t)>                         => (ok v)
 Notes:
 * Reused Core binary rules and functions:
     - [`core:name`]
-    - [`core:s8`]
+    - [`core:byte`]
     - [`core:s16`]
     - [`core:s32`]
     - [`core:s64`]
-    - [`core:u8`]
     - [`core:u16`]
     - [`core:u32`]
     - [`core:u64`]
@@ -439,8 +438,7 @@ appear once within a `name` section, for example component instances can only be
 named once.
 
 
-[`core:s8`]: https://webassembly.github.io/spec/core/binary/values.html#integers
-[`core:u8`]: https://webassembly.github.io/spec/core/binary/values.html#integers
+[`core:byte`]: https://webassembly.github.io/spec/core/binary/values.html#binary-byte
 [`core:s16`]: https://webassembly.github.io/spec/core/binary/values.html#integers
 [`core:u16`]: https://webassembly.github.io/spec/core/binary/values.html#integers
 [`core:s32`]: https://webassembly.github.io/spec/core/binary/values.html#integers
