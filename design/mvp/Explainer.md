@@ -1389,7 +1389,13 @@ val      ::= false | true
 f64canon ::= <core:f64> without the `nan:0x` case.
 ```
 
-The validation rules for `value` require the `val` to match the `valtype`.  For example:
+The validation rules for `value` require the `val` to match the `valtype`.
+
+`(binary ...)` expression provides an alternative syntax allowing the binary contents
+of the value definition to be written directly in the text format, analogous to data segments,
+avoiding the need to understand type information when encoding or decoding.
+
+For example:
 ```wasm
 (component
   (value $a bool true)
