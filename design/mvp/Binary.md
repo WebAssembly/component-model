@@ -355,7 +355,7 @@ Notes:
 (See [Value Definitions](Explainer.md#value-definitions) in the explainer.)
 
 ```ebnf
-value                      ::= t:<valtype> len:<uN> v:<val(t)>         => (value t v) (where len = ||v|| and N = ceil(sqrt(||v||)))
+value                      ::= t:<valtype> len:<core:u32> v:<val(t)>   => (value t v) (where len = ||v||)
 val(bool)                  ::= 0x00                                    => false
                              | 0x01                                    => true
 val(u8)                    ::= v:<core:byte>                           => v
@@ -401,7 +401,6 @@ Notes:
     - [`core:u16`]
     - [`core:u32`]
     - [`core:u64`]
-    - [`core:uN`]
     - [`core:f32`]
     - [`core:f64`]
     - [`core:utf8`]
@@ -445,7 +444,6 @@ named once.
 [`core:u32`]: https://webassembly.github.io/spec/core/binary/values.html#integers
 [`core:s64`]: https://webassembly.github.io/spec/core/binary/values.html#integers
 [`core:u64`]: https://webassembly.github.io/spec/core/binary/values.html#integers
-[`core:uN`]: https://webassembly.github.io/spec/core/binary/values.html#integers
 [`core:f32`]: https://webassembly.github.io/spec/core/binary/values.html#floating-point
 [`core:f64`]: https://webassembly.github.io/spec/core/binary/values.html#floating-point
 [`core:utf8`]: https://webassembly.github.io/spec/core/binary/values.html#binary-utf8
