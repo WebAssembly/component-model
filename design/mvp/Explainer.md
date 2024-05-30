@@ -1364,8 +1364,7 @@ Components may define values in the value index space using following syntax:
 ```ebnf
 value    ::= (value <id>? <valtype> <val>)
 val      ::= false | true
-           | <core:u64>
-           | <core:s64>
+           | <core:i64>
            | <f64canon>
            | nan
            | '<core:stringchar>'
@@ -2088,7 +2087,7 @@ and will be added over the coming months to complete the MVP proposal:
 [Index Space]: https://webassembly.github.io/spec/core/syntax/modules.html#indices
 [Abbreviations]: https://webassembly.github.io/spec/core/text/conventions.html#abbreviations
 
-[`core:i64`]: https://webassembly.github.io/spec/core/syntax/values.html#integers
+[`core:i64`]: https://webassembly.github.io/spec/core/text/values.html#text-int
 [`core:f64`]: https://webassembly.github.io/spec/core/syntax/values.html#floating-point
 [`core:char`]: https://webassembly.github.io/spec/core/syntax/values.html#syntax-name
 [`core:name`]: https://webassembly.github.io/spec/core/syntax/values.html#syntax-name
