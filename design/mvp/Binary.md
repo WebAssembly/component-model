@@ -359,7 +359,7 @@ value                      ::= t:<valtype> len:<uN> v:<val(t)>         => (value
 val(bool)                  ::= 0x00                                    => false
                              | 0x01                                    => true
 val(u8)                    ::= v:<core:byte>                           => v
-val(s8)                    ::= v:<core:byte>                           => v if v < 128 else (v - 256)
+val(s8)                    ::= v:<core:byte>                           => v' (where v' = v if v < 128 else (v - 256))
 val(s16)                   ::= v:<core:s16>                            => v
 val(u16)                   ::= v:<core:u16>                            => v
 val(s32)                   ::= v:<core:s32>                            => v
