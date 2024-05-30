@@ -2096,7 +2096,7 @@ and will be added over the coming months to complete the MVP proposal:
 
 [`core:i64`]: https://webassembly.github.io/spec/core/text/values.html#text-int
 [`core:f64`]: https://webassembly.github.io/spec/core/syntax/values.html#floating-point
-[`core:char`]: https://webassembly.github.io/spec/core/syntax/values.html#syntax-name
+[`core:stringchar`]: https://webassembly.github.io/spec/core/text/values.html#text-string
 [`core:name`]: https://webassembly.github.io/spec/core/syntax/values.html#syntax-name
 [`core:module`]: https://webassembly.github.io/spec/core/text/modules.html#text-module
 [`core:type`]: https://webassembly.github.io/spec/core/text/modules.html#types
