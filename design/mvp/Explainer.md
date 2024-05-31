@@ -1093,12 +1093,9 @@ type-checking rules for instantiating type imports mirror the *elimination*
 rule of [universal types]  (∀T).
 
 Importantly, this type substitution performed by the parent is not visible to
-the child at validation- or run-time. In particular, the type checks performed
-by the [Canonical ABI](CanonicalABI.md#context) use distinct type tags for
-distinct type imports and associate type tags with *handles*, not the underlying
-*resource*, leveraging the shared-nothing nature of components to type-tag handles
-at component boundaries and avoid the usual [type-exposure problems with
-dynamic casts][non-parametric parametricity].
+the child at validation- or run-time. In particular, there are no runtime
+casts that can "see through" to the original type parameter, avoiding
+avoiding the usual [type-exposure problems with dynamic casts][non-parametric parametricity].
 
 In summary: all type constructors are *structural* with the exception of
 `resource`, which is *abstract* and *generative*. Type imports and exports that
