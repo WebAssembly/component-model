@@ -59,7 +59,7 @@ over and can literally be implemented in terms of:
 * green threads as-if running on a single OS thread in languages like Go and
   (recently) Java
 
-The Component Model supports this wide vareity of language features by
+The Component Model supports this wide variety of language features by
 specifying a common low-level "async" ABI which the different languages'
 compilers and runtimes can bind their different language-level concurrency
 features to. This is similar to how a native OS exposes APIs for concurrency
