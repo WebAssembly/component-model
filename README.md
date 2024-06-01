@@ -2,10 +2,10 @@
 
 This repository is where the component model is being standardized. For a more user-focused explanation, take a look at the **[Component Model Documentation]**.
 
-This repository describes the high-level [goals], [use cases], [design choices]
-and [FAQ] of the component model as well as a more-detailed [assembly-level explainer], [IDL],
-[binary format] and [ABI] covering the initial Minimum Viable Product (MVP)
-release.
+This repository contains the high-level [goals], [use cases], [design choices]
+and [FAQ] of the component model as well as a more-detailed, low-level
+[AST explainer], [async explainer], [IDL], [binary format] and [ABI] covering
+the initial Minimum Viable Product (MVP) release.
 
 In the future, this repository will additionally contain a [formal spec],
 reference interpreter and test suite.
@@ -27,7 +27,8 @@ To contribute to any of these repositories, see the Community Group's
 [use cases]: design/high-level/UseCases.md
 [design choices]: design/high-level/Choices.md
 [FAQ]: design/high-level/FAQ.md
-[assembly-level explainer]: design/mvp/Explainer.md
+[AST explainer]: design/mvp/Explainer.md
+[async explainer]: design/mvp/Async.md
 [IDL]: design/mvp/WIT.md
 [binary format]: design/mvp/Binary.md
 [ABI]: design/mvp/CanonicalABI.md
