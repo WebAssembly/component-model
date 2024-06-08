@@ -3,9 +3,9 @@
 This repository is where the component model is being standardized. For a more user-focused explanation, take a look at the **[Component Model Documentation]**.
 
 This repository describes the high-level [goals], [use cases], [design choices]
-and [FAQ] of the component model as well as a more-detailed [assembly-level explainer], [IDL],
-[binary format] and [ABI] covering the initial Minimum Viable Product (MVP)
-release.
+and [FAQ] of the component model as well as a more-detailed [assembly-level
+explainer], [IDL], [binary format], [ABI] and [build targets] covering the
+initial Minimum Viable Product (MVP) release.
 
 In the future, this repository will additionally contain a [formal spec],
 reference interpreter and test suite.
@@ -31,6 +31,7 @@ To contribute to any of these repositories, see the Community Group's
 [IDL]: design/mvp/WIT.md
 [binary format]: design/mvp/Binary.md
 [ABI]: design/mvp/CanonicalABI.md
+[Build Targets]: design/mvp/BuildTargets.md
 [formal spec]: spec/
 [W3C WebAssembly Community Group]: https://www.w3.org/community/webassembly/
 [Contributing Guidelines]: https://webassembly.org/community/contributing/
