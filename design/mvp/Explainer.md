@@ -205,9 +205,11 @@ defined). Thus, the following two components are equivalent:
 Whereas modules and components represent immutable *code*, instances associate
 code with potentially-mutable *state* (e.g., linear memory) and thus are
 necessary to create before being able to *run* the code. Instance definitions
-create module or component instances by selecting a module or component and
-then supplying a set of named *arguments* which satisfy all the named *imports*
-of the selected module or component.
+create module or component instances by selecting a module or component to
+**instantiate** and then supplying a set of named *arguments* which satisfy all
+the named *imports* of the selected module or component. This low-level
+instantiation mechanism allows the Component Model to simultaneously support
+multiple different styles of traditional [linking](Linking.md).
 
 The syntax for defining a core module instance is:
 ```ebnf
