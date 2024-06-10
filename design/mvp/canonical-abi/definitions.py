@@ -704,18 +704,20 @@ def store_string_to_utf8(cx, src, src_code_units, worst_case_size):
   assert(src_code_units <= MAX_STRING_BYTE_LENGTH)
   ptr = cx.opts.realloc(0, 0, 1, src_code_units)
   trap_if(ptr + src_code_units > len(cx.opts.memory))
-  encoded = src.encode('utf-8')
-  assert(src_code_units <= len(encoded))
-  cx.opts.memory[ptr : ptr+src_code_units] = encoded[0 : src_code_units]
-  if src_code_units < len(encoded):
-    trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
-    ptr = cx.opts.realloc(ptr, src_code_units, 1, worst_case_size)
-    trap_if(ptr + worst_case_size > len(cx.opts.memory))
-    cx.opts.memory[ptr+src_code_units : ptr+len(encoded)] = encoded[src_code_units : ]
-    if worst_case_size > len(encoded):
-      ptr = cx.opts.realloc(ptr, worst_case_size, 1, len(encoded))
-      trap_if(ptr + len(encoded) > len(cx.opts.memory))
-  return (ptr, len(encoded))
+  for i,code_point in enumerate(src):
+    if ord(code_point) < 2**7:
+      cx.opts.memory[ptr + i] = ord(code_point)
+    else:
+      trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
+      ptr = cx.opts.realloc(ptr, src_code_units, 1, worst_case_size)
+      trap_if(ptr + worst_case_size > len(cx.opts.memory))
+      encoded = src.encode('utf-8')
+      cx.opts.memory[ptr+i : ptr+len(encoded)] = encoded[i : ]
+      if worst_case_size > len(encoded):
+        ptr = cx.opts.realloc(ptr, worst_case_size, 1, len(encoded))
+        trap_if(ptr + len(encoded) > len(cx.opts.memory))
+      return (ptr, len(encoded))
+  return (ptr, src_code_units)
 
 def store_utf8_to_utf16(cx, src, src_code_units):
   worst_case_size = 2 * src_code_units
