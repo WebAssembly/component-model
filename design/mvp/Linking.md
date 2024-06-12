@@ -58,11 +58,11 @@ these tools knowing about the Component Model.
 
 A single Core WebAssembly module can be trivially wrapped into a component
 using a tool like the [`wasm-tools`] `component new` command. Multiple Core
-WebAssembly modules can be **shared-everything dynamically-linked** together
-and loaded imperatively at runtime via emulated `dlopen()` using the `component
-link` command. (In the future, more-eager modes of native dynamic linking could
-be added.) For a low-level sketch of how dynamic linking works at the WAT
-level, see [this example](examples/SharedEverythingDynamicLinking.md).
+WebAssembly modules can be **shared-everything dynamically-linked** together by
+a tool ike the `component link` command, which supports both loading modules into
+linear memory automatically (in the style of `ld-linux.so`) or manually (in the
+style of `dlopen()`). For a low-level sketch of how dynamic linking works at
+the WAT level, see [this example](examples/SharedEverythingDynamicLinking.md).
 
 Lastly, multiple components can be **shared-nothing-linked** together using
 language-agnostic composition tools like [`wac`]. Since the output of
