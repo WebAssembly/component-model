@@ -65,10 +65,10 @@ be added.) For a low-level sketch of how dynamic linking works at the WAT
 level, see [this example](examples/SharedEverythingDynamicLinking.md).
 
 Lastly, multiple components can be **shared-nothing-linked** together using
-language-agnostic composition tools like [`wasm-compose`] or [`wac`]. Since the
-output of composition is itself a component, composite components can
-themselves be further composed with other components. For a low-level sketch of
-how shared-nothing linking works at the WAT level, see
+language-agnostic composition tools like [`wac`]. Since the output of
+composition is itself a component, composite components can themselves be
+further composed with other components. For a low-level sketch of how
+shared-nothing linking works at the WAT level, see
 [this example](examples/LinkTimeVirtualization.md).
 
 
@@ -136,7 +136,6 @@ post-Preview 2 features of WIT and the Component Model.)
 [Custom Section]: https://webassembly.github.io/spec/core/binary/modules.html#custom-section
 [`wasm-ld`]: https://lld.llvm.org/WebAssembly.html
 [`wasm-tools`]: https://github.com/bytecodealliance/wasm-tools#tools-included
-[`wasm-compose`]: https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-compose
 [`wac`]: https://github.com/bytecodealliance/wac
 [JS API]: https://webassembly.github.io/spec/js-api/index.html
 [JIT Future Feature]: https://github.com/WebAssembly/design/blob/main/FutureFeatures.md#platform-independent-just-in-time-jit-compilation
