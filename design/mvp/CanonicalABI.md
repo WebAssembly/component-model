@@ -2040,9 +2040,7 @@ async def canon_lower(opts, callee, ft, task, flat_args):
       nonlocal flat_results
       flat_results = lower_sync_values(subtask, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
 
-    inst.thread.release()
     await callee(task, start_thunk, return_thunk)
-    await inst.thread.acquire()
 
     subtask.finish()
   else:
@@ -2073,11 +2071,6 @@ async def canon_lower(opts, callee, ft, task, flat_args):
 
   return flat_results
 ```
-In the sync case, the `thread` lock is released/reacquired before/after making
-the cross-component call to allow other existing tasks to make progress or (if
-there is no backpressure) new tasks to start. This makes a sync-lowered call
-equivalent to waiting on an async-lowered call.
-
 In the async case, `asyncio.create_task` followed by `await asyncio.sleep(0)`
 are used together to achieve the effect of eagerly executing the `do_call`
 Python coroutine without `await`ing it. Following the `sleep(0)`, the coroutine
