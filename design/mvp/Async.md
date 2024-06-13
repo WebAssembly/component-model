@@ -127,7 +127,7 @@ called by the outside world), a new **task** is created that logically contains
 all the transitive control-flow state of the export call and will be destroyed
 when the export call finishes. When all of a component's exports are lifted
 synchronously, there will be at most one task alive at any one time. However,
-when a component exports asynchronousy-lifted functions, there can be multiple
+when a component exports asynchronously-lifted functions, there can be multiple
 tasks alive at once.
 
 In the Canonical ABI explainer, a "task" is represented with the Python
@@ -302,7 +302,8 @@ function type has no params or results, since parameters are passed in via
 multiple `summarize` calls can be active at once: once the first call to
 `task.wait` blocks, the runtime will suspend its callstack (fiber) and start a
 new stack for the new call to `summarize`. Thus, `summarize` must be careful to
-allocate a separate linear-memory stack in its entry point, if one is needed.
+allocate a separate linear-memory stack in its entry point, if one is needed,
+and to save and restore this before and after calling `task.wait`.
 
 (Note that, for brevity this example ignores the `memory` and `realloc`
 immediates required by `canon lift` and `canon lower` to allocate the `list`
