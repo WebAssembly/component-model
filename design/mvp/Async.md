@@ -37,9 +37,13 @@ built-in **asynchronous** support, these pain points can be addressed.
 The Component Model's [goals] and intended [use cases] suggest the following
 additional goals and requirements for native async support:
 
-* Be independent-of but complementary-to the mechanisms for multi-threading;
-  components should be able to achieve a high degree of concurrency using one
-  or multiple threads.
+* Be independent-of but complementary-to the Core WebAssembly [stack-switching]
+  proposal; don't depend on this proposal being fully standard or implemented
+  (just like [JSPI]).
+* Be independent-of but complementary-to the Core WebAssembly
+  [shared-everything-threads] proposal; don't depend on this proposal being
+  fully standard or implemented and ensure that components can achieve a high
+  degree of concurrency using only one.
 * Avoid partitioning interfaces and components into separate strata; don't give
   functions (or components) a [color].
 * Enable tight integration (e.g., automatic bindings generation) with a wide
@@ -474,4 +478,6 @@ features will be added in future chunks to complete "async" in Preview 3:
 [Goals]: ../high-level/Goals.md
 [Use Cases]: ../high-level/UseCases.md
 
+[stack-switching]: https://github.com/WebAssembly/stack-switching/
+[JSPI]: https://github.com/WebAssembly/js-promise-integration/
 [shared-everything-threads]: https://github.com/webAssembly/shared-everything-threads
