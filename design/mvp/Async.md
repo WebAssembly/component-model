@@ -57,7 +57,7 @@ over and can literally be implemented in terms of:
 * `async` functions in languages like C#, JS, Python, Rust and Swift
 * stackful coroutines in languages like Kotlin, Perl, PHP and (recently) C++
 * green threads as-if running on a single OS thread in languages like Go and
-  (recently) Java
+  (initially and recently again) Java
 
 The Component Model supports this wide variety of language features by
 specifying a common low-level "async" ABI which the different languages'
