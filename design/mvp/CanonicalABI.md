@@ -1995,7 +1995,7 @@ an "event loop" inside `canon_lift`. Otherwise, waiting must happen by calling
 `task.wait` (defined below), which potentially requires the runtime
 implementation to use a fiber (aka. stackful coroutine) to switch to another
 task. Thus, `callback` is an optimization for avoiding fiber creation for async
-languages that don't need it (e.g., JS, C# and Rust).
+languages that don't need it (e.g., JS, Python, C# and Rust).
 
 Uncaught Core WebAssembly [exceptions] result in a trap at component
 boundaries. Thus, if a component wishes to signal an error, it must use some
