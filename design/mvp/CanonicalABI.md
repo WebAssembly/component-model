@@ -243,7 +243,7 @@ class CanonicalOptions:
   string_encoding: Optional[str] = None
   realloc: Optional[Callable] = None
   post_return: Optional[Callable] = None
-  sync: bool = True
+  sync: bool = True # = !canonopt.async
   callback: Optional[Callable] = None
 ```
 
