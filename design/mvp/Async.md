@@ -117,12 +117,14 @@ async support.
 
 ### Sync and Async Functions
 
-An "async" function is a component-level function that has been [lifted]
-with the `async` option set. Symmetrically, a "sync" function is a
-component-level function that does not have the `async` option set (which is
-the default and only option prior to Preview 3). The sync/async distinction
-does not appear in the function type and thus any given WIT function type can
-be implemented with either a sync or async function.
+The distinction between sync and async functions does not appear in the
+component-level function type (nor in WIT). Rather, an "async" function is a
+component-level function that has been [lifted] from Core WebAssembly with the
+`async` option set. Symmetrically, a "sync" function is a component-level
+function that does not have the `async` option set (which is the default and
+only option prior to Preview 3). Thus, the sync/async distinction appears
+only independently in how a component-level function is *implemented* or
+*called*.
 
 ### Task
 
