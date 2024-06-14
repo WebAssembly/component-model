@@ -573,16 +573,6 @@ another task:
     return self.process_event(self.events.get_nowait())
 ```
 
-Additionally, the current task can cooperatively allow the runtime to switch to
-another task (e.g., to maintain concurrency during a long-running compute-bound
-task) by calling `yield_` (via `canon task.yield`, defined below):
-```python
-  async def yield_(self):
-    self.inst.thread.release()
-    await asyncio.sleep(0)
-    await self.inst.thread.acquire()
-```
-
 Lastly, when a task exists, the runtime enforces the guard conditions mentioned
 above and releases the `thread` lock, allowing other tasks to start or make
 progress.
