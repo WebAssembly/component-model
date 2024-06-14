@@ -341,7 +341,7 @@ class ResourceType(Type):
   dtor_sync: bool
   dtor_callback: Optional[Callable]
 
-  def __init__(self, impl, dtor = None):
+  def __init__(self, impl, dtor = None, dtor_sync = True, dtor_callback = None):
     self.impl = impl
     self.dtor = dtor
     self.dtor_sync = dtor_sync
