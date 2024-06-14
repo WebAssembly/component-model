@@ -552,10 +552,7 @@ defvaltype    ::= bool
 valtype       ::= <typeidx>
                 | <defvaltype>
 resourcetype  ::= (resource (rep i32) (dtor async? <funcidx> (callback <funcidx>)?)?)
-functype      ::= (func <paramlist> <resultlist>)
-paramlist     ::= (param "<label>" <valtype>)*
-resultlist    ::= (result "<label>" <valtype>)*
-                | (result <valtype>)
+functype      ::= (func (param "<label>" <valtype>)* (result <valtype>)?)
 componenttype ::= (component <componentdecl>*)
 instancetype  ::= (instance <instancedecl>*)
 componentdecl ::= <importdecl>
@@ -690,13 +687,8 @@ The remaining 4 type constructors in `deftype` use `valtype` to describe
 shared-nothing functions, resources, components, and component instances:
 
 The `func` type constructor describes a component-level function definition
-that takes and returns a list of `valtype`. In contrast to [`core:functype`],
-the parameters and results of `functype` can have associated names which
-validation requires to be unique. To improve the ergonomics and performance of
-the common case of single-value-returning functions, function types may
-additionally have a single unnamed return type. For this special case, bindings
-generators are naturally encouraged to return the single value directly without
-wrapping it in any containing record/object/struct.
+that takes a list of uniquely-named `valtype` parameters and optionally returns
+a `valtype`.
 
 The `resource` type constructor creates a fresh type for each instance of the
 containing component (with "freshness" and its interaction with general

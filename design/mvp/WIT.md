@@ -1122,7 +1122,6 @@ param-list ::= '(' named-type-list ')'
 
 result-list ::= ϵ
               | '->' ty
-              | '->' '(' named-type-list ')'
 
 named-type-list ::= ϵ
                   | named-type ( ',' named-type )*
