@@ -204,7 +204,7 @@ resourcetype  ::= 0x3f 0x7f f?:<funcidx>?                 => (resource (rep i32)
 functype      ::= 0x40 ps:<paramlist> rs:<resultlist>     => (func ps rs)
 paramlist     ::= lt*:vec(<labelvaltype>)                 => (param lt)*
 resultlist    ::= 0x00 t:<valtype>                        => (result t)
-                | 0x01 lt*:vec(<labelvaltype>)            => (result lt)*
+                | 0x01 0x00                               =>
 componenttype ::= 0x41 cd*:vec(<componentdecl>)           => (component cd*)
 instancetype  ::= 0x42 id*:vec(<instancedecl>)            => (instance id*)
 componentdecl ::= 0x03 id:<importdecl>                    => id
