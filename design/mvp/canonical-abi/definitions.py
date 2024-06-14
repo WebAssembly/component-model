@@ -49,6 +49,8 @@ class ModuleType(ExternType):
 class CoreFuncType(CoreExternType):
   params: list[str]
   results: list[str]
+  def __eq__(self, other):
+    return self.params == other.params and self.results == other.results
 
 @dataclass
 class CoreMemoryType(CoreExternType):
@@ -1334,12 +1336,14 @@ def lower_heap_values(cx, vs, ts, out_param):
   tuple_value = {str(i): v for i,v in enumerate(vs)}
   if out_param is None:
     ptr = cx.opts.realloc(0, 0, alignment(tuple_type), elem_size(tuple_type))
+    flat_vals = [ptr]
   else:
     ptr = out_param.next('i32')
+    flat_vals = []
   trap_if(ptr != align_to(ptr, alignment(tuple_type)))
   trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
   store(cx, tuple_value, tuple_type, ptr)
-  return [ptr]
+  return flat_vals
 
 ### `canon lift`
 
@@ -1466,18 +1470,26 @@ async def canon_resource_rep(rt, task, i):
 
 ### `canon task.start`
 
-async def canon_task_start(task, i):
+async def canon_task_start(task, core_ft, flat_args):
+  assert(len(core_ft.params) == len(flat_args))
   trap_if(task.opts.sync)
+  trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType([], task.ft.params), 'lower'))
   task.start()
-  lower_async_values(task, task.start_thunk(), task.ft.param_types(), CoreValueIter([i]))
-  return []
+  args = task.start_thunk()
+  flat_results = lower_sync_values(task, MAX_FLAT_RESULTS, args, task.ft.param_types(), CoreValueIter(flat_args))
+  assert(len(core_ft.results) == len(flat_results))
+  return flat_results
 
 ### `canon task.return`
 
-async def canon_task_return(task, i):
+async def canon_task_return(task, core_ft, flat_args):
+  assert(len(core_ft.params) == len(flat_args))
   trap_if(task.opts.sync)
+  trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType(task.ft.results, []), 'lower'))
   task.return_()
-  task.return_thunk(lift_async_values(task, CoreValueIter([i]), task.ft.result_types()))
+  results = lift_sync_values(task, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_types())
+  task.return_thunk(results)
+  assert(len(core_ft.results) == 0)
   return []
 
 ### `canon task.wait`

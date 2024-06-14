@@ -1313,8 +1313,8 @@ canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
         | (canon resource.drop <typeidx> async? (core func <id>?))
         | (canon resource.rep <typeidx> (core func <id>?))
-        | (canon task.start (core func <id>?)) 🔀
-        | (canon task.return (core func <id>?)) 🔀
+        | (canon task.start <core:typeidx> (core func <id>?)) 🔀
+        | (canon task.return <core:typeidx> (core func <id>?)) 🔀
         | (canon task.wait (core func <id>?)) 🔀
         | (canon task.poll (core func <id>?)) 🔀
         | (canon task.yield (core func <id>?)) 🔀
@@ -1374,21 +1374,26 @@ transferring ownership of the newly-created resource to the export's caller.
 See the [async explainer](Async.md) for high-level context and terminology
 and the [Canonical ABI explainer] for detailed runtime semantics.
 
-The `task.start` built-in has type `[i32] -> []` where the `i32` is a pointer
-into a linear memory buffer that will receive the arguments of the call to
-the current task. This built-in must be called from an `async`-lifted export
-exactly once per export activation. Delaying the call to `task.start` allows
-the async callee to exert *backpressure* on the caller. (See also
-[Starting](Async.md#starting) in the async explainer and [`canon_task_start`]
-in the Canonical ABI explainer.)
-
-The `task.return` built-in has type `[i32] -> []` where the `i32` is a pointer
-to a linear memory buffer containing the value to be returned from the current
+The `task.start` built-in returns the arguments to the currently-executing
 task. This built-in must be called from an `async`-lifted export exactly once
-per export activation after `task.start`. After calling `task.return`, the
-callee can continue executing for an arbitrary amount of time before returning
-to the caller. (See also [Returning](Async.md#returning) in the async explainer
-and [`canon_task_return`] in the Canonical ABI explainer.)
+per export activation. Delaying the call to `task.start` allows the async
+callee to exert *backpressure* on the caller. The `canon task.start` definition
+takes the type index of a core function type and produces a core function with
+exactly that type. When called, the declared core function type is checked
+to match the lowered function type of a component-level function returning the
+parameter types of the current task. (See also [Starting](Async.md#starting) in
+the async explainer and [`canon_task_start`] in the Canonical ABI explainer.)
+
+The `task.return` built-in takes as parameters the result values of the
+currently-executing task. This built-in must be called from an `async`-lifted
+export exactly once per export activation after `task.start`. After calling
+`task.return`, the callee can continue executing for an arbitrary amount of
+time before returning to the caller. The `canon task.return` definition takes
+the type index of a core function type and produces a core function with
+exactly that type. When called, the declared core function type is checked
+to match the lowered function type of a component-level function taking the
+result types of the current task. (See also [Returning](Async.md#returning) in
+the async explainer and [`canon_task_return`] in the Canonical ABI explainer.)
 
 The `task.wait` built-in has type `[i32] -> [i32]`, returning an event and
 storing the 4-byte payload of the event at the address passed as parameter.

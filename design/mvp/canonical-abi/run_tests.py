@@ -491,8 +491,8 @@ async def test_async_to_async():
   eager_ft = FuncType([], [U8()])
   async def core_eager_producer(task, args):
     assert(len(args) == 0)
-    [] = await canon_task_start(task, 1000)
-    [] = await canon_task_return(task, 43)
+    [] = await canon_task_start(task, CoreFuncType([],[]), [])
+    [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [43])
     return []
   eager_callee = partial(canon_lift, producer_opts, producer_inst, core_eager_producer, eager_ft)
 
@@ -514,11 +514,9 @@ async def test_async_to_async():
   async def consumer(task, args):
     assert(len(args) == 0)
 
-    ptr = consumer_heap.realloc(0, 0, 1, 1)
-    [] = await canon_task_start(task, ptr)
-    b = consumer_heap.memory[ptr]
-    assert(b == True)
+    [b] = await canon_task_start(task, CoreFuncType([],['i32']), [])
 
+    ptr = consumer_heap.realloc(0, 0, 1, 1)
     [ret] = await canon_lower(consumer_opts, eager_callee, eager_ft, task, [0, ptr])
     assert(ret == 0)
     u8 = consumer_heap.memory[ptr]
@@ -574,7 +572,7 @@ async def test_async_to_async():
     assert(callidx == 1)
     assert(task.num_async_subtasks == 0)
 
-    [] = await canon_task_return(task, 42)
+    [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [42])
     return []
 
   ft = FuncType([Bool()],[U8()])
@@ -611,7 +609,7 @@ async def test_async_callback():
   consumer_ft = FuncType([],[U32()])
   async def consumer(task, args):
     assert(len(args) == 0)
-    [] = await canon_task_start(task, 0)
+    [] = await canon_task_start(task, CoreFuncType([],[]), [])
 
     [ret] = await canon_lower(opts, producer1, producer_ft, task, [0, 0])
     assert(ret == (1 | (AsyncCallState.STARTED << 30)))
@@ -633,7 +631,7 @@ async def test_async_callback():
       assert(args[0] == 43)
       assert(args[1] == AsyncCallState.DONE)
       assert(args[2] == 2)
-      [] = await canon_task_return(task, 83)
+      [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [83])
       return [0]
 
   consumer_inst = ComponentInstance()
@@ -710,8 +708,8 @@ async def test_async_to_sync():
 
     assert(task.poll() is None)
 
-    await canon_task_start(task, 0)
-    await canon_task_return(task, 83)
+    await canon_task_start(task, CoreFuncType([],[]), [])
+    await canon_task_return(task, CoreFuncType(['i32'],[]), [83])
     return []
 
   consumer_inst = ComponentInstance()

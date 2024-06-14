@@ -1868,12 +1868,14 @@ def lower_heap_values(cx, vs, ts, out_param):
   tuple_value = {str(i): v for i,v in enumerate(vs)}
   if out_param is None:
     ptr = cx.opts.realloc(0, 0, alignment(tuple_type), elem_size(tuple_type))
+    flat_vals = [ptr]
   else:
     ptr = out_param.next('i32')
+    flat_vals = []
   trap_if(ptr != align_to(ptr, alignment(tuple_type)))
   trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
   store(cx, tuple_value, tuple_type, ptr)
-  return [ptr]
+  return flat_vals
 ```
 The `may_leave` flag is guarded by `canon_lower` below to prevent a component
 from calling out of the component while in the middle of lowering, ensuring
@@ -2207,43 +2209,61 @@ component instance defining a resource can access its representation.
 
 For a canonical definition:
 ```wasm
-(canon task.start (core func $f))
+(canon task.start $ft (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param i32))`
+* `$f` is given type `$ft`, which validation requires to be a (core) function type
 
 Calling `$f` invokes the following function which extracts the arguments from the
 caller and lowers them into the current instance:
 ```python
-async def canon_task_start(task, i):
+async def canon_task_start(task, core_ft, flat_args):
+  assert(len(core_ft.params) == len(flat_args))
   trap_if(task.opts.sync)
+  trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType([], task.ft.params), 'lower'))
   task.start()
-  lower_async_values(task, task.start_thunk(), task.ft.param_types(), CoreValueIter([i]))
-  return []
+  args = task.start_thunk()
+  flat_results = lower_sync_values(task, MAX_FLAT_RESULTS, args, task.ft.param_types(), CoreValueIter(flat_args))
+  assert(len(core_ft.results) == len(flat_results))
+  return flat_results
 ```
-The call to the `Task.start` (defined above) ensures that `canon task.start` is
-called exactly once, before `canon task.return`, before an async call finishes.
+An expected implementation of `task.start` would generate a core wasm function
+for each lowering of an `async`-lifted export that performs the fused copy of
+the arguments into the caller, storing the index of this function in the `Task`
+structure and using `call_indirect` to perform the function-type-equality check
+required here. The call to `Task.start` (defined above) ensures that `canon
+task.start` is called exactly once, before `canon task.return`, before an async
+call finishes.
 
 ### 🔀 `canon task.return`
 
 For a canonical definition:
 ```wasm
-(canon task.return (core func $f))
+(canon task.return $ft (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param i32))`
+* `$f` is given type `$ft`, which validation requires to be a (core) function type
 
 Calling `$f` invokes the following function which lifts the results from the
 current instance and passes them to the caller:
 ```python
-async def canon_task_return(task, i):
+async def canon_task_return(task, core_ft, flat_args):
+  assert(len(core_ft.params) == len(flat_args))
   trap_if(task.opts.sync)
+  trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType(task.ft.results, []), 'lower'))
   task.return_()
-  task.return_thunk(lift_async_values(task, CoreValueIter([i]), task.ft.result_types()))
+  results = lift_sync_values(task, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_types())
+  task.return_thunk(results)
+  assert(len(core_ft.results) == 0)
   return []
 ```
-The call to `Task.return_` (defined above) ensures that `canon task.return` is
-called exactly once, after `canon task.start`, before an async call finishes.
+An expected implementation of `task.return` would generate a core wasm function
+for each lowering of an `async`-lifted export that performs the fused copy of
+the results into the caller, storing the index of this function in the `Task`
+structure and using `call_indirect` to perform the function-type-equality check
+required here. The call to `Task.return_` (defined above) ensures that `canon
+task.return` is called exactly once, after `canon task.start`, before an async
+call finishes.
 
 ### 🔀 `canon task.wait`
 
