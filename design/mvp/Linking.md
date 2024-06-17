@@ -2,8 +2,10 @@
 
 The Component Model enables multiple complementary forms of linking which allow
 producer toolchains to control which Core WebAssembly modules do or don't share
-low-level memory. At a high-level, there are two primary forms of linking:
-**shared-everything linking** and **shared-nothing linking**:
+low-level memory. At a high-level, there are two primary axes of choices to
+make when linking:
+* **shared-everything** vs. **shared-nothing**:
+* **inline** vs. **import**
 
 When two modules are linked together to share Core WebAssembly `memory` and
 `table` instances, it is called **shared-everything linking**. In this case,
@@ -39,6 +41,18 @@ producer toolchain, it's completely invisible to the Component Model and the
 runtime and thus mostly only relevant when talking about entire end-to-end
 workflows (like we'll do next).
 
+Regardless of whether or not memory is shared when linking, when two (child)
+modules or components are linked together to create a new (parent) component,
+the Component Model gives two options for how the parent represents its
+children:
+* A parent component can **inline** its children, literally storing the child
+  module or component binaries in a contiguous byte range inside the parent
+  (via the `core:module` and `component` sections in the [binary format]).
+* A parent component can **import** its children, using the import name to
+  refer to modules or components stored in an external shared registry that is
+  mutually known to later stages in the deployment pipeline (specifically with
+  the [`depname`] case of `importname` in the text and binary format).
+
 Given this terminology, the following diagram shows how the different forms of
 linking can be used together in the context of C/C++:
 <p align="center"><img src="examples/images/combined-linking.svg" width="800"></p>
@@ -70,6 +84,19 @@ composition is itself a component, composite components can themselves be
 further composed with other components. For a low-level sketch of how
 shared-nothing linking works at the WAT level, see
 [this example](examples/LinkTimeVirtualization.md).
+
+With both `wasm-tools link` and `wac`, the developer will have the option to
+either store child modules or components **inline** or to **import** them from
+an external registry. This registry toolchain integration is still in progress,
+but by reusing common support libries such as [`wasm-pkg-tools`], higher-level
+tooling can uniformly interact with multiple kinds of storage backends such as
+local directories, [OCI Wasm Artifacts] stored in standard [OCI Registries] and
+[warg registries]. Of note, even when modules or components are stored inline
+by earlier stages of the build pipeline, when creating an OCI Wasm Artifact, a
+toolchain can enable deduplication by content-hash of common modules or
+components by placing them in separate OCI [`layers`] which are imported via
+[`hashname`] by the root component stored in the first layer of the OCI Wasm
+Artifact.
 
 
 ## Fully-runtime dynamic linking
@@ -127,16 +154,27 @@ or DLL that can be efficiently loaded at runtime.
 post-Preview 2 features of WIT and the Component Model.)
 
 
-[ABI]: https://en.wikipedia.org/wiki/Application_binary_interface
-[AOT compilation]: https://en.wikipedia.org/wiki/Ahead-of-time_compilation
+[Canonical ABI]: CanonicalABI.md
+[Binary Format]: Binary.md
+[WIT]: WIT.md
+[`depname`]: Explainer.md#import-and-export-definitions
+[`hashname`]: Explainer.md#import-and-export-definitions
+
 [WebAssembly/tool-conventions]: https://github.com/WebAssembly/tool-conventions
 [WebAssembly Object File]: https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md
-[`wit-bindgen`]: https://github.com/bytecodealliance/wit-bindgen
-[Canonical ABI]: CanonicalABI.md
 [Custom Section]: https://webassembly.github.io/spec/core/binary/modules.html#custom-section
-[`wasm-ld`]: https://lld.llvm.org/WebAssembly.html
-[`wasm-tools`]: https://github.com/bytecodealliance/wasm-tools#tools-included
-[`wac`]: https://github.com/bytecodealliance/wac
 [JS API]: https://webassembly.github.io/spec/js-api/index.html
 [JIT Future Feature]: https://github.com/WebAssembly/design/blob/main/FutureFeatures.md#platform-independent-just-in-time-jit-compilation
-[WIT]: WIT.md
+
+[`wasm-ld`]: https://lld.llvm.org/WebAssembly.html
+[`wit-bindgen`]: https://github.com/bytecodealliance/wit-bindgen
+[`wasm-tools`]: https://github.com/bytecodealliance/wasm-tools#tools-included
+[`wac`]: https://github.com/bytecodealliance/wac
+[`wasm-pkg-tools`]: https://github.com/bytecodealliance/wasm-pkg-tools
+
+[ABI]: https://en.wikipedia.org/wiki/Application_binary_interface
+[AOT Compilation]: https://en.wikipedia.org/wiki/Ahead-of-time_compilation
+[OCI Wasm Artifacts]: https://tag-runtime.cncf.io/wgs/wasm/deliverables/wasm-oci-artifact/
+[OCI Registries]: https://github.com/opencontainers/distribution-spec/blob/main/spec.md#definitions
+[`layers`]: https://github.com/opencontainers/image-spec/blob/v1.0.1/manifest.md
+[warg registries]: https://warg.io/
