@@ -93,10 +93,10 @@ tooling can uniformly interact with multiple kinds of storage backends such as
 local directories, [OCI Wasm Artifacts] stored in standard [OCI Registries] and
 [warg registries]. Of note, even when modules or components are stored inline
 by earlier stages of the build pipeline, when creating an OCI Wasm Artifact, a
-toolchain can enable deduplication by content-hash of common modules or
-components by placing them in separate OCI [`layers`] which are imported via
-[`hashname`] by the root component stored in the first layer of the OCI Wasm
-Artifact.
+toolchain can (hypothetically, existing tools don't do this yet) enable
+deduplication by content-hash of common modules or components by placing them
+in separate OCI [`layers`] which are imported via [`hashname`] by the root
+component stored in the first layer of the OCI Wasm Artifact.
 
 
 ## Fully-runtime dynamic linking
