@@ -22,5 +22,12 @@ many questions that are answered by the Component Model, particularly when more
 than one wasm module is involved, but for single-module scenarios or highly
 custom scenarios, this might be appropriate.
 
+### Does the Component Model force every (module | package | library) to have a separate memory?
+
+No, as described in [Linking.md](Linking.md), the Component Model supports a
+combination of "shared-everything" and "shared-nothing" linking, allowing
+developers and producer toolchains to choose the appropriate kind of linking
+to use in a particular situation.
+
 
 [WASI]: https://github.com/WebAssembly/WASI/blob/main/README.md
