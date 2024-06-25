@@ -7,7 +7,7 @@ of modules in Core WebAssembly.
 * [Supporting definitions](#supporting-definitions)
   * [Despecialization](#despecialization)
   * [Alignment](#alignment)
-  * [Size](#size)
+  * [Element Size](#element-size)
   * [Runtime State](#runtime-state)
   * [Loading](#loading)
   * [Storing](#storing)
@@ -96,8 +96,8 @@ def alignment(t):
     case S16() | U16()      : return 2
     case S32() | U32()      : return 4
     case S64() | U64()      : return 8
-    case Float32()          : return 4
-    case Float64()          : return 8
+    case F32()              : return 4
+    case F64()              : return 8
     case Char()             : return 4
     case String() | List(_) : return 4
     case Record(fields)     : return alignment_record(fields)
@@ -152,54 +152,58 @@ def alignment_flags(labels):
   return 4
 ```
 
-Handle types are passed as `i32` indices into the `HandleTable` introduced
-below.
+Handle types are passed as `i32` indices into the `Table[HandleElem]`
+introduced below.
 
 
-### Size
+### Element Size
 
-Each value type is also assigned a `size`, measured in bytes, which corresponds
-the `sizeof` operator in C. Empty types, such as records with no fields, are
-not permitted, to avoid complications in source languages.
+Each value type is also assigned an `elem_size` which is the number of bytes
+used when values of the type are stored as elements of a `list`. Having this
+byte size be a static property of the type instead of attempting to use a
+variable-length element-encoding scheme both simplifies the implementation and
+maps well to languages which represent `list`s as random-access arrays. Empty
+types, such as records with no fields, are not permitted, to avoid
+complications in source languages.
 ```python
-def size(t):
+def elem_size(t):
   match despecialize(t):
     case Bool()             : return 1
     case S8() | U8()        : return 1
     case S16() | U16()      : return 2
     case S32() | U32()      : return 4
     case S64() | U64()      : return 8
-    case Float32()          : return 4
-    case Float64()          : return 8
+    case F32()              : return 4
+    case F64()              : return 8
     case Char()             : return 4
     case String() | List(_) : return 8
-    case Record(fields)     : return size_record(fields)
-    case Variant(cases)     : return size_variant(cases)
-    case Flags(labels)      : return size_flags(labels)
+    case Record(fields)     : return elem_size_record(fields)
+    case Variant(cases)     : return elem_size_variant(cases)
+    case Flags(labels)      : return elem_size_flags(labels)
     case Own(_) | Borrow(_) : return 4
 
-def size_record(fields):
+def elem_size_record(fields):
   s = 0
   for f in fields:
     s = align_to(s, alignment(f.t))
-    s += size(f.t)
+    s += elem_size(f.t)
   assert(s > 0)
   return align_to(s, alignment_record(fields))
 
 def align_to(ptr, alignment):
   return math.ceil(ptr / alignment) * alignment
 
-def size_variant(cases):
-  s = size(discriminant_type(cases))
+def elem_size_variant(cases):
+  s = elem_size(discriminant_type(cases))
   s = align_to(s, max_case_alignment(cases))
   cs = 0
   for c in cases:
     if c.t is not None:
-      cs = max(cs, size(c.t))
+      cs = max(cs, elem_size(c.t))
   s += cs
   return align_to(s, alignment_variant(cases))
 
-def size_flags(labels):
+def elem_size_flags(labels):
   n = len(labels)
   assert(n > 0)
   if n <= 8: return 1
@@ -216,67 +220,30 @@ The subsequent definitions of loading and storing a value from linear memory
 require additional runtime state, which is threaded through most subsequent
 definitions via the `cx` parameter of type `CallContext`:
 ```python
+@dataclass
 class CallContext:
   opts: CanonicalOptions
   inst: ComponentInstance
-  lenders: list[HandleElem]
-  borrow_count: int
-
-  def __init__(self, opts, inst):
-    self.opts = opts
-    self.inst = inst
-    self.lenders = []
-    self.borrow_count = 0
 ```
-One `CallContext` is created for each call for both the component caller and
-callee (defined below in `canon_lower` and `canon_lift`, resp.). Thus, a
-cross-component call will create 2 `CallContext` objects for the call, while a
-component-to-host or host-to-component call will create a single `CallContext`
-for the component caller or callee, resp.
 
-The meaning of the `opts` and `inst` fields are described with their associated
-types below.
-
-The `lenders` and `borrow_count` fields are used by the following helper
-methods of `CallContext` plus the `{lift,lower}_{own,borrow}` operations. These
-fields are updated at the appropriate points in the lifecycle of a call (below)
-and maintain the bookkeeping to dynamically ensure that `own` handles are not
-dropped while they have been `borrow`ed and that all `borrow` handles created
-for a call are dropped before the end of the call.
+The `opts` field of `CallContext` contains all the possible `canonopt`
+immediates that can be passed to the `canon` definition being implemented.
 ```python
-  def track_owning_lend(self, lending_handle):
-    assert(lending_handle.own)
-    lending_handle.lend_count += 1
-    self.lenders.append(lending_handle)
-
-  def exit_call(self):
-    trap_if(self.borrow_count != 0)
-    for h in self.lenders:
-      h.lend_count -= 1
-```
-Note, the `lenders` list usually has a fixed size (in all cases except when a
-function signature has `borrow`s in `list`s) and thus can be stored inline in
-the native stack frame.
-
-The `CanonicalOptions` class implements the `opts` field of `CallContext` and
-represents the [`canonopt`] values supplied to currently-executing `canon lift`
-or `canon lower`:
-```python
+@dataclass
 class CanonicalOptions:
-  memory: bytearray
-  string_encoding: str
-  realloc: Callable[[int,int,int,int],int]
-  post_return: Callable[[],None]
+  memory: Optional[bytearray] = None
+  string_encoding: Optional[str] = None
+  realloc: Optional[Callable] = None
+  post_return: Optional[Callable] = None
 ```
 
-The `ComponentInstance` class implements the `inst` field of `CallContext` and
-represents the component instance that the currently-executing canonical
-definition is defined to execute inside. The `may_enter` and `may_leave` fields
-are used to enforce the [component invariants]: `may_leave` indicates whether
-the instance may call out to an import and the `may_enter` state indicates
-whether the instance may be called from the outside world through an export.
+The `inst` field of `CallContext` points to the component instance which the
+`canon`-generated function is closed over. Component instances contain all the
+core wasm instance as well as some extra state that is used exclusively by the
+Canonical ABI:
 ```python
 class ComponentInstance:
+  # core module instance state
   may_leave: bool
   may_enter: bool
   handles: HandleTables
@@ -286,29 +253,114 @@ class ComponentInstance:
     self.may_enter = True
     self.handles = HandleTables()
 ```
-`HandleTables` is defined in terms of a collection of supporting runtime
-bookkeeping classes that we'll go through first.
+The `may_enter` and `may_leave` fields are used to enforce the [component
+invariants]: `may_leave` indicates whether the instance may call out to an
+import and the `may_enter` state indicates whether the instance may be called
+from the outside world through an export.
 
-The `ResourceType` class represents a resource type that has been defined by
-the specific component instance pointed to by `impl` with a particular
-function closure as the `dtor`.
+The `handles` field of `ComponentInstance` contains a mapping from
+`ResourceType` to `Table`s of `HandleElem`s (defined next), establishing a
+separate `i32`-indexed array per resource type.
+```python
+class HandleTables:
+  rt_to_table: MutableMapping[ResourceType, Table[HandleElem]]
+
+  def __init__(self):
+    self.rt_to_table = dict()
+
+  def table(self, rt):
+    if rt not in self.rt_to_table:
+      self.rt_to_table[rt] = Table[HandleElem]()
+    return self.rt_to_table[rt]
+
+  def get(self, rt, i):
+    return self.table(rt).get(i)
+  def add(self, rt, h):
+    return self.table(rt).add(h)
+  def remove(self, rt, i):
+    return self.table(rt).remove(i)
+```
+While this Python code performs a dynamic hash-table lookup on each handle
+table access, as we'll see below, the `rt` parameter is always statically known
+such that a normal implementation can statically enumerate all `Table` objects
+at compile time and then route the calls to `get`, `add` and `remove` to the
+correct `Table` at the callsite. The net result is that each component instance
+will contain one handle table per resource type used by the component, with
+each compiled adapter function accessing the correct handle table as-if it were
+a global variable.
+
+The `ResourceType` class represents a concrete resource type that has been
+created by the component instance `impl`. `ResourceType` objects are used as
+keys by `HandleTables` above and thus we assume that Python object identity
+corresponds to resource type equality, as defined by [type checking] rules.
 ```python
 class ResourceType(Type):
   impl: ComponentInstance
-  dtor: Optional[Callable[[int],None]]
+  dtor: Optional[Callable]
 
   def __init__(self, impl, dtor = None):
     self.impl = impl
     self.dtor = dtor
 ```
+The `Table` class, used by `HandleTables` above, encapsulates a single
+mutable, growable array of generic elements, indexed by Core WebAssembly
+`i32`s.
+```python
+ElemT = TypeVar('ElemT')
+class Table(Generic[ElemT]):
+  array: list[Optional[ElemT]]
+  free: list[int]
 
-The `HandleElem` class represents the elements of the per-component-instance
-handle tables (defined next).
+  def __init__(self):
+    self.array = [None]
+    self.free = []
+
+  def get(self, i):
+    trap_if(i >= len(self.array))
+    trap_if(self.array[i] is None)
+    return self.array[i]
+
+  def add(self, e):
+    if self.free:
+      i = self.free.pop()
+      assert(self.array[i] is None)
+      self.array[i] = e
+    else:
+      i = len(self.array)
+      trap_if(i >= 2**30)
+      self.array.append(e)
+    return i
+
+  def remove(self, i):
+    e = self.get(i)
+    self.array[i] = None
+    self.free.append(i)
+    return e
+```
+`Table` maintains a dense array of elements that can contain holes created by
+the `remove` method (defined below). When table elements are accessed (e.g., by
+`canon_lift` and `resource.rep`, below), there are thus both a bounds check and
+hole check necessary. Upon initialization, table element `0` is allocated and
+set to `None`, effectively reserving index `0` which is both useful for
+catching null/uninitialized accesses and allowing `0` to serve as a sentinel
+value.
+
+The `add` and `remove` methods work together to maintain a free list of holes
+that are used in preference to growing the table. The free list is represented
+as a Python list here, but an optimizing implementation could instead store the
+free list in the free elements of `array`.
+
+The limit of `2**30` ensures that the high 2 bits of table indices are unset
+and available for other use in guest code (e.g., for tagging, packed words or
+sentinel values).
+
+The `HandleElem` class defines the elements of the per-resource-type `Table`s
+stored in `HandleTables`:
 ```python
 class HandleElem:
   rep: int
   own: bool
-  scope: Optional[CallContext]
+  scope: Optional[ExportCall]
   lend_count: int
 
   def __init__(self, rep, own, scope = None):
@@ -323,15 +375,14 @@ fixed to be an `i32`) passed to `resource.new`.
 The `own` field indicates whether this element was created from an `own` type
 (or, if false, a `borrow` type).
 
-The `scope` field optionally stores the `CallContext` of the call that created
-this handle if the handle type was `borrow`. Until async is added to the
-Component Model, because of the non-reentrancy of components, there is at most
-one `CallContext` alive for a given component at a time and thus this field
-does not actually need to be stored per `HandleElem`.
+The `scope` field stores the `ExportCall` that created the borrowed handle.
+Until async is added to the Component Model, because of the non-reentrancy of
+components, there is at most one `ExportCall` alive for a given component at a
+time and thus this field does not actually need to be stored per `HandleElem`.
 
 The `lend_count` field maintains a conservative approximation of the number of
 live handles that were lent from this `own` handle (by calls to `borrow`-taking
-functions). This count is maintained by the `CallContext` bookkeeping functions
+functions). This count is maintained by the `ImportCall` bookkeeping functions
 (above) and is ensured to be zero when an `own` handle is dropped.
 
 An optimizing implementation can enumerate the canonical definitions present
@@ -340,85 +391,61 @@ table only contains `own` or `borrow` handles and then, based on this,
 statically eliminate the `own` and the `lend_count` xor `scope` fields,
 and guards thereof.
 
-`HandleTable` (singular) encapsulates a single mutable, growable array
-of handles that all share the same `ResourceType`. Defining `HandleTable` in
-chunks, we start with the fields and `get` method:
+One `CallContext` is created for each call for both the component caller and
+callee (in `canon_lower` and `canon_lift`, resp., as defined below). Thus, a
+cross-component call will create 2 `CallContext` objects for the call, while a
+component-to-host or host-to-component call will create a single `CallContext`
+for the component caller or callee, resp.
+
+Additional per-call state is required to check that callers and callees uphold
+their respective parts of the call contract:
+
+The `ExportCall` subclass of `CallContext` tracks the number of borrowed
+handles that were passed as parameters to the export that have not yet been
+dropped (which might dangle if the caller destroys the resource after the
+call):
 ```python
-class HandleTable:
-  array: list[Optional[HandleElem]]
-  free: list[int]
+class ExportCall(CallContext):
+  borrow_count: int
 
-  def __init__(self):
-    self.array = [None]
-    self.free = []
+  def __init__(self, opts, inst):
+    super().__init__(opts, inst)
+    self.borrow_count = 0
 
-  def get(self, i):
-    trap_if(i >= len(self.array))
-    trap_if(self.array[i] is None)
-    return self.array[i]
+  def create_borrow(self):
+    self.borrow_count += 1
+
+  def drop_borrow(self):
+    assert(self.borrow_count > 0)
+    self.borrow_count -= 1
+
+  def exit(self):
+    trap_if(self.borrow_count != 0)
 ```
-The `HandleTable` class maintains a dense array of handles that can contain
-holes created by the `remove` method (defined below). When handles are accessed
-(by lifting and `resource.rep`), there are thus both a bounds check and hole
-check necessary. Upon initialization, table element `0` is allocated and set to
-`None`, effectively reserving index `0` which is both useful for catching
-null/uninitialized accesses and allowing `0` to serve as a sentinel value.
 
-The `add` and `remove` methods work together to maintain a free list of holes
-that are used in preference to growing the table. The free list is represented
-as a Python list here, but an optimizing implementation could instead store the
-free list in the free elements of `array`.
+The `ImportCall` subclass of `CallContext` tracks the owned handles that have
+been lent for the duration of an import call, ensuring that they aren't dropped
+during the call (which might create a dangling borrowed handle):
 ```python
-  def add(self, h):
-    if self.free:
-      i = self.free.pop()
-      assert(self.array[i] is None)
-      self.array[i] = h
-    else:
-      i = len(self.array)
-      trap_if(i >= 2**30)
-      self.array.append(h)
-    return i
+class ImportCall(CallContext):
+  lenders: list[HandleElem]
 
-  def remove(self, rt, i):
-    h = self.get(i)
-    self.array[i] = None
-    self.free.append(i)
-    return h
+  def __init__(self, opts, inst):
+    super().__init__(opts, inst)
+    self.lenders = []
+
+  def track_owning_lend(self, lending_handle):
+    assert(lending_handle.own)
+    lending_handle.lend_count += 1
+    self.lenders.append(lending_handle)
+
+  def exit(self):
+    for h in self.lenders:
+      h.lend_count -= 1
 ```
-The handle index limit of `2**30` ensures that the high 2 bits of handle
-indices are unset and available for other use in guest code (e.g., for tagging,
-packed words or sentinel values).
-
-Finally, we can define `HandleTables` (plural) as simply a wrapper around
-a mutable mapping from `ResourceType` to `HandleTable`:
-```python
-class HandleTables:
-  rt_to_table: MutableMapping[ResourceType, HandleTable]
-
-  def __init__(self):
-    self.rt_to_table = dict()
-
-  def table(self, rt):
-    if rt not in self.rt_to_table:
-      self.rt_to_table[rt] = HandleTable()
-    return self.rt_to_table[rt]
-
-  def get(self, rt, i):
-    return self.table(rt).get(i)
-  def add(self, rt, h):
-    return self.table(rt).add(h)
-  def remove(self, rt, i):
-    return self.table(rt).remove(rt, i)
-```
-While this Python code performs a dynamic hash-table lookup on each handle
-table access, as we'll see below, the `rt` parameter is always statically
-known such that a normal implementation can statically enumerate all
-`HandleTable` objects at compile time and then route the calls to `get`,
-`add` and `remove` to the correct `HandleTable` at the callsite. The
-net result is that each component instance will contain one handle table per
-resource type used by the component, with each compiled adapter function
-accessing the correct handle table as-if it were a global variable.
+Note, the `lenders` list usually has a fixed size (in all cases except when a
+function signature has `borrow`s in `list`s) and thus can be stored inline in
+the native stack frame.
 
 
 ### Loading
@@ -430,7 +457,7 @@ the top-level case analysis:
 ```python
 def load(cx, ptr, t):
   assert(ptr == align_to(ptr, alignment(t)))
-  assert(ptr + size(t) <= len(cx.opts.memory))
+  assert(ptr + elem_size(t) <= len(cx.opts.memory))
   match despecialize(t):
     case Bool()         : return convert_int_to_bool(load_int(cx, ptr, 1))
     case U8()           : return load_int(cx, ptr, 1)
@@ -441,8 +468,8 @@ def load(cx, ptr, t):
     case S16()          : return load_int(cx, ptr, 2, signed=True)
     case S32()          : return load_int(cx, ptr, 4, signed=True)
     case S64()          : return load_int(cx, ptr, 8, signed=True)
-    case Float32()      : return decode_i32_as_float(load_int(cx, ptr, 4))
-    case Float64()      : return decode_i64_as_float(load_int(cx, ptr, 8))
+    case F32()          : return decode_i32_as_float(load_int(cx, ptr, 4))
+    case F64()          : return decode_i64_as_float(load_int(cx, ptr, 8))
     case Char()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
     case String()       : return load_string(cx, ptr)
     case List(t)        : return load_list(cx, ptr, t)
@@ -500,10 +527,10 @@ def decode_i64_as_float(i):
   return canonicalize_nan64(core_f64_reinterpret_i64(i))
 
 def core_f32_reinterpret_i32(i):
-  return struct.unpack('!f', struct.pack('!I', i))[0] # f32.reinterpret_i32
+  return struct.unpack('<f', struct.pack('<I', i))[0] # f32.reinterpret_i32
 
 def core_f64_reinterpret_i64(i):
-  return struct.unpack('!d', struct.pack('!Q', i))[0] # f64.reinterpret_i64
+  return struct.unpack('<d', struct.pack('<Q', i))[0] # f64.reinterpret_i64
 ```
 
 An `i32` is converted to a `char` (a [Unicode Scalar Value]) by dynamically
@@ -511,6 +538,7 @@ testing that its unsigned integral value is in the valid [Unicode Code Point]
 range and not a [Surrogate]:
 ```python
 def convert_i32_to_char(cx, i):
+  assert(i >= 0)
   trap_if(i >= 0x110000)
   trap_if(0xD800 <= i <= 0xDFFF)
   return chr(i)
@@ -571,10 +599,10 @@ def load_list(cx, ptr, elem_type):
 
 def load_list_from_range(cx, ptr, length, elem_type):
   trap_if(ptr != align_to(ptr, alignment(elem_type)))
-  trap_if(ptr + length * size(elem_type) > len(cx.opts.memory))
+  trap_if(ptr + length * elem_size(elem_type) > len(cx.opts.memory))
   a = []
   for i in range(length):
-    a.append(load(cx, ptr + i * size(elem_type), elem_type))
+    a.append(load(cx, ptr + i * elem_size(elem_type), elem_type))
   return a
 
 def load_record(cx, ptr, fields):
@@ -582,7 +610,7 @@ def load_record(cx, ptr, fields):
   for field in fields:
     ptr = align_to(ptr, alignment(field.t))
     record[field.label] = load(cx, ptr, field.t)
-    ptr += size(field.t)
+    ptr += elem_size(field.t)
   return record
 ```
 As a technical detail: the `align_to` in the loop in `load_record` is
@@ -599,7 +627,7 @@ implementation can build the appropriate index tables at compile-time so that
 variant-passing is always O(1) and not involving string operations.
 ```python
 def load_variant(cx, ptr, cases):
-  disc_size = size(discriminant_type(cases))
+  disc_size = elem_size(discriminant_type(cases))
   case_index = load_int(cx, ptr, disc_size)
   ptr += disc_size
   trap_if(case_index >= len(cases))
@@ -630,7 +658,7 @@ derived from the ordered labels of the `flags` type. The code here takes
 advantage of Python's support for integers of arbitrary width.
 ```python
 def load_flags(cx, ptr, labels):
-  i = load_int(cx, ptr, size_flags(labels))
+  i = load_int(cx, ptr, elem_size_flags(labels))
   return unpack_flags_from_int(i, labels)
 
 def unpack_flags_from_int(i, labels):
@@ -665,13 +693,19 @@ from the source handle, leaving the source handle intact in the current
 component instance's handle table:
 ```python
 def lift_borrow(cx, i, t):
+  assert(isinstance(cx, ImportCall))
   h = cx.inst.handles.get(t.rt, i)
   if h.own:
     cx.track_owning_lend(h)
   return h.rep
 ```
-The `track_owning_lend` call to `CallContext` participates in the enforcement of
-the dynamic borrow rules.
+The `track_owning_lend` call to `CallContext` participates in the enforcement
+of the dynamic borrow rules, which keep the source `own` handle alive until the
+end of the call (as an intentionally-conservative upper bound on how long the
+`borrow` handle can be held). This tracking is only required when `h` is an
+`own` handle because, when `h` is a `borrow` handle, this tracking has already
+happened (when the originating `own` handle was lifted) for a strictly longer
+call scope than the current call.
 
 
 ### Storing
@@ -682,7 +716,7 @@ The `store` function defines how to write a value `v` of a given value type
 ```python
 def store(cx, v, t, ptr):
   assert(ptr == align_to(ptr, alignment(t)))
-  assert(ptr + size(t) <= len(cx.opts.memory))
+  assert(ptr + elem_size(t) <= len(cx.opts.memory))
   match despecialize(t):
     case Bool()         : store_int(cx, int(bool(v)), ptr, 1)
     case U8()           : store_int(cx, v, ptr, 1)
@@ -693,8 +727,8 @@ def store(cx, v, t, ptr):
     case S16()          : store_int(cx, v, ptr, 2, signed=True)
     case S32()          : store_int(cx, v, ptr, 4, signed=True)
     case S64()          : store_int(cx, v, ptr, 8, signed=True)
-    case Float32()      : store_int(cx, encode_float_as_i32(v), ptr, 4)
-    case Float64()      : store_int(cx, encode_float_as_i64(v), ptr, 8)
+    case F32()          : store_int(cx, encode_float_as_i32(v), ptr, 4)
+    case F64()          : store_int(cx, encode_float_as_i64(v), ptr, 8)
     case Char()         : store_int(cx, char_to_i32(v), ptr, 4)
     case String()       : store_string(cx, v, ptr)
     case List(t)        : store_list(cx, v, ptr, t)
@@ -760,10 +794,10 @@ def encode_float_as_i64(f):
   return core_i64_reinterpret_f64(maybe_scramble_nan64(f))
 
 def core_i32_reinterpret_f32(f):
-  return struct.unpack('!I', struct.pack('!f', f))[0] # i32.reinterpret_f32
+  return struct.unpack('<I', struct.pack('<f', f))[0] # i32.reinterpret_f32
 
 def core_i64_reinterpret_f64(f):
-  return struct.unpack('!Q', struct.pack('!d', f))[0] # i64.reinterpret_f64
+  return struct.unpack('<Q', struct.pack('<d', f))[0] # i64.reinterpret_f64
 ```
 
 The integral value of a `char` (a [Unicode Scalar Value]) is a valid unsigned
@@ -871,18 +905,20 @@ def store_string_to_utf8(cx, src, src_code_units, worst_case_size):
   assert(src_code_units <= MAX_STRING_BYTE_LENGTH)
   ptr = cx.opts.realloc(0, 0, 1, src_code_units)
   trap_if(ptr + src_code_units > len(cx.opts.memory))
-  encoded = src.encode('utf-8')
-  assert(src_code_units <= len(encoded))
-  cx.opts.memory[ptr : ptr+src_code_units] = encoded[0 : src_code_units]
-  if src_code_units < len(encoded):
-    trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
-    ptr = cx.opts.realloc(ptr, src_code_units, 1, worst_case_size)
-    trap_if(ptr + worst_case_size > len(cx.opts.memory))
-    cx.opts.memory[ptr+src_code_units : ptr+len(encoded)] = encoded[src_code_units : ]
-    if worst_case_size > len(encoded):
-      ptr = cx.opts.realloc(ptr, worst_case_size, 1, len(encoded))
-      trap_if(ptr + len(encoded) > len(cx.opts.memory))
-  return (ptr, len(encoded))
+  for i,code_point in enumerate(src):
+    if ord(code_point) < 2**7:
+      cx.opts.memory[ptr + i] = ord(code_point)
+    else:
+      trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
+      ptr = cx.opts.realloc(ptr, src_code_units, 1, worst_case_size)
+      trap_if(ptr + worst_case_size > len(cx.opts.memory))
+      encoded = src.encode('utf-8')
+      cx.opts.memory[ptr+i : ptr+len(encoded)] = encoded[i : ]
+      if worst_case_size > len(encoded):
+        ptr = cx.opts.realloc(ptr, worst_case_size, 1, len(encoded))
+        trap_if(ptr + len(encoded) > len(cx.opts.memory))
+      return (ptr, len(encoded))
+  return (ptr, src_code_units)
 ```
 
 Converting from UTF-8 to UTF-16 performs an initial worst-case size allocation
@@ -990,20 +1026,20 @@ def store_list(cx, v, ptr, elem_type):
   store_int(cx, length, ptr + 4, 4)
 
 def store_list_into_range(cx, v, elem_type):
-  byte_length = len(v) * size(elem_type)
+  byte_length = len(v) * elem_size(elem_type)
   trap_if(byte_length >= (1 << 32))
   ptr = cx.opts.realloc(0, 0, alignment(elem_type), byte_length)
   trap_if(ptr != align_to(ptr, alignment(elem_type)))
   trap_if(ptr + byte_length > len(cx.opts.memory))
   for i,e in enumerate(v):
-    store(cx, e, elem_type, ptr + i * size(elem_type))
+    store(cx, e, elem_type, ptr + i * elem_size(elem_type))
   return (ptr, len(v))
 
 def store_record(cx, v, ptr, fields):
   for f in fields:
     ptr = align_to(ptr, alignment(f.t))
     store(cx, v[f.label], f.t, ptr)
-    ptr += size(f.t)
+    ptr += elem_size(f.t)
 ```
 
 Variants are stored using the `|`-separated list of `refines` cases built
@@ -1015,7 +1051,7 @@ case indices to the consumer's case indices.
 ```python
 def store_variant(cx, v, ptr, cases):
   case_index, case_value = match_case(v, cases)
-  disc_size = size(discriminant_type(cases))
+  disc_size = elem_size(discriminant_type(cases))
   store_int(cx, case_index, ptr, disc_size)
   ptr += disc_size
   ptr = align_to(ptr, max_case_alignment(cases))
@@ -1042,7 +1078,7 @@ to variants.
 ```python
 def store_flags(cx, v, ptr, labels):
   i = pack_flags_into_int(v, labels)
-  store_int(cx, i, ptr, size_flags(labels))
+  store_int(cx, i, ptr, elem_size_flags(labels))
 
 def pack_flags_into_int(v, labels):
   i = 0
@@ -1061,10 +1097,11 @@ def lower_own(cx, rep, t):
   return cx.inst.handles.add(t.rt, h)
 
 def lower_borrow(cx, rep, t):
+  assert(isinstance(cx, ExportCall))
   if cx.inst is t.rt.impl:
     return rep
   h = HandleElem(rep, own=False, scope=cx)
-  cx.borrow_count += 1
+  cx.create_borrow()
   return cx.inst.handles.add(t.rt, h)
 ```
 The special case in `lower_borrow` is an optimization, recognizing that, when
@@ -1072,7 +1109,6 @@ a borrowed handle is passed to the component that implemented the resource
 type, the only thing the borrowed handle is good for is calling
 `resource.rep`, so lowering might as well avoid the overhead of creating an
 intermediate borrow handle.
-
 
 ### Flattening
 
@@ -1134,8 +1170,8 @@ def flatten_type(t):
     case U8() | U16() | U32() : return ['i32']
     case S8() | S16() | S32() : return ['i32']
     case S64() | U64()        : return ['i64']
-    case Float32()            : return ['f32']
-    case Float64()            : return ['f64']
+    case F32()                : return ['f32']
+    case F64()                : return ['f64']
     case Char()               : return ['i32']
     case String() | List(_)   : return ['i32', 'i32']
     case Record(fields)       : return flatten_record(fields)
@@ -1181,27 +1217,31 @@ def join(a, b):
 
 ### Flat Lifting
 
-The `lift_flat` function defines how to convert zero or more core values into a
-single high-level value of type `t`. The values are given by a value iterator
-that iterates over a complete parameter or result list and asserts that the
-expected and actual types line up. Presenting the definition of `lift_flat`
-piecewise, we start with the top-level case analysis:
+Values are lifted by iterating over a list of parameter or result Core
+WebAssembly values:
 ```python
 @dataclass
-class Value:
-  t: str # 'i32'|'i64'|'f32'|'f64'
-  v: int|float
-
-@dataclass
-class ValueIter:
-  values: list[Value]
+class CoreValueIter:
+  values: list[int|float]
   i = 0
   def next(self, t):
     v = self.values[self.i]
     self.i += 1
-    assert(v.t == t)
-    return v.v
+    match t:
+      case 'i32': assert(isinstance(v, int) and 0 <= v < 2**32)
+      case 'i64': assert(isinstance(v, int) and 0 <= v < 2**64)
+      case 'f32': assert(isinstance(v, (int,float)))
+      case 'f64': assert(isinstance(v, (int,float)))
+      case _    : assert(False)
+    return v
+```
+The `match` is only used for spec-level assertions; no runtime typecase is
+required.
 
+The `lift_flat` function defines how to convert a list of core values into a
+single high-level value of type `t`. Presenting the definition of `lift_flat`
+piecewise, we start with the top-level case analysis:
+```python
 def lift_flat(cx, vi, t):
   match despecialize(t):
     case Bool()         : return convert_int_to_bool(vi.next('i32'))
@@ -1213,8 +1253,8 @@ def lift_flat(cx, vi, t):
     case S16()          : return lift_flat_signed(vi, 32, 16)
     case S32()          : return lift_flat_signed(vi, 32, 32)
     case S64()          : return lift_flat_signed(vi, 64, 64)
-    case Float32()      : return canonicalize_nan32(vi.next('f32'))
-    case Float64()      : return canonicalize_nan64(vi.next('f64'))
+    case F32()          : return canonicalize_nan32(vi.next('f32'))
+    case F64()          : return canonicalize_nan64(vi.next('f64'))
     case Char()         : return convert_i32_to_char(cx, vi.next('i32'))
     case String()       : return lift_flat_string(cx, vi)
     case List(t)        : return lift_flat_list(cx, vi, t)
@@ -1292,7 +1332,7 @@ def lift_flat_variant(cx, vi, cases):
         case ('i64', 'i32') : return wrap_i64_to_i32(x)
         case ('i64', 'f32') : return decode_i32_as_float(wrap_i64_to_i32(x))
         case ('i64', 'f64') : return decode_i64_as_float(x)
-        case _              : return x
+        case _              : assert(have == want); return x
   c = cases[case_index]
   if c.t is None:
     v = None
@@ -1328,25 +1368,25 @@ piecewise, we start with the top-level case analysis:
 ```python
 def lower_flat(cx, v, t):
   match despecialize(t):
-    case Bool()         : return [Value('i32', int(v))]
-    case U8()           : return [Value('i32', v)]
-    case U16()          : return [Value('i32', v)]
-    case U32()          : return [Value('i32', v)]
-    case U64()          : return [Value('i64', v)]
+    case Bool()         : return [int(v)]
+    case U8()           : return [v]
+    case U16()          : return [v]
+    case U32()          : return [v]
+    case U64()          : return [v]
     case S8()           : return lower_flat_signed(v, 32)
     case S16()          : return lower_flat_signed(v, 32)
     case S32()          : return lower_flat_signed(v, 32)
     case S64()          : return lower_flat_signed(v, 64)
-    case Float32()      : return [Value('f32', maybe_scramble_nan32(v))]
-    case Float64()      : return [Value('f64', maybe_scramble_nan64(v))]
-    case Char()         : return [Value('i32', char_to_i32(v))]
+    case F32()          : return [maybe_scramble_nan32(v)]
+    case F64()          : return [maybe_scramble_nan64(v)]
+    case Char()         : return [char_to_i32(v)]
     case String()       : return lower_flat_string(cx, v)
     case List(t)        : return lower_flat_list(cx, v, t)
     case Record(fields) : return lower_flat_record(cx, v, fields)
     case Variant(cases) : return lower_flat_variant(cx, v, cases)
     case Flags(labels)  : return lower_flat_flags(v, labels)
-    case Own()          : return [Value('i32', lower_own(cx, v, t))]
-    case Borrow()       : return [Value('i32', lower_borrow(cx, v, t))]
+    case Own()          : return [lower_own(cx, v, t)]
+    case Borrow()       : return [lower_borrow(cx, v, t)]
 ```
 
 Since component-level values are assumed in-range and, as previously stated,
@@ -1358,7 +1398,7 @@ would be a no-op in hardware):
 def lower_flat_signed(i, core_bits):
   if i < 0:
     i += (1 << core_bits)
-  return [Value('i' + str(core_bits), i)]
+  return [i]
 ```
 
 Since strings and lists are stored in linear memory, lifting can reuse the
@@ -1367,11 +1407,11 @@ previous definitions; only the resulting pointers are returned differently
 ```python
 def lower_flat_string(cx, v):
   ptr, packed_length = store_string_into_range(cx, v)
-  return [Value('i32', ptr), Value('i32', packed_length)]
+  return [ptr, packed_length]
 
 def lower_flat_list(cx, v, elem_type):
   (ptr, length) = store_list_into_range(cx, v, elem_type)
-  return [Value('i32', ptr), Value('i32', length)]
+  return [ptr, length]
 ```
 
 Records are lowered by recursively lowering their fields:
@@ -1396,17 +1436,17 @@ def lower_flat_variant(cx, v, cases):
     payload = []
   else:
     payload = lower_flat(cx, case_value, c.t)
-  for i,have in enumerate(payload):
-    want = flat_types.pop(0)
-    match (have.t, want):
-      case ('f32', 'i32') : payload[i] = Value('i32', encode_float_as_i32(have.v))
-      case ('i32', 'i64') : payload[i] = Value('i64', have.v)
-      case ('f32', 'i64') : payload[i] = Value('i64', encode_float_as_i32(have.v))
-      case ('f64', 'i64') : payload[i] = Value('i64', encode_float_as_i64(have.v))
-      case _              : pass
-  for want in flat_types:
-    payload.append(Value(want, 0))
-  return [Value('i32', case_index)] + payload
+    for i,(fv,have) in enumerate(zip(payload, flatten_type(c.t))):
+      want = flat_types.pop(0)
+      match (have, want):
+        case ('f32', 'i32') : payload[i] = encode_float_as_i32(fv)
+        case ('i32', 'i64') : payload[i] = fv
+        case ('f32', 'i64') : payload[i] = encode_float_as_i32(fv)
+        case ('f64', 'i64') : payload[i] = encode_float_as_i64(fv)
+        case _              : assert(have == want)
+  for _ in flat_types:
+    payload.append(0)
+  return [case_index] + payload
 ```
 
 Finally, flags are lowered by slicing the bit vector into `i32` chunks:
@@ -1415,7 +1455,7 @@ def lower_flat_flags(v, labels):
   i = pack_flags_into_int(v, labels)
   flat = []
   for _ in range(num_i32_flags(labels)):
-    flat.append(Value('i32', i & 0xffffffff))
+    flat.append(i & 0xffffffff)
     i >>= 32
   assert(i == 0)
   return flat
@@ -1424,8 +1464,8 @@ def lower_flat_flags(v, labels):
 ### Lifting and Lowering Values
 
 The `lift_values` function defines how to lift a list of at most `max_flat`
-core parameters or results given by the `ValueIter` `vi` into a tuple of values
-with types `ts`:
+core parameters or results given by the `CoreValueIter` `vi` into a tuple of
+values with types `ts`:
 ```python
 def lift_values(cx, max_flat, vi, ts):
   flat_types = flatten_types(ts)
@@ -1433,7 +1473,7 @@ def lift_values(cx, max_flat, vi, ts):
     ptr = vi.next('i32')
     tuple_type = Tuple(ts)
     trap_if(ptr != align_to(ptr, alignment(tuple_type)))
-    trap_if(ptr + size(tuple_type) > len(cx.opts.memory))
+    trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
     return list(load(cx, ptr, tuple_type).values())
   else:
     return [ lift_flat(cx, vi, t) for t in ts ]
@@ -1446,24 +1486,36 @@ greater-than-`max_flat` case by either allocating storage with `realloc` or
 accepting a caller-allocated buffer as an out-param:
 ```python
 def lower_values(cx, max_flat, vs, ts, out_param = None):
+  inst = cx.inst
+  assert(inst.may_leave)
+  inst.may_leave = False
+
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
     tuple_type = Tuple(ts)
     tuple_value = {str(i): v for i,v in enumerate(vs)}
     if out_param is None:
-      ptr = cx.opts.realloc(0, 0, alignment(tuple_type), size(tuple_type))
+      ptr = cx.opts.realloc(0, 0, alignment(tuple_type), elem_size(tuple_type))
     else:
       ptr = out_param.next('i32')
     trap_if(ptr != align_to(ptr, alignment(tuple_type)))
-    trap_if(ptr + size(tuple_type) > len(cx.opts.memory))
+    trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
     store(cx, tuple_value, tuple_type, ptr)
-    return [ Value('i32', ptr) ]
+    flat_vales = [ptr]
   else:
     flat_vals = []
     for i in range(len(vs)):
       flat_vals += lower_flat(cx, vs[i], ts[i])
-    return flat_vals
+
+  inst.may_leave = True
+  return flat_vals
 ```
+The `may_leave` flag is used by `canon_lower` below to prevent a component from
+calling out of the component while in the middle of lowering, ensuring that the
+relative ordering of the side effects of `lift_values` and `lower_values`
+cannot be observed and thus an implementation may reliably fuse `lift_values`
+with `lower_values` when making a cross-component call, avoiding any
+intermediate copy.
 
 ## Canonical Definitions
 
@@ -1482,10 +1534,10 @@ validation specifies:
 * `$f` is given type `$ft`
 * a `memory` is present if required by lifting and is a subtype of `(memory 1)`
 * a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
-* if a `post-return` is present, it has type `(func (param flatten_functype($ft)['results']))`
+* if a `post-return` is present, it has type `(func (param flatten_functype($ft).results))`
 
 When instantiating component instance `$inst`:
-* Define `$f` to be the closure `lambda call, args: canon_lift($opts, $inst, $callee, $ft, args)`
+* Define `$f` to be the partially-bound closure `canon_lift($opts, $inst, $callee, $ft)`
 
 Thus, `$f` captures `$opts`, `$inst`, `$callee` and `$ft` in a closure which
 can be subsequently exported or passed into a child instance (via `with`). If
@@ -1503,38 +1555,35 @@ component*.
 
 Given the above closure arguments, `canon_lift` is defined:
 ```python
-def canon_lift(opts, inst, callee, ft, args):
-  cx = CallContext(opts, inst)
+def canon_lift(opts, inst, callee, ft, start_thunk, return_thunk):
+  export_call = ExportCall(opts, inst)
   trap_if(not inst.may_enter)
 
-  assert(inst.may_leave)
-  inst.may_leave = False
-  flat_args = lower_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
-  inst.may_leave = True
+  flat_args = lower_values(export_call, MAX_FLAT_PARAMS, start_thunk(), ft.param_types())
+  flat_results = call_and_trap_on_throw(callee, flat_args)
+  return_thunk(lift_values(export_call, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types()))
 
+  if opts.post_return is not None:
+    call_and_trap_on_throw(opts.post_return, flat_results)
+
+  export_call.exit()
+
+def call_and_trap_on_throw(callee, args):
   try:
-    flat_results = callee(flat_args)
+    return callee(args)
   except CoreWebAssemblyException:
     trap()
-
-  results = lift_values(cx, MAX_FLAT_RESULTS, ValueIter(flat_results), ft.result_types())
-
-  def post_return():
-    if opts.post_return is not None:
-      opts.post_return(flat_results)
-    cx.exit_call()
-
-  return (results, post_return)
 ```
 Uncaught Core WebAssembly [exceptions] result in a trap at component
 boundaries. Thus, if a component wishes to signal an error, it must use some
 sort of explicit type such as `result` (whose `error` case particular language
 bindings may choose to map to and from exceptions).
 
-The contract assumed by `canon_lift` (and ensured by `canon_lower` below) is
-that the caller of `canon_lift` *must* call `post_return` right after lowering
-`result`. This ensures that `post_return` can be used to perform cleanup
-actions after the lowering is complete.
+The `start_thunk` and `return_thunk` are used to model the interleaving of
+reading arguments out of the caller's stack and memory and writing results
+back into the caller's stack and memory. After the results have been copied
+from the callee's memory into the caller's memory, the callee's `post_return`
+function is called to allow the callee to reclaim any memory.
 
 
 ### `canon lower`
@@ -1550,53 +1599,42 @@ where `$callee` has type `$ft`, validation specifies:
 * there is no `post-return` in `$opts`
 
 When instantiating component instance `$inst`:
-* Define `$f` to be the closure: `lambda call, args: canon_lower($opts, $inst, $callee, $ft, args)`
+* Define `$f` to be the partially-bound closure: `canon_lower($opts, $inst, $callee, $ft)`
 
-Thus, from the perspective of Core WebAssembly, `$f` is a [function instance]
-containing a `hostfunc` that closes over `$opts`, `$inst`, `$callee` and `$ft`
-and, when called from Core WebAssembly code, calls `canon_lower`, which is defined as:
+where `canon_lower` is defined:
 ```python
 def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
-  cx = CallContext(opts, inst)
+  import_call = ImportCall(opts, inst)
   trap_if(not inst.may_leave)
 
   assert(inst.may_enter)
   if calling_import:
     inst.may_enter = False
 
-  flat_args = ValueIter(flat_args)
-  args = lift_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
+  flat_args = CoreValueIter(flat_args)
+  flat_results = None
 
-  results, post_return = callee(args)
+  def start_thunk():
+    return lift_values(import_call, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
-  inst.may_leave = False
-  flat_results = lower_values(cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
-  inst.may_leave = True
+  def return_thunk(results):
+    nonlocal flat_results
+    flat_results = lower_values(import_call, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
 
-  post_return()
-  cx.exit_call()
+  callee(start_thunk, return_thunk)
 
   if calling_import:
     inst.may_enter = True
 
+  import_call.exit()
   return flat_results
 ```
-The definitions of `canon_lift` and `canon_lower` are mostly symmetric
-(swapping lifting and lowering), with a few exceptions (in `flatten_functype`,
-as defined above):
-* The caller does not need a `post-return` function since the Core WebAssembly
-  caller simply regains control when `canon_lower` returns, allowing it to free
-  (or not) any memory passed as `flat_args`.
-* When handling the too-many-flat-values case, instead of relying on `realloc`,
-  the caller pass in a pointer to caller-allocated memory as a final
-  `i32` parameter.
-
 Since any cross-component call necessarily transits through a statically-known
 `canon_lower`+`canon_lift` call pair, an AOT compiler can fuse `canon_lift` and
-`canon_lower` into a single, efficient trampoline. This allows efficient
-compilation of the permissive [subtyping](Subtyping.md) allowed between
-components (including the elimination of string operations on the labels of
-records and variants) as well as post-MVP [adapter functions].
+`canon_lower` into a single, efficient trampoline. In the future this may allow
+efficient compilation of permissive subtyping between components (including the
+elimination of string operations on the labels of records and variants) as well
+as post-MVP [adapter functions].
 
 By clearing `may_enter` for the duration of calls to imports, the `may_enter`
 guard in `canon_lift` ensures that components cannot be externally reentered,
@@ -1611,20 +1649,6 @@ Because `may_enter` is not cleared on the exceptional exit path taken by
 `trap()`, if there is a trap during Core WebAssembly execution of lifting or
 lowering, the component is left permanently un-enterable, ensuring the
 lockdown-after-trap [component invariant].
-
-The `may_leave` flag set during lowering in `canon_lift` and `canon_lower`
-ensures that the relative ordering of the side effects of `lift` and `lower`
-cannot be observed via import calls and thus an implementation may reliably
-interleave `lift` and `lower` whenever making a cross-component call to avoid
-the intermediate copy performed by `lift`. This unobservability of interleaving
-depends on the shared-nothing property of components which guarantees that all
-the low-level state touched by `lift` and `lower` are disjoint. Though it
-should be rare, same-component-instance `canon_lift`+`canon_lower` call pairs
-are technically allowed by the above rules (and may arise unintentionally in
-component reexport scenarios). Such cases can be statically distinguished by
-the AOT compiler as requiring an intermediate copy to implement the above
-`lift`-then-`lower` semantics.
-
 
 ### `canon resource.new`
 
@@ -1643,7 +1667,8 @@ instance's handle table:
 ```python
 def canon_resource_new(inst, rt, rep):
   h = HandleElem(rep, own=True)
-  return inst.handles.add(rt, h)
+  i = inst.handles.add(rt, h)
+  return [i]
 ```
 
 ### `canon resource.drop`
@@ -1669,9 +1694,8 @@ def canon_resource_drop(inst, rt, i):
     if rt.dtor:
       rt.dtor(h.rep)
   else:
-    assert(h.scope is not None)
-    assert(h.scope.borrow_count > 0)
-    h.scope.borrow_count -= 1
+    h.scope.drop_borrow()
+  return []
 ```
 The `may_enter` guard ensures the non-reentrance [component invariant], since
 a destructor call is analogous to a call to an export.
@@ -1692,7 +1716,7 @@ representation from the handle.
 ```python
 def canon_resource_rep(inst, rt, i):
   h = inst.handles.get(rt, i)
-  return h.rep
+  return [h.rep]
 ```
 Note that the "locally-defined" requirement above ensures that only the
 component instance defining a resource can access its representation.
@@ -1713,7 +1737,7 @@ validation specifies:
 > Currently, that would require additional work in the toolchain to support so,
 > for simplicity, the current proposal simply fixes a single `i32` parameter type.
 > However, `thread.spawn` could be extended to allow arbitrary thread parameters
-> in the future, once it's concretely beneficial to the toolchain. 
+> in the future, once it's concretely beneficial to the toolchain.
 > The inclusion of `$ft` ensures backwards compatibility for when arbitrary
 > parameters are allowed.
 
@@ -1729,7 +1753,7 @@ In pseudocode, `$st` looks like:
 def canon_thread_spawn(f, c):
   trap_if(f is None)
   if DETERMINISTIC_PROFILE:
-    return -1
+    return [-1]
 
   def thread_start():
     try:
@@ -1738,9 +1762,9 @@ def canon_thread_spawn(f, c):
       trap()
 
   if spawn(thread_start):
-    return 0
+    return [0]
   else:
-    return -1
+    return [-1]
 ```
 
 ### 🧵 `canon thread.hw_concurrency`
@@ -1760,9 +1784,9 @@ component instance.
 ```python
 def canon_thread_hw_concurrency():
   if DETERMINISTIC_PROFILE:
-    return 1
+    return [1]
   else:
-    return NUM_ALLOWED_THREADS
+    return [NUM_ALLOWED_THREADS]
 ```
 
 [Canonical Definitions]: Explainer.md#canonical-definitions

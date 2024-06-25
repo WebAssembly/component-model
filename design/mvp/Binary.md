@@ -22,7 +22,7 @@ See the [explainer introduction](Explainer.md) for an explanation of 🪙.
 component ::= <preamble> s*:<section>*            => (component flatten(s*))
 preamble  ::= <magic> <version> <layer>
 magic     ::= 0x00 0x61 0x73 0x6D
-version   ::= 0x0a 0x00
+version   ::= 0x0d 0x00
 layer     ::= 0x01 0x00
 section   ::=    section_0(<core:custom>)         => ϵ
             | m:section_1(<core:module>)          => [core-prefix(m)]
@@ -36,19 +36,23 @@ section   ::=    section_0(<core:custom>)         => ϵ
             | s: section_9(<start>)               => [s]
             | i*:section_10(vec(<import>))        => i*
             | e*:section_11(vec(<export>))        => e*
+            | v*:section_12(vec(<value>))         => v* 🪙
 ```
 Notes:
 * Reused Core binary rules: [`core:section`], [`core:custom`], [`core:module`]
 * The `core-prefix(t)` meta-function inserts a `core` token after the leftmost
   paren of `t` (e.g., `core-prefix( (module (func)) )` is `(core module (func))`).
 * The `version` given above is pre-standard. As the proposal changes before
-  final standardization, `version` will be bumped from `0xa` upwards to
+  final standardization, `version` will be bumped from `0x0d` upwards to
   coordinate prototypes. When the standard is finalized, `version` will be
   changed one last time to `0x1`. (This mirrors the path taken for the Core
   WebAssembly 1.0 spec.)
 * The `layer` field is meant to distinguish modules from components early in
   the binary format. (Core WebAssembly modules already implicitly have a
-  `layer` field of `0x0` in their 4 byte [`core:version`] field.)
+  `layer` field of `0x0` if the existing 4-byte [`core:version`] field is
+  reinterpreted as two 2-byte fields. This implies that the Core WebAssembly
+  spec needs to make a backwards-compatible spec change to split `core:version`
+  and fix `layer` to forever be `0x0`.)
 
 
 ## Instance Definitions
@@ -72,8 +76,8 @@ core:inlineexport   ::= n:<core:name> si:<core:sortidx>                    => (e
 instance            ::= ie:<instanceexpr>                                  => (instance ie)
 instanceexpr        ::= 0x00 c:<componentidx> arg*:vec(<instantiatearg>)   => (instantiate c arg*)
                       | 0x01 e*:vec(<inlineexport>)                        => e*
-instantiatearg      ::= n:<string>  si:<sortidx>                           => (with n si)
-string              ::= s:<core:name>                                      => s
+instantiatearg      ::= n:<name>  si:<sortidx>                             => (with n si)
+name                ::= n:<core:name>                                      => n
 sortidx             ::= sort:<sort> idx:<u32>                              => (sort idx)
 sort                ::= 0x00 cs:<core:sort>                                => core cs
                       | 0x01                                               => func
@@ -96,7 +100,7 @@ Notes:
 * Validation of `core:instantiatearg` initially only allows the `instance`
   sort, but would be extended to accept other sorts as core wasm is extended.
 * Validation of `instantiate` requires each `<importname>` in `c` to match a
-  `string` in a `with` argument (compared as strings) and for the types to
+  `name` in a `with` argument (compared as strings) and for the types to
   match.
 * When validating `instantiate`, after each individual type-import is supplied
   via `with`, the actual type supplied is immediately substituted for all uses
@@ -111,7 +115,7 @@ Notes:
 (See [Alias Definitions](Explainer.md#alias-definitions) in the explainer.)
 ```ebnf
 alias       ::= s:<sort> t:<aliastarget>                => (alias t (s))
-aliastarget ::= 0x00 i:<instanceidx> n:<string>         => export i n
+aliastarget ::= 0x00 i:<instanceidx> n:<name>           => export i n
               | 0x01 i:<core:instanceidx> n:<core:name> => core export i n
               | 0x02 ct:<u32> idx:<u32>                 => outer ct idx
 ```
@@ -157,9 +161,6 @@ Notes:
   initially-empty type index space.
 * `alias` declarators currently only allow `outer` `type` aliases but
   would add `export` aliases when core wasm adds type exports.
-* Validation of `outer` aliases cannot see beyond the enclosing core type index
-  space. Since core modules and core module types cannot nest in the MVP, this
-  means that the maximum `ct` in an MVP `alias` declarator is `1`.
 
 ```ebnf
 type          ::= dt:<deftype>                            => (type dt)
@@ -176,17 +177,17 @@ primvaltype   ::= 0x7f                                    => bool
                 | 0x79                                    => u32
                 | 0x78                                    => s64
                 | 0x77                                    => u64
-                | 0x76                                    => float32
-                | 0x75                                    => float64
+                | 0x76                                    => f32
+                | 0x75                                    => f64
                 | 0x74                                    => char
                 | 0x73                                    => string
 defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x72 lt*:vec(<labelvaltype>)            => (record (field lt)*)    (if |lt*| > 0)
-                | 0x71 case*:vec(<case>)                  => (variant case*)
+                | 0x71 case*:vec(<case>)                  => (variant case+) (if |case*| > 0)
                 | 0x70 t:<valtype>                        => (list t)
                 | 0x6f t*:vec(<valtype>)                  => (tuple t+)    (if |t*| > 0)
                 | 0x6e l*:vec(<label'>)                   => (flags l+)    (if |l*| > 0)
-                | 0x6d l*:vec(<label'>)                   => (enum l*)
+                | 0x6d l*:vec(<label'>)                   => (enum l+)     (if |l*| > 0)
                 | 0x6b t:<valtype>                        => (option t)
                 | 0x6a t?:<valtype>? u?:<valtype>?        => (result t? (error u)?)
                 | 0x69 i:<typeidx>                        => (own i)
@@ -215,12 +216,14 @@ importdecl    ::= in:<importname'> ed:<externdesc>        => (import in ed)
 exportdecl    ::= en:<exportname'> ed:<externdesc>        => (export en ed)
 externdesc    ::= 0x00 0x11 i:<core:typeidx>              => (core module (type i))
                 | 0x01 i:<typeidx>                        => (func (type i))
-                | 0x02 t:<valtype>                        => (value t) 🪙
+                | 0x02 b:<valuebound>                     => (value b) 🪙
                 | 0x03 b:<typebound>                      => (type b)
                 | 0x04 i:<typeidx>                        => (component (type i))
                 | 0x05 i:<typeidx>                        => (instance (type i))
 typebound     ::= 0x00 i:<typeidx>                        => (eq i)
                 | 0x01                                    => (sub resource)
+valuebound    ::= 0x00 i:<valueidx>                       => (eq i) 🪙
+                | 0x01 t:<valtype>                        => t 🪙
 ```
 Notes:
 * The type opcodes follow the same negative-SLEB128 scheme as Core WebAssembly,
@@ -251,7 +254,8 @@ Notes:
 * All parameter labels, result labels, record field labels, variant case
   labels, flag labels, enum case labels, component import names, component
   export names, instance import names and instance export names must be
-  unique in their containing scope.
+  unique in their containing scope, considering two labels that differ only in
+  case to be equal and thus rejected.
 * Validation of `externdesc` requires the various `typeidx` type constructors
   to match the preceding `sort`.
 * (The `0x00` immediate of `case` may be reinterpreted in the future as the
@@ -265,7 +269,7 @@ Notes:
 canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift f opts type-index-space[ft])
            | 0x01 0x00 f:<funcidx> opts:<opts>                   => (canon lower f opts (core func))
            | 0x02 rt:<typeidx>                                   => (canon resource.new rt (core func))
-           | 0x03 rt:<typdidx>                                   => (canon resource.drop rt (core func))
+           | 0x03 rt:<typeidx>                                   => (canon resource.drop rt (core func))
            | 0x04 rt:<typeidx>                                   => (canon resource.rep rt (core func))
            | 0x05 ft:<typeidx>                                   => (canon thread.spawn ft (core func))
            | 0x06                                                => (canon thread.hw_concurrency (core func))
@@ -347,6 +351,64 @@ Notes:
 * `<integrity-metadata>` is as defined by the
   [SRI](https://www.w3.org/TR/SRI/#dfn-integrity-metadata) spec.
 
+## 🪙 Value Definitions
+
+(See [Value Definitions](Explainer.md#value-definitions) in the explainer.)
+
+```ebnf
+value                      ::= t:<valtype> len:<core:u32> v:<val(t)>   => (value t v) (where len = ||v||)
+val(bool)                  ::= 0x00                                    => false
+                             | 0x01                                    => true
+val(u8)                    ::= v:<core:byte>                           => v
+val(s8)                    ::= v:<core:byte>                           => v' (where v' = v if v < 128 else (v - 256))
+val(s16)                   ::= v:<core:s16>                            => v
+val(u16)                   ::= v:<core:u16>                            => v
+val(s32)                   ::= v:<core:s32>                            => v
+val(u32)                   ::= v:<core:u32>                            => v
+val(s64)                   ::= v:<core:s64>                            => v
+val(u64)                   ::= v:<core:u64>                            => v
+val(f32)                   ::= v:<core:f32>                            => v (if !isnan(v))
+                             | 0x00 0x00 0xC0 0x7F                     => nan
+val(f64)                   ::= v:<core:f64>                            => v (if !isnan(v))
+                             | 0x00 0x00 0x00 0x00 0x00 0x00 0xF8 0x7F => nan
+val(char)                  ::= b*:<core:byte>*                         => c (where b* = core:utf8(c))
+val(string)                ::= v:<core:name>                           => v
+val(i:<typeidx>)           ::= v:<val(type-index-space[i])>            => v
+val((record (field l t)+)) ::= v+:<val(t)>+                            => (record v+)
+val((variant (case l t?)+) ::= i:<core:u32> v?:<val(t[i])>?            => (variant l[i] v?)
+val((list t))              ::= v:vec(<val(t)>)                         => (list v)
+val((tuple t+))            ::= v+:<val(t)>+                            => (tuple v+)
+val((flags l+))            ::= (v:<core:byte>)^N                       => (flags (l[i] for i in 0..|l+|-1 if v[floor(i / 8)] & 2^(i mod 8) > 0)) (where N = ceil(|l+| / 8))
+val((enum l+))             ::= i:<core:u32>                            => (enum l[i])
+val((option t))            ::= 0x00                                    => none
+                             | 0x01 v:<val(t)>                         => (some v)
+val((result))              ::= 0x00                                    => ok
+                             | 0x01                                    => error
+val((result t))            ::= 0x00 v:<val(t)>                         => (ok v)
+                             | 0x01                                    => error
+val((result (error u)))    ::= 0x00                                    => ok
+                             | 0x01 v:<val(u)>                         => (error v)
+val((result t (error u)))  ::= 0x00 v:<val(t)>                         => (ok v)
+                             | 0x01 v:<val(u)>                         => (error v)
+```
+
+Notes:
+* Reused Core binary rules and functions:
+    - [`core:name`]
+    - [`core:byte`]
+    - [`core:s16`]
+    - [`core:s32`]
+    - [`core:s64`]
+    - [`core:u16`]
+    - [`core:u32`]
+    - [`core:u64`]
+    - [`core:f32`]
+    - [`core:f64`]
+    - [`core:utf8`]
+* `&` operator is used to denote bitwise AND operation, which performs AND on every bit of two numbers in their binary form
+* `isnan` is a function, which takes a floating point number as a parameter and returns `true` iff it represents a NaN as defined in [IEEE 754 standard]
+* `||B||` is the length of the byte sequence generated from the production `B` in a derivation as defined in [Core convention auxilary notation]
+
 ## Name Section
 
 Like the core wasm [name
@@ -376,7 +438,16 @@ appear once within a `name` section, for example component instances can only be
 named once.
 
 
+[`core:byte`]: https://webassembly.github.io/spec/core/binary/values.html#binary-byte
+[`core:s16`]: https://webassembly.github.io/spec/core/binary/values.html#integers
+[`core:u16`]: https://webassembly.github.io/spec/core/binary/values.html#integers
+[`core:s32`]: https://webassembly.github.io/spec/core/binary/values.html#integers
 [`core:u32`]: https://webassembly.github.io/spec/core/binary/values.html#integers
+[`core:s64`]: https://webassembly.github.io/spec/core/binary/values.html#integers
+[`core:u64`]: https://webassembly.github.io/spec/core/binary/values.html#integers
+[`core:f32`]: https://webassembly.github.io/spec/core/binary/values.html#floating-point
+[`core:f64`]: https://webassembly.github.io/spec/core/binary/values.html#floating-point
+[`core:utf8`]: https://webassembly.github.io/spec/core/binary/values.html#binary-utf8
 [`core:section`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-section
 [`core:custom`]: https://webassembly.github.io/spec/core/binary/modules.html#custom-section
 [`core:module`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-module
@@ -388,3 +459,6 @@ named once.
 
 [type-imports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
 [module-linking]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md
+
+[IEEE 754 standard]: https://ieeexplore.ieee.org/document/8766229
+[Core convention auxilary notation]: https://webassembly.github.io/spec/core/binary/conventions.html#auxiliary-notation

@@ -1,6 +1,6 @@
 # Component Model design and specification
 
-This repository is where the component model is being standardized. For a more user-focussed explanation, take a look at the **[Component Model Documentation]**.
+This repository is where the component model is being standardized. For a more user-focused explanation, take a look at the **[Component Model Documentation]**.
 
 This repository describes the high-level [goals], [use cases], [design choices]
 and [FAQ] of the component model as well as a more-detailed [assembly-level explainer], [IDL],

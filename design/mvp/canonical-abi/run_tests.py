@@ -1,4 +1,5 @@
 import definitions
+from functools import partial
 from definitions import *
 
 def equal_modulo_string_encoding(s, t):
@@ -66,7 +67,7 @@ def test(t, vals_to_lift, v,
   def test_name():
     return "test({},{},{}):".format(t, vals_to_lift, v)
 
-  vi = ValueIter([Value(ft, v) for ft,v in zip(flatten_type(t), vals_to_lift, strict=True)])
+  vi = CoreValueIter(vals_to_lift)
 
   if v is None:
     try:
@@ -90,9 +91,8 @@ def test(t, vals_to_lift, v,
     dst_encoding = cx.opts.string_encoding
   cx = mk_cx(heap.memory, dst_encoding, heap.realloc)
   lowered_vals = lower_flat(cx, v, lower_t)
-  assert(flatten_type(lower_t) == list(map(lambda v: v.t, lowered_vals)))
 
-  vi = ValueIter(lowered_vals)
+  vi = CoreValueIter(lowered_vals)
   got = lift_flat(cx, vi, lower_t)
   if not equal_modulo_string_encoding(got, lower_v):
     fail("{} re-lift expected {} but got {}".format(test_name(), lower_v, got))
@@ -110,12 +110,12 @@ test(t, [2], {'a':False,'b':True})
 test(t, [3], {'a':True,'b':True})
 test(t, [4], {'a':False,'b':False})
 test(Flags([str(i) for i in range(33)]), [0xffffffff,0x1], { str(i):True for i in range(33) })
-t = Variant([Case('x',U8()),Case('y',Float32()),Case('z',None)])
+t = Variant([Case('x',U8()),Case('y',F32()),Case('z',None)])
 test(t, [0,42], {'x': 42})
 test(t, [0,256], {'x': 0})
 test(t, [1,0x4048f5c3], {'y': 3.140000104904175})
 test(t, [2,0xffffffff], {'z': None})
-t = Option(Float32())
+t = Option(F32())
 test(t, [0,3.14], {'none':None})
 test(t, [1,3.14], {'some':3.14})
 t = Result(U8(),U32())
@@ -148,21 +148,21 @@ test_pairs(U32(), [((1<<31)-1,(1<<31)-1),(1<<31,1<<31),(((1<<32)-1),(1<<32)-1)])
 test_pairs(S32(), [((1<<31)-1,(1<<31)-1),(1<<31,-(1<<31)),((1<<32)-1,-1)])
 test_pairs(U64(), [((1<<63)-1,(1<<63)-1), (1<<63,1<<63), ((1<<64)-1,(1<<64)-1)])
 test_pairs(S64(), [((1<<63)-1,(1<<63)-1), (1<<63,-(1<<63)), ((1<<64)-1,-1)])
-test_pairs(Float32(), [(3.14,3.14)])
-test_pairs(Float64(), [(3.14,3.14)])
+test_pairs(F32(), [(3.14,3.14)])
+test_pairs(F64(), [(3.14,3.14)])
 test_pairs(Char(), [(0,'\x00'), (65,'A'), (0xD7FF,'\uD7FF'), (0xD800,None), (0xDFFF,None)])
 test_pairs(Char(), [(0xE000,'\uE000'), (0x10FFFF,'\U0010FFFF'), (0x110000,None), (0xFFFFFFFF,None)])
 test_pairs(Enum(['a','b']), [(0,{'a':None}), (1,{'b':None}), (2,None)])
 
 def test_nan32(inbits, outbits):
   origf = decode_i32_as_float(inbits)
-  f = lift_flat(mk_cx(), ValueIter([Value('f32', origf)]), Float32())
+  f = lift_flat(mk_cx(), CoreValueIter([origf]), F32())
   if DETERMINISTIC_PROFILE:
     assert(encode_float_as_i32(f) == outbits)
   else:
     assert(not math.isnan(origf) or math.isnan(f))
   cx = mk_cx(int.to_bytes(inbits, 4, 'little'))
-  f = load(cx, 0, Float32())
+  f = load(cx, 0, F32())
   if DETERMINISTIC_PROFILE:
     assert(encode_float_as_i32(f) == outbits)
   else:
@@ -170,13 +170,13 @@ def test_nan32(inbits, outbits):
 
 def test_nan64(inbits, outbits):
   origf = decode_i64_as_float(inbits)
-  f = lift_flat(mk_cx(), ValueIter([Value('f64', origf)]), Float64())
+  f = lift_flat(mk_cx(), CoreValueIter([origf]), F64())
   if DETERMINISTIC_PROFILE:
     assert(encode_float_as_i64(f) == outbits)
   else:
     assert(not math.isnan(origf) or math.isnan(f))
   cx = mk_cx(int.to_bytes(inbits, 8, 'little'))
-  f = load(cx, 0, Float64())
+  f = load(cx, 0, F64())
   if DETERMINISTIC_PROFILE:
     assert(encode_float_as_i64(f) == outbits)
   else:
@@ -323,12 +323,12 @@ def test_flatten(t, params, results):
   got = flatten_functype(t, 'lower')
   assert(got == expect)
 
-test_flatten(FuncType([U8(),Float32(),Float64()],[]), ['i32','f32','f64'], [])
-test_flatten(FuncType([U8(),Float32(),Float64()],[Float32()]), ['i32','f32','f64'], ['f32'])
-test_flatten(FuncType([U8(),Float32(),Float64()],[U8()]), ['i32','f32','f64'], ['i32'])
-test_flatten(FuncType([U8(),Float32(),Float64()],[Tuple([Float32()])]), ['i32','f32','f64'], ['f32'])
-test_flatten(FuncType([U8(),Float32(),Float64()],[Tuple([Float32(),Float32()])]), ['i32','f32','f64'], ['f32','f32'])
-test_flatten(FuncType([U8(),Float32(),Float64()],[Float32(),Float32()]), ['i32','f32','f64'], ['f32','f32'])
+test_flatten(FuncType([U8(),F32(),F64()],[]), ['i32','f32','f64'], [])
+test_flatten(FuncType([U8(),F32(),F64()],[F32()]), ['i32','f32','f64'], ['f32'])
+test_flatten(FuncType([U8(),F32(),F64()],[U8()]), ['i32','f32','f64'], ['i32'])
+test_flatten(FuncType([U8(),F32(),F64()],[Tuple([F32()])]), ['i32','f32','f64'], ['f32'])
+test_flatten(FuncType([U8(),F32(),F64()],[Tuple([F32(),F32()])]), ['i32','f32','f64'], ['f32','f32'])
+test_flatten(FuncType([U8(),F32(),F64()],[F32(),F32()]), ['i32','f32','f64'], ['f32','f32'])
 test_flatten(FuncType([U8() for _ in range(17)],[]), ['i32' for _ in range(17)], [])
 test_flatten(FuncType([U8() for _ in range(17)],[Tuple([U8(),U8()])]), ['i32' for _ in range(17)], ['i32','i32'])
 
@@ -342,7 +342,7 @@ def test_roundtrip(t, v):
   callee_heap = Heap(1000)
   callee_opts = mk_opts(callee_heap.memory, 'utf8', callee_heap.realloc, lambda x: () )
   callee_inst = ComponentInstance()
-  lifted_callee = lambda args: canon_lift(callee_opts, callee_inst, callee, ft, args)
+  lifted_callee = partial(canon_lift, callee_opts, callee_inst, callee, ft)
 
   caller_heap = Heap(1000)
   caller_opts = mk_opts(caller_heap.memory, 'utf8', caller_heap.realloc)
@@ -351,7 +351,7 @@ def test_roundtrip(t, v):
 
   flat_args = lower_flat(caller_cx, v, t)
   flat_results = canon_lower(caller_opts, caller_inst, lifted_callee, True, ft, flat_args)
-  got = lift_flat(caller_cx, ValueIter(flat_results), t)
+  got = lift_flat(caller_cx, CoreValueIter(flat_results), t)
 
   if got != v:
     fail("test_roundtrip({},{},{}) got {}".format(t, v, caller_args, got))
@@ -381,11 +381,12 @@ def test_handles():
   rt2 = ResourceType(inst, dtor) # only usable in exports
   opts = mk_opts()
 
-  def host_import(args):
+  def host_import(start_thunk, return_thunk):
+    args = start_thunk()
     assert(len(args) == 2)
     assert(args[0] == 42)
     assert(args[1] == 44)
-    return ([45], lambda:())
+    return_thunk([45])
 
   def core_wasm(args):
     nonlocal dtor_value
@@ -393,13 +394,13 @@ def test_handles():
     assert(len(args) == 4)
     assert(len(inst.handles.table(rt).array) == 4)
     assert(inst.handles.table(rt).array[0] is None)
-    assert(args[0].t == 'i32' and args[0].v == 1)
-    assert(args[1].t == 'i32' and args[1].v == 2)
-    assert(args[2].t == 'i32' and args[2].v == 3)
-    assert(args[3].t == 'i32' and args[3].v == 13)
-    assert(canon_resource_rep(inst, rt, 1) == 42)
-    assert(canon_resource_rep(inst, rt, 2) == 43)
-    assert(canon_resource_rep(inst, rt, 3) == 44)
+    assert(args[0] == 1)
+    assert(args[1] == 2)
+    assert(args[2] == 3)
+    assert(args[3] == 13)
+    assert(canon_resource_rep(inst, rt, 1)[0] == 42)
+    assert(canon_resource_rep(inst, rt, 2)[0] == 43)
+    assert(canon_resource_rep(inst, rt, 3)[0] == 44)
 
     host_ft = FuncType([
       Borrow(rt),
@@ -408,13 +409,13 @@ def test_handles():
       Own(rt)
     ])
     args = [
-      Value('i32',1),
-      Value('i32',3)
+      1,
+      3
     ]
     results = canon_lower(opts, inst, host_import, True, host_ft, args)
     assert(len(results) == 1)
-    assert(results[0].t == 'i32' and results[0].v == 4)
-    assert(canon_resource_rep(inst, rt, 4) == 45)
+    assert(results[0] == 4)
+    assert(canon_resource_rep(inst, rt, 4)[0] == 45)
 
     dtor_value = None
     canon_resource_drop(inst, rt, 1)
@@ -423,7 +424,7 @@ def test_handles():
     assert(inst.handles.table(rt).array[1] is None)
     assert(len(inst.handles.table(rt).free) == 1)
 
-    h = canon_resource_new(inst, rt, 46)
+    h = canon_resource_new(inst, rt, 46)[0]
     assert(h == 1)
     assert(len(inst.handles.table(rt).array) == 5)
     assert(inst.handles.table(rt).array[1] is not None)
@@ -436,7 +437,7 @@ def test_handles():
     assert(inst.handles.table(rt).array[3] is None)
     assert(len(inst.handles.table(rt).free) == 1)
 
-    return [Value('i32', 1), Value('i32', 2), Value('i32', 4)]
+    return [1, 2, 4]
 
   ft = FuncType([
     Own(rt),
@@ -448,13 +449,16 @@ def test_handles():
     Own(rt),
     Own(rt)
   ])
-  args = [
-    42,
-    43,
-    44,
-    13
-  ]
-  got,post_return = canon_lift(opts, inst, core_wasm, ft, args)
+
+  def arg_thunk():
+    return [ 42, 43, 44, 13 ]
+
+  got = None
+  def return_thunk(results):
+    nonlocal got
+    got = results
+
+  canon_lift(opts, inst, core_wasm, ft, arg_thunk, return_thunk)
 
   assert(len(got) == 3)
   assert(got[0] == 46)

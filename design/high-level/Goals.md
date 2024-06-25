@@ -13,7 +13,7 @@
      language or family of languages.
    * *Embeddability*: design components to be embedded in a diverse set of
      host execution environments, including browsers, servers, intermediaries,
-     small devices and data-intensive systems.
+     small devices, and data-intensive systems.
    * *Optimizability*: maximize the static information available to
      Ahead-of-Time compilers to minimize the cost of instantiation and
      startup.
@@ -31,7 +31,7 @@
 ## Non-goals
 
 1. Don't attempt to solve 100% of WebAssembly embedding scenarios.
-   * Some scenarios will require features in conflict with the above-mentioned goal.
+   * Some scenarios will require features in conflict with the above-mentioned goals.
    * With the layered approach to specification, unsupported embedding
      scenarios can be solved via alternative layered specifications or by
      directly embedding the existing WebAssembly core specification.

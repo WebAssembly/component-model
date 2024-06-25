@@ -148,11 +148,11 @@ the programming language):
    full cost and OS-dependency of splitting their program into multiple processes
    by instead having each component do one thing well and using the component
    model to compose their program as a hierarchy of components.
-6. An application developer composes multiple independently-developed
-   components that import and export the same interface (e.g., a HTTP
-   request-handling interface) by linking them together, exports-to-imports, being
-   able to create recursive, branching DAGs of linked components not otherwise
-   expressible with classic Unix-style pipelines.
+6. An application developer composes multiple independently-developed components
+   that import and export the same interface (e.g., an HTTP request-handling
+   interface). By linking these components from exports to imports, the developer
+   can create recursive, branching DAGs of linked components, achieving
+   configurations not possible with classic Unix-style pipelines.
 
 In all the above use cases, the developer has an additional goal of keeping the
 component reuse as a private, fully-encapsulated implementation detail that

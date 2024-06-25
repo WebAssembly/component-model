@@ -5,13 +5,11 @@
 ### Boilerplate
 
 from __future__ import annotations
+from dataclasses import dataclass
+from typing import Optional, Callable, MutableMapping, TypeVar, Generic
 import math
 import struct
 import random
-from dataclasses import dataclass
-from typing import Optional
-from typing import Callable
-from typing import MutableMapping
 
 class Trap(BaseException): pass
 class CoreWebAssemblyException(BaseException): pass
@@ -106,8 +104,8 @@ class S32(ValType): pass
 class U32(ValType): pass
 class S64(ValType): pass
 class U64(ValType): pass
-class Float32(ValType): pass
-class Float64(ValType): pass
+class F32(ValType): pass
+class F64(ValType): pass
 class Char(ValType): pass
 class String(ValType): pass
 
@@ -182,8 +180,8 @@ def alignment(t):
     case S16() | U16()      : return 2
     case S32() | U32()      : return 4
     case S64() | U64()      : return 8
-    case Float32()          : return 4
-    case Float64()          : return 8
+    case F32()              : return 4
+    case F64()              : return 8
     case Char()             : return 4
     case String() | List(_) : return 4
     case Record(fields)     : return alignment_record(fields)
@@ -222,46 +220,46 @@ def alignment_flags(labels):
   if n <= 16: return 2
   return 4
 
-### Size
+### Element Size
 
-def size(t):
+def elem_size(t):
   match despecialize(t):
     case Bool()             : return 1
     case S8() | U8()        : return 1
     case S16() | U16()      : return 2
     case S32() | U32()      : return 4
     case S64() | U64()      : return 8
-    case Float32()          : return 4
-    case Float64()          : return 8
+    case F32()              : return 4
+    case F64()              : return 8
     case Char()             : return 4
     case String() | List(_) : return 8
-    case Record(fields)     : return size_record(fields)
-    case Variant(cases)     : return size_variant(cases)
-    case Flags(labels)      : return size_flags(labels)
+    case Record(fields)     : return elem_size_record(fields)
+    case Variant(cases)     : return elem_size_variant(cases)
+    case Flags(labels)      : return elem_size_flags(labels)
     case Own(_) | Borrow(_) : return 4
 
-def size_record(fields):
+def elem_size_record(fields):
   s = 0
   for f in fields:
     s = align_to(s, alignment(f.t))
-    s += size(f.t)
+    s += elem_size(f.t)
   assert(s > 0)
   return align_to(s, alignment_record(fields))
 
 def align_to(ptr, alignment):
   return math.ceil(ptr / alignment) * alignment
 
-def size_variant(cases):
-  s = size(discriminant_type(cases))
+def elem_size_variant(cases):
+  s = elem_size(discriminant_type(cases))
   s = align_to(s, max_case_alignment(cases))
   cs = 0
   for c in cases:
     if c.t is not None:
-      cs = max(cs, size(c.t))
+      cs = max(cs, elem_size(c.t))
   s += cs
   return align_to(s, alignment_variant(cases))
 
-def size_flags(labels):
+def elem_size_flags(labels):
   n = len(labels)
   assert(n > 0)
   if n <= 8: return 1
@@ -273,36 +271,20 @@ def num_i32_flags(labels):
 
 ### Runtime State
 
+@dataclass
 class CallContext:
   opts: CanonicalOptions
   inst: ComponentInstance
-  lenders: list[HandleElem]
-  borrow_count: int
 
-  def __init__(self, opts, inst):
-    self.opts = opts
-    self.inst = inst
-    self.lenders = []
-    self.borrow_count = 0
-
-  def track_owning_lend(self, lending_handle):
-    assert(lending_handle.own)
-    lending_handle.lend_count += 1
-    self.lenders.append(lending_handle)
-
-  def exit_call(self):
-    trap_if(self.borrow_count != 0)
-    for h in self.lenders:
-      h.lend_count -= 1
-
+@dataclass
 class CanonicalOptions:
-  memory: bytearray
-  string_encoding: str
-  realloc: Callable[[int,int,int,int],int]
-  post_return: Callable[[],None]
-  reference_type: bool
+  memory: Optional[bytearray] = None
+  string_encoding: Optional[str] = None
+  realloc: Optional[Callable] = None
+  post_return: Optional[Callable] = None
 
 class ComponentInstance:
+  # core module instance state
   may_leave: bool
   may_enter: bool
   handles: HandleTables
@@ -312,28 +294,35 @@ class ComponentInstance:
     self.may_enter = True
     self.handles = HandleTables()
 
+class HandleTables:
+  rt_to_table: MutableMapping[ResourceType, Table[HandleElem]]
+
+  def __init__(self):
+    self.rt_to_table = dict()
+
+  def table(self, rt):
+    if rt not in self.rt_to_table:
+      self.rt_to_table[rt] = Table[HandleElem]()
+    return self.rt_to_table[rt]
+
+  def get(self, rt, i):
+    return self.table(rt).get(i)
+  def add(self, rt, h):
+    return self.table(rt).add(h)
+  def remove(self, rt, i):
+    return self.table(rt).remove(i)
+
 class ResourceType(Type):
   impl: ComponentInstance
-  dtor: Optional[Callable[[int],None]]
+  dtor: Optional[Callable]
 
   def __init__(self, impl, dtor = None):
     self.impl = impl
     self.dtor = dtor
 
-class HandleElem:
-  rep: int
-  own: bool
-  scope: Optional[CallContext]
-  lend_count: int
-
-  def __init__(self, rep, own, scope = None):
-    self.rep = rep
-    self.own = own
-    self.scope = scope
-    self.lend_count = 0
-
-class HandleTable:
-  array: list[Optional[HandleElem]]
+ElemT = TypeVar('ElemT')
+class Table(Generic[ElemT]):
+  array: list[Optional[ElemT]]
   free: list[int]
 
   def __init__(self):
@@ -345,46 +334,73 @@ class HandleTable:
     trap_if(self.array[i] is None)
     return self.array[i]
 
-  def add(self, h):
+  def add(self, e):
     if self.free:
       i = self.free.pop()
       assert(self.array[i] is None)
-      self.array[i] = h
+      self.array[i] = e
     else:
       i = len(self.array)
       trap_if(i >= 2**30)
-      self.array.append(h)
+      self.array.append(e)
     return i
 
-  def remove(self, rt, i):
-    h = self.get(i)
+  def remove(self, i):
+    e = self.get(i)
     self.array[i] = None
     self.free.append(i)
-    return h
+    return e
 
-class HandleTables:
-  rt_to_table: MutableMapping[ResourceType, HandleTable]
+class HandleElem:
+  rep: int
+  own: bool
+  scope: Optional[ExportCall]
+  lend_count: int
 
-  def __init__(self):
-    self.rt_to_table = dict()
+  def __init__(self, rep, own, scope = None):
+    self.rep = rep
+    self.own = own
+    self.scope = scope
+    self.lend_count = 0
 
-  def table(self, rt):
-    if rt not in self.rt_to_table:
-      self.rt_to_table[rt] = HandleTable()
-    return self.rt_to_table[rt]
+class ExportCall(CallContext):
+  borrow_count: int
 
-  def get(self, rt, i):
-    return self.table(rt).get(i)
-  def add(self, rt, h):
-    return self.table(rt).add(h)
-  def remove(self, rt, i):
-    return self.table(rt).remove(rt, i)
+  def __init__(self, opts, inst):
+    super().__init__(opts, inst)
+    self.borrow_count = 0
+
+  def create_borrow(self):
+    self.borrow_count += 1
+
+  def drop_borrow(self):
+    assert(self.borrow_count > 0)
+    self.borrow_count -= 1
+
+  def exit(self):
+    trap_if(self.borrow_count != 0)
+
+class ImportCall(CallContext):
+  lenders: list[HandleElem]
+
+  def __init__(self, opts, inst):
+    super().__init__(opts, inst)
+    self.lenders = []
+
+  def track_owning_lend(self, lending_handle):
+    assert(lending_handle.own)
+    lending_handle.lend_count += 1
+    self.lenders.append(lending_handle)
+
+  def exit(self):
+    for h in self.lenders:
+      h.lend_count -= 1
 
 ### Loading
 
 def load(cx, ptr, t):
   assert(ptr == align_to(ptr, alignment(t)))
-  assert(ptr + size(t) <= len(cx.opts.memory))
+  assert(ptr + elem_size(t) <= len(cx.opts.memory))
   match despecialize(t):
     case Bool()         : return convert_int_to_bool(load_int(cx, ptr, 1))
     case U8()           : return load_int(cx, ptr, 1)
@@ -395,8 +411,8 @@ def load(cx, ptr, t):
     case S16()          : return load_int(cx, ptr, 2, signed=True)
     case S32()          : return load_int(cx, ptr, 4, signed=True)
     case S64()          : return load_int(cx, ptr, 8, signed=True)
-    case Float32()      : return decode_i32_as_float(load_int(cx, ptr, 4))
-    case Float64()      : return decode_i64_as_float(load_int(cx, ptr, 8))
+    case F32()          : return decode_i32_as_float(load_int(cx, ptr, 4))
+    case F64()          : return decode_i64_as_float(load_int(cx, ptr, 8))
     case Char()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
     case String()       : return load_string(cx, ptr)
     case List(t)        : return load_list(cx, ptr, t)
@@ -436,12 +452,13 @@ def decode_i64_as_float(i):
   return canonicalize_nan64(core_f64_reinterpret_i64(i))
 
 def core_f32_reinterpret_i32(i):
-  return struct.unpack('!f', struct.pack('!I', i))[0] # f32.reinterpret_i32
+  return struct.unpack('<f', struct.pack('<I', i))[0] # f32.reinterpret_i32
 
 def core_f64_reinterpret_i64(i):
-  return struct.unpack('!d', struct.pack('!Q', i))[0] # f64.reinterpret_i64
+  return struct.unpack('<d', struct.pack('<Q', i))[0] # f64.reinterpret_i64
 
 def convert_i32_to_char(cx, i):
+  assert(i >= 0)
   trap_if(i >= 0x110000)
   trap_if(0xD800 <= i <= 0xDFFF)
   return chr(i)
@@ -488,10 +505,10 @@ def load_list(cx, ptr, elem_type):
 
 def load_list_from_range(cx, ptr, length, elem_type):
   trap_if(ptr != align_to(ptr, alignment(elem_type)))
-  trap_if(ptr + length * size(elem_type) > len(cx.opts.memory))
+  trap_if(ptr + length * elem_size(elem_type) > len(cx.opts.memory))
   a = []
   for i in range(length):
-    a.append(load(cx, ptr + i * size(elem_type), elem_type))
+    a.append(load(cx, ptr + i * elem_size(elem_type), elem_type))
   return a
 
 def load_record(cx, ptr, fields):
@@ -499,11 +516,11 @@ def load_record(cx, ptr, fields):
   for field in fields:
     ptr = align_to(ptr, alignment(field.t))
     record[field.label] = load(cx, ptr, field.t)
-    ptr += size(field.t)
+    ptr += elem_size(field.t)
   return record
 
 def load_variant(cx, ptr, cases):
-  disc_size = size(discriminant_type(cases))
+  disc_size = elem_size(discriminant_type(cases))
   case_index = load_int(cx, ptr, disc_size)
   ptr += disc_size
   trap_if(case_index >= len(cases))
@@ -529,7 +546,7 @@ def find_case(label, cases):
   return -1
 
 def load_flags(cx, ptr, labels):
-  i = load_int(cx, ptr, size_flags(labels))
+  i = load_int(cx, ptr, elem_size_flags(labels))
   return unpack_flags_from_int(i, labels)
 
 def unpack_flags_from_int(i, labels):
@@ -546,6 +563,7 @@ def lift_own(cx, i, t):
   return h.rep
 
 def lift_borrow(cx, i, t):
+  assert(isinstance(cx, ImportCall))
   h = cx.inst.handles.get(t.rt, i)
   if h.own:
     cx.track_owning_lend(h)
@@ -555,7 +573,7 @@ def lift_borrow(cx, i, t):
 
 def store(cx, v, t, ptr):
   assert(ptr == align_to(ptr, alignment(t)))
-  assert(ptr + size(t) <= len(cx.opts.memory))
+  assert(ptr + elem_size(t) <= len(cx.opts.memory))
   match despecialize(t):
     case Bool()         : store_int(cx, int(bool(v)), ptr, 1)
     case U8()           : store_int(cx, v, ptr, 1)
@@ -566,8 +584,8 @@ def store(cx, v, t, ptr):
     case S16()          : store_int(cx, v, ptr, 2, signed=True)
     case S32()          : store_int(cx, v, ptr, 4, signed=True)
     case S64()          : store_int(cx, v, ptr, 8, signed=True)
-    case Float32()      : store_int(cx, encode_float_as_i32(v), ptr, 4)
-    case Float64()      : store_int(cx, encode_float_as_i64(v), ptr, 8)
+    case F32()          : store_int(cx, encode_float_as_i32(v), ptr, 4)
+    case F64()          : store_int(cx, encode_float_as_i64(v), ptr, 8)
     case Char()         : store_int(cx, char_to_i32(v), ptr, 4)
     case String()       : store_string(cx, v, ptr)
     case List(t)        : store_list(cx, v, ptr, t)
@@ -612,10 +630,10 @@ def encode_float_as_i64(f):
   return core_i64_reinterpret_f64(maybe_scramble_nan64(f))
 
 def core_i32_reinterpret_f32(f):
-  return struct.unpack('!I', struct.pack('!f', f))[0] # i32.reinterpret_f32
+  return struct.unpack('<I', struct.pack('<f', f))[0] # i32.reinterpret_f32
 
 def core_i64_reinterpret_f64(f):
-  return struct.unpack('!Q', struct.pack('!d', f))[0] # i64.reinterpret_f64
+  return struct.unpack('<Q', struct.pack('<d', f))[0] # i64.reinterpret_f64
 
 def char_to_i32(c):
   i = ord(c)
@@ -686,18 +704,20 @@ def store_string_to_utf8(cx, src, src_code_units, worst_case_size):
   assert(src_code_units <= MAX_STRING_BYTE_LENGTH)
   ptr = cx.opts.realloc(0, 0, 1, src_code_units)
   trap_if(ptr + src_code_units > len(cx.opts.memory))
-  encoded = src.encode('utf-8')
-  assert(src_code_units <= len(encoded))
-  cx.opts.memory[ptr : ptr+src_code_units] = encoded[0 : src_code_units]
-  if src_code_units < len(encoded):
-    trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
-    ptr = cx.opts.realloc(ptr, src_code_units, 1, worst_case_size)
-    trap_if(ptr + worst_case_size > len(cx.opts.memory))
-    cx.opts.memory[ptr+src_code_units : ptr+len(encoded)] = encoded[src_code_units : ]
-    if worst_case_size > len(encoded):
-      ptr = cx.opts.realloc(ptr, worst_case_size, 1, len(encoded))
-      trap_if(ptr + len(encoded) > len(cx.opts.memory))
-  return (ptr, len(encoded))
+  for i,code_point in enumerate(src):
+    if ord(code_point) < 2**7:
+      cx.opts.memory[ptr + i] = ord(code_point)
+    else:
+      trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
+      ptr = cx.opts.realloc(ptr, src_code_units, 1, worst_case_size)
+      trap_if(ptr + worst_case_size > len(cx.opts.memory))
+      encoded = src.encode('utf-8')
+      cx.opts.memory[ptr+i : ptr+len(encoded)] = encoded[i : ]
+      if worst_case_size > len(encoded):
+        ptr = cx.opts.realloc(ptr, worst_case_size, 1, len(encoded))
+        trap_if(ptr + len(encoded) > len(cx.opts.memory))
+      return (ptr, len(encoded))
+  return (ptr, src_code_units)
 
 def store_utf8_to_utf16(cx, src, src_code_units):
   worst_case_size = 2 * src_code_units
@@ -771,24 +791,24 @@ def store_list(cx, v, ptr, elem_type):
   store_int(cx, length, ptr + 4, 4)
 
 def store_list_into_range(cx, v, elem_type):
-  byte_length = len(v) * size(elem_type)
+  byte_length = len(v) * elem_size(elem_type)
   trap_if(byte_length >= (1 << 32))
   ptr = cx.opts.realloc(0, 0, alignment(elem_type), byte_length)
   trap_if(ptr != align_to(ptr, alignment(elem_type)))
   trap_if(ptr + byte_length > len(cx.opts.memory))
   for i,e in enumerate(v):
-    store(cx, e, elem_type, ptr + i * size(elem_type))
+    store(cx, e, elem_type, ptr + i * elem_size(elem_type))
   return (ptr, len(v))
 
 def store_record(cx, v, ptr, fields):
   for f in fields:
     ptr = align_to(ptr, alignment(f.t))
     store(cx, v[f.label], f.t, ptr)
-    ptr += size(f.t)
+    ptr += elem_size(f.t)
 
 def store_variant(cx, v, ptr, cases):
   case_index, case_value = match_case(v, cases)
-  disc_size = size(discriminant_type(cases))
+  disc_size = elem_size(discriminant_type(cases))
   store_int(cx, case_index, ptr, disc_size)
   ptr += disc_size
   ptr = align_to(ptr, max_case_alignment(cases))
@@ -807,7 +827,7 @@ def match_case(v, cases):
 
 def store_flags(cx, v, ptr, labels):
   i = pack_flags_into_int(v, labels)
-  store_int(cx, i, ptr, size_flags(labels))
+  store_int(cx, i, ptr, elem_size_flags(labels))
 
 def pack_flags_into_int(v, labels):
   i = 0
@@ -822,10 +842,11 @@ def lower_own(cx, rep, t):
   return cx.inst.handles.add(t.rt, h)
 
 def lower_borrow(cx, rep, t):
+  assert(isinstance(cx, ExportCall))
   if cx.inst is t.rt.impl:
     return rep
   h = HandleElem(rep, own=False, scope=cx)
-  cx.borrow_count += 1
+  cx.create_borrow()
   return cx.inst.handles.add(t.rt, h)
 
 ### Flattening
@@ -858,8 +879,8 @@ def flatten_type(t):
     case U8() | U16() | U32() : return ['i32']
     case S8() | S16() | S32() : return ['i32']
     case S64() | U64()        : return ['i64']
-    case Float32()            : return ['f32']
-    case Float64()            : return ['f64']
+    case F32()                : return ['f32']
+    case F64()                : return ['f64']
     case Char()               : return ['i32']
     case String() | List(_)   : return ['i32', 'i32']
     case Record(fields)       : return flatten_record(fields)
@@ -892,19 +913,19 @@ def join(a, b):
 ### Flat Lifting
 
 @dataclass
-class Value:
-  t: str # 'i32'|'i64'|'f32'|'f64'
-  v: int|float
-
-@dataclass
-class ValueIter:
-  values: list[Value]
+class CoreValueIter:
+  values: list[int|float]
   i = 0
   def next(self, t):
     v = self.values[self.i]
     self.i += 1
-    assert(v.t == t)
-    return v.v
+    match t:
+      case 'i32': assert(isinstance(v, int) and 0 <= v < 2**32)
+      case 'i64': assert(isinstance(v, int) and 0 <= v < 2**64)
+      case 'f32': assert(isinstance(v, (int,float)))
+      case 'f64': assert(isinstance(v, (int,float)))
+      case _    : assert(False)
+    return v
 
 def lift_flat(cx, vi, t):
   match despecialize(t):
@@ -917,8 +938,8 @@ def lift_flat(cx, vi, t):
     case S16()          : return lift_flat_signed(vi, 32, 16)
     case S32()          : return lift_flat_signed(vi, 32, 32)
     case S64()          : return lift_flat_signed(vi, 64, 64)
-    case Float32()      : return canonicalize_nan32(vi.next('f32'))
-    case Float64()      : return canonicalize_nan64(vi.next('f64'))
+    case F32()          : return canonicalize_nan32(vi.next('f32'))
+    case F64()          : return canonicalize_nan64(vi.next('f64'))
     case Char()         : return convert_i32_to_char(cx, vi.next('i32'))
     case String()       : return lift_flat_string(cx, vi)
     case List(t)        : return lift_flat_list(cx, vi, t)
@@ -942,56 +963,44 @@ def lift_flat_signed(vi, core_width, t_width):
   return i
 
 def lift_flat_string(cx, vi):
-  if cx.opts.reference_type:
-    raise NotImplementedError
-  else:
-    ptr = vi.next('i32')
-    packed_length = vi.next('i32')
-    return load_string_from_range(cx, ptr, packed_length)
+  ptr = vi.next('i32')
+  packed_length = vi.next('i32')
+  return load_string_from_range(cx, ptr, packed_length)
 
 def lift_flat_list(cx, vi, elem_type):
-  if cx.opts.reference_type:
-    raise NotImplementedError
-  else:
-    ptr = vi.next('i32')
-    length = vi.next('i32')
-    return load_list_from_range(cx, ptr, length, elem_type)
+  ptr = vi.next('i32')
+  length = vi.next('i32')
+  return load_list_from_range(cx, ptr, length, elem_type)
 
 def lift_flat_record(cx, vi, fields):
-  if cx.opts.reference_type:
-      raise NotImplementedError
-  else:
-    record = {}
-    for f in fields:
-      record[f.label] = lift_flat(cx, vi, f.t)
-    return record
+  record = {}
+  for f in fields:
+    record[f.label] = lift_flat(cx, vi, f.t)
+  return record
 
 def lift_flat_variant(cx, vi, cases):
-  if cx.opts.reference_type:
-    raise NotImplementedError
+  flat_types = flatten_variant(cases)
+  assert(flat_types.pop(0) == 'i32')
+  case_index = vi.next('i32')
+  trap_if(case_index >= len(cases))
+  class CoerceValueIter:
+    def next(self, want):
+      have = flat_types.pop(0)
+      x = vi.next(have)
+      match (have, want):
+        case ('i32', 'f32') : return decode_i32_as_float(x)
+        case ('i64', 'i32') : return wrap_i64_to_i32(x)
+        case ('i64', 'f32') : return decode_i32_as_float(wrap_i64_to_i32(x))
+        case ('i64', 'f64') : return decode_i64_as_float(x)
+        case _              : assert(have == want); return x
+  c = cases[case_index]
+  if c.t is None:
+    v = None
   else:
-    flat_types = flatten_variant(cases)
-    assert(flat_types.pop(0) == 'i32')
-    case_index = vi.next('i32')
-    trap_if(case_index >= len(cases))
-    class CoerceValueIter:
-      def next(self, want):
-        have = flat_types.pop(0)
-        x = vi.next(have)
-        match (have, want):
-          case ('i32', 'f32') : return decode_i32_as_float(x)
-          case ('i64', 'i32') : return wrap_i64_to_i32(x)
-          case ('i64', 'f32') : return decode_i32_as_float(wrap_i64_to_i32(x))
-          case ('i64', 'f64') : return decode_i64_as_float(x)
-          case _              : return x
-    c = cases[case_index]
-    if c.t is None:
-      v = None
-    else:
-      v = lift_flat(cx, CoerceValueIter(), c.t)
-    for have in flat_types:
-      _ = vi.next(have)
-    return { case_label_with_refinements(c, cases): v }
+    v = lift_flat(cx, CoerceValueIter(), c.t)
+  for have in flat_types:
+    _ = vi.next(have)
+  return { case_label_with_refinements(c, cases): v }
 
 def wrap_i64_to_i32(i):
   assert(0 <= i < (1 << 64))
@@ -1009,80 +1018,71 @@ def lift_flat_flags(vi, labels):
 
 def lower_flat(cx, v, t):
   match despecialize(t):
-    case Bool()         : return [Value('i32', int(v))]
-    case U8()           : return [Value('i32', v)]
-    case U16()          : return [Value('i32', v)]
-    case U32()          : return [Value('i32', v)]
-    case U64()          : return [Value('i64', v)]
+    case Bool()         : return [int(v)]
+    case U8()           : return [v]
+    case U16()          : return [v]
+    case U32()          : return [v]
+    case U64()          : return [v]
     case S8()           : return lower_flat_signed(v, 32)
     case S16()          : return lower_flat_signed(v, 32)
     case S32()          : return lower_flat_signed(v, 32)
     case S64()          : return lower_flat_signed(v, 64)
-    case Float32()      : return [Value('f32', maybe_scramble_nan32(v))]
-    case Float64()      : return [Value('f64', maybe_scramble_nan64(v))]
-    case Char()         : return [Value('i32', char_to_i32(v))]
+    case F32()          : return [maybe_scramble_nan32(v)]
+    case F64()          : return [maybe_scramble_nan64(v)]
+    case Char()         : return [char_to_i32(v)]
     case String()       : return lower_flat_string(cx, v)
     case List(t)        : return lower_flat_list(cx, v, t)
     case Record(fields) : return lower_flat_record(cx, v, fields)
     case Variant(cases) : return lower_flat_variant(cx, v, cases)
     case Flags(labels)  : return lower_flat_flags(v, labels)
-    case Own()          : return [Value('i32', lower_own(cx, v, t))]
-    case Borrow()       : return [Value('i32', lower_borrow(cx, v, t))]
+    case Own()          : return [lower_own(cx, v, t)]
+    case Borrow()       : return [lower_borrow(cx, v, t)]
 
 def lower_flat_signed(i, core_bits):
   if i < 0:
     i += (1 << core_bits)
-  return [Value('i' + str(core_bits), i)]
+  return [i]
 
 def lower_flat_string(cx, v):
   ptr, packed_length = store_string_into_range(cx, v)
-  return [Value('i32', ptr), Value('i32', packed_length)]
+  return [ptr, packed_length]
 
 def lower_flat_list(cx, v, elem_type):
-  if cx.opts.reference_type:
-    raise NotImplementedError
-  else:
-    (ptr, length) = store_list_into_range(cx, v, elem_type)
-    return [Value('i32', ptr), Value('i32', length)]
+  (ptr, length) = store_list_into_range(cx, v, elem_type)
+  return [ptr, length]
 
 def lower_flat_record(cx, v, fields):
-  if cx.opts.reference_type:
-      raise NotImplementedError
-  else:
-    flat = []
-    for f in fields:
-      flat += lower_flat(cx, v[f.label], f.t)
-    return flat
+  flat = []
+  for f in fields:
+    flat += lower_flat(cx, v[f.label], f.t)
+  return flat
 
 def lower_flat_variant(cx, v, cases):
-  if cx.opts.reference_type:
-      raise NotImplementedError
+  case_index, case_value = match_case(v, cases)
+  flat_types = flatten_variant(cases)
+  assert(flat_types.pop(0) == 'i32')
+  c = cases[case_index]
+  if c.t is None:
+    payload = []
   else:
-    case_index, case_value = match_case(v, cases)
-    flat_types = flatten_variant(cases)
-    assert(flat_types.pop(0) == 'i32')
-    c = cases[case_index]
-    if c.t is None:
-      payload = []
-    else:
-      payload = lower_flat(cx, case_value, c.t)
-    for i,have in enumerate(payload):
+    payload = lower_flat(cx, case_value, c.t)
+    for i,(fv,have) in enumerate(zip(payload, flatten_type(c.t))):
       want = flat_types.pop(0)
-      match (have.t, want):
-        case ('f32', 'i32') : payload[i] = Value('i32', encode_float_as_i32(have.v))
-        case ('i32', 'i64') : payload[i] = Value('i64', have.v)
-        case ('f32', 'i64') : payload[i] = Value('i64', encode_float_as_i32(have.v))
-        case ('f64', 'i64') : payload[i] = Value('i64', encode_float_as_i64(have.v))
-        case _              : pass
-    for want in flat_types:
-      payload.append(Value(want, 0))
-    return [Value('i32', case_index)] + payload
+      match (have, want):
+        case ('f32', 'i32') : payload[i] = encode_float_as_i32(fv)
+        case ('i32', 'i64') : payload[i] = fv
+        case ('f32', 'i64') : payload[i] = encode_float_as_i32(fv)
+        case ('f64', 'i64') : payload[i] = encode_float_as_i64(fv)
+        case _              : assert(have == want)
+  for _ in flat_types:
+    payload.append(0)
+  return [case_index] + payload
 
 def lower_flat_flags(v, labels):
   i = pack_flags_into_int(v, labels)
   flat = []
   for _ in range(num_i32_flags(labels)):
-    flat.append(Value('i32', i & 0xffffffff))
+    flat.append(i & 0xffffffff)
     i >>= 32
   assert(i == 0)
   return flat
@@ -1095,87 +1095,91 @@ def lift_values(cx, max_flat, vi, ts):
     ptr = vi.next('i32')
     tuple_type = Tuple(ts)
     trap_if(ptr != align_to(ptr, alignment(tuple_type)))
-    trap_if(ptr + size(tuple_type) > len(cx.opts.memory))
+    trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
     return list(load(cx, ptr, tuple_type).values())
   else:
     return [ lift_flat(cx, vi, t) for t in ts ]
 
 def lower_values(cx, max_flat, vs, ts, out_param = None):
+  inst = cx.inst
+  assert(inst.may_leave)
+  inst.may_leave = False
+
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
     tuple_type = Tuple(ts)
     tuple_value = {str(i): v for i,v in enumerate(vs)}
     if out_param is None:
-      ptr = cx.opts.realloc(0, 0, alignment(tuple_type), size(tuple_type))
+      ptr = cx.opts.realloc(0, 0, alignment(tuple_type), elem_size(tuple_type))
     else:
       ptr = out_param.next('i32')
     trap_if(ptr != align_to(ptr, alignment(tuple_type)))
-    trap_if(ptr + size(tuple_type) > len(cx.opts.memory))
+    trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
     store(cx, tuple_value, tuple_type, ptr)
-    return [ Value('i32', ptr) ]
+    flat_vales = [ptr]
   else:
     flat_vals = []
     for i in range(len(vs)):
       flat_vals += lower_flat(cx, vs[i], ts[i])
-    return flat_vals
+
+  inst.may_leave = True
+  return flat_vals
 
 ### `canon lift`
 
-def canon_lift(opts, inst, callee, ft, args):
-  cx = CallContext(opts, inst)
+def canon_lift(opts, inst, callee, ft, start_thunk, return_thunk):
+  export_call = ExportCall(opts, inst)
   trap_if(not inst.may_enter)
 
-  assert(inst.may_leave)
-  inst.may_leave = False
-  flat_args = lower_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
-  inst.may_leave = True
+  flat_args = lower_values(export_call, MAX_FLAT_PARAMS, start_thunk(), ft.param_types())
+  flat_results = call_and_trap_on_throw(callee, flat_args)
+  return_thunk(lift_values(export_call, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types()))
 
+  if opts.post_return is not None:
+    call_and_trap_on_throw(opts.post_return, flat_results)
+
+  export_call.exit()
+
+def call_and_trap_on_throw(callee, args):
   try:
-    flat_results = callee(flat_args)
+    return callee(args)
   except CoreWebAssemblyException:
     trap()
-
-  results = lift_values(cx, MAX_FLAT_RESULTS, ValueIter(flat_results), ft.result_types())
-
-  def post_return():
-    if opts.post_return is not None:
-      opts.post_return(flat_results)
-    cx.exit_call()
-
-  return (results, post_return)
 
 ### `canon lower`
 
 def canon_lower(opts, inst, callee, calling_import, ft, flat_args):
-  cx = CallContext(opts, inst)
+  import_call = ImportCall(opts, inst)
   trap_if(not inst.may_leave)
 
   assert(inst.may_enter)
   if calling_import:
     inst.may_enter = False
 
-  flat_args = ValueIter(flat_args)
-  args = lift_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
+  flat_args = CoreValueIter(flat_args)
+  flat_results = None
 
-  results, post_return = callee(args)
+  def start_thunk():
+    return lift_values(import_call, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
-  inst.may_leave = False
-  flat_results = lower_values(cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
-  inst.may_leave = True
+  def return_thunk(results):
+    nonlocal flat_results
+    flat_results = lower_values(import_call, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
 
-  post_return()
-  cx.exit_call()
+  callee(start_thunk, return_thunk)
 
   if calling_import:
     inst.may_enter = True
 
+  import_call.exit()
   return flat_results
 
 ### `canon resource.new`
 
 def canon_resource_new(inst, rt, rep):
   h = HandleElem(rep, own=True)
-  return inst.handles.add(rt, h)
+  i = inst.handles.add(rt, h)
+  return [i]
 
 ### `canon resource.drop`
 
@@ -1188,12 +1192,11 @@ def canon_resource_drop(inst, rt, i):
     if rt.dtor:
       rt.dtor(h.rep)
   else:
-    assert(h.scope is not None)
-    assert(h.scope.borrow_count > 0)
-    h.scope.borrow_count -= 1
+    h.scope.drop_borrow()
+  return []
 
 ### `canon resource.rep`
 
 def canon_resource_rep(inst, rt, i):
   h = inst.handles.get(rt, i)
-  return h.rep
+  return [h.rep]
