@@ -1116,7 +1116,7 @@ def lower_values(cx, max_flat, vs, ts, out_param = None):
     trap_if(ptr != align_to(ptr, alignment(tuple_type)))
     trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
     store(cx, tuple_value, tuple_type, ptr)
-    flat_vales = [ptr]
+    flat_vals = [ptr]
   else:
     flat_vals = []
     for i in range(len(vs)):

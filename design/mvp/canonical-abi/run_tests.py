@@ -348,12 +348,18 @@ def test_roundtrip(t, v):
   caller_inst = ComponentInstance()
   caller_cx = CallContext(caller_opts, caller_inst)
 
-  flat_args = lower_flat(caller_cx, v, t)
+  return_in_heap = len(flatten_types([t])) > definitions.MAX_FLAT_RESULTS
+
+  flat_args = lower_values(caller_cx, definitions.MAX_FLAT_PARAMS, [v], [t])
+  if return_in_heap:
+    flat_args += [ caller_heap.realloc(0, 0, alignment(t), elem_size(t)) ]
   flat_results = canon_lower(caller_opts, caller_inst, lifted_callee, True, ft, flat_args)
-  got = lift_flat(caller_cx, CoreValueIter(flat_results), t)
+  if return_in_heap:
+    flat_results = [ flat_args[-1] ]
+  [got] = lift_values(caller_cx, definitions.MAX_FLAT_PARAMS, CoreValueIter(flat_results), [t])
 
   if got != v:
-    fail("test_roundtrip({},{},{}) got {}".format(t, v, caller_args, got))
+    fail("test_roundtrip({},{}) got {}".format(t, v, got))
 
   assert(caller_inst.may_leave and caller_inst.may_enter)
   assert(callee_inst.may_leave and callee_inst.may_enter)
@@ -364,6 +370,9 @@ test_roundtrip(Tuple([U16(),U16()]), mk_tup(3,4))
 test_roundtrip(List(String()), [mk_str("hello there")])
 test_roundtrip(List(List(String())), [[mk_str("one"),mk_str("two")],[mk_str("three")]])
 test_roundtrip(List(Option(Tuple([String(),U16()]))), [{'some':mk_tup(mk_str("answer"),42)}])
+test_roundtrip(Variant([Case('x', Tuple([U32(),U32(),U32(),U32(), U32(),U32(),U32(),U32(),
+                                         U32(),U32(),U32(),U32(), U32(),U32(),U32(),U32(), String()]))]),
+               {'x': mk_tup(1,2,3,4, 5,6,7,8, 9,10,11,12, 13,14,15,16, mk_str("wat"))})
 
 def test_handles():
   before = definitions.MAX_FLAT_RESULTS
