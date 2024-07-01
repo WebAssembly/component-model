@@ -662,8 +662,8 @@ world w2 {
 
 ## Nesting WIT interfaces
 [nest]: #nesting-wit-interfaces
-Interfaces can also export other interfaces via the `nest` keyword.
-With the `nest` keyword, one can reference other interfaces in the same package, foreign packages, or simply define anonymous interfaces inline.
+Interfaces can also contain other interfaces via the `nest` keyword.
+With the `nest` keyword, one can reference other interfaces in the same package, foreign packages, or define anonymous interfaces inline.
 
 ```wit
 package local:example;
@@ -673,7 +673,7 @@ interface foo {
 }
 
 interface top {
-  nest foo
+  nest foo;
   nest foreign:pkg/bar;
   baz: interface {
     ...
@@ -685,31 +685,45 @@ Each of these forms of nesting interfaces are encoded as:
 
 ```wasm
 (component
-  (type (;0;)
-    (instance
-      ... `types from foo`
-    )
-  )
-  (export "local:example/foo" (type 0))
-  (type (;1;) 
-    (instance
-      (alias outer 0 0 (type (;0;)))
-      (export "local:example/foo" (instance (type 0)))
-      (type (;1;) 
-        (instance 
-          ... `types from foreign:pkg/bar`
+  (type (;0;) 
+    (component 
+      (type (;0;)
+        (instance
+          ... `types from foo`
         )
       )
-      (export "foreign:pkg/bar" (instance (type 1)))
-      (type (;2;) 
-        (instance 
-          ... `types from baz`
-        )
-      )
-      (export "baz" (instance (type 2)))
+      (export "local:example/foo" (type 0))
     )
   )
-  (export "local:example/top (type 1))
+  (export (;1;) "foo" (type 0))
+  (type (;2;)
+    (component
+      (type (;0;) 
+        (instance
+          (type (;0;)
+            (instance
+              ... `types from foo`
+            )
+          )
+          (export "local:example/foo" (instance (type 0)))
+          (type (;1;) 
+            (instance 
+              ... `types from foreign:pkg/bar`
+            )
+          )
+          (export "foreign:pkg/bar" (instance (type 1)))
+          (type (;2;) 
+            (instance 
+              ... `types from baz`
+            )
+          )
+          (export "baz" (instance (type 2)))
+        )
+      )
+      (export "local:example/top (type 1))
+    )
+  )
+  (export (;3;) "top" (type 2))
 )
 ```
 
@@ -1159,6 +1173,7 @@ interface-items ::= gate interface-definition
 interface-definition ::= typedef-item
                        | use-item
                        | func-item
+                       | nest-item
 
 typedef-item ::= resource-item
                | variant-items
@@ -1181,6 +1196,9 @@ named-type-list ::= ϵ
                   | named-type ( ',' named-type )*
 
 named-type ::= id ':' ty
+
+nest-item ::= gate nest use-path ';'
+            | id: interface-item
 ```
 
 
