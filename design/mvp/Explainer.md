@@ -44,6 +44,7 @@ implemented, considered stable and included in a future milestone:
 * 🪙: value imports/exports and component-level start function
 * 🪺: nested namespaces and packages in import/export names
 * 🧵: threading built-ins
+* 📡: reference types ([gc] proposal integration)
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
 this repo merges and supersedes the [module-linking] and [interface-types]
@@ -599,6 +600,7 @@ sets of abstract values:
 | `list`                    | homogeneous, variable-length [sequences] of values |
 | `own`                     | a unique, opaque address of a resource that will be destroyed when this value is dropped |
 | `borrow`                  | an opaque address of a resource that must be dropped before the current export call returns |
+
 
 How these abstract values are produced and consumed from Core WebAssembly
 values and linear memory is configured by the component via *canonical lifting
@@ -1170,10 +1172,13 @@ canonopt ::= string-encoding=utf8
            | (memory <core:memidx>)
            | (realloc <core:funcidx>)
            | (post-return <core:funcidx>)
+           | reference-type 📡
 ```
 While the production `externdesc` accepts any `sort`, the validation rules
 for `canon lift` would only allow the `func` sort. In the future, other sorts
 may be added (viz., types), hence the explicit sort.
+
+##### `string-encoding` options
 
 The `string-encoding` option specifies the encoding the Canonical ABI will use
 for the `string` type. The `latin1+utf16` encoding captures a common string
@@ -1183,6 +1188,8 @@ Point range) or UTF-16 (which can express all Code Points, but uses either
 2 or 4 bytes per Code Point). If no `string-encoding` option is specified, the
 default is UTF-8. It is a validation error to include more than one
 `string-encoding` option.
+
+##### `memory` options
 
 The `(memory ...)` option specifies the memory that the Canonical ABI will
 use to load and store values. If the Canonical ABI needs to load or store,
@@ -1200,6 +1207,43 @@ have the following core function type:
 The Canonical ABI will use `realloc` both to allocate (passing `0` for the
 first two parameters) and reallocate. If the Canonical ABI needs `realloc`,
 validation requires this option to be present (there is no default).
+
+##### `reference-type` options
+
+📡 `reference-type` does not take effect by default. When this option 
+is turned on, Canonical ABI will be required to use reference types to pass 
+parameters. This option conflicts with `memory` and `realloc` and cannot 
+exist at the same time.
+
+📡 When `reference-type` is enabled, the parameter type will change as follows:
+
+| wit type             | wasm w/o `reference-type`   | wasm w/ `reference-type`          |
+| :------------------- | :-------------------------- | :-------------------------------- |
+| `bool`               | `(i32,)`                    | `(i32,)`                          |
+| `char`               | `(i32,)`                    | `(i32,)`                          |
+| `u8`                 | `(i32,)`                    | `(i32,)`                          |
+| `u16`                | `(i32,)`                    | `(i32,)`                          |
+| `u32`                | `(i32,)`                    | `(i32,)`                          |
+| `u64`                | `(i32,)`                    | `(i32,)`                          |
+| `resource`           | `(ptr: i32)`                | `(ref extern,)`                   |
+| `list<T>`            | `(ptr: i32, len: i32)`      | `(ref array (mut $t),)`           |
+| `record { a, b }`    | `(a: A, b: B)` (flatten)    | `(ref struct $record,)`           |
+| `tuple<A, B>`(in⩽16) | `(a: A, b: B)` (flatten)    | `(a: A, b: B)` (flatten)          |
+| `tuple<A, B>`(out>1) | `(ptr: i32)`                | `(ref struct (mut $a) (mut $b),)` |
+
+📡 For variant types, they will be unpacked into two parts: enumeration and data.
+
+| wit type                | wasm w/o `reference-type`   | wasm w/ `reference-type` |
+| :---------------------- | :-------------------------- | :----------------------- |
+| `option<A>` (heap type) | `(i32, [A_SIZE])`           | `(i32, (ref null eq))`   |
+| `none`      (heap type) | `(0, [FILL_ZEROES])`        | `(1, null)`              |
+| `(some A)`  (heap type) | `(1, [A_SIZE])`             | `(0, ref $a)`            |
+| `result<A, B>`          | `(i32, [MAX_VARIANT_SIZE])` | `(i32, (ref null eq))`   |
+| `(ok A)`                | `(0, [A_SIZE])`             | `(0, ref $a)`            |
+| `(err B)`               | `(1, [B_SIZE])`             | `(1, ref $b)`            |
+| `variant`               | `(i32, [MAX_VARIANT_SIZE])` | `(i32, (ref null eq))`   |
+
+##### `post-return` options
 
 The `(post-return ...)` option may only be present in `canon lift`
 and specifies a core function to be called with the original return values
