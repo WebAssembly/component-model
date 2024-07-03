@@ -534,19 +534,19 @@ async def test_async_to_async():
     consumer_heap.memory[argp] = 83
     consumer_heap.memory[argp+1] = 84
     fut1.set_result(None)
-    state, callidx = await task.wait()
-    assert(state == AsyncCallState.STARTED)
+    event, callidx = await task.wait()
+    assert(event == EventCode.CALL_STARTED)
     assert(callidx == 1)
     assert(consumer_heap.memory[retp] == 15)
     fut2.set_result(None)
-    state, callidx = await task.wait()
-    assert(state == AsyncCallState.RETURNED)
+    event, callidx = await task.wait()
+    assert(event == EventCode.CALL_RETURNED)
     assert(callidx == 1)
     assert(consumer_heap.memory[retp] == 44)
     fut3.set_result(None)
     assert(task.num_async_subtasks == 1)
-    state, callidx = await task.wait()
-    assert(state == AsyncCallState.DONE)
+    event, callidx = await task.wait()
+    assert(event == EventCode.CALL_DONE)
     assert(callidx == 1)
     assert(task.num_async_subtasks == 0)
 
@@ -567,8 +567,8 @@ async def test_async_to_async():
     assert(task.num_async_subtasks == 1)
     assert(dtor_value is None)
     dtor_fut.set_result(None)
-    state, callidx = await task.wait()
-    assert(state == AsyncCallState.DONE)
+    event, callidx = await task.wait()
+    assert(event == AsyncCallState.DONE)
     assert(callidx == 1)
     assert(task.num_async_subtasks == 0)
 
@@ -623,13 +623,17 @@ async def test_async_callback():
   async def callback(task, args):
     assert(len(args) == 3)
     if args[0] == 42:
-      assert(args[1] == AsyncCallState.DONE)
+      assert(args[1] == EventCode.CALL_DONE)
       assert(args[2] == 1)
+      return [53]
+    elif args[0] == 52:
+      assert(args[1] == EventCode.YIELDED)
+      assert(args[2] == 0)
       fut2.set_result(None)
-      return [43]
+      return [62]
     else:
-      assert(args[0] == 43)
-      assert(args[1] == AsyncCallState.DONE)
+      assert(args[0] == 62)
+      assert(args[1] == EventCode.CALL_DONE)
       assert(args[2] == 2)
       [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [83])
       return [0]
@@ -693,16 +697,16 @@ async def test_async_to_sync():
 
     fut.set_result(None)
     assert(producer1_done == False)
-    state, callidx = await task.wait()
-    assert(state == AsyncCallState.DONE)
+    event, callidx = await task.wait()
+    assert(event == EventCode.CALL_DONE)
     assert(callidx == 1)
     assert(producer1_done == True)
 
     assert(producer2_done == False)
     await canon_task_yield(task)
     assert(producer2_done == True)
-    state, callidx = task.poll()
-    assert(state == AsyncCallState.DONE)
+    event, callidx = task.poll()
+    assert(event == EventCode.CALL_DONE)
     assert(callidx == 2)
     assert(producer2_done == True)
 
@@ -748,12 +752,12 @@ async def test_sync_using_wait():
     assert(ret == (2 | (AsyncCallState.STARTED << 30)))
 
     fut1.set_result(None)
-    state, callidx = await task.wait()
-    assert(state == AsyncCallState.DONE)
+    event, callidx = await task.wait()
+    assert(event == EventCode.CALL_DONE)
     assert(callidx == 1)
     fut2.set_result(None)
-    state, callidx = await task.wait()
-    assert(state == AsyncCallState.DONE)
+    event, callidx = await task.wait()
+    assert(event == EventCode.CALL_DONE)
     assert(callidx == 2)
     return []
 
