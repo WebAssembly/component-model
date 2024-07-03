@@ -384,6 +384,19 @@ class HandleElem:
     self.scope = scope
     self.lend_count = 0
 
+class AsyncCallState(IntEnum):
+  STARTING = 0
+  STARTED = 1
+  RETURNED = 2
+  DONE = 3
+
+class EventCode(IntEnum):
+  CALL_STARTING = AsyncCallState.STARTING
+  CALL_STARTED = AsyncCallState.STARTED
+  CALL_RETURNED = AsyncCallState.RETURNED
+  CALL_DONE = AsyncCallState.DONE
+  YIELDED = 4
+
 class Task(CallContext):
   caller: Optional[Task]
   borrow_count: int
@@ -440,12 +453,17 @@ class Task(CallContext):
     if subtask.state == AsyncCallState.DONE:
       self.inst.async_subtasks.remove(subtask.index)
       self.num_async_subtasks -= 1
-    return (subtask.state, subtask.index)
+    return (EventCode(subtask.state), subtask.index)
 
   def poll(self):
     if self.events.empty():
       return None
     return self.process_event(self.events.get_nowait())
+
+  async def yield_(self):
+    self.inst.thread.release()
+    await asyncio.sleep(0)
+    await self.inst.thread.acquire()
 
   def exit(self):
     assert(self.events.empty())
@@ -485,12 +503,6 @@ class SyncTask(Task):
     self.inst.may_enter_sync = True
     if self.inst.pending_sync_tasks:
       self.inst.pending_sync_tasks.pop(0).set_result(None)
-
-class AsyncCallState(IntEnum):
-  STARTING = 0
-  STARTED = 1
-  RETURNED = 2
-  DONE = 3
 
 class AsyncTask(Task):
   ft: FuncType
@@ -1367,10 +1379,16 @@ async def canon_lift(opts, inst, callee, ft, caller, start_thunk, return_thunk):
     if not opts.callback:
       [] = await call_and_trap_on_throw(callee, task, [])
     else:
-      [ctx] = await call_and_trap_on_throw(callee, task, [])
-      while ctx != 0:
-        event, payload = await task.wait()
-        [ctx] = await call_and_trap_on_throw(opts.callback, task, [ctx, event, payload])
+      [packed_ctx] = await call_and_trap_on_throw(callee, task, [])
+      while packed_ctx != 0:
+        is_yield = bool(packed_ctx & 1)
+        ctx = packed_ctx & ~1
+        if is_yield:
+          await task.yield_()
+          event, payload = (EventCode.YIELDED, 0)
+        else:
+          event, payload = await task.wait()
+        [packed_ctx] = await call_and_trap_on_throw(opts.callback, task, [ctx, event, payload])
 
     assert(opts.post_return is None)
     task.exit()
@@ -1512,7 +1530,6 @@ async def canon_task_poll(task, ptr):
 ### `canon task.yield`
 
 async def canon_task_yield(task):
-  task.inst.thread.release()
-  await asyncio.sleep(0)
-  await task.inst.thread.acquire()
+  trap_if(task.opts.callback is not None)
+  await task.yield_()
   return []
