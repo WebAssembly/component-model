@@ -261,7 +261,7 @@ class ComponentInstance:
   pending_async_tasks: list[asyncio.Future]
   handles: HandleTables
   async_subtasks: Table[AsyncSubtask]
-  thread: asyncio.Lock
+  active: asyncio.Lock
 
   def __init__(self):
     self.may_leave = True
@@ -271,7 +271,7 @@ class ComponentInstance:
     self.pending_async_tasks = []
     self.handles = HandleTables()
     self.async_subtasks = Table[AsyncSubtask]()
-    self.thread = asyncio.Lock()
+    self.active = asyncio.Lock()
 ```
 The `may_leave` field is used below to track whether the instance may call a
 lowered import to prevent optimization-breaking cases of reentrance during
@@ -289,11 +289,11 @@ The `async_subtasks` field is used below to track and assign an `i32` index to
 each active async-lowered call in progress that has been made by this
 `ComponentInstance`.
 
-Finally, the `thread` field is used below to restrict the switching of Python
+Finally, the `active` field is used below to restrict the switching of Python
 coroutines (`async def` functions) to only occur at specific points (such as
 when a task blocks on `task.wait` or when an `async callback`-lifted export
 call returns to its event loop to wait for an event. Thus, the calls to
-`thread.acquire()` and `thread.release()` in the Python code below point to
+`active.acquire()` and `active.release()` in the Python code below point to
 where the runtime may switch between concurrent tasks. Without this
 `asyncio.Lock`, Python's normal `asyncio` semantics would allow switching
 between concurrent tasks at *every* spec-internal `await`, which would lead to
@@ -495,12 +495,12 @@ for a component export called directly by the host, or else the current task
 when the calling component called into this component. The `caller` field is
 used by the following two methods to prevent a component from being reentered
 (enforcing the [component invariant]) in a way that is well-defined even in the
-presence of async calls). (The `thread.acquire()` call in `enter()` is
+presence of async calls). (The `active.acquire()` call in `enter()` is
 described above and here ensures that concurrent export calls do not
 arbitrarily interleave.)
 ```python
   async def enter(self):
-    await self.inst.thread.acquire()
+    await self.inst.active.acquire()
     self.trap_if_on_the_stack(self.inst)
 
   def trap_if_on_the_stack(self, inst):
@@ -558,9 +558,9 @@ guarded to be `0` in `Task.exit` (below) to ensure [structured concurrency].
     self.events.put_nowait(subtask)
 
   async def wait(self):
-    self.inst.thread.release()
+    self.inst.active.release()
     subtask = await self.events.get()
-    await self.inst.thread.acquire()
+    await self.inst.active.acquire()
     return self.process_event(subtask)
 
   def process_event(self, subtask):
@@ -579,7 +579,7 @@ should not have to create an actual queue; instead it should be possible to
 embed a "next ready" linked list in the elements of the `async_subtasks` table
 (noting the `enqueued` guard above ensures that a subtask can be enqueued at
 most once). The implementation of `wait` releases and reacquires the
-instance-wide `thread` lock to specify that `wait` is a point where the runtime
+instance-wide `active` lock to specify that `wait` is a point where the runtime
 can switch to another task running in the same component instance or start a
 new task in response to an incoming export call.
 
@@ -598,20 +598,20 @@ the runtime to switch to another ready task, but without blocking on I/O (as
 emulated in the Python code here by awaiting a `sleep(0)`).
 ```python
   async def yield_(self):
-    self.inst.thread.release()
+    self.inst.active.release()
     await asyncio.sleep(0)
-    await self.inst.thread.acquire()
+    await self.inst.active.acquire()
 ```
 
 Lastly, when a task exists, the runtime enforces the guard conditions mentioned
-above and releases the `thread` lock, allowing other tasks to start or make
+above and releases the `active` lock, allowing other tasks to start or make
 progress.
 ```python
   def exit(self):
     assert(self.events.empty())
     trap_if(self.borrow_count != 0)
     trap_if(self.num_async_subtasks != 0)
-    self.inst.thread.release()
+    self.inst.active.release()
 ```
 
 While `canon_lift` creates `Task`s, `canon_lower` creates `Subtask` objects:
@@ -2077,8 +2077,8 @@ async def canon_lower(opts, callee, ft, task, flat_args):
       await callee(task, start_thunk, return_thunk)
       subtask.finish()
 
+    asyncio.get_event_loop().set_task_factory(asyncio.eager_task_factory)
     asyncio.create_task(do_call())
-    await asyncio.sleep(0) # start do_call eagerly
 
     if subtask.state == AsyncCallState.DONE:
       flat_results = [0]
@@ -2090,23 +2090,22 @@ async def canon_lower(opts, callee, ft, task, flat_args):
 
   return flat_results
 ```
-In the async case, `asyncio.create_task` followed by `await asyncio.sleep(0)`
-are used together to achieve the effect of eagerly executing the `do_call`
-Python coroutine without `await`ing it. Following the `sleep(0)`, the coroutine
-has either completed eagerly (with `return_thunk` having been called to write
-the return values into the caller-supplied memory buffer), in which case the
-lowered function can simply return `0` to indicate "done". Otherwise, the
-coroutine is still running, in which case it is added to an instance-wide table
-of active async subtasks, returning the table index packed with the current
-state of the subtask (so that the caller can know whether it can reclaim the
-parameter and result memory buffers) and delivering subsequent progress events
-to the calling task via the `AsyncSubtask` `start` and `return_` methods
-(defined above).
+In the async case, the combination of `asyncio.create_task` with
+`eager_task_factory` immediately start executing `do_call` without `await`ing
+it. Following `create_task`, `do_call` has either completed eagerly (with
+`return_thunk` having been called to write the return values into the
+caller-supplied memory buffer), in which case the lowered function can simply
+return `0` to indicate "done". Otherwise, the coroutine is still running, in
+which case it is added to an instance-wide table of active async subtasks,
+returning the table index packed with the current state of the subtask (so that
+the caller can know whether it can reclaim the parameter and result memory
+buffers) and delivering subsequent progress events to the calling task via the
+`AsyncSubtask` `start` and `return_` methods (defined above).
 
-Note that the async case does *not* release or reacquire the `thread` lock
+Note that the async case does *not* release or reacquire the `active` lock
 since (due to the `trap_if_on_stack` reentrance guard in `Task.enter`) the
 `callee` is necessarily in another component instance (which has a separate
-`thread` lock). This allows fine-grained inter-component task interleaving (up
+`active` lock). This allows fine-grained inter-component task interleaving (up
 to and including preemptive multithreading) which doesn't break regular async
 codes' assumptions due to the component shared-nothing model. This also means
 that an async import calls are *not* allowed to switch to another task in the
@@ -2314,7 +2313,7 @@ async def canon_task_wait(task, ptr):
 The `trap_if` ensures that, when a component uses a `callback` all events flow
 through the event loop at the base of the stack.
 
-Note that `task.wait` releases and reacquires the `thread` lock and thus
+Note that `task.wait` releases and reacquires the `active` lock and thus
 `canon_task_wait` allows the runtime to switch to another active task in the
 current component instance. Note also that `task.wait` can be called from a
 sync-lifted `SyncTask` so that even fully synchronous code can make concurrent
@@ -2354,9 +2353,8 @@ For a canonical definition:
 validation specifies:
 * `$f` is given type `(func)`
 
-Calling `$f` simply releases and reacquires the `thread` lock, using a
-Python `asyncio.sleep(0)` in the middle to make it clear that other
-coroutines are allowed to acquire the `lock` and execute.
+Calling `$f` calls `Task.yield_`, trapping if called when there is a `callback`.
+(When there is a callback, yielding is achieved by returning with the LSB set.)
 ```python
 async def canon_task_yield(task):
   trap_if(task.opts.callback is not None)
