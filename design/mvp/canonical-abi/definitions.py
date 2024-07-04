@@ -417,7 +417,7 @@ class Task(CallContext):
   def trap_if_on_the_stack(self, inst):
     c = self.caller
     while c is not None:
-      trap_if(c.inst is int)
+      trap_if(c.inst is inst)
       c = c.caller
 
   def create_borrow(self):
