@@ -261,7 +261,7 @@ class ComponentInstance:
   pending_async_tasks: list[asyncio.Future]
   handles: HandleTables
   async_subtasks: Table[AsyncSubtask]
-  active: asyncio.Lock
+  fiber: asyncio.Lock
 
   def __init__(self):
     self.may_leave = True
@@ -271,7 +271,7 @@ class ComponentInstance:
     self.pending_async_tasks = []
     self.handles = HandleTables()
     self.async_subtasks = Table[AsyncSubtask]()
-    self.active = asyncio.Lock()
+    self.fiber = asyncio.Lock()
 ```
 The `may_leave` field is used below to track whether the instance may call a
 lowered import to prevent optimization-breaking cases of reentrance during
@@ -289,16 +289,16 @@ The `async_subtasks` field is used below to track and assign an `i32` index to
 each active async-lowered call in progress that has been made by this
 `ComponentInstance`.
 
-Finally, the `active` field is used below to restrict the switching of Python
+Finally, the `fiber` field is used below to restrict the switching of Python
 coroutines (`async def` functions) to only occur at specific points (such as
 when a task blocks on `task.wait` or when an `async callback`-lifted export
 call returns to its event loop to wait for an event. Thus, the calls to
-`active.acquire()` and `active.release()` in the Python code below point to
+`fiber.acquire()` and `fiber.release()` in the Python code below point to
 where the runtime may switch between concurrent tasks. Without this
 `asyncio.Lock`, Python's normal `asyncio` semantics would allow switching
 between concurrent tasks at *every* spec-internal `await`, which would lead to
 multi-threading-like interleaving between concurrent tasks. (Alternatively, if
-Python had standard-library fibers, they could have been used instead of
+Python had standard-library [fibers], they could have been used instead of
 `asyncio`, obviating the need for this `Lock`.)
 
 One `HandleTables` object is stored per `ComponentInstance` and is defined as:
@@ -495,12 +495,12 @@ for a component export called directly by the host, or else the current task
 when the calling component called into this component. The `caller` field is
 used by the following two methods to prevent a component from being reentered
 (enforcing the [component invariant]) in a way that is well-defined even in the
-presence of async calls). (The `active.acquire()` call in `enter()` is
+presence of async calls). (The `fiber.acquire()` call in `enter()` is
 described above and here ensures that concurrent export calls do not
 arbitrarily interleave.)
 ```python
   async def enter(self):
-    await self.inst.active.acquire()
+    await self.inst.fiber.acquire()
     self.trap_if_on_the_stack(self.inst)
 
   def trap_if_on_the_stack(self, inst):
@@ -558,9 +558,9 @@ guarded to be `0` in `Task.exit` (below) to ensure [structured concurrency].
     self.events.put_nowait(subtask)
 
   async def wait(self):
-    self.inst.active.release()
+    self.inst.fiber.release()
     subtask = await self.events.get()
-    await self.inst.active.acquire()
+    await self.inst.fiber.acquire()
     return self.process_event(subtask)
 
   def process_event(self, subtask):
@@ -579,7 +579,7 @@ should not have to create an actual queue; instead it should be possible to
 embed a "next ready" linked list in the elements of the `async_subtasks` table
 (noting the `enqueued` guard above ensures that a subtask can be enqueued at
 most once). The implementation of `wait` releases and reacquires the
-instance-wide `active` lock to specify that `wait` is a point where the runtime
+instance-wide `fiber` lock to specify that `wait` is a point where the runtime
 can switch to another task running in the same component instance or start a
 new task in response to an incoming export call.
 
@@ -598,20 +598,20 @@ the runtime to switch to another ready task, but without blocking on I/O (as
 emulated in the Python code here by awaiting a `sleep(0)`).
 ```python
   async def yield_(self):
-    self.inst.active.release()
+    self.inst.fiber.release()
     await asyncio.sleep(0)
-    await self.inst.active.acquire()
+    await self.inst.fiber.acquire()
 ```
 
 Lastly, when a task exists, the runtime enforces the guard conditions mentioned
-above and releases the `active` lock, allowing other tasks to start or make
+above and releases the `fiber` lock, allowing other tasks to start or make
 progress.
 ```python
   def exit(self):
     assert(self.events.empty())
     trap_if(self.borrow_count != 0)
     trap_if(self.num_async_subtasks != 0)
-    self.inst.active.release()
+    self.inst.fiber.release()
 ```
 
 While `canon_lift` creates `Task`s, `canon_lower` creates `Subtask` objects:
@@ -2100,10 +2100,10 @@ the caller can know whether it can reclaim the parameter and result memory
 buffers) and delivering subsequent progress events to the calling task via the
 `AsyncSubtask` `start` and `return_` methods (defined above).
 
-Note that the async case does *not* release or reacquire the `active` lock
+Note that the async case does *not* release or reacquire the `fiber` lock
 since (due to the `trap_if_on_stack` reentrance guard in `Task.enter`) the
 `callee` is necessarily in another component instance (which has a separate
-`active` lock). This allows fine-grained inter-component task interleaving (up
+`fiber` lock). This allows fine-grained inter-component task interleaving (up
 to and including preemptive multithreading) which doesn't break regular async
 codes' assumptions due to the component shared-nothing model. This also means
 that an async import calls are *not* allowed to switch to another task in the
@@ -2311,7 +2311,7 @@ async def canon_task_wait(task, ptr):
 The `trap_if` ensures that, when a component uses a `callback` all events flow
 through the event loop at the base of the stack.
 
-Note that `task.wait` releases and reacquires the `active` lock and thus
+Note that `task.wait` releases and reacquires the `fiber` lock and thus
 `canon_task_wait` allows the runtime to switch to another active task in the
 current component instance. Note also that `task.wait` can be called from a
 sync-lifted `SyncTask` so that even fully synchronous code can make concurrent
@@ -2457,6 +2457,7 @@ def canon_thread_hw_concurrency():
 [Unicode Code Point]: https://unicode.org/glossary/#code_point
 [Surrogate]: https://unicode.org/faq/utf_bom.html#utf16-2
 [Name Mangling]: https://en.wikipedia.org/wiki/Name_mangling
+[Fibers]: https://en.wikipedia.org/wiki/Fiber_(computer_science)
 [Asyncify]: https://emscripten.org/docs/porting/asyncify.html
 
 [`import_name`]: https://clang.llvm.org/docs/AttributeReference.html#import-name

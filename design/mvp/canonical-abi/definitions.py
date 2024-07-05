@@ -299,7 +299,7 @@ class ComponentInstance:
   pending_async_tasks: list[asyncio.Future]
   handles: HandleTables
   async_subtasks: Table[AsyncSubtask]
-  active: asyncio.Lock
+  fiber: asyncio.Lock
 
   def __init__(self):
     self.may_leave = True
@@ -309,7 +309,7 @@ class ComponentInstance:
     self.pending_async_tasks = []
     self.handles = HandleTables()
     self.async_subtasks = Table[AsyncSubtask]()
-    self.active = asyncio.Lock()
+    self.fiber = asyncio.Lock()
 
 class HandleTables:
   rt_to_table: MutableMapping[ResourceType, Table[HandleElem]]
@@ -411,7 +411,7 @@ class Task(CallContext):
     self.num_async_subtasks = 0
 
   async def enter(self):
-    await self.inst.active.acquire()
+    await self.inst.fiber.acquire()
     self.trap_if_on_the_stack(self.inst)
 
   def trap_if_on_the_stack(self, inst):
@@ -442,9 +442,9 @@ class Task(CallContext):
     self.events.put_nowait(subtask)
 
   async def wait(self):
-    self.inst.active.release()
+    self.inst.fiber.release()
     subtask = await self.events.get()
-    await self.inst.active.acquire()
+    await self.inst.fiber.acquire()
     return self.process_event(subtask)
 
   def process_event(self, subtask):
@@ -461,15 +461,15 @@ class Task(CallContext):
     return self.process_event(self.events.get_nowait())
 
   async def yield_(self):
-    self.inst.active.release()
+    self.inst.fiber.release()
     await asyncio.sleep(0)
-    await self.inst.active.acquire()
+    await self.inst.fiber.acquire()
 
   def exit(self):
     assert(self.events.empty())
     trap_if(self.borrow_count != 0)
     trap_if(self.num_async_subtasks != 0)
-    self.inst.active.release()
+    self.inst.fiber.release()
 
 class Subtask(CallContext):
   lenders: list[HandleElem]
