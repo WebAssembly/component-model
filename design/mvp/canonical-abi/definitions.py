@@ -1400,17 +1400,17 @@ async def call_and_trap_on_throw(callee, task, args):
 ### `canon lower`
 
 async def canon_lower(opts, callee, ft, task, flat_args):
-  inst = task.inst
-  trap_if(not inst.may_leave)
+  trap_if(not task.inst.may_leave)
+
   flat_args = CoreValueIter(flat_args)
+  flat_results = None
 
   if opts.sync:
-    subtask = Subtask(opts, inst)
+    subtask = Subtask(opts, task.inst)
 
     def start_thunk():
       return lift_sync_values(subtask, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
-    flat_results = None
     def return_thunk(results):
       nonlocal flat_results
       flat_results = lower_sync_values(subtask, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
@@ -1419,7 +1419,7 @@ async def canon_lower(opts, callee, ft, task, flat_args):
 
     subtask.finish()
   else:
-    subtask = AsyncSubtask(opts, inst)
+    subtask = AsyncSubtask(opts, task.inst)
 
     async def do_call():
       def start_thunk():
