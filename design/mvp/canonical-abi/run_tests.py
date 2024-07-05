@@ -391,12 +391,12 @@ def test_handles():
   rt2 = ResourceType(inst, dtor) # only usable in exports
   opts = mk_opts()
 
-  async def host_import(entered, start_thunk, return_thunk):
-    args = start_thunk()
+  async def host_import(entered, on_start, on_return):
+    args = on_start()
     assert(len(args) == 2)
     assert(args[0] == 42)
     assert(args[1] == 44)
-    return_thunk([45])
+    on_return([45])
 
   async def core_wasm(task, args):
     nonlocal dtor_value
@@ -460,15 +460,15 @@ def test_handles():
     Own(rt)
   ])
 
-  def arg_thunk():
+  def on_start():
     return [ 42, 43, 44, 13 ]
 
   got = None
-  def return_thunk(results):
+  def on_return(results):
     nonlocal got
     got = results
 
-  asyncio.run(canon_lift(opts, inst, core_wasm, ft, None, arg_thunk, return_thunk))
+  asyncio.run(canon_lift(opts, inst, core_wasm, ft, None, on_start, on_return))
 
   assert(len(got) == 3)
   assert(got[0] == 46)
@@ -498,13 +498,13 @@ async def test_async_to_async():
 
   fut1, fut2, fut3 = asyncio.Future(), asyncio.Future(), asyncio.Future()
   blocking_ft = FuncType([U8(),U8()], [U8()])
-  async def blocking_callee(entered, start_thunk, return_thunk):
+  async def blocking_callee(entered, on_start, on_return):
     await fut1
-    [x,y] = start_thunk()
+    [x,y] = on_start()
     assert(x == 83)
     assert(y == 84)
     await fut2
-    return_thunk([44])
+    on_return([44])
     await fut3
 
   consumer_heap = Heap(10)
@@ -577,16 +577,16 @@ async def test_async_to_async():
 
   ft = FuncType([Bool()],[U8()])
 
-  def arg_thunk():
+  def on_start():
     return [ True ]
 
   got = None
-  def return_thunk(results):
+  def on_return(results):
     nonlocal got
     got = results
 
   consumer_inst = ComponentInstance()
-  await canon_lift(consumer_opts, consumer_inst, consumer, ft, None, arg_thunk, return_thunk)
+  await canon_lift(consumer_opts, consumer_inst, consumer, ft, None, on_start, on_return)
   assert(len(got) == 1)
   assert(got[0] == 42)
 
@@ -596,10 +596,10 @@ async def test_async_callback():
   producer_inst = ComponentInstance()
 
   producer_ft = FuncType([], [])
-  async def producer(fut, entered, start_thunk, return_thunk):
-    start_thunk()
+  async def producer(fut, entered, on_start, on_return):
+    on_start()
     await fut
-    return_thunk([])
+    on_return([])
 
   fut1 = asyncio.Future()
   producer1 = partial(producer, fut1)
@@ -639,10 +639,10 @@ async def test_async_callback():
       return [0]
 
   consumer_inst = ComponentInstance()
-  def arg_thunk(): return []
+  def on_start(): return []
 
   got = None
-  def return_thunk(results):
+  def on_return(results):
     nonlocal got
     got = results
 
@@ -650,7 +650,7 @@ async def test_async_callback():
   opts.sync = False
   opts.callback = callback
 
-  await canon_lift(opts, consumer_inst, consumer, consumer_ft, None, arg_thunk, return_thunk)
+  await canon_lift(opts, consumer_inst, consumer, consumer_ft, None, on_start, on_return)
   assert(got[0] == 83)
 
 asyncio.run(test_async_callback())
@@ -717,14 +717,14 @@ async def test_async_to_sync():
     return []
 
   consumer_inst = ComponentInstance()
-  def arg_thunk(): return []
+  def on_start(): return []
 
   got = None
-  def return_thunk(results):
+  def on_return(results):
     nonlocal got
     got = results
 
-  await canon_lift(consumer_opts, consumer_inst, consumer, consumer_ft, None, arg_thunk, return_thunk)
+  await canon_lift(consumer_opts, consumer_inst, consumer, consumer_ft, None, on_start, on_return)
   assert(got[0] == 83)
 
 asyncio.run(test_async_to_sync())
@@ -733,10 +733,10 @@ async def test_sync_using_wait():
   inst = ComponentInstance()
   ft = FuncType([], [])
 
-  async def hostcall(fut, entered, start_thunk, return_thunk):
-    start_thunk()
+  async def hostcall(fut, entered, on_start, on_return):
+    on_start()
     await fut
-    return_thunk([])
+    on_return([])
   fut1 = asyncio.Future()
   hostcall1 = partial(hostcall, fut1)
   fut2 = asyncio.Future()
@@ -761,9 +761,9 @@ async def test_sync_using_wait():
     assert(callidx == 2)
     return []
 
-  def arg_thunk(): return []
-  def return_thunk(results): pass
-  await canon_lift(mk_opts(), inst, core_func, ft, None, arg_thunk, return_thunk)
+  def on_start(): return []
+  def on_return(results): pass
+  await canon_lift(mk_opts(), inst, core_func, ft, None, on_start, on_return)
 
 asyncio.run(test_sync_using_wait())
 

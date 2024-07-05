@@ -506,16 +506,16 @@ class SyncTask(Task):
 
 class AsyncTask(Task):
   ft: FuncType
-  start_thunk: Callable
-  return_thunk: Callable
+  on_start: Callable
+  on_return: Callable
   state: AsyncCallState
   unblock_next_pending: bool
 
-  def __init__(self, opts, inst, caller, ft, start_thunk, return_thunk):
+  def __init__(self, opts, inst, caller, ft, on_start, on_return):
     super().__init__(opts, inst, caller)
     self.ft = ft
-    self.start_thunk = start_thunk
-    self.return_thunk = return_thunk
+    self.on_start = on_start
+    self.on_return = on_return
     self.state = AsyncCallState.STARTING
     self.unblock_next_pending = False
 
@@ -1357,21 +1357,21 @@ def lower_heap_values(cx, vs, ts, out_param):
 
 ### `canon lift`
 
-async def canon_lift(opts, inst, callee, ft, caller, start_thunk, return_thunk):
+async def canon_lift(opts, inst, callee, ft, caller, on_start, on_return):
   if opts.sync:
     task = SyncTask(opts, inst, caller)
     await task.enter()
 
-    flat_args = lower_sync_values(task, MAX_FLAT_PARAMS, start_thunk(), ft.param_types())
+    flat_args = lower_sync_values(task, MAX_FLAT_PARAMS, on_start(), ft.param_types())
     flat_results = await call_and_trap_on_throw(callee, task, flat_args)
-    return_thunk(lift_sync_values(task, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types()))
+    on_return(lift_sync_values(task, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types()))
 
     if opts.post_return is not None:
       [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
 
     task.exit()
   else:
-    task = AsyncTask(opts, inst, caller, ft, start_thunk, return_thunk)
+    task = AsyncTask(opts, inst, caller, ft, on_start, on_return)
     await task.enter()
 
     if not opts.callback:
@@ -1408,29 +1408,29 @@ async def canon_lower(opts, callee, ft, task, flat_args):
   if opts.sync:
     subtask = Subtask(opts, task.inst)
 
-    def start_thunk():
+    def on_start():
       return lift_sync_values(subtask, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
-    def return_thunk(results):
+    def on_return(results):
       nonlocal flat_results
       flat_results = lower_sync_values(subtask, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
 
-    await callee(task, start_thunk, return_thunk)
+    await callee(task, on_start, on_return)
 
     subtask.finish()
   else:
     subtask = AsyncSubtask(opts, task.inst)
 
     async def do_call():
-      def start_thunk():
+      def on_start():
         subtask.start()
         return lift_async_values(subtask, flat_args, ft.param_types())
 
-      def return_thunk(results):
+      def on_return(results):
         subtask.return_()
         lower_async_values(subtask, results, ft.result_types(), flat_args)
 
-      await callee(task, start_thunk, return_thunk)
+      await callee(task, on_start, on_return)
       subtask.finish()
 
     asyncio.get_event_loop().set_task_factory(asyncio.eager_task_factory)
@@ -1491,7 +1491,7 @@ async def canon_task_start(task, core_ft, flat_args):
   trap_if(task.opts.sync)
   trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType([], task.ft.params), 'lower'))
   task.start()
-  args = task.start_thunk()
+  args = task.on_start()
   flat_results = lower_sync_values(task, MAX_FLAT_RESULTS, args, task.ft.param_types(), CoreValueIter(flat_args))
   assert(len(core_ft.results) == len(flat_results))
   return flat_results
@@ -1504,7 +1504,7 @@ async def canon_task_return(task, core_ft, flat_args):
   trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType(task.ft.results, []), 'lower'))
   task.return_()
   results = lift_sync_values(task, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_types())
-  task.return_thunk(results)
+  task.on_return(results)
   assert(len(core_ft.results) == 0)
   return []
 
