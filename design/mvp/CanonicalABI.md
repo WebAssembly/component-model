@@ -706,7 +706,6 @@ class AsyncTask(Task):
   async def wait(self):
     if self.state == AsyncCallState.STARTING:
       self.inst.may_enter_async = False
-      self.unblock_next_pending = False
     else:
       self.maybe_unblock_next_pending()
     return await super().wait()
@@ -722,7 +721,6 @@ class AsyncTask(Task):
     self.state = AsyncCallState.STARTED
     if not self.inst.may_enter_async:
       self.inst.may_enter_async = True
-      self.unblock_next_pending = len(self.inst.pending_async_tasks) > 0
 
   def return_(self):
     trap_if(self.state != AsyncCallState.STARTED)
