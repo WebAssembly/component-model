@@ -296,22 +296,22 @@ class ComponentInstance:
   handles: HandleTables
   num_tasks: int
   backpressure: bool
+  calling_sync_import: bool
   pending_tasks: list[asyncio.Future]
   active_sync_task: bool
   pending_sync_tasks: list[asyncio.Future]
   async_subtasks: Table[AsyncSubtask]
-  fiber: asyncio.Lock
 
   def __init__(self):
     self.may_leave = True
     self.handles = HandleTables()
     self.num_tasks = 0
     self.backpressure = False
+    self.calling_sync_import = False
     self.pending_tasks = []
     self.active_sync_task = False
     self.pending_sync_tasks = []
     self.async_subtasks = Table[AsyncSubtask]()
-    self.fiber = asyncio.Lock()
 
 class HandleTables:
   rt_to_table: MutableMapping[ResourceType, Table[HandleElem]]
@@ -399,28 +399,33 @@ class EventCode(IntEnum):
   CALL_DONE = AsyncCallState.DONE
   YIELDED = 4
 
+current_task = asyncio.Lock()
+
 class Task(CallContext):
   caller: Optional[Task]
+  on_block: Optional[Callable]
   borrow_count: int
   events: asyncio.Queue[AsyncSubtask]
   num_async_subtasks: int
 
-  def __init__(self, opts, inst, caller):
+  def __init__(self, opts, inst, caller, on_block):
     super().__init__(opts, inst)
+    assert(on_block is not None)
     self.caller = caller
+    self.on_block = on_block
     self.borrow_count = 0
     self.events = asyncio.Queue[AsyncSubtask]()
     self.num_async_subtasks = 0
 
   async def enter(self):
-    await self.inst.fiber.acquire()
+    assert(current_task.locked())
     self.trap_if_on_the_stack(self.inst)
     self.inst.num_tasks += 1
-    if self.inst.backpressure or self.inst.pending_tasks:
+    if not self.may_enter() or self.inst.pending_tasks:
       f = asyncio.Future()
       self.inst.pending_tasks.append(f)
-      await f
-      assert(not self.inst.backpressure)
+      await self.suspend(f)
+      assert(self.may_enter())
 
   def trap_if_on_the_stack(self, inst):
     c = self.caller
@@ -428,8 +433,23 @@ class Task(CallContext):
       trap_if(c.inst is inst)
       c = c.caller
 
+  def may_enter(self):
+    return not self.inst.backpressure and not self.inst.calling_sync_import
+
+  async def suspend(self, future):
+    assert(current_task.locked())
+    self.maybe_start_pending_task()
+    if self.on_block:
+      self.on_block()
+      self.on_block = None
+    else:
+      current_task.release()
+    r = await future
+    await current_task.acquire()
+    return r
+
   def maybe_start_pending_task(self):
-    if self.inst.pending_tasks and not self.inst.backpressure:
+    if self.inst.pending_tasks and self.may_enter():
       self.inst.pending_tasks.pop(0).set_result(None)
 
   def create_borrow(self):
@@ -454,10 +474,7 @@ class Task(CallContext):
     self.events.put_nowait(subtask)
 
   async def wait(self):
-    self.inst.fiber.release()
-    self.maybe_start_pending_task()
-    subtask = await self.events.get()
-    await self.inst.fiber.acquire()
+    subtask = await self.suspend(self.events.get())
     return self.process_event(subtask)
 
   def process_event(self, subtask):
@@ -474,20 +491,19 @@ class Task(CallContext):
     return self.process_event(self.events.get_nowait())
 
   async def yield_(self):
-    self.inst.fiber.release()
-    self.maybe_start_pending_task()
-    await asyncio.sleep(0)
-    await self.inst.fiber.acquire()
+    await self.suspend(asyncio.sleep(0))
 
   def exit(self):
+    assert(current_task.locked())
     assert(self.events.empty())
     assert(self.inst.num_tasks >= 1)
     trap_if(self.inst.backpressure and self.inst.num_tasks == 1)
     trap_if(self.borrow_count != 0)
     trap_if(self.num_async_subtasks != 0)
     self.inst.num_tasks -= 1
-    self.inst.fiber.release()
     self.maybe_start_pending_task()
+    if not self.on_block:
+      current_task.release()
 
 class Subtask(CallContext):
   lenders: list[HandleElem]
@@ -511,10 +527,7 @@ class SyncTask(Task):
     if self.inst.active_sync_task:
       f = asyncio.Future()
       self.inst.pending_sync_tasks.append(f)
-      self.inst.fiber.release()
-      self.maybe_start_pending_task()
-      await f
-      await self.inst.fiber.acquire()
+      await self.suspend(f)
       assert(not self.inst.active_sync_task)
     self.inst.active_sync_task = True
 
@@ -531,8 +544,8 @@ class AsyncTask(Task):
   on_return: Callable
   state: AsyncCallState
 
-  def __init__(self, opts, inst, caller, ft, on_start, on_return):
-    super().__init__(opts, inst, caller)
+  def __init__(self, opts, inst, caller, on_block, ft, on_start, on_return):
+    super().__init__(opts, inst, caller, on_block)
     self.ft = ft
     self.on_start = on_start
     self.on_return = on_return
@@ -1351,9 +1364,9 @@ def lower_heap_values(cx, vs, ts, out_param):
 
 ### `canon lift`
 
-async def canon_lift(opts, inst, callee, ft, caller, on_start, on_return):
+async def canon_lift(opts, inst, callee, ft, caller, on_block, on_start, on_return):
   if opts.sync:
-    task = SyncTask(opts, inst, caller)
+    task = SyncTask(opts, inst, caller, on_block)
     await task.enter()
 
     flat_args = lower_sync_values(task, MAX_FLAT_PARAMS, on_start(), ft.param_types())
@@ -1365,7 +1378,7 @@ async def canon_lift(opts, inst, callee, ft, caller, on_start, on_return):
 
     task.exit()
   else:
-    task = AsyncTask(opts, inst, caller, ft, on_start, on_return)
+    task = AsyncTask(opts, inst, caller, on_block, ft, on_start, on_return)
     await task.enter()
 
     if not opts.callback:
@@ -1398,47 +1411,51 @@ async def canon_lower(opts, callee, ft, task, flat_args):
 
   flat_args = CoreValueIter(flat_args)
   flat_results = None
-
   if opts.sync:
     subtask = Subtask(opts, task.inst)
-
+    task.inst.calling_sync_import = True
+    def on_block():
+      if task.on_block:
+        task.on_block()
+        task.on_block = None
     def on_start():
       return lift_sync_values(subtask, MAX_FLAT_PARAMS, flat_args, ft.param_types())
-
     def on_return(results):
       nonlocal flat_results
       flat_results = lower_sync_values(subtask, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
-
-    await callee(task, on_start, on_return)
-
+    await callee(task, on_block, on_start, on_return)
+    task.inst.calling_sync_import = False
     subtask.finish()
   else:
     subtask = AsyncSubtask(opts, task.inst)
-
+    eager_result = asyncio.Future()
     async def do_call():
+      def on_block():
+        eager_result.set_result('block')
       def on_start():
         subtask.start()
         return lift_async_values(subtask, flat_args, ft.param_types())
-
       def on_return(results):
         subtask.return_()
         lower_async_values(subtask, results, ft.result_types(), flat_args)
-
-      await callee(task, on_start, on_return)
+      await callee(task, on_block, on_start, on_return)
       subtask.finish()
-
-    asyncio.get_event_loop().set_task_factory(asyncio.eager_task_factory)
+      if not eager_result.done():
+        eager_result.set_result('complete')
     asyncio.create_task(do_call())
-
-    if subtask.state == AsyncCallState.DONE:
-      flat_results = [0]
-    else:
-      i = task.add_async_subtask(subtask)
-      assert(0 < i < 2**30)
-      assert(0 <= int(subtask.state) < 2**2)
-      flat_results = [ i | (int(subtask.state) << 30) ]
+    match await eager_result:
+      case 'complete':
+        flat_results = [0]
+      case 'block':
+        i = task.add_async_subtask(subtask)
+        flat_results = [pack_async_result(i, subtask.state)]
 
   return flat_results
+
+def pack_async_result(i, state):
+  assert(0 < i < 2**30)
+  assert(0 <= int(state) < 2**2)
+  return i | (int(state) << 30)
 
 ### `canon resource.new`
 
