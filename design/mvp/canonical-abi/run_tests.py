@@ -1,6 +1,11 @@
 import definitions
 from definitions import *
 
+asyncio.run(definitions.current_task.acquire())
+
+def unlock_on_block():
+  definitions.current_task.release()
+
 def equal_modulo_string_encoding(s, t):
   if s is None and t is None:
     return True
@@ -348,11 +353,12 @@ def test_roundtrip(t, v):
   caller_heap = Heap(1000)
   caller_opts = mk_opts(caller_heap.memory, 'utf8', caller_heap.realloc)
   caller_inst = ComponentInstance()
-  caller_task = Task(caller_opts, caller_inst, None)
+  caller_task = Task(caller_opts, caller_inst, None, lambda:())
 
   return_in_heap = len(flatten_types([t])) > definitions.MAX_FLAT_RESULTS
 
   asyncio.run(caller_task.enter())
+
   flat_args = lower_sync_values(caller_task, definitions.MAX_FLAT_PARAMS, [v], [t])
   if return_in_heap:
     flat_args += [ caller_heap.realloc(0, 0, alignment(t), elem_size(t)) ]
@@ -391,7 +397,7 @@ def test_handles():
   rt2 = ResourceType(inst, dtor) # only usable in exports
   opts = mk_opts()
 
-  async def host_import(entered, on_start, on_return):
+  async def host_import(entered, on_block, on_start, on_return):
     args = on_start()
     assert(len(args) == 2)
     assert(args[0] == 42)
@@ -468,7 +474,7 @@ def test_handles():
     nonlocal got
     got = results
 
-  asyncio.run(canon_lift(opts, inst, core_wasm, ft, None, on_start, on_return))
+  asyncio.run(canon_lift(opts, inst, core_wasm, ft, None, lambda:(), on_start, on_return))
 
   assert(len(got) == 3)
   assert(got[0] == 46)
@@ -497,15 +503,17 @@ async def test_async_to_async():
   eager_callee = partial(canon_lift, producer_opts, producer_inst, core_eager_producer, eager_ft)
 
   fut1, fut2, fut3 = asyncio.Future(), asyncio.Future(), asyncio.Future()
-  blocking_ft = FuncType([U8(),U8()], [U8()])
-  async def blocking_callee(caller, on_start, on_return):
-    await fut1
-    [x,y] = on_start()
+  blocking_ft = FuncType([U8()], [U8()])
+  async def core_blocking_producer(task, args):
+    assert(len(args) == 0)
+    await task.suspend(fut1)
+    [x] = await canon_task_start(task, CoreFuncType([],['i32']), [])
     assert(x == 83)
-    assert(y == 84)
-    await fut2
-    on_return([44])
-    await fut3
+    await task.suspend(fut2)
+    [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [44])
+    await task.suspend(fut3)
+    return []
+  blocking_callee = partial(canon_lift, producer_opts, producer_inst, core_blocking_producer, blocking_ft) 
 
   consumer_heap = Heap(10)
   consumer_opts = mk_opts(consumer_heap.memory)
@@ -522,22 +530,17 @@ async def test_async_to_async():
     u8 = consumer_heap.memory[ptr]
     assert(u8 == 43)
 
-    argp = consumer_heap.realloc(0, 0, 1, 2)
     retp = ptr
-    consumer_heap.memory[argp] = 13
-    consumer_heap.memory[argp+1] = 14
-    consumer_heap.memory[retp] = 15
-    [ret] = await canon_lower(consumer_opts, blocking_callee, blocking_ft, task, [argp, retp])
-    assert(consumer_heap.memory[retp] == 15)
+    consumer_heap.memory[retp] = 13
+    [ret] = await canon_lower(consumer_opts, blocking_callee, blocking_ft, task, [83, retp])
+    assert(consumer_heap.memory[retp] == 13)
     assert(task.num_async_subtasks == 1)
     assert(ret == 1)
-    consumer_heap.memory[argp] = 83
-    consumer_heap.memory[argp+1] = 84
     fut1.set_result(None)
     event, callidx = await task.wait()
     assert(event == EventCode.CALL_STARTED)
     assert(callidx == 1)
-    assert(consumer_heap.memory[retp] == 15)
+    assert(consumer_heap.memory[retp] == 13)
     fut2.set_result(None)
     event, callidx = await task.wait()
     assert(event == EventCode.CALL_RETURNED)
@@ -555,7 +558,7 @@ async def test_async_to_async():
     async def dtor(task, args):
       nonlocal dtor_value
       assert(len(args) == 1)
-      await dtor_fut
+      await task.suspend(dtor_fut)
       dtor_value = args[0]
     rt = ResourceType(producer_inst, dtor)
 
@@ -586,7 +589,8 @@ async def test_async_to_async():
     got = results
 
   consumer_inst = ComponentInstance()
-  await canon_lift(consumer_opts, consumer_inst, consumer, ft, None, on_start, on_return)
+  await canon_lift(consumer_opts, consumer_inst, consumer, ft, None, unlock_on_block, on_start, on_return)
+  await current_task.acquire()
   assert(len(got) == 1)
   assert(got[0] == 42)
 
@@ -594,17 +598,22 @@ asyncio.run(test_async_to_async())
 
 async def test_async_callback():
   producer_inst = ComponentInstance()
-
+  producer_opts = mk_opts()
+  producer_opts.sync = False
   producer_ft = FuncType([], [])
-  async def producer(fut, entered, on_start, on_return):
-    on_start()
-    await fut
-    on_return([])
 
+  async def core_producer_pre(fut, task, args):
+    assert(len(args) == 0)
+    await canon_task_start(task, CoreFuncType([],[]), [])
+    await task.suspend(fut)
+    await canon_task_return(task, CoreFuncType([],[]), [])
+    return []
   fut1 = asyncio.Future()
-  producer1 = partial(producer, fut1)
+  core_producer1 = partial(core_producer_pre, fut1)
+  producer1 = partial(canon_lift, producer_opts, producer_inst, core_producer1, producer_ft)
   fut2 = asyncio.Future()
-  producer2 = partial(producer, fut2)
+  core_producer2 = partial(core_producer_pre, fut2)
+  producer2 = partial(canon_lift, producer_opts, producer_inst, core_producer2, producer_ft)
 
   consumer_ft = FuncType([],[U32()])
   async def consumer(task, args):
@@ -650,7 +659,8 @@ async def test_async_callback():
   opts.sync = False
   opts.callback = callback
 
-  await canon_lift(opts, consumer_inst, consumer, consumer_ft, None, on_start, on_return)
+  await canon_lift(opts, consumer_inst, consumer, consumer_ft, None, unlock_on_block, on_start, on_return)
+  await current_task.acquire()
   assert(got[0] == 83)
 
 asyncio.run(test_async_callback())
@@ -665,7 +675,7 @@ async def test_async_to_sync():
   async def producer1_core(task, args):
     nonlocal producer1_done
     assert(len(args) == 0)
-    await fut
+    await task.suspend(fut)
     producer1_done = True
     return []
 
@@ -724,7 +734,8 @@ async def test_async_to_sync():
     nonlocal got
     got = results
 
-  await canon_lift(consumer_opts, consumer_inst, consumer, consumer_ft, None, on_start, on_return)
+  await canon_lift(consumer_opts, consumer_inst, consumer, consumer_ft, None, unlock_on_block, on_start, on_return)
+  await current_task.acquire()
   assert(got[0] == 83)
 
 asyncio.run(test_async_to_sync())
@@ -742,7 +753,7 @@ async def test_async_backpressure():
     await canon_task_start(task, CoreFuncType([],[]), [])
     await canon_task_return(task, CoreFuncType([],[]), [])
     await canon_task_backpressure(task, [1])
-    await fut
+    await task.suspend(fut)
     await canon_task_backpressure(task, [0])
     producer1_done = True
     return []
@@ -801,23 +812,29 @@ async def test_async_backpressure():
     nonlocal got
     got = results
 
-  await canon_lift(consumer_opts, consumer_inst, consumer, consumer_ft, None, on_start, on_return)
+  await canon_lift(consumer_opts, consumer_inst, consumer, consumer_ft, None, unlock_on_block, on_start, on_return)
+  await current_task.acquire()
   assert(got[0] == 84)
 
 asyncio.run(test_async_backpressure())
 
 async def test_sync_using_wait():
-  inst = ComponentInstance()
+  hostcall_opts = mk_opts()
+  hostcall_opts.sync = False
+  hostcall_inst = ComponentInstance()
   ft = FuncType([], [])
 
-  async def hostcall(fut, entered, on_start, on_return):
-    on_start()
-    await fut
-    on_return([])
+  async def core_hostcall_pre(fut, task, args):
+    [] = await canon_task_start(task, CoreFuncType([],[]), [])
+    await task.suspend(fut)
+    [] = await canon_task_return(task, CoreFuncType([],[]), [])
+    return []
   fut1 = asyncio.Future()
-  hostcall1 = partial(hostcall, fut1)
+  core_hostcall1 = partial(core_hostcall_pre, fut1)
+  hostcall1 = partial(canon_lift, hostcall_opts, hostcall_inst, core_hostcall1, ft)
   fut2 = asyncio.Future()
-  hostcall2 = partial(hostcall, fut2)
+  core_hostcall2 = partial(core_hostcall_pre, fut2)
+  hostcall2 = partial(canon_lift, hostcall_opts, hostcall_inst, core_hostcall2, ft)
 
   lower_opts = mk_opts()
   lower_opts.sync = False
@@ -838,9 +855,11 @@ async def test_sync_using_wait():
     assert(callidx == 2)
     return []
 
+  inst = ComponentInstance()
   def on_start(): return []
   def on_return(results): pass
-  await canon_lift(mk_opts(), inst, core_func, ft, None, on_start, on_return)
+  await canon_lift(mk_opts(), inst, core_func, ft, None, unlock_on_block, on_start, on_return)
+  await current_task.acquire()
 
 asyncio.run(test_sync_using_wait())
 
