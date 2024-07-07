@@ -24,6 +24,7 @@ being specified here.
   * [`canon resource.new`](#canon-resourcenew)
   * [`canon resource.drop`](#canon-resourcedrop)
   * [`canon resource.rep`](#canon-resourcerep)
+  * [`canon task.backpressure`](#-canon-taskbackpressure) 🔀
   * [`canon task.start`](#-canon-taskstart) 🔀
   * [`canon task.return`](#-canon-taskreturn) 🔀
   * [`canon task.wait`](#-canon-taskwait) 🔀
@@ -255,21 +256,23 @@ Canonical ABI:
 class ComponentInstance:
   # core module instance state
   may_leave: bool
-  may_enter_sync: bool
-  may_enter_async: bool
-  pending_sync_tasks: list[asyncio.Future]
-  pending_async_tasks: list[asyncio.Future]
   handles: HandleTables
+  num_tasks: int
+  backpressure: bool
+  pending_tasks: list[asyncio.Future]
+  active_sync_task: bool
+  pending_sync_tasks: list[asyncio.Future]
   async_subtasks: Table[AsyncSubtask]
   fiber: asyncio.Lock
 
   def __init__(self):
     self.may_leave = True
-    self.may_enter_sync = True
-    self.may_enter_async = True
-    self.pending_sync_tasks = []
-    self.pending_async_tasks = []
     self.handles = HandleTables()
+    self.num_tasks = 0
+    self.backpressure = False
+    self.pending_tasks = []
+    self.active_sync_task = False
+    self.pending_sync_tasks = []
     self.async_subtasks = Table[AsyncSubtask]()
     self.fiber = asyncio.Lock()
 ```
@@ -277,13 +280,19 @@ The `may_leave` field is used below to track whether the instance may call a
 lowered import to prevent optimization-breaking cases of reentrance during
 lowering.
 
-The `may_enter_(sync|async)` and `pending_(sync|async)_tasks` fields
-are used below to implement backpressure that is applied when new
-sync|async-lifted export calls try to enter this `ComponentInstance`.
-
 The `handles` field contains a mapping from `ResourceType` to `Table`s of
 `HandleElem`s (defined next), establishing a separate `i32`-indexed array per
 resource type.
+
+The `backpressure` and `pending_tasks` fields are used below to implement
+backpressure that is applied when new export calls create new `Task`s in this
+`ComponentInstance`. The `num_tasks` field tracks the number of live `Task`s in
+this `ComponentInstance` and is primarily used to guard that a component
+doesn't enter an invalid state where `backpressure` enabled but there are no
+live tasks to disable it.
+
+The `active_sync_task` and `pending_sync_tasks` fields are similarly used to
+serialize synchronously-lifted calls into this component instance.
 
 The `async_subtasks` field is used below to track and assign an `i32` index to
 each active async-lowered call in progress that has been made by this
@@ -492,17 +501,30 @@ the particular feature (`borrow` handles, `async` imports) is not used.
 
 The `caller` field is immutable and is either `None`, when a `Task` is created
 for a component export called directly by the host, or else the current task
-when the calling component called into this component. The `caller` field is
-used by the following two methods to prevent a component from being reentered
-(enforcing the [component invariant]) in a way that is well-defined even in the
-presence of async calls). (The `fiber.acquire()` call in `enter()` is
+when the calling component called into this component.
+
+The `enter()` method is called immediately after constructing the `Task` and is
+responsible for implementing backpressure that has been signalled by guest code
+via the `task.backpressure` built-in. (The `fiber.acquire()` call in `enter()` is
 described above and here ensures that concurrent export calls do not
 arbitrarily interleave.)
 ```python
   async def enter(self):
     await self.inst.fiber.acquire()
     self.trap_if_on_the_stack(self.inst)
-
+    self.inst.num_tasks += 1
+    if self.inst.backpressure or self.inst.pending_tasks:
+      f = asyncio.Future()
+      self.inst.pending_tasks.append(f)
+      await f
+      assert(not self.inst.backpressure)
+```
+The `caller` field mentioned above is used by `trap_if_on_the_stack` (called by
+`enter` above) to prevent a component from being unexpectedly reentered
+(enforcing the [component invariant]) in a way that is well-defined even in the
+presence of async calls). This definition depends on having an async call tree
+which in turn depends on maintaining [structured concurrency].
+```python
   def trap_if_on_the_stack(self, inst):
     c = self.caller
     while c is not None:
@@ -521,6 +543,16 @@ O(n) loop in `trap_if_on_the_stack`:
 * For the remaining cases, the live instances on the stack can be maintained in
   a packed bit-vector (assigning each potentially-reenterable async component
   instance a static bit position) that is passed by copy from caller to callee.
+
+The `pending_tasks` queue (appended to by `enter` above) is emptied one at a
+time when backpressure is disabled, ensuring that each popped tasks gets a
+chance to start and possibly re-enable backpressure before the next pending
+task is started:
+```python
+  def maybe_start_pending_task(self):
+    if self.inst.pending_tasks and not self.inst.backpressure:
+      self.inst.pending_tasks.pop(0).set_result(None)
+```
 
 The `borrow_count` field is used by the following methods to track the number
 of borrowed handles that were passed as parameters to the export that have not
@@ -559,6 +591,7 @@ guarded to be `0` in `Task.exit` (below) to ensure [structured concurrency].
 
   async def wait(self):
     self.inst.fiber.release()
+    self.maybe_start_pending_task()
     subtask = await self.events.get()
     await self.inst.fiber.acquire()
     return self.process_event(subtask)
@@ -599,6 +632,7 @@ emulated in the Python code here by awaiting a `sleep(0)`).
 ```python
   async def yield_(self):
     self.inst.fiber.release()
+    self.maybe_start_pending_task()
     await asyncio.sleep(0)
     await self.inst.fiber.acquire()
 ```
@@ -609,9 +643,13 @@ progress.
 ```python
   def exit(self):
     assert(self.events.empty())
+    assert(self.inst.num_tasks >= 1)
+    trap_if(self.inst.backpressure and self.inst.num_tasks == 1)
     trap_if(self.borrow_count != 0)
     trap_if(self.num_async_subtasks != 0)
+    self.inst.num_tasks -= 1
     self.inst.fiber.release()
+    self.maybe_start_pending_task()
 ```
 
 While `canon_lift` creates `Task`s, `canon_lower` creates `Subtask` objects:
@@ -649,20 +687,23 @@ given component instance at a given time.
 ```python
 class SyncTask(Task):
   async def enter(self):
-    if not self.inst.may_enter_sync:
+    await super().enter()
+    if self.inst.active_sync_task:
       f = asyncio.Future()
       self.inst.pending_sync_tasks.append(f)
+      self.inst.fiber.release()
+      self.maybe_start_pending_task()
       await f
-      assert(self.inst.may_enter_sync)
-    self.inst.may_enter_sync = False
-    await super().enter()
+      await self.inst.fiber.acquire()
+      assert(not self.inst.active_sync_task)
+    self.inst.active_sync_task = True
 
   def exit(self):
-    super().exit()
-    assert(not self.inst.may_enter_sync)
-    self.inst.may_enter_sync = True
+    assert(self.inst.active_sync_task)
+    self.inst.active_sync_task = False
     if self.inst.pending_sync_tasks:
       self.inst.pending_sync_tasks.pop(0).set_result(None)
+    super().exit()
 ```
 Thus, after one sync task starts running, any subsequent attempts to call into
 the same component instance before the first sync task finishes will wait in a
@@ -672,19 +713,16 @@ implementation should be able to avoid separately allocating
 `Subtask` table element of the caller.
 
 The first 3 fields of `AsyncTask` are simply immutable copies of
-arguments/immediates passed to `canon_lift` that are used later on. The last 2
-fields are used to check the above-mentioned state machine transitions and also
-specify an async version of backpressure. In particular, the rules apply
-backpressure if a task blocks (calling `wait`) while still in the `STARTING`
-state, which signals that the component instance isn't ready to take on any new
-async calls (until some active calls finish):
+arguments/immediates passed to `canon_lift` and are used by the `task.start`
+and `task.return` built-ins below. The last field is used to check the
+above-mentioned state machine transitions from methods that are called by
+`task.start`, `task.return` and `canon_lift` below.
 ```python
 class AsyncTask(Task):
   ft: FuncType
   on_start: Callable
   on_return: Callable
   state: AsyncCallState
-  unblock_next_pending: bool
 
   def __init__(self, opts, inst, caller, ft, on_start, on_return):
     super().__init__(opts, inst, caller)
@@ -692,54 +730,20 @@ class AsyncTask(Task):
     self.on_start = on_start
     self.on_return = on_return
     self.state = AsyncCallState.STARTING
-    self.unblock_next_pending = False
-
-  async def enter(self):
-    if not self.inst.may_enter_async or self.inst.pending_async_tasks:
-      f = asyncio.Future()
-      self.inst.pending_async_tasks.append(f)
-      await f
-      assert(self.inst.may_enter_async)
-      self.unblock_next_pending = len(self.inst.pending_async_tasks) > 0
-    await super().enter()
-
-  async def wait(self):
-    if self.state == AsyncCallState.STARTING:
-      self.inst.may_enter_async = False
-    else:
-      self.maybe_unblock_next_pending()
-    return await super().wait()
-
-  def maybe_unblock_next_pending(self):
-    if self.unblock_next_pending:
-      self.unblock_next_pending = False
-      assert(self.inst.may_enter_async)
-      self.inst.pending_async_tasks.pop(0).set_result(None)
 
   def start(self):
     trap_if(self.state != AsyncCallState.STARTING)
     self.state = AsyncCallState.STARTED
-    if not self.inst.may_enter_async:
-      self.inst.may_enter_async = True
 
   def return_(self):
     trap_if(self.state != AsyncCallState.STARTED)
     self.state = AsyncCallState.RETURNED
 
   def exit(self):
-    super().exit()
     trap_if(self.state != AsyncCallState.RETURNED)
     self.state = AsyncCallState.DONE
-    self.maybe_unblock_next_pending()
+    super().exit()
 ```
-The above rules are careful to release pending async calls from the queue one
-at a time (rather than unblocking all of them at once). This ensures that, in
-all cases, every new task has a chance to apply backpressure before the next
-new task starts.
-
-Note that the backpressure rules described above apply independently to sync
-and async tasks and thus if a component exports both sync- *and* async-lifted
-functions, async functions may execute concurrently with sync functions.
 
 Finally, the `AsyncSubtask` class extends `Subtask` with fields that are used
 by the methods of `Task`, as shown above. `AsyncSubtask`s have the same linear
@@ -2221,6 +2225,27 @@ async def canon_resource_rep(rt, task, i):
 ```
 Note that the "locally-defined" requirement above ensures that only the
 component instance defining a resource can access its representation.
+
+### 🔀 `canon task.backpressure`
+
+For a canonical definition:
+```wasm
+(canon task.backpressure (core func $f))
+```
+validation specifies:
+* `$f` is given type `[i32] -> []`
+
+Calling `$f` invokes the following function, which sets the `backpressure`
+flag on the current `ComponentInstance`:
+```python
+async def canon_task_backpressure(task, flat_args):
+  trap_if(task.opts.sync)
+  task.inst.backpressure = bool(flat_args[0])
+  return []
+```
+The `backpressure` flag is read by `Task.enter` (defined above) to prevent new
+tasks from entering the component instance and forcing the guest code to
+consume resources.
 
 ### 🔀 `canon task.start`
 

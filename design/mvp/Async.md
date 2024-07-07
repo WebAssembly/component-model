@@ -18,6 +18,7 @@ summary of the motivation and animated sketch of the design in action.
   * [Subtask and Supertask](#subtask-and-supertask)
   * [Structured concurrency](#structured-concurrency)
   * [Waiting](#waiting)
+  * [Backpressure](#backpressure)
   * [Starting](#starting)
   * [Returning](#returning)
 * [Examples](#examples)
@@ -209,6 +210,20 @@ same thing which, in the Canonical ABI Python code, is factored out into
 [`Task`]'s `wait` method. Thus, the difference between `callback` and
 non-`callback` is mostly one of optimization, not expressivity.
 
+### Backpressure
+
+Once a component exports asynchronously-lifted functions, multiple concurrent
+export calls can start piling up, each consuming some of the component's finite
+private resources (like linear memory), requiring the component to be able to
+exert *backpressure* to allow some tasks to finish (and release private
+resources) before admitting new async export calls. To do this, a component may
+call the `task.backpressure` built-in to set a "backpressure" flag that causes
+subsequent export calls to immediately return in the [starting](#starting)
+state without calling the component's Core WebAssembly code.
+
+See the [`canon_task_backpressure`] function and [`Task.enter`] method in the
+Canonical ABI explainer for the setting and implementation of backpressure.
+
 ### Starting
 
 When a component asynchronously lifts a function, instead of the function
@@ -217,12 +232,10 @@ asynchronously-lifted Core WebAssembly function is passed an empty list of
 arguments and must instead call an imported [`task.start`] built-in to lower
 and receive its arguments.
 
-The main reason to have `task.start` is so that an overloaded component
-instance can [wait](#waiting) for existing tasks to finish before starting a
-new task. Once a component instance waits to start a task, the Component Model
-will automatically apply backpressure, preventing new tasks from starting.
-See the [`AsyncTask`] class and [`canon_task_start`] function in the Canonical
-ABI explainer for more details.
+The main reason to have `task.start` is so that an overloaded component can
+[wait](#waiting) and/or exert [backpressure](#backpressure) before accepting
+the arguments to an export call. See the [`canon_task_start`] function in the
+Canonical ABI explainer for more details.
 
 Before a task has called `task.start`, it is considered in the "starting"
 state. After calling `task.start`, the task is in a "started" state.
@@ -469,9 +482,11 @@ features will be added in future chunks to complete "async" in Preview 3:
 [`canon_lower`]: CanonicalABI.md#canon-lower
 [`canon_lower`]: CanonicalABI.md#canon-task-wait
 [`canon_task_wait`]: CanonicalABI.md#-canon-taskwait
+[`canon_task_backpressure`]: CanonicalABI.md#-canon-taskbackpressure
 [`canon_task_start`]: CanonicalABI.md#-canon-taskstart
 [`canon_task_return`]: CanonicalABI.md#-canon-taskreturn
 [`Task`]: CanonicalABI.md#runtime-state
+[`Task.enter`]: CanonicalABI.md#runtime-state
 [`Subtask`]: CanonicalABI.md#runtime-state
 [`AsyncTask`]: CanonicalABI.md#runtime-state
 

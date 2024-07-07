@@ -275,11 +275,12 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x04 rt:<typeidx>                                   => (canon resource.rep rt (core func))
            | 0x05 ft:<typeidx>                                   => (canon thread.spawn ft (core func))
            | 0x06                                                => (canon thread.hw_concurrency (core func))
-           | 0x08 ft:<core:typeidx>                              => (canon task.start ft (core func))
-           | 0x09 ft:<core:typeidx>                              => (canon task.return ft (core func))
-           | 0x0a                                                => (canon task.wait (core func))
-           | 0x0b                                                => (canon task.poll (core func))
-           | 0x0c                                                => (canon task.yield (core func))
+           | 0x08                                                => (canon task.backpressure (core func))
+           | 0x09 ft:<core:typeidx>                              => (canon task.start ft (core func))
+           | 0x0a ft:<core:typeidx>                              => (canon task.return ft (core func))
+           | 0x0b                                                => (canon task.wait (core func))
+           | 0x0c                                                => (canon task.poll (core func))
+           | 0x0d                                                => (canon task.yield (core func))
 opts     ::= opt*:vec(<canonopt>)                                => opt*
 canonopt ::= 0x00                                                => string-encoding=utf8
            | 0x01                                                => string-encoding=utf16

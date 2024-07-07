@@ -1313,6 +1313,7 @@ canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
         | (canon resource.drop <typeidx> async? (core func <id>?))
         | (canon resource.rep <typeidx> (core func <id>?))
+        | (canon task.backpressure (core func <id>?)) 🔀
         | (canon task.start <core:typeidx> (core func <id>?)) 🔀
         | (canon task.return <core:typeidx> (core func <id>?)) 🔀
         | (canon task.wait (core func <id>?)) 🔀
@@ -1374,15 +1375,19 @@ transferring ownership of the newly-created resource to the export's caller.
 See the [async explainer](Async.md) for high-level context and terminology
 and the [Canonical ABI explainer] for detailed runtime semantics.
 
+The `task.backpressure` built-in has type `[i32] -> []` and allows the
+async-lifted callee to toggle a per-component-instance flag that, when set,
+prevents new incoming export calls to the component (until the flag is unset).
+This allows the component to exert [backpressure](Async.md#backpressure).
+
 The `task.start` built-in returns the arguments to the currently-executing
 task. This built-in must be called from an `async`-lifted export exactly once
-per export activation. Delaying the call to `task.start` allows the async
-callee to exert *backpressure* on the caller. The `canon task.start` definition
-takes the type index of a core function type and produces a core function with
-exactly that type. When called, the declared core function type is checked
-to match the lowered function type of a component-level function returning the
-parameter types of the current task. (See also [Starting](Async.md#starting) in
-the async explainer and [`canon_task_start`] in the Canonical ABI explainer.)
+per export activation. The `canon task.start` definition takes the type index
+of a core function type and produces a core function with exactly that type.
+When called, the declared core function type is checked to match the lowered
+function type of a component-level function returning the parameter types of
+the current task. (See also [Starting](Async.md#starting) in the async
+explainer and [`canon_task_start`] in the Canonical ABI explainer.)
 
 The `task.return` built-in takes as parameters the result values of the
 currently-executing task. This built-in must be called from an `async`-lifted
