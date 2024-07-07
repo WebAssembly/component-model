@@ -293,21 +293,23 @@ class CanonicalOptions:
 class ComponentInstance:
   # core module instance state
   may_leave: bool
-  may_enter_sync: bool
-  may_enter_async: bool
-  pending_sync_tasks: list[asyncio.Future]
-  pending_async_tasks: list[asyncio.Future]
   handles: HandleTables
+  num_tasks: int
+  backpressure: bool
+  pending_tasks: list[asyncio.Future]
+  active_sync_task: bool
+  pending_sync_tasks: list[asyncio.Future]
   async_subtasks: Table[AsyncSubtask]
   fiber: asyncio.Lock
 
   def __init__(self):
     self.may_leave = True
-    self.may_enter_sync = True
-    self.may_enter_async = True
-    self.pending_sync_tasks = []
-    self.pending_async_tasks = []
     self.handles = HandleTables()
+    self.num_tasks = 0
+    self.backpressure = False
+    self.pending_tasks = []
+    self.active_sync_task = False
+    self.pending_sync_tasks = []
     self.async_subtasks = Table[AsyncSubtask]()
     self.fiber = asyncio.Lock()
 
@@ -413,12 +415,22 @@ class Task(CallContext):
   async def enter(self):
     await self.inst.fiber.acquire()
     self.trap_if_on_the_stack(self.inst)
+    self.inst.num_tasks += 1
+    if self.inst.backpressure or self.inst.pending_tasks:
+      f = asyncio.Future()
+      self.inst.pending_tasks.append(f)
+      await f
+      assert(not self.inst.backpressure)
 
   def trap_if_on_the_stack(self, inst):
     c = self.caller
     while c is not None:
       trap_if(c.inst is inst)
       c = c.caller
+
+  def maybe_start_pending_task(self):
+    if self.inst.pending_tasks and not self.inst.backpressure:
+      self.inst.pending_tasks.pop(0).set_result(None)
 
   def create_borrow(self):
     self.borrow_count += 1
@@ -443,6 +455,7 @@ class Task(CallContext):
 
   async def wait(self):
     self.inst.fiber.release()
+    self.maybe_start_pending_task()
     subtask = await self.events.get()
     await self.inst.fiber.acquire()
     return self.process_event(subtask)
@@ -462,14 +475,19 @@ class Task(CallContext):
 
   async def yield_(self):
     self.inst.fiber.release()
+    self.maybe_start_pending_task()
     await asyncio.sleep(0)
     await self.inst.fiber.acquire()
 
   def exit(self):
     assert(self.events.empty())
+    assert(self.inst.num_tasks >= 1)
+    trap_if(self.inst.backpressure and self.inst.num_tasks == 1)
     trap_if(self.borrow_count != 0)
     trap_if(self.num_async_subtasks != 0)
+    self.inst.num_tasks -= 1
     self.inst.fiber.release()
+    self.maybe_start_pending_task()
 
 class Subtask(CallContext):
   lenders: list[HandleElem]
@@ -489,27 +507,29 @@ class Subtask(CallContext):
 
 class SyncTask(Task):
   async def enter(self):
-    if not self.inst.may_enter_sync:
+    await super().enter()
+    if self.inst.active_sync_task:
       f = asyncio.Future()
       self.inst.pending_sync_tasks.append(f)
+      self.inst.fiber.release()
+      self.maybe_start_pending_task()
       await f
-      assert(self.inst.may_enter_sync)
-    self.inst.may_enter_sync = False
-    await super().enter()
+      await self.inst.fiber.acquire()
+      assert(not self.inst.active_sync_task)
+    self.inst.active_sync_task = True
 
   def exit(self):
-    super().exit()
-    assert(not self.inst.may_enter_sync)
-    self.inst.may_enter_sync = True
+    assert(self.inst.active_sync_task)
+    self.inst.active_sync_task = False
     if self.inst.pending_sync_tasks:
       self.inst.pending_sync_tasks.pop(0).set_result(None)
+    super().exit()
 
 class AsyncTask(Task):
   ft: FuncType
   on_start: Callable
   on_return: Callable
   state: AsyncCallState
-  unblock_next_pending: bool
 
   def __init__(self, opts, inst, caller, ft, on_start, on_return):
     super().__init__(opts, inst, caller)
@@ -517,45 +537,19 @@ class AsyncTask(Task):
     self.on_start = on_start
     self.on_return = on_return
     self.state = AsyncCallState.STARTING
-    self.unblock_next_pending = False
-
-  async def enter(self):
-    if not self.inst.may_enter_async or self.inst.pending_async_tasks:
-      f = asyncio.Future()
-      self.inst.pending_async_tasks.append(f)
-      await f
-      assert(self.inst.may_enter_async)
-      self.unblock_next_pending = len(self.inst.pending_async_tasks) > 0
-    await super().enter()
-
-  async def wait(self):
-    if self.state == AsyncCallState.STARTING:
-      self.inst.may_enter_async = False
-    else:
-      self.maybe_unblock_next_pending()
-    return await super().wait()
-
-  def maybe_unblock_next_pending(self):
-    if self.unblock_next_pending:
-      self.unblock_next_pending = False
-      assert(self.inst.may_enter_async)
-      self.inst.pending_async_tasks.pop(0).set_result(None)
 
   def start(self):
     trap_if(self.state != AsyncCallState.STARTING)
     self.state = AsyncCallState.STARTED
-    if not self.inst.may_enter_async:
-      self.inst.may_enter_async = True
 
   def return_(self):
     trap_if(self.state != AsyncCallState.STARTED)
     self.state = AsyncCallState.RETURNED
 
   def exit(self):
-    super().exit()
     trap_if(self.state != AsyncCallState.RETURNED)
     self.state = AsyncCallState.DONE
-    self.maybe_unblock_next_pending()
+    super().exit()
 
 class AsyncSubtask(Subtask):
   state: AsyncCallState
@@ -1483,6 +1477,13 @@ async def canon_resource_drop(rt, sync, task, i):
 async def canon_resource_rep(rt, task, i):
   h = task.inst.handles.get(rt, i)
   return [h.rep]
+
+### `canon task.backpressure`
+
+async def canon_task_backpressure(task, flat_args):
+  trap_if(task.opts.sync)
+  task.inst.backpressure = bool(flat_args[0])
+  return []
 
 ### `canon task.start`
 
