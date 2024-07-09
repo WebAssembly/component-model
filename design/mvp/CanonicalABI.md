@@ -2129,13 +2129,6 @@ efficient compilation of permissive subtyping between components (including the
 elimination of string operations on the labels of records and variants) as well
 as post-MVP [adapter functions].
 
-By clearing `may_enter` for the duration of calls to imports, the `may_enter`
-guard in `canon_lift` ensures that components cannot be externally reentered,
-which is part of the [component invariants]. Because `may_enter` is not cleared
-on the exceptional exit path taken by `trap()`, if there is a trap during Core
-WebAssembly execution of lifting or lowering, the component is left permanently
-un-enterable, ensuring the lockdown-after-trap [component invariant].
-
 ### `canon resource.new`
 
 For a canonical definition:
