@@ -221,6 +221,11 @@ call the `task.backpressure` built-in to set a "backpressure" flag that causes
 subsequent export calls to immediately return in the [starting](#starting)
 state without calling the component's Core WebAssembly code.
 
+Once backpressure is enabled, the current task can [wait](#waiting) for
+existing tasks to finish and release their associated resources. Thus, a task
+can [wait](#waiting) with or without backpressure, depending on whether it
+wants to accept new accept new export calls while waiting or not.
+
 See the [`canon_task_backpressure`] function and [`Task.enter`] method in the
 Canonical ABI explainer for the setting and implementation of backpressure.
 
@@ -233,9 +238,9 @@ arguments and must instead call an imported [`task.start`] built-in to lower
 and receive its arguments.
 
 The main reason to have `task.start` is so that an overloaded component can
-[wait](#waiting) and/or exert [backpressure](#backpressure) before accepting
-the arguments to an export call. See the [`canon_task_start`] function in the
-Canonical ABI explainer for more details.
+enable [backpressure](#backpressure) and then [wait](#waiting) for existing
+tasks to finish before the receiving the arguments to the current task. See the
+[`canon_task_start`] function in the Canonical ABI explainer for more details.
 
 Before a task has called `task.start`, it is considered in the "starting"
 state. After calling `task.start`, the task is in a "started" state.
