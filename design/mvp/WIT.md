@@ -923,8 +923,9 @@ package-items ::= toplevel-use-item | interface-item | world-item
 ### Feature Gates
 
 Various WIT items can be "gated", to reflect the fact that the item is part of
-an unstable feature or that the item was added as part of a minor version
-update and shouldn't be used when targeting an earlier minor version.
+an unstable feature, that the item was added as part of a minor version
+update and shouldn't be used when targeting an earlier minor version, or that a
+feature has been deprecated and should no longer be used.
 
 For example, the following interface has 4 items, 3 of which are gated:
 ```wit
@@ -939,6 +940,9 @@ interface foo {
 
   @unstable(feature = fancier-foo)
   d: func();
+
+  @deprecated(version = 0.2.1)
+  e: func();
 }
 ```
 The `@since` gate indicates that `b` and `c` were added as part of the `0.2.1`
@@ -952,6 +956,12 @@ In contrast, the `@unstable` gate on `d` indicates that `d` is part of the
 change type or be removed at any time. An important expectation set by the
 `@unstable` gate is that toolchains will not expose `@unstable` features by
 default unless explicitly opted-into by the developer.
+
+Finally, the `@deprecated` gate on `e` indicates that `e` should no longer be
+used starting version `0.2.1`. `@deprecated` gates can carry an optional
+"message" field which can be used to elaborate why the feature should no longer
+be used and which feature to use instead. Both toolchains and host runtimes may
+warn users if they detect an `@deprecated` API is being used.
 
 Together, these gates support a development flow in which new features start
 with an `@unstable` gate while the details are still being hashed out. Then,
@@ -970,9 +980,15 @@ Specifically, the syntax for feature gates is:
 ```wit
 gate ::= unstable-gate
        | since-gate
+       | deprecated-gate
+
 unstable-gate ::= '@unstable' '(' feature-field ')'
+since-gate ::= '@since' '(' version-field ( ',' feature-field )? ')'
+deprecated-gate ::= '@deprecated' '(' version-field ( ',' message-field )? ')'
+
 feature-field ::= 'feature' '=' id
-since-gate ::= '@since' '(' 'version' '=' <valid semver> ( ',' feature-field )? ')'
+version-field ::= 'version' '=' <valid semver>
+message-field ::= 'message' '=' message
 ```
 
 As part of WIT validation, any item that refers to another gated item must also
