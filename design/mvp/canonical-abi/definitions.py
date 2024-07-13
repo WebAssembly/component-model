@@ -1055,12 +1055,11 @@ MAX_FLAT_PARAMS = 16
 MAX_FLAT_RESULTS = 1
 
 def flatten_functype(opts, ft, context):
+  flat_params = flatten_types(ft.param_types())
+  flat_results = flatten_types(ft.result_types())
   if opts.sync:
-    flat_params = flatten_types(ft.param_types())
     if len(flat_params) > MAX_FLAT_PARAMS:
       flat_params = ['i32']
-
-    flat_results = flatten_types(ft.result_types())
     if len(flat_results) > MAX_FLAT_RESULTS:
       match context:
         case 'lift':
@@ -1068,7 +1067,6 @@ def flatten_functype(opts, ft, context):
         case 'lower':
           flat_params += ['i32']
           flat_results = []
-
     return CoreFuncType(flat_params, flat_results)
   else:
     match context:
@@ -1076,7 +1074,10 @@ def flatten_functype(opts, ft, context):
         flat_params = []
         flat_results = []
       case 'lower':
-        flat_params = ['i32', 'i32']
+        if len(flat_params) > 1:
+          flat_params = ['i32']
+        if len(flat_results) > 0:
+          flat_params += ['i32']
         flat_results = ['i32']
     return CoreFuncType(flat_params, flat_results)
 
@@ -1299,23 +1300,12 @@ def lower_flat_flags(v, labels):
 
 ### Lifting and Lowering Values
 
-def lift_sync_values(cx, max_flat, vi, ts):
+def lift_flat_values(cx, max_flat, vi, ts):
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
     return lift_heap_values(cx, vi, ts)
   else:
     return [ lift_flat(cx, vi, t) for t in ts ]
-
-def lift_async_values(cx, vi, ts):
-  if len(ts) == 0:
-    _ = vi.next('i32')
-    return []
-  flat_types = flatten_types(ts)
-  if len(flat_types) == 1 and flat_types[0] == 'i32':
-    assert(len(ts) == 1)
-    return [ lift_flat(cx, vi, ts[0]) ]
-  else:
-    return lift_heap_values(cx, vi, ts)
 
 def lift_heap_values(cx, vi, ts):
   ptr = vi.next('i32')
@@ -1324,10 +1314,9 @@ def lift_heap_values(cx, vi, ts):
   trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
   return list(load(cx, ptr, tuple_type).values())
 
-def lower_sync_values(cx, max_flat, vs, ts, out_param = None):
-  inst = cx.inst
-  assert(inst.may_leave)
-  inst.may_leave = False
+def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
+  assert(cx.inst.may_leave)
+  cx.inst.may_leave = False
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
     flat_vals = lower_heap_values(cx, vs, ts, out_param)
@@ -1335,18 +1324,8 @@ def lower_sync_values(cx, max_flat, vs, ts, out_param = None):
     flat_vals = []
     for i in range(len(vs)):
       flat_vals += lower_flat(cx, vs[i], ts[i])
-  inst.may_leave = True
+  cx.inst.may_leave = True
   return flat_vals
-
-def lower_async_values(cx, vs, ts, out_param):
-  if len(ts) == 0:
-    _ = out_param.next('i32')
-    return
-  inst = cx.inst
-  assert(inst.may_leave)
-  inst.may_leave = False
-  lower_heap_values(cx, vs, ts, out_param)
-  inst.may_leave = True
 
 def lower_heap_values(cx, vs, ts, out_param):
   tuple_type = Tuple(ts)
@@ -1369,9 +1348,9 @@ async def canon_lift(opts, inst, callee, ft, caller, on_block, on_start, on_retu
     task = SyncTask(opts, inst, caller, on_block)
     await task.enter()
 
-    flat_args = lower_sync_values(task, MAX_FLAT_PARAMS, on_start(), ft.param_types())
+    flat_args = lower_flat_values(task, MAX_FLAT_PARAMS, on_start(), ft.param_types())
     flat_results = await call_and_trap_on_throw(callee, task, flat_args)
-    on_return(lift_sync_values(task, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types()))
+    on_return(lift_flat_values(task, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types()))
 
     if opts.post_return is not None:
       [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
@@ -1419,10 +1398,10 @@ async def canon_lower(opts, callee, ft, task, flat_args):
         task.on_block()
         task.on_block = None
     def on_start():
-      return lift_sync_values(subtask, MAX_FLAT_PARAMS, flat_args, ft.param_types())
+      return lift_flat_values(subtask, MAX_FLAT_PARAMS, flat_args, ft.param_types())
     def on_return(results):
       nonlocal flat_results
-      flat_results = lower_sync_values(subtask, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
+      flat_results = lower_flat_values(subtask, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
     await callee(task, on_block, on_start, on_return)
     task.inst.calling_sync_import = False
     subtask.finish()
@@ -1434,10 +1413,10 @@ async def canon_lower(opts, callee, ft, task, flat_args):
         eager_result.set_result('block')
       def on_start():
         subtask.start()
-        return lift_async_values(subtask, flat_args, ft.param_types())
+        return lift_flat_values(subtask, 1, flat_args, ft.param_types())
       def on_return(results):
         subtask.return_()
-        lower_async_values(subtask, results, ft.result_types(), flat_args)
+        lower_flat_values(subtask, 0, results, ft.result_types(), flat_args)
       await callee(task, on_block, on_start, on_return)
       subtask.finish()
       if not eager_result.done():
@@ -1510,7 +1489,7 @@ async def canon_task_start(task, core_ft, flat_args):
   trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType([], task.ft.params), 'lower'))
   task.start()
   args = task.on_start()
-  flat_results = lower_sync_values(task, MAX_FLAT_RESULTS, args, task.ft.param_types(), CoreValueIter(flat_args))
+  flat_results = lower_flat_values(task, MAX_FLAT_RESULTS, args, task.ft.param_types(), CoreValueIter(flat_args))
   assert(len(core_ft.results) == len(flat_results))
   return flat_results
 
@@ -1521,7 +1500,7 @@ async def canon_task_return(task, core_ft, flat_args):
   trap_if(task.opts.sync)
   trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType(task.ft.results, []), 'lower'))
   task.return_()
-  results = lift_sync_values(task, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_types())
+  results = lift_flat_values(task, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_types())
   task.on_return(results)
   assert(len(core_ft.results) == 0)
   return []

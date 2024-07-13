@@ -359,13 +359,13 @@ def test_roundtrip(t, v):
 
   asyncio.run(caller_task.enter())
 
-  flat_args = lower_sync_values(caller_task, definitions.MAX_FLAT_PARAMS, [v], [t])
+  flat_args = lower_flat_values(caller_task, definitions.MAX_FLAT_PARAMS, [v], [t])
   if return_in_heap:
     flat_args += [ caller_heap.realloc(0, 0, alignment(t), elem_size(t)) ]
   flat_results = asyncio.run(canon_lower(caller_opts, lifted_callee, ft, caller_task, flat_args))
   if return_in_heap:
     flat_results = [ flat_args[-1] ]
-  [got] = lift_sync_values(caller_task, definitions.MAX_FLAT_PARAMS, CoreValueIter(flat_results), [t])
+  [got] = lift_flat_values(caller_task, definitions.MAX_FLAT_PARAMS, CoreValueIter(flat_results), [t])
   caller_task.exit()
 
   if got != v:
