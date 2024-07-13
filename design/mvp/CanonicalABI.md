@@ -1558,9 +1558,6 @@ As shown here, the core signatures `async` functions use a lower limit on the
 maximum number of parameters (1) and results (0) passed as scalars before
 falling back to passing through memory.
 
-based on the function type (parameters and results are passed through memory
-pointed to by the fixed `i32` parameters).
-
 Presenting the definition of `flatten_type` piecewise, we start with the
 top-level case analysis:
 ```python
