@@ -11,6 +11,8 @@ being specified here.
   * [Despecialization](#despecialization)
   * [Alignment](#alignment)
   * [Element Size](#element-size)
+  * [Call Context](#call-context)
+  * [Canonical ABI Options](#canonical-abi-options)
   * [Runtime State](#runtime-state)
   * [Loading](#loading)
   * [Storing](#storing)
@@ -223,17 +225,21 @@ def num_i32_flags(labels):
   return math.ceil(len(labels) / 32)
 ```
 
-### Runtime State
+### Call Context
 
 The subsequent definitions of loading and storing a value from linear memory
-require additional runtime state, which is threaded through most subsequent
-definitions via the `cx` parameter of type `CallContext`:
+require additional configuration and state, which is threaded through most
+subsequent definitions via the `cx` parameter of type `CallContext`:
 ```python
 @dataclass
 class CallContext:
   opts: CanonicalOptions
   inst: ComponentInstance
 ```
+Note that the `Task` and `Subtask` classes defined below derive `CallContext`,
+adding additional state only used for export and import calls, resp.
+
+### Canonical ABI Options
 
 The `opts` field of `CallContext` contains all the possible `canonopt`
 immediates that can be passed to the `canon` definition being implemented.
@@ -247,6 +253,11 @@ class CanonicalOptions:
   sync: bool = True # = !canonopt.async
   callback: Optional[Callable] = None
 ```
+(Note that the `async` `canonopt` is inverted to `sync` here for the practical
+reason that `async` is a keyword and most branches below want to start with the
+`sync = True` case.)
+
+### Runtime State
 
 The `inst` field of `CallContext` points to the component instance which the
 `canon`-generated function is closed over. Component instances contain all the
@@ -1499,8 +1510,8 @@ With only the definitions above, the Canonical ABI would be forced to place all
 parameters and results in linear memory. While this is necessary in the general
 case, in many cases performance can be improved by passing small-enough values
 in registers by using core function parameters and results. To support this
-optimization, the Canonical ABI defines `flatten` to map component function
-types to core function types by attempting to decompose all the
+optimization, the Canonical ABI defines `flatten_functype` to map component
+function types to core function types by attempting to decompose all the
 non-dynamically-sized component value types into core value types.
 
 For a variety of [practical][Implementation Limits] reasons, we need to limit
@@ -1519,7 +1530,7 @@ have already allocated space for the return value (e.g., efficiently on the
 stack), passing in an `i32` pointer as an parameter instead of returning an
 `i32` as a return value.
 
-Given all this, the top-level definition of `flatten` is:
+Given all this, the top-level definition of `flatten_functype` is:
 ```python
 MAX_FLAT_PARAMS = 16
 MAX_FLAT_RESULTS = 1
@@ -1881,7 +1892,7 @@ def lift_heap_values(cx, vi, ts):
 
 Symmetrically, the `lower_flat_values` function defines how to lower a
 list of component-level values `vs` of types `ts` into a list of core
-values. As already described for [`flatten`](#flattening) above,
+values. As already described for [`flatten_functype`](#flattening) above,
 lowering handles the greater-than-`max_flat` case by either allocating
 storage with `realloc` or accepting a caller-allocated buffer as an
 out-param:

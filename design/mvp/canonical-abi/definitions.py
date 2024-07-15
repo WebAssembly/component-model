@@ -274,12 +274,14 @@ def elem_size_flags(labels):
 def num_i32_flags(labels):
   return math.ceil(len(labels) / 32)
 
-### Runtime State
+### Call Context
 
 @dataclass
 class CallContext:
   opts: CanonicalOptions
   inst: ComponentInstance
+
+### Canonical ABI Options
 
 @dataclass
 class CanonicalOptions:
@@ -289,6 +291,8 @@ class CanonicalOptions:
   post_return: Optional[Callable] = None
   sync: bool = True # = !canonopt.async
   callback: Optional[Callable] = None
+
+### Runtime State
 
 class ComponentInstance:
   # core module instance state
