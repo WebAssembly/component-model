@@ -158,6 +158,7 @@ back to sequences of `i32`s when there are more than 32 flags.
 ```python
 def alignment_flags(labels):
   n = len(labels)
+  assert(0 < n <= 32)
   if n <= 8: return 1
   if n <= 16: return 2
   return 4
@@ -216,13 +217,10 @@ def elem_size_variant(cases):
 
 def elem_size_flags(labels):
   n = len(labels)
-  assert(n > 0)
+  assert(0 < n <= 32)
   if n <= 8: return 1
   if n <= 16: return 2
-  return 4 * num_i32_flags(labels)
-
-def num_i32_flags(labels):
-  return math.ceil(len(labels) / 32)
+  return 4
 ```
 
 ### Call Context
@@ -1584,7 +1582,7 @@ def flatten_type(t):
     case String() | List(_)   : return ['i32', 'i32']
     case Record(fields)       : return flatten_record(fields)
     case Variant(cases)       : return flatten_variant(cases)
-    case Flags(labels)        : return ['i32'] * num_i32_flags(labels)
+    case Flags(labels)        : return ['i32']
     case Own(_) | Borrow(_)   : return ['i32']
 ```
 
@@ -1755,16 +1753,12 @@ def wrap_i64_to_i32(i):
   return i % (1 << 32)
 ```
 
-Finally, flags are lifted by OR-ing together all the flattened `i32` values
-and then lifting to a record the same way as when loading flags from linear
-memory.
+Finally, flags are lifted by lifting to a record the same way as when loading
+flags from linear memory.
 ```python
 def lift_flat_flags(vi, labels):
-  i = 0
-  shift = 0
-  for _ in range(num_i32_flags(labels)):
-    i |= (vi.next('i32') << shift)
-    shift += 32
+  assert(0 < len(labels) <= 32)
+  i = vi.next('i32')
   return unpack_flags_from_int(i, labels)
 ```
 
@@ -1857,16 +1851,11 @@ def lower_flat_variant(cx, v, cases):
   return [case_index] + payload
 ```
 
-Finally, flags are lowered by slicing the bit vector into `i32` chunks:
+Finally, flags are lowered by packing the flags into on `i32` bitvector.
 ```python
 def lower_flat_flags(v, labels):
-  i = pack_flags_into_int(v, labels)
-  flat = []
-  for _ in range(num_i32_flags(labels)):
-    flat.append(i & 0xffffffff)
-    i >>= 32
-  assert(i == 0)
-  return flat
+  assert(0 < len(labels) <= 32)
+  return [pack_flags_into_int(v, labels)]
 ```
 
 ### Lifting and Lowering Values

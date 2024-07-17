@@ -114,7 +114,7 @@ test(t, [0], {'a':False,'b':False})
 test(t, [2], {'a':False,'b':True})
 test(t, [3], {'a':True,'b':True})
 test(t, [4], {'a':False,'b':False})
-test(Flags([str(i) for i in range(33)]), [0xffffffff,0x1], { str(i):True for i in range(33) })
+test(Flags([str(i) for i in range(32)]), [0xffffffff], { str(i):True for i in range(32) })
 t = Variant([Case('x',U8()),Case('y',F32()),Case('z',None)])
 test(t, [0,42], {'x': 42})
 test(t, [0,256], {'x': 0})
@@ -304,12 +304,10 @@ test_heap(t, v, [0,2],
           [0xff,0xff,0x1,0, 0,0,0,0])
 test_heap(t, v, [0,2],
           [0xff,0xff,0x3,0, 0,0,0,0])
-t = List(Flags([str(i) for i in range(33)]))
-v = [{ str(i):b for i in range(33) } for b in [True,False]]
+t = List(Flags([str(i) for i in range(32)]))
+v = [{ str(i):b for i in range(32) } for b in [True,False]]
 test_heap(t, v, [0,2],
-          [0xff,0xff,0xff,0xff,0x1,0,0,0, 0,0,0,0,0,0,0,0])
-test_heap(t, v, [0,2],
-          [0xff,0xff,0xff,0xff,0x3,0,0,0, 0,0,0,0,0,0,0,0])
+          [0xff,0xff,0xff,0xff, 0,0,0,0])
 
 def test_flatten(t, params, results):
   expect = CoreFuncType(params, results)

@@ -221,6 +221,7 @@ def max_case_alignment(cases):
 
 def alignment_flags(labels):
   n = len(labels)
+  assert(0 < n <= 32)
   if n <= 8: return 1
   if n <= 16: return 2
   return 4
@@ -266,13 +267,10 @@ def elem_size_variant(cases):
 
 def elem_size_flags(labels):
   n = len(labels)
-  assert(n > 0)
+  assert(0 < n <= 32)
   if n <= 8: return 1
   if n <= 16: return 2
-  return 4 * num_i32_flags(labels)
-
-def num_i32_flags(labels):
-  return math.ceil(len(labels) / 32)
+  return 4
 
 ### Call Context
 
@@ -1100,7 +1098,7 @@ def flatten_type(t):
     case String() | List(_)   : return ['i32', 'i32']
     case Record(fields)       : return flatten_record(fields)
     case Variant(cases)       : return flatten_variant(cases)
-    case Flags(labels)        : return ['i32'] * num_i32_flags(labels)
+    case Flags(labels)        : return ['i32']
     case Own(_) | Borrow(_)   : return ['i32']
 
 def flatten_record(fields):
@@ -1222,11 +1220,8 @@ def wrap_i64_to_i32(i):
   return i % (1 << 32)
 
 def lift_flat_flags(vi, labels):
-  i = 0
-  shift = 0
-  for _ in range(num_i32_flags(labels)):
-    i |= (vi.next('i32') << shift)
-    shift += 32
+  assert(0 < len(labels) <= 32)
+  i = vi.next('i32')
   return unpack_flags_from_int(i, labels)
 
 ### Flat Lowering
@@ -1294,13 +1289,8 @@ def lower_flat_variant(cx, v, cases):
   return [case_index] + payload
 
 def lower_flat_flags(v, labels):
-  i = pack_flags_into_int(v, labels)
-  flat = []
-  for _ in range(num_i32_flags(labels)):
-    flat.append(i & 0xffffffff)
-    i >>= 32
-  assert(i == 0)
-  return flat
+  assert(0 < len(labels) <= 32)
+  return [pack_flags_into_int(v, labels)]
 
 ### Lifting and Lowering Values
 
