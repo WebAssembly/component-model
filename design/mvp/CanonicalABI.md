@@ -1535,13 +1535,26 @@ Given all this, the top-level definition of `flatten_functype` is:
 MAX_FLAT_PARAMS = 16
 MAX_FLAT_RESULTS = 1
 
-def flatten_functype(opts, ft, context):
-  flat_params = flatten_types(ft.param_types())
-  flat_results = flatten_types(ft.result_types())
+class Needs:
+  memory: bool = False
+  realloc: bool = False
+
+def reverse_context(context):
+  match context:
+    case 'lift'  : return 'lower'
+    case 'lower' : return 'lift'
+
+def flatten_functype(opts, ft, context, needs):
+  flat_params = flatten_types(ft.param_types(), reverse_context(context), needs)
+  flat_results = flatten_types(ft.result_types(), context, needs)
   if opts.sync:
     if len(flat_params) > MAX_FLAT_PARAMS:
+      needs.memory = True
+      if context == 'lift':
+        needs.realloc = True
       flat_params = ['i32']
     if len(flat_results) > MAX_FLAT_RESULTS:
+      needs.memory = True
       match context:
         case 'lift':
           flat_results = ['i32']
@@ -1556,23 +1569,29 @@ def flatten_functype(opts, ft, context):
         flat_results = []
       case 'lower':
         if len(flat_params) > 1:
+          needs.memory = True
           flat_params = ['i32']
         if len(flat_results) > 0:
+          needs.memory = True
           flat_params += ['i32']
         flat_results = ['i32']
     return CoreFuncType(flat_params, flat_results)
-
-def flatten_types(ts):
-  return [ft for t in ts for ft in flatten_type(t)]
 ```
+The `Needs` object tracks whether a Canonical ABI call requires the
+`memory` or `realloc` `canonopt`s to be set, as required by Component
+Model validation.
+
 As shown here, the core signatures `async` functions use a lower limit on the
 maximum number of parameters (1) and results (0) passed as scalars before
 falling back to passing through memory.
 
-Presenting the definition of `flatten_type` piecewise, we start with the
+Presenting the definition of `flatten_type(s)` piecewise, we start with the
 top-level case analysis:
 ```python
-def flatten_type(t):
+def flatten_types(ts, context, needs):
+  return [ft for t in ts for ft in flatten_type(t, context, needs)]
+
+def flatten_type(t, context, needs):
   match despecialize(t):
     case Bool()               : return ['i32']
     case U8() | U16() | U32() : return ['i32']
@@ -1581,19 +1600,29 @@ def flatten_type(t):
     case F32()                : return ['f32']
     case F64()                : return ['f64']
     case Char()               : return ['i32']
-    case String() | List(_)   : return ['i32', 'i32']
-    case Record(fields)       : return flatten_record(fields)
-    case Variant(cases)       : return flatten_variant(cases)
+    case Record(fields)       : return flatten_record(fields, context, needs)
+    case Variant(cases)       : return flatten_variant(cases, context, needs)
     case Flags(labels)        : return ['i32'] * num_i32_flags(labels)
     case Own(_) | Borrow(_)   : return ['i32']
+    case String() | List(_):
+      needs.memory = True
+      if context == 'lower':
+        needs.realloc = True
+      return ['i32', 'i32']
 ```
+Note that `context` refers to whether the particular *value* is being lifted or
+lowered, not whether this is part of a lifted or lowered call to a function. In
+particular, `flatten_functype` above reverses the direction of parameters since
+a lifted function call lowers its parameters. Thus, `needs.realloc` is only set
+for the string/list parameters of lifted exports and results of lowered
+imports.
 
 Record flattening simply flattens each field in sequence.
 ```python
-def flatten_record(fields):
+def flatten_record(fields, context, needs):
   flat = []
   for f in fields:
-    flat += flatten_type(f.t)
+    flat += flatten_type(f.t, context, needs)
   return flat
 ```
 
@@ -1606,16 +1635,16 @@ case, all flattened variants are passed with the same static set of core types,
 which may involve, e.g., reinterpreting an `f32` as an `i32` or zero-extending
 an `i32` into an `i64`.
 ```python
-def flatten_variant(cases):
+def flatten_variant(cases, context, needs):
   flat = []
   for c in cases:
     if c.t is not None:
-      for i,ft in enumerate(flatten_type(c.t)):
+      for i,ft in enumerate(flatten_type(c.t, context, needs)):
         if i < len(flat):
           flat[i] = join(flat[i], ft)
         else:
           flat.append(ft)
-  return flatten_type(discriminant_type(cases)) + flat
+  return flatten_type(discriminant_type(cases), context, needs) + flat
 
 def join(a, b):
   if a == b: return a
@@ -1727,7 +1756,7 @@ reinterprets between the different types appropriately and also traps if the
 high bits of an `i64` are set for a 32-bit type:
 ```python
 def lift_flat_variant(cx, vi, cases):
-  flat_types = flatten_variant(cases)
+  flat_types = flatten_variant(cases, 'lift', Needs())
   assert(flat_types.pop(0) == 'i32')
   case_index = vi.next('i32')
   trap_if(case_index >= len(cases))
@@ -1837,14 +1866,14 @@ manually coercing the otherwise-incompatible type pairings allowed by `join`:
 ```python
 def lower_flat_variant(cx, v, cases):
   case_index, case_value = match_case(v, cases)
-  flat_types = flatten_variant(cases)
+  flat_types = flatten_variant(cases, 'lower', Needs())
   assert(flat_types.pop(0) == 'i32')
   c = cases[case_index]
   if c.t is None:
     payload = []
   else:
     payload = lower_flat(cx, case_value, c.t)
-    for i,(fv,have) in enumerate(zip(payload, flatten_type(c.t))):
+    for i,(fv,have) in enumerate(zip(payload, flatten_type(c.t, 'lower', Needs()))):
       want = flat_types.pop(0)
       match (have, want):
         case ('f32', 'i32') : payload[i] = encode_float_as_i32(fv)
@@ -1876,7 +1905,7 @@ parameters or results (given by the `CoreValueIter` `vi`) into a tuple
 of component-level values with types `ts`.
 ```python
 def lift_flat_values(cx, max_flat, vi, ts):
-  flat_types = flatten_types(ts)
+  flat_types = flatten_types(ts, 'lift', Needs())
   if len(flat_types) > max_flat:
     return lift_heap_values(cx, vi, ts)
   else:
@@ -1900,7 +1929,7 @@ out-param:
 def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
   assert(cx.inst.may_leave)
   cx.inst.may_leave = False
-  flat_types = flatten_types(ts)
+  flat_types = flatten_types(ts, 'lower', Needs())
   if len(flat_types) > max_flat:
     flat_vals = lower_heap_values(cx, vs, ts, out_param)
   else:
@@ -2297,7 +2326,7 @@ caller and lowers them into the current instance:
 async def canon_task_start(task, core_ft, flat_args):
   assert(len(core_ft.params) == len(flat_args))
   trap_if(task.opts.sync)
-  trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType([], task.ft.params), 'lower'))
+  trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType([], task.ft.params), 'lower', Needs()))
   task.start()
   args = task.on_start()
   flat_results = lower_flat_values(task, MAX_FLAT_RESULTS, args, task.ft.param_types(), CoreValueIter(flat_args))
@@ -2327,7 +2356,7 @@ current instance and passes them to the caller:
 async def canon_task_return(task, core_ft, flat_args):
   assert(len(core_ft.params) == len(flat_args))
   trap_if(task.opts.sync)
-  trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType(task.ft.results, []), 'lower'))
+  trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType(task.ft.results, []), 'lower', Needs()))
   task.return_()
   results = lift_flat_values(task, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_types())
   task.on_return(results)

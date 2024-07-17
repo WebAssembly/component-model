@@ -319,13 +319,13 @@ def test_flatten(t, params, results):
 
   if len(results) > definitions.MAX_FLAT_RESULTS:
     expect.results = ['i32']
-  got = flatten_functype(CanonicalOptions(), t, 'lift')
+  got = flatten_functype(CanonicalOptions(), t, 'lift', Needs())
   assert(got == expect)
 
   if len(results) > definitions.MAX_FLAT_RESULTS:
     expect.params += ['i32']
     expect.results = []
-  got = flatten_functype(CanonicalOptions(), t, 'lower')
+  got = flatten_functype(CanonicalOptions(), t, 'lower', Needs())
   assert(got == expect)
 
 test_flatten(FuncType([U8(),F32(),F64()],[]), ['i32','f32','f64'], [])
@@ -355,7 +355,7 @@ def test_roundtrip(t, v):
   caller_inst = ComponentInstance()
   caller_task = Task(caller_opts, caller_inst, None, lambda:())
 
-  return_in_heap = len(flatten_types([t])) > definitions.MAX_FLAT_RESULTS
+  return_in_heap = len(flatten_types([t], 'lift', Needs())) > definitions.MAX_FLAT_RESULTS
 
   asyncio.run(caller_task.enter())
 
