@@ -988,8 +988,11 @@ deprecated-gate ::= '@deprecated' '(' version-field ( ',' message-field )? ')'
 
 feature-field ::= 'feature' '=' id
 version-field ::= 'version' '=' <valid semver>
-message-field ::= 'message' '=' message
+message-field ::= 'message' '=' <core:string>
 ```
+
+In this syntax `<core:string>` refers to core Wasm's [string
+value](https://webassembly.github.io/spec/core/text/values.html#text-string).
 
 As part of WIT validation, any item that refers to another gated item must also
 be compatibly gated. For example, this is an error:
