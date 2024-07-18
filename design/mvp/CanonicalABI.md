@@ -1851,7 +1851,7 @@ def lower_flat_variant(cx, v, cases):
   return [case_index] + payload
 ```
 
-Finally, flags are lowered by packing the flags into on `i32` bitvector.
+Finally, flags are lowered by packing the flags into an `i32` bitvector.
 ```python
 def lower_flat_flags(v, labels):
   assert(0 < len(labels) <= 32)
