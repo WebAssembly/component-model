@@ -978,9 +978,10 @@ enable the feature by default.
 
 Specifically, the syntax for feature gates is:
 ```wit
-gate ::= unstable-gate
-       | since-gate
-       | deprecated-gate
+gate ::= gate-item*
+gate-item ::= unstable-gate
+            | since-gate
+            | deprecated-gate
 
 unstable-gate ::= '@unstable' '(' feature-field ')'
 since-gate ::= '@since' '(' version-field ( ',' feature-field )? ')'
