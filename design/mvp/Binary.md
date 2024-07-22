@@ -168,6 +168,7 @@ deftype       ::= dvt:<defvaltype>                        => dvt
                 | ft:<functype>                           => ft
                 | ct:<componenttype>                      => ct
                 | it:<instancetype>                       => it
+                | rt:<resourcetype>                       => rt
 primvaltype   ::= 0x7f                                    => bool
                 | 0x7e                                    => s8
                 | 0x7d                                    => u8
