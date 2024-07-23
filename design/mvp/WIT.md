@@ -958,10 +958,10 @@ change type or be removed at any time. An important expectation set by the
 default unless explicitly opted-into by the developer.
 
 Finally, the `@deprecated` gate on `e` indicates that `e` should no longer be
-used starting version `0.2.1`. `@deprecated` gates can carry an optional
-"message" field which can be used to elaborate why the feature should no longer
-be used and which feature to use instead. Both toolchains and host runtimes may
-warn users if they detect an `@deprecated` API is being used.
+used starting version `0.2.1`. Both toolchains and host runtimes may
+warn users if they detect an `@deprecated` API is being used. An `@deprecated`
+gate is required to always be paired up with an `@since` gate. It is
+semantically invalid to use `@deprecated` without also using `@since`.
 
 Together, these gates support a development flow in which new features start
 with an `@unstable` gate while the details are still being hashed out. Then,
@@ -985,7 +985,7 @@ gate-item ::= unstable-gate
 
 unstable-gate ::= '@unstable' '(' feature-field ')'
 since-gate ::= '@since' '(' version-field ( ',' feature-field )? ')'
-deprecated-gate ::= '@deprecated' '(' version-field ( ',' message-field )? ')'
+deprecated-gate ::= '@deprecated' '(' version-field ')'
 
 feature-field ::= 'feature' '=' id
 version-field ::= 'version' '=' <valid semver>
