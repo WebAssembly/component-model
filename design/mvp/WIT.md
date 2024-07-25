@@ -65,8 +65,7 @@ WIT packages can be defined in a collection of files. At least one of these
 files must specify a package name. Multiple files can specify the `package`,
 though they must all agree on what the package name is.
 
-Alternatively, many packages can be declared consecutively in one or more
-files, if the "explicit" package notation is used:
+Additionally, many packages can be declared consecutively in one or more files, if the "explicit" package notation is used:
 
 ```wit
 package local:a {
@@ -77,6 +76,8 @@ package local:b {
   interface bar {}
 }
 ```
+
+It is worth noting that when defining packages "explicitly" with a scope, that it does not remove the need for the "root" package declaration above. That is, there must be a single "root" package that is the container of all such "explicitly" defined packages. 
 
 Package names are used to generate the [names of imports and exports]
 in the Component Model's representation of [`interface`s][interfaces] and
@@ -890,35 +891,14 @@ readability but this isn't required.
 Concretely, the structure of a `wit` file is:
 
 ```ebnf
-wit-file ::= explicit-package-list | implicit-package-definition
-```
-
-Files may be organized in two arrangements. The first of these is as a series
-of multiple consecutive "explicit" `package ... {...}` declarations, with the
-package's contents contained within the brackets.
-
-```ebnf
-explicit-package-list ::= explicit-package-definition*
+wit-file ::= package-decl? (package-items | explicit-package-definition)*
 
 explicit-package-definition ::= package-decl '{' package-items* '}'
-```
 
-Alternatively, a file may "implicitly" consist of an optional `package ...;`
-declaration, followed by a list of package items.
-
-```ebnf
-implicit-package-definition ::= package-decl? package-items*
-```
-
-These two structures cannot be mixed: a file may be written in either in the
-explicit or implicit styles, but not both at once.
-
-All other declarations in a `wit` document are tied to a package, and defined
-as follows. A package definition consists of one or more such items:
-
-```ebnf
 package-items ::= toplevel-use-item | interface-item | world-item
 ```
+
+Essentially, these top level items are [worlds], [interfaces], [use statements][use] and other package defintions.
 
 ### Feature Gates
 
