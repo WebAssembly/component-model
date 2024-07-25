@@ -941,7 +941,8 @@ interface foo {
   @unstable(feature = fancier-foo)
   d: func();
 
-  @deprecated(version = 0.2.1)
+  @since(version = 0.2.0)
+  @deprecated(version = 0.2.2)
   e: func();
 }
 ```
@@ -958,7 +959,7 @@ change type or be removed at any time. An important expectation set by the
 default unless explicitly opted-into by the developer.
 
 Finally, the `@deprecated` gate on `e` indicates that `e` should no longer be
-used starting version `0.2.1`. Both toolchains and host runtimes may warn users
+used starting version `0.2.2`. Both toolchains and host runtimes may warn users
 if they detect an `@deprecated` API is being used. An `@deprecated` gate is
 required to always be paired up with either a `@since` or `@deprecated` gate.
 
