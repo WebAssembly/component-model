@@ -207,7 +207,7 @@ def elem_size(t):
 
 def elem_size_list(elem_type, maybe_length):
   if maybe_length is not None:
-    return maybe_length * size(elem_type)
+    return maybe_length * elem_size(elem_type)
   return 8
 
 def elem_size_record(fields):
