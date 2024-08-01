@@ -47,6 +47,7 @@ implemented, considered stable and included in a future milestone:
 * 🪺: nested namespaces and packages in import/export names
 * 🔀: async
 * 🧵: threading built-ins
+* 🔧: fixed-length lists
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
 this repo merges and supersedes the [module-linking] and [interface-types]
@@ -542,6 +543,7 @@ defvaltype    ::= bool
                 | (record (field "<label>" <valtype>)+)
                 | (variant (case "<label>" <valtype>?)+)
                 | (list <valtype>)
+                | (list <valtype> <u32>) 🔧
                 | (tuple <valtype>+)
                 | (flags "<label>"+)
                 | (enum "<label>"+)
@@ -596,7 +598,7 @@ sets of abstract values:
 | `char`                    | [Unicode Scalar Values] |
 | `record`                  | heterogeneous [tuples] of named values |
 | `variant`                 | heterogeneous [tagged unions] of named values |
-| `list`                    | homogeneous, variable-length [sequences] of values |
+| `list`                    | homogeneous, variable- or fixed-length [sequences] of values |
 | `own`                     | a unique, opaque address of a resource that will be destroyed when this value is dropped |
 | `borrow`                  | an opaque address of a resource that must be dropped before the current export call returns |
 
@@ -627,6 +629,10 @@ component-level there is a `bool` type with `true` and `false` values.
 
 The `record`, `variant`, and `list` types allow for grouping, categorizing,
 and sequencing contained values.
+
+🔧 When the optional `<u32>` immediate of the `list` type constructor is present,
+the list has a fixed length and the representation of the list in memory is
+specialized to this length.
 
 ##### Handle types
 

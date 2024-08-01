@@ -12,7 +12,7 @@ rules, but rather merge the minimal need-to-know elements of both, with just
 enough detail to create a prototype. A complete definition of the binary format
 and validation will be present in the [formal specification](../../spec/).
 
-See the [explainer introduction](Explainer.md) for an explanation of 🪙.
+See [Gated Features](Explainer.md#gated-features) for an explanation of 🪙 and 🔧.
 
 
 ## Component Definitions
@@ -186,6 +186,7 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x72 lt*:vec(<labelvaltype>)            => (record (field lt)*)    (if |lt*| > 0)
                 | 0x71 case*:vec(<case>)                  => (variant case+) (if |case*| > 0)
                 | 0x70 t:<valtype>                        => (list t)
+                | 0x67 t:<valtype> len:<u32>              => (list t len) 🔧
                 | 0x6f t*:vec(<valtype>)                  => (tuple t+)    (if |t*| > 0)
                 | 0x6e l*:vec(<label'>)                   => (flags l+)    (if 0 < |l*| <= 32)
                 | 0x6d l*:vec(<label'>)                   => (enum l+)     (if |l*| > 0)
@@ -446,6 +447,12 @@ nameassoc ::= idx:<u32> name:<name>
 where `namemap` is the same as for core wasm. A particular `sort` should only
 appear once within a `name` section, for example component instances can only be
 named once.
+
+
+## Binary Format Warts to Fix in a 1.0 Release
+
+* The two `list` type codes should be merged into one with an optional immediate.
+* The `0x00` prefix byte of `importname'` and `exportname'` will be removed or repurposed.
 
 
 [`core:byte`]: https://webassembly.github.io/spec/core/binary/values.html#binary-byte
