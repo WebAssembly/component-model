@@ -1042,14 +1042,17 @@ interface calc {
 **First, add new items under an `@unstable` annotation with a `feature` specified:**
 
 ```wit
-package examples:fgates@0.1.1;
+package examples:fgates-calc@0.1.1;
 
 // ... elided ...
 
 interface calc {
   add: func(x: i32, y: i32) -> result<i32, calc-error>;
 
-  @unstable(feature = minus)
+  /// By convention, feature flags should be prefixed with package name to reduce chance of collisions
+  ///
+  /// see: https://github.com/WebAssembly/WASI/blob/main/Contributing.md#filing-changes-to-existing-phase-3-proposals
+  @unstable(feature = fgates-calc-minus)
   sub: func(x: i32, y: i32) -> result<i32, calc-error>;
 }
 ```
@@ -1061,7 +1064,7 @@ Note that if we had to *add* a new variant to `calc-error`, this would be a *bre
 **Second, when the feature is ready to be stabilized, switch to a `@since` annotation:**
 
 ```wit
-package examples:fgates-stabilization@0.1.2;
+package examples:fgates-calc@0.1.2;
 
 // ... elided ...
 
@@ -1073,7 +1076,7 @@ interface calc {
 }
 ```
 
-While you *may* include the `feature` portion of `@since` (i.e. `@since(version = 0.1.2, feature = minus)`), it is *ignored* by tooling and is only informational once the feature is stabilized.
+While you *may* include the `feature` portion of `@since` (i.e. `@since(version = 0.1.2, feature = fgates-calc-minus)`), it is *ignored* by tooling and is only informational once the feature is stabilized.
 
 #### Scenario: Deprecation of an existing stable feature
 
