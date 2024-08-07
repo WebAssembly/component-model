@@ -642,7 +642,7 @@ interface a {
   resource r;
 }
 interface b {
-  use a.{r}; 
+  use a.{r};
   foo: func() -> r;
 }
 
@@ -966,17 +966,21 @@ required to always be paired up with either a `@since` or `@deprecated` gate.
 Together, these gates support a development flow in which new features start
 with an `@unstable` gate while the details are still being hashed out. Then,
 once the feature is stable (and, in a WASI context, voted upon), the
-`@unstable` gate is switched to a `@since` gate. To enable a smooth transition
-(during which producer toolchains are targeting a version earlier than the
-`@since`-specified `version`), the `@since` gate contains an optional `feature`
-field that, when present, says to enable the feature when *either* the target
-version is greator-or-equal *or* the feature name is explicitly enabled by the
-developer. Thus, `c` is enabled if the version is `0.2.2` or newer or the
+`@unstable` gate is switched to a `@since` gate.
+
+To enable a smooth transition (during which producer toolchains are targeting a
+version earlier than the `@since`-specified `version`), the `@since` gate contains
+an optional `feature` field that, when present, says to enable the feature when
+*either* the target version is greater-or-equal *or* the feature name is explicitly
+enabled by the developer.
+
+Thus, `c` is enabled if the version is `0.2.2` or newer or the
 `fancy-foo` feature is explicitly enabled by the developer. The `feature` field
 can be removed once producer toolchains have updated their default version to
 enable the feature by default.
 
 Specifically, the syntax for feature gates is:
+
 ```wit
 gate ::= gate-item*
 gate-item ::= unstable-gate
@@ -993,6 +997,7 @@ version-field ::= 'version' '=' <valid semver>
 
 As part of WIT validation, any item that refers to another gated item must also
 be compatibly gated. For example, this is an error:
+
 ```wit
 interface i {
   @since(version = 1.0.1)
@@ -1001,6 +1006,7 @@ interface i {
   type t2 = t1; // error
 }
 ```
+
 Additionally, if an item is *contained* by a gated item, it must also be
 compatibly gated. For example, this is an error:
 ```wit
@@ -1012,6 +1018,119 @@ interface i {
   bar: func();  // also error: weaker gate
 }
 ```
+
+#### Scenario: Stabilization of a new feature
+
+This section lays out the basic flow and expected usage of feature gate machinery when stabilizing a new feature.
+
+Assume the following WIT package as the initial interface:
+
+```wit
+package examples:fgates@0.1.0;
+
+variant calc-error {
+  integer-overflow,
+  integer-underflow,
+  unexpected,
+}
+
+interface calc {
+  add: func(x: i32, y: i32) -> result<i32, calc-error>;
+}
+```
+
+**First, add new items under an `@unstable` annotation with a `feature` specified:**
+
+```wit
+package examples:fgates-calc@0.1.1;
+
+// ... elided ...
+
+interface calc {
+  add: func(x: i32, y: i32) -> result<i32, calc-error>;
+
+  /// By convention, feature flags should be prefixed with package name to reduce chance of collisions
+  ///
+  /// see: https://github.com/WebAssembly/WASI/blob/main/Contributing.md#filing-changes-to-existing-phase-3-proposals
+  @unstable(feature = fgates-calc-minus)
+  sub: func(x: i32, y: i32) -> result<i32, calc-error>;
+}
+```
+
+At this point, consumers of the WIT can enable feature `minus` through their relevant tooling and get access to the `sub` function.
+
+Note that if we had to *add* a new variant to `calc-error`, this would be a *breaking change* for most if not all downstream bindgen tooling (i.e. the enum would become a new object, incompatible with previous code).
+
+**Second, when the feature is ready to be stabilized, switch to a `@since` annotation:**
+
+```wit
+package examples:fgates-calc@0.1.2;
+
+// ... elided ...
+
+interface calc {
+  add: func(x: i32, y: i32) -> result<i32, calc-error>;
+
+  @since(version = 0.1.2)
+  sub: func(x: i32, y: i32) -> result<i32, calc-error>;
+}
+```
+
+While you *may* include the `feature` portion of `@since` (i.e. `@since(version = 0.1.2, feature = fgates-calc-minus)`), it is *ignored* by tooling and is only informational once the feature is stabilized.
+
+#### Scenario: Deprecation of an existing stable feature
+
+This section lays out the basic flow and expected usage of feature gate machinery when stabilizing a new feature.
+
+Assume the following WIT package as the initial interface:
+
+```wit
+package examples:fgates-deprecation@0.1.1;
+
+variant calc-error {
+  integer-overflow,
+  integer-underflow,
+  unexpected,
+}
+
+interface calc {
+  add-one: func(x: i32) -> result<i32, calc-error>;
+
+  @since(version = 0.1.1)
+  add: func(x: i32, y: i32) -> result<i32, calc-error>;
+}
+```
+
+**First: Add the `@deprecated` annotation to the relevant item in a new version**
+
+```wit
+package examples:fgates-deprecation@0.1.2;
+
+// ... elided ..
+
+interface calc {
+  @deprecated(version = 0.1.2)
+  add-one: func(x: i32) -> result<i32, calc-error>;
+
+  add: func(x: i32, y: i32) -> result<i32, calc-error>;
+}
+```
+
+At this point, tooling consuming this WIT will be able to appropriately alert users to the now-deprecated `add-one` function.
+
+**Second: completely remove the deprecated item in the next SemVer-compliant major version**
+
+```wit
+package examples:fgates-deprecation@0.2.0;
+
+// ... elided ..
+
+interface calc {
+  add: func(x: i32, y: i32) -> result<i32, calc-error>;
+}
+```
+
+In this new "major" version (this is considered a major version under SemVer 0.X rules) -- the `add-one` function can be fully removed.
 
 ## Package declaration
 [package declaration]: #package-declaration
