@@ -65,7 +65,7 @@ WIT packages can be defined in a collection of files. At least one of these
 files must specify a package name. Multiple files can specify the `package`,
 though they must all agree on what the package name is.
 
-Additionally, many packages can be declared consecutively in one or more files, if the "explicit" package notation is used:
+Additionally, many packages can be declared consecutively in one or more files, if the following nested package notation is used:
 
 ```wit
 package local:a {
