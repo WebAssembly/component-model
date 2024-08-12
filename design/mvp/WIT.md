@@ -77,7 +77,7 @@ package local:b {
 }
 ```
 
-It is worth noting that when defining packages "explicitly" with a scope, that it does not remove the need for the "root" package declaration above. That is, there must be a single "root" package that is the container of all such "explicitly" defined packages. 
+It is worth noting that defining nested packages does not remove the need for the "root" package declaration above. These nested package definitions simply provide the contents of other packages inline so that they don't have to be otherwise resolved via the filesystem or a registry. 
 
 Package names are used to generate the [names of imports and exports]
 in the Component Model's representation of [`interface`s][interfaces] and
