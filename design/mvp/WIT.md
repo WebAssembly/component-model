@@ -891,9 +891,9 @@ readability but this isn't required.
 Concretely, the structure of a `wit` file is:
 
 ```ebnf
-wit-file ::= package-decl? (package-items | explicit-package-definition)*
+wit-file ::= package-decl? (package-items | nested-package-definition)*
 
-explicit-package-definition ::= package-decl '{' package-items* '}'
+nested-package-definition ::= package-decl '{' package-items* '}'
 
 package-items ::= toplevel-use-item | interface-item | world-item
 ```
