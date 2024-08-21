@@ -440,7 +440,6 @@ class Task(CallContext):
 
   async def suspend(self, future):
     assert(current_task.locked())
-    self.maybe_start_pending_task()
     if self.on_block:
       self.on_block()
       self.on_block = None
@@ -449,10 +448,6 @@ class Task(CallContext):
     r = await future
     await current_task.acquire()
     return r
-
-  def maybe_start_pending_task(self):
-    if self.inst.pending_tasks and self.may_enter():
-      self.inst.pending_tasks.pop(0).set_result(None)
 
   def create_borrow(self):
     self.borrow_count += 1
@@ -476,8 +471,13 @@ class Task(CallContext):
     self.events.put_nowait(subtask)
 
   async def wait(self):
+    self.maybe_start_pending_task()
     subtask = await self.suspend(self.events.get())
     return self.process_event(subtask)
+
+  def maybe_start_pending_task(self):
+    if self.inst.pending_tasks and self.may_enter():
+      self.inst.pending_tasks.pop(0).set_result(None)
 
   def process_event(self, subtask):
     assert(subtask.supertask is self)
@@ -493,6 +493,7 @@ class Task(CallContext):
     return self.process_event(self.events.get_nowait())
 
   async def yield_(self):
+    self.maybe_start_pending_task()
     await self.suspend(asyncio.sleep(0))
 
   def exit(self):
