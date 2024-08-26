@@ -567,14 +567,14 @@ in-progress:
     return not self.inst.backpressure and not self.inst.calling_sync_import
 ```
 
-The key method of `Task`, used by `enter`, `wait` and `yield_`, is `suspend`.
-`Task.suspend` takes an `asyncio.Future` and waits on it, while allowing other
-tasks make progress. When suspending, there are two cases to consider:
+The key method of `Task`, used by `enter`, `wait` and `yield_`, is `suspend`,
+which takes an `asyncio.Future` to `await` on. When suspending, there are two
+cases to consider:
 * This is the first time the current `Task` has blocked and thus there may be
-  an `async`-lowered caller waiting to find out that its call blocked (which we
-  signal by calling the `on_block` handler that the caller passed to
+  an `async`-lowered caller waiting to find out that the callee blocked (which
+  is signalled by calling the `on_block` handler that the caller passed to
   `canon_lift`).
-* This task has already blocked in the past (signaled by `on_block` being
+* This task has already blocked in the past (signalled by `on_block` being
   `None`) and thus there is no `async`-lowered caller to switch to and so we
   let Python's `asyncio` scheduler non-deterministically pick some other task
   that is ready to go, waiting to `acquire` the `current_task` lock.
@@ -598,41 +598,6 @@ reimplemented using the [`suspend`] instruction of the [typed continuations]
 proposal, removing the need for `on_block` and the subtle calling contract
 between `Task.suspend` and `canon_lift`.
 
-The `borrow_count` field is used by the following methods to track the number
-of borrowed handles that were passed as parameters to the export that have not
-yet been dropped (and thus might dangle if the caller destroys the resource
-after this export call finishes):
-```python
-  def create_borrow(self):
-    self.borrow_count += 1
-
-  def drop_borrow(self):
-    assert(self.borrow_count > 0)
-    self.borrow_count -= 1
-```
-The `exit` defined below traps if `borrow_count` is not zero when the lifted
-call completes.
-
-All `Task`s (whether lifted `async` or not) are allowed to call `async`-lowered
-imports. Calling an `async`-lowered import creates an `AsyncSubtask` (defined
-below) which is stored in the current component instance's `async_subtasks`
-table and tracked by the current task's `num_async_subtasks` counter, which is
-guarded to be `0` in `Task.exit` (below) to ensure [structured concurrency].
-```python
-  def add_async_subtask(self, subtask):
-    assert(subtask.supertask is None and subtask.index is None)
-    subtask.supertask = self
-    subtask.index = self.inst.async_subtasks.add(subtask)
-    self.num_async_subtasks += 1
-    return subtask.index
-
-  def async_subtask_made_progress(self, subtask):
-    assert(subtask.supertask is self)
-    if subtask.enqueued:
-      return
-    subtask.enqueued = True
-    self.events.put_nowait(subtask)
-```
 While a task is running, it may call `wait` (via `canon task.wait` or, when a
 `callback` is present, by returning to the event loop) to block until there is
 progress on one of the task's async subtasks. Although the Python code uses an
@@ -681,6 +646,40 @@ emulated in the Python code here by awaiting a `sleep(0)`).
   async def yield_(self):
     self.maybe_start_pending_task()
     await self.suspend(asyncio.sleep(0))
+```
+
+All `Task`s (whether lifted `async` or not) are allowed to call `async`-lowered
+imports. Calling an `async`-lowered import creates an `AsyncSubtask` (defined
+below) which is stored in the current component instance's `async_subtasks`
+table and tracked by the current task's `num_async_subtasks` counter, which is
+guarded to be `0` in `Task.exit` (below) to ensure [structured concurrency].
+```python
+  def add_async_subtask(self, subtask):
+    assert(subtask.supertask is None and subtask.index is None)
+    subtask.supertask = self
+    subtask.index = self.inst.async_subtasks.add(subtask)
+    self.num_async_subtasks += 1
+    return subtask.index
+
+  def async_subtask_made_progress(self, subtask):
+    assert(subtask.supertask is self)
+    if subtask.enqueued:
+      return
+    subtask.enqueued = True
+    self.events.put_nowait(subtask)
+```
+
+The `borrow_count` field is used by the following methods to track the number
+of borrowed handles that were passed as parameters to the export that have not
+yet been dropped (and thus might dangle if the caller destroys the resource
+after this export call finishes):
+```python
+  def create_borrow(self):
+    self.borrow_count += 1
+
+  def drop_borrow(self):
+    assert(self.borrow_count > 0)
+    self.borrow_count -= 1
 ```
 
 Lastly, when a task exits, the runtime enforces the guard conditions mentioned

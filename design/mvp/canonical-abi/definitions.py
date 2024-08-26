@@ -449,27 +449,6 @@ class Task(CallContext):
     await current_task.acquire()
     return r
 
-  def create_borrow(self):
-    self.borrow_count += 1
-
-  def drop_borrow(self):
-    assert(self.borrow_count > 0)
-    self.borrow_count -= 1
-
-  def add_async_subtask(self, subtask):
-    assert(subtask.supertask is None and subtask.index is None)
-    subtask.supertask = self
-    subtask.index = self.inst.async_subtasks.add(subtask)
-    self.num_async_subtasks += 1
-    return subtask.index
-
-  def async_subtask_made_progress(self, subtask):
-    assert(subtask.supertask is self)
-    if subtask.enqueued:
-      return
-    subtask.enqueued = True
-    self.events.put_nowait(subtask)
-
   async def wait(self):
     self.maybe_start_pending_task()
     subtask = await self.suspend(self.events.get())
@@ -495,6 +474,27 @@ class Task(CallContext):
   async def yield_(self):
     self.maybe_start_pending_task()
     await self.suspend(asyncio.sleep(0))
+
+  def add_async_subtask(self, subtask):
+    assert(subtask.supertask is None and subtask.index is None)
+    subtask.supertask = self
+    subtask.index = self.inst.async_subtasks.add(subtask)
+    self.num_async_subtasks += 1
+    return subtask.index
+
+  def async_subtask_made_progress(self, subtask):
+    assert(subtask.supertask is self)
+    if subtask.enqueued:
+      return
+    subtask.enqueued = True
+    self.events.put_nowait(subtask)
+
+  def create_borrow(self):
+    self.borrow_count += 1
+
+  def drop_borrow(self):
+    assert(self.borrow_count > 0)
+    self.borrow_count -= 1
 
   def exit(self):
     assert(current_task.locked())
@@ -1469,14 +1469,14 @@ async def canon_resource_rep(rt, task, i):
   h = task.inst.handles.get(rt, i)
   return [h.rep]
 
-### `canon task.backpressure`
+### 🔀 `canon task.backpressure`
 
 async def canon_task_backpressure(task, flat_args):
   trap_if(task.opts.sync)
   task.inst.backpressure = bool(flat_args[0])
   return []
 
-### `canon task.start`
+### 🔀 `canon task.start`
 
 async def canon_task_start(task, core_ft, flat_args):
   assert(len(core_ft.params) == len(flat_args))
@@ -1488,7 +1488,7 @@ async def canon_task_start(task, core_ft, flat_args):
   assert(len(core_ft.results) == len(flat_results))
   return flat_results
 
-### `canon task.return`
+### 🔀 `canon task.return`
 
 async def canon_task_return(task, core_ft, flat_args):
   assert(len(core_ft.params) == len(flat_args))
@@ -1500,7 +1500,7 @@ async def canon_task_return(task, core_ft, flat_args):
   assert(len(core_ft.results) == 0)
   return []
 
-### `canon task.wait`
+### 🔀 `canon task.wait`
 
 async def canon_task_wait(task, ptr):
   trap_if(task.opts.callback is not None)
@@ -1508,7 +1508,7 @@ async def canon_task_wait(task, ptr):
   store(task, payload, U32(), ptr)
   return [event]
 
-### `canon task.poll`
+### 🔀 `canon task.poll`
 
 async def canon_task_poll(task, ptr):
   ret = task.poll()
@@ -1517,7 +1517,7 @@ async def canon_task_poll(task, ptr):
   store(task, ret, Tuple([U32(), U32()]), ptr)
   return [1]
 
-### `canon task.yield`
+### 🔀 `canon task.yield`
 
 async def canon_task_yield(task):
   trap_if(task.opts.callback is not None)
