@@ -661,6 +661,60 @@ world w2 {
 > configure that a `use`'d interface is a particular import or a particular
 > export.
 
+## Unlocked Imports (semver)
+
+When working with a registry, the keyword `unlocked-dep` is available to specify version requirements as ranges.
+
+```wit
+world w {
+  unlocked-dep foo:bar@{>=x.x.x <y.y.y};
+}
+```
+
+The binary format has a corresponding [import definition](Explainer.md#import-and-export-definitions) and this WIT syntax informs
+bindgen tooling that it should be used.
+
+The key idea here is to be able to specify a dependency on a _component_, rather than on a wit interface.  Sometimes, as a component author, the goal is to have a dynamic import, where at a time after development is done, one of many implementations of a wit interface is specified, so that in essence your dependency makes your component configurable.  This workflow is well documented across a variety of tools.  Unlocked imports, on the other hand, are available for
+specifying a dependency on a specific implementation of an interface, with a semver range
+
+### Example Unlocked Workflow
+Each language has its own toolchain for creating wasm components that should feel familiar to users of that language.  As an example, somebody authoring a rust component would add the component they're interested in to their `Cargo.toml`.
+
+```
+"foo:bar" = "x.x.x"
+```
+
+Say that the exports of this component match the exports of some `world exports`.  Then the wit used for the component being authored would end up as follows:
+
+```wit
+package my:component
+
+package foo:bar {
+  interface exports {
+    nest some:other/interfacename
+    ...
+  }
+}
+
+world w {
+  unlocked-dep foo:bar/exports@{>=x.x.x <y.y.y}
+}
+```
+
+
+Once this wit is synthesized by the language toolchain based on the language's package file, bindings can be generated and a wasm binary can be compiled which will contain unlocked imports as defined in the [import definition section](Explainer.md#import-and-export-definitions) of the explainer.  Below is an example of the unlocked imports that will be present in the `wat`
+
+```wat
+(import "unlocked-dep=<foo:bar/exports@{>=1.0.0}>")
+```
+
+A wasm component binary that has unlocked imports is referred to as an unlocked component. In general, unlocked components are what would be published to a registry.   Registry aware tools have a command `lock` that will produce a  "locked" component when it resolves dependency versions.  As an example, today the warg cli has a [lock command](https://github.com/bytecodealliance/registry/blob/main/src/commands/lock.rs). This "locked"  component will use locked import statements, rather than unlocked import statements, with pinned version numbers and integrity hashes discovered during package resolution, as can be seen below.
+
+```wat
+(import "locked-dep=<foo:bar/example@1.0.0>,integrity=<sha256-7b582e13fd1f798ed86206850112fe01f837fcbf3210ce29eba8eb087e202f62>")
+```
+
+Locked components aren't runnable unless they are being run by a registry aware runtime.  They serve the role of a reproducible deployment artifact.  In order to run them with a runtime that is not registry aware, one would need to use a `bundle` command, also made available by registry aware toolchains, that will inline component definitions where locked imports exist in a locked component.  The warg cli also has a reference implementation of a [bundle command](https://github.com/bytecodealliance/registry/blob/main/src/commands/bundle.rs).
 ## WIT Functions
 [functions]: #wit-functions
 
