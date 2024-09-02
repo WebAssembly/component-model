@@ -1311,6 +1311,7 @@ canon ::= ...
         | (canon task.wait (core func <id>?)) 🔀
         | (canon task.poll (core func <id>?)) 🔀
         | (canon task.yield (core func <id>?)) 🔀
+        | (canon subtask.drop (core func <id>?)) 🔀
         | (canon thread.spawn <typeidx> (core func <id>?)) 🧵
         | (canon thread.hw_concurrency (core func <id>?)) 🧵
 ```
@@ -1408,6 +1409,10 @@ The `task.yield` built-in has type `[] -> []` and simply allows the runtime to
 switch to another task, allowing a long-running computation to cooperatively
 interleave with other tasks. (See also [`canon_task_yield`] in the Canonical
 ABI explainer.)
+
+The `subtask.drop` built-in has type `[i32] -> []` and removes the indicated
+[subtask](Async.md#subtask-and-supertask) from the current instance's subtask
+table, trapping if the subtask isn't done.
 
 ##### 🧵 Threading built-ins
 

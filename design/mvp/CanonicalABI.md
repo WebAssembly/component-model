@@ -619,9 +619,6 @@ once).
   def process_event(self, subtask):
     assert(subtask.supertask is self)
     subtask.enqueued = False
-    if subtask.state == AsyncCallState.DONE:
-      self.inst.async_subtasks.remove(subtask.index)
-      self.num_async_subtasks -= 1
     return (EventCode(subtask.state), subtask.index)
 ```
 The `pending_tasks` queue (appended to by `enter` above) is emptied by `wait`
@@ -2396,6 +2393,29 @@ Calling `$f` calls `Task.yield_`, trapping if called when there is a `callback`.
 async def canon_task_yield(task):
   trap_if(task.opts.callback is not None)
   await task.yield_()
+  return []
+```
+
+### 🔀 `canon subtask.drop`
+
+For a canonical definition:
+```wasm
+(canon subtask.drop (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param i32))`
+
+Calling `$f` removes the indicated subtask from the instance's table, trapping
+if the subtask isn't done or isn't a subtask of the current task. The guard
+on `enqueued` ensures that supertasks can only drop subtasks once they've been
+officially notified of their completion (via `task.wait` or callback).
+```python
+async def canon_subtask_drop(task, i):
+  subtask = task.inst.async_subtasks.remove(i)
+  trap_if(subtask.enqueued)
+  trap_if(subtask.state != AsyncCallState.DONE)
+  trap_if(subtask.supertask is not task)
+  task.num_async_subtasks -= 1
   return []
 ```
 

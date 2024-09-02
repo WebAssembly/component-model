@@ -549,6 +549,8 @@ async def test_async_to_async():
     event, callidx = await task.wait()
     assert(event == EventCode.CALL_DONE)
     assert(callidx == 1)
+    assert(task.num_async_subtasks == 1)
+    await canon_subtask_drop(task, callidx)
     assert(task.num_async_subtasks == 0)
 
     dtor_fut = asyncio.Future()
@@ -571,6 +573,7 @@ async def test_async_to_async():
     event, callidx = await task.wait()
     assert(event == AsyncCallState.DONE)
     assert(callidx == 1)
+    await canon_subtask_drop(task, callidx)
     assert(task.num_async_subtasks == 0)
 
     [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [42])
@@ -632,6 +635,7 @@ async def test_async_callback():
     if args[0] == 42:
       assert(args[1] == EventCode.CALL_DONE)
       assert(args[2] == 1)
+      await canon_subtask_drop(task, 1)
       return [53]
     elif args[0] == 52:
       assert(args[1] == EventCode.YIELDED)
@@ -642,6 +646,7 @@ async def test_async_callback():
       assert(args[0] == 62)
       assert(args[1] == EventCode.CALL_DONE)
       assert(args[2] == 2)
+      await canon_subtask_drop(task, 2)
       [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [83])
       return [0]
 
@@ -708,6 +713,7 @@ async def test_async_to_sync():
     event, callidx = await task.wait()
     assert(event == EventCode.CALL_DONE)
     assert(callidx == 1)
+    await canon_subtask_drop(task, callidx)
     assert(producer1_done == True)
 
     assert(producer2_done == False)
@@ -716,6 +722,7 @@ async def test_async_to_sync():
     event, callidx = task.poll()
     assert(event == EventCode.CALL_DONE)
     assert(callidx == 2)
+    await canon_subtask_drop(task, callidx)
     assert(producer2_done == True)
 
     assert(task.poll() is None)
@@ -796,6 +803,9 @@ async def test_async_backpressure():
     assert(callidx == 2)
     assert(producer2_done == True)
 
+    await canon_subtask_drop(task, 1)
+    await canon_subtask_drop(task, 2)
+
     assert(task.poll() is None)
 
     await canon_task_start(task, CoreFuncType([],[]), [])
@@ -851,6 +861,10 @@ async def test_sync_using_wait():
     event, callidx = await task.wait()
     assert(event == EventCode.CALL_DONE)
     assert(callidx == 2)
+
+    await canon_subtask_drop(task, 1)
+    await canon_subtask_drop(task, 2)
+
     return []
 
   inst = ComponentInstance()

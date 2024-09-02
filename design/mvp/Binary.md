@@ -282,6 +282,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x0b                                                => (canon task.wait (core func))
            | 0x0c                                                => (canon task.poll (core func))
            | 0x0d                                                => (canon task.yield (core func))
+           | 0x0e                                                => (canon subtask.drop (core func))
 opts     ::= opt*:vec(<canonopt>)                                => opt*
 canonopt ::= 0x00                                                => string-encoding=utf8
            | 0x01                                                => string-encoding=utf16

@@ -451,8 +451,8 @@ features will be added in future chunks to complete "async" in Preview 3:
   concurrency
 * `subtask.cancel`: allow a supertask to signal to a subtask that its result is
   no longer wanted and to please wrap it up promptly
-* `subtask.drop`: allow tail-calling a subtask so that the current wasm
-  instance can be torn down eagerly
+* allow "tail-calling" a subtask so that the current wasm instance can be torn
+  down eagerly
 * `task.index`+`task.wake`: allow tasks in the same instance to wait on and
   wake each other (async condvar-style)
 * `nonblocking` function type attribute: allow a function to declare in its

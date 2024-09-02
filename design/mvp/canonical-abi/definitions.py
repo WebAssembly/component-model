@@ -461,9 +461,6 @@ class Task(CallContext):
   def process_event(self, subtask):
     assert(subtask.supertask is self)
     subtask.enqueued = False
-    if subtask.state == AsyncCallState.DONE:
-      self.inst.async_subtasks.remove(subtask.index)
-      self.num_async_subtasks -= 1
     return (EventCode(subtask.state), subtask.index)
 
   def poll(self):
@@ -1522,4 +1519,14 @@ async def canon_task_poll(task, ptr):
 async def canon_task_yield(task):
   trap_if(task.opts.callback is not None)
   await task.yield_()
+  return []
+
+### 🔀 `canon subtask.drop`
+
+async def canon_subtask_drop(task, i):
+  subtask = task.inst.async_subtasks.remove(i)
+  trap_if(subtask.enqueued)
+  trap_if(subtask.state != AsyncCallState.DONE)
+  trap_if(subtask.supertask is not task)
+  task.num_async_subtasks -= 1
   return []
