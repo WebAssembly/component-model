@@ -138,8 +138,7 @@ Notes:
 ```ebnf
 core:type        ::= dt:<core:deftype>                  => (type dt)        (GC proposal)
 core:deftype     ::= ft:<core:functype>                 => ft               (WebAssembly 1.0)
-                   | st:<core:structtype>               => st               (GC proposal)
-                   | at:<core:arraytype>                => at               (GC proposal)
+                   | 0x00 rt:<core:rectype>             => rt               (WebAssembly 3.0)
                    | mt:<core:moduletype>               => mt
 core:moduletype  ::= 0x50 md*:vec(<core:moduledecl>)    => (module md*)
 core:moduledecl  ::= 0x00 i:<core:import>               => i
@@ -152,7 +151,15 @@ core:importdecl  ::= i:<core:import>                    => i
 core:exportdecl  ::= n:<core:name> d:<core:importdesc>  => (export n d)
 ```
 Notes:
-* Reused Core binary rules: [`core:import`], [`core:importdesc`], [`core:functype`]
+* Reused Core binary rules: [`core:import`], [`core:importdesc`],
+  [`core:functype`], [`core:rectype`]
+* The three branches of `core:deftype` have prefix bytes of 0x60
+  (`core:functype`), 0x50 (`core:moduletype`   ), and 0x00 (`core:rectype`). This
+  is because the component model and the GC specifications (i.e., source of
+  `core:rectype`) have evolved in parallel and independently. Ideally, in the
+  future, the `core:functype` production would be removed as it can be expressed
+  within `core:rectype`. Also, the prefix byte of `core:moduletype` (0x50) will
+  also likely change as well.
 * Validation of `core:moduledecl` rejects `core:moduletype` definitions
   and `outer` aliases of `core:moduletype` definitions inside `type`
   declarators. Thus, as an invariant, when validating a `core:moduletype`, the
@@ -474,6 +481,7 @@ named once.
 [`core:import`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-import
 [`core:importdesc`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-importdesc
 [`core:functype`]: https://webassembly.github.io/spec/core/binary/types.html#binary-functype
+[`core:rectype]: https://webassembly.github.io/gc/core/binary/types.html#recursive-types
 
 [type-imports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
 [module-linking]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md
