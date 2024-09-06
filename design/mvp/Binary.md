@@ -136,7 +136,7 @@ Notes:
 
 (See [Type Definitions](Explainer.md#type-definitions) in the explainer.)
 ```ebnf
-core:type        ::= dt:<core:deftype>                                    => (type dt)        (GC proposal)
+core:type        ::= dt:<core:deftype>                                    => (type dt)
 core:deftype     ::= rt:<core:rectype>                                    => rt               (WebAssembly 3.0)
                    | 0x00 0x50 x*:vec(<core:typeidx>) ct:<core:comptype>  => sub x* ct        (WebAssembly 3.0)
                    | mt:<core:moduletype>                                 => mt
