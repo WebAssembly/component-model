@@ -3,9 +3,6 @@ from definitions import *
 
 asyncio.run(definitions.current_task.acquire())
 
-def unlock_on_block():
-  definitions.current_task.release()
-
 def equal_modulo_string_encoding(s, t):
   if s is None and t is None:
     return True
@@ -351,7 +348,7 @@ def test_roundtrip(t, v):
   caller_heap = Heap(1000)
   caller_opts = mk_opts(caller_heap.memory, 'utf8', caller_heap.realloc)
   caller_inst = ComponentInstance()
-  caller_task = Task(caller_opts, caller_inst, None, lambda:())
+  caller_task = Task(caller_opts, caller_inst, None, None)
 
   return_in_heap = len(flatten_types([t])) > definitions.MAX_FLAT_RESULTS
 
@@ -590,8 +587,7 @@ async def test_async_to_async():
     got = results
 
   consumer_inst = ComponentInstance()
-  await canon_lift(consumer_opts, consumer_inst, consumer, ft, None, unlock_on_block, on_start, on_return)
-  await current_task.acquire()
+  await canon_lift(consumer_opts, consumer_inst, consumer, ft, None, None, on_start, on_return)
   assert(len(got) == 1)
   assert(got[0] == 42)
 
@@ -662,8 +658,7 @@ async def test_async_callback():
   opts.sync = False
   opts.callback = callback
 
-  await canon_lift(opts, consumer_inst, consumer, consumer_ft, None, unlock_on_block, on_start, on_return)
-  await current_task.acquire()
+  await canon_lift(opts, consumer_inst, consumer, consumer_ft, None, None, on_start, on_return)
   assert(got[0] == 83)
 
 asyncio.run(test_async_callback())
@@ -739,8 +734,7 @@ async def test_async_to_sync():
     nonlocal got
     got = results
 
-  await canon_lift(consumer_opts, consumer_inst, consumer, consumer_ft, None, unlock_on_block, on_start, on_return)
-  await current_task.acquire()
+  await canon_lift(consumer_opts, consumer_inst, consumer, consumer_ft, None, None, on_start, on_return)
   assert(got[0] == 83)
 
 asyncio.run(test_async_to_sync())
@@ -820,8 +814,7 @@ async def test_async_backpressure():
     nonlocal got
     got = results
 
-  await canon_lift(consumer_opts, consumer_inst, consumer, consumer_ft, None, unlock_on_block, on_start, on_return)
-  await current_task.acquire()
+  await canon_lift(consumer_opts, consumer_inst, consumer, consumer_ft, None, None, on_start, on_return)
   assert(got[0] == 84)
 
 asyncio.run(test_async_backpressure())
@@ -870,8 +863,7 @@ async def test_sync_using_wait():
   inst = ComponentInstance()
   def on_start(): return []
   def on_return(results): pass
-  await canon_lift(mk_opts(), inst, core_func, ft, None, unlock_on_block, on_start, on_return)
-  await current_task.acquire()
+  await canon_lift(mk_opts(), inst, core_func, ft, None, None, on_start, on_return)
 
 asyncio.run(test_sync_using_wait())
 
