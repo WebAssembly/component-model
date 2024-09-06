@@ -136,18 +136,19 @@ Notes:
 
 (See [Type Definitions](Explainer.md#type-definitions) in the explainer.)
 ```ebnf
-core:type        ::= dt:<core:deftype>                  => (type dt)        (GC proposal)
-core:deftype     ::= rt:<core:rectype>                  => rt               (WebAssembly 3.0)
-                   | mt:<core:moduletype>               => mt
-core:moduletype  ::= 0x50 md*:vec(<core:moduledecl>)    => (module md*)
-core:moduledecl  ::= 0x00 i:<core:import>               => i
-                   | 0x01 t:<core:type>                 => t
-                   | 0x02 a:<core:alias>                => a
-                   | 0x03 e:<core:exportdecl>           => e
-core:alias       ::= s:<core:sort> t:<core:aliastarget> => (alias t (s))
-core:aliastarget ::= 0x01 ct:<u32> idx:<u32>            => outer ct idx
-core:importdecl  ::= i:<core:import>                    => i
-core:exportdecl  ::= n:<core:name> d:<core:importdesc>  => (export n d)
+core:type        ::= dt:<core:deftype>                                    => (type dt)        (GC proposal)
+core:deftype     ::= rt:<core:rectype>                                    => rt               (WebAssembly 3.0)
+                   | 0x00 0x50 x*:vec(<core:typeidx>) ct:<core:comptype>  => sub x* ct        (WebAssembly 3.0)
+                   | mt:<core:moduletype>                                 => mt
+core:moduletype  ::= 0x50 md*:vec(<core:moduledecl>)                      => (module md*)
+core:moduledecl  ::= 0x00 i:<core:import>                                 => i
+                   | 0x01 t:<core:type>                                   => t
+                   | 0x02 a:<core:alias>                                  => a
+                   | 0x03 e:<core:exportdecl>                             => e
+core:alias       ::= s:<core:sort> t:<core:aliastarget>                   => (alias t (s))
+core:aliastarget ::= 0x01 ct:<u32> idx:<u32>                              => outer ct idx
+core:importdecl  ::= i:<core:import>                                      => i
+core:exportdecl  ::= n:<core:name> d:<core:importdesc>                    => (export n d)
 ```
 Notes:
 * Reused Core binary rules: [`core:import`], [`core:importdesc`],
