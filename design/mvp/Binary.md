@@ -137,8 +137,7 @@ Notes:
 (See [Type Definitions](Explainer.md#type-definitions) in the explainer.)
 ```ebnf
 core:type        ::= dt:<core:deftype>                  => (type dt)        (GC proposal)
-core:deftype     ::= ft:<core:functype>                 => ft               (WebAssembly 1.0)
-                   | 0x00 rt:<core:rectype>             => rt               (WebAssembly 3.0)
+core:deftype     ::= rt:<core:rectype>                  => rt               (WebAssembly 3.0)
                    | mt:<core:moduletype>               => mt
 core:moduletype  ::= 0x50 md*:vec(<core:moduledecl>)    => (module md*)
 core:moduledecl  ::= 0x00 i:<core:import>               => i
@@ -152,14 +151,14 @@ core:exportdecl  ::= n:<core:name> d:<core:importdesc>  => (export n d)
 ```
 Notes:
 * Reused Core binary rules: [`core:import`], [`core:importdesc`],
-  [`core:functype`], [`core:rectype`]
-* The three branches of `core:deftype` have prefix bytes of 0x60
-  (`core:functype`), 0x50 (`core:moduletype`   ), and 0x00 (`core:rectype`). This
-  is because the component model and the GC specifications (i.e., source of
-  `core:rectype`) have evolved in parallel and independently. Ideally, in the
-  future, the `core:functype` production would be removed as it can be expressed
-  within `core:rectype`. Also, the prefix byte of `core:moduletype` (0x50) will
-  also likely change as well.
+  [`core:rectype`]
+* Unfortunately, the `core:deftype` rule results in an encoding ambiguity: the
+  `0x50` opcode is used by both `core:moduletype` and `core:subtype`, which can
+  be decoded as a top-level form of `core:rectype`. To resolve this, prior to
+  v1.0 of this specification, we require `core:subtype` to be prefixed by `0x00`
+  in this context (i.e., a `sub` as a component core type is `0x00 0x50`;
+  elsewhere, `0x50`). By the v1.0 release of this specification,
+  `core:moduletype` will receive a new, non-overlapping opcode.
 * Validation of `core:moduledecl` rejects `core:moduletype` definitions
   and `outer` aliases of `core:moduletype` definitions inside `type`
   declarators. Thus, as an invariant, when validating a `core:moduletype`, the
