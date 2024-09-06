@@ -153,12 +153,13 @@ Notes:
 * Reused Core binary rules: [`core:import`], [`core:importdesc`],
   [`core:rectype`]
 * Unfortunately, the `core:deftype` rule results in an encoding ambiguity: the
-  `0x50` opcode is used by both `core:moduletype` and `core:subtype`, which can
-  be decoded as a top-level form of `core:rectype`. To resolve this, prior to
-  v1.0 of this specification, we require `core:subtype` to be prefixed by `0x00`
-  in this context (i.e., a `sub` as a component core type is `0x00 0x50`;
-  elsewhere, `0x50`). By the v1.0 release of this specification,
-  `core:moduletype` will receive a new, non-overlapping opcode.
+  `0x50` opcode is used by both `core:moduletype` and a non-final
+  `core:subtype`, which can be decoded as a top-level form of `core:rectype`. To
+  resolve this, prior to v1.0 of this specification, we require `core:subtype`
+  to be prefixed by `0x00` in this context (i.e., a non-final `sub` as a
+  component core type is `0x00 0x50`; elsewhere, `0x50`). By the v1.0 release of
+  this specification, `core:moduletype` will receive a new, non-overlapping
+  opcode.
 * Validation of `core:moduledecl` rejects `core:moduletype` definitions
   and `outer` aliases of `core:moduletype` definitions inside `type`
   declarators. Thus, as an invariant, when validating a `core:moduletype`, the
