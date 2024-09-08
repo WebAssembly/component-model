@@ -780,7 +780,7 @@ resource XML { ... }
 parse-XML-document: func(s: string) -> XML;
 ```
 
-This form can't lexically represent WIT keywords, so the second form is the
+This form can't lexically represent WIT [keywords](#keywords), so the second form is the
 same syntax with the same restrictions as the first, but prefixed with '%':
 
 ```wit
@@ -856,21 +856,46 @@ bare as an identifier. These are used to help parse the format, and the list of
 keywords is still in flux at this time but the current set is:
 
 ```ebnf
-keyword ::= 'use'
-          | 'type'
-          | 'resource'
-          | 'func'
-          | 'record'
+keyword ::= 'as'
+          | 'bool'
+          | 'borrow'
+          | 'char'
+          | 'constructor'
           | 'enum'
-          | 'flags'
-          | 'variant'
-          | 'static'
-          | 'interface'
-          | 'world'
-          | 'import'
           | 'export'
-          | 'package'
+          | 'f32'
+          | 'f64'
+          | 'flags'
+          | 'from'
+          | 'func'
+          | 'future'
+          | 'import'
           | 'include'
+          | 'interface'
+          | 'list'
+          | 'option'
+          | 'own'
+          | 'package'
+          | 'record'
+          | 'resource'
+          | 'result'
+          | 's16'
+          | 's32'
+          | 's64'
+          | 's8'
+          | 'static'
+          | 'stream'
+          | 'string'
+          | 'tuple'
+          | 'type'
+          | 'u16'
+          | 'u32'
+          | 'u64'
+          | 'u8'
+          | 'use'
+          | 'variant'
+          | 'wit'
+          | 'world'
 ```
 
 ### Integers
