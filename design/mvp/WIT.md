@@ -663,7 +663,7 @@ world w2 {
 
 ## Unlocked Dependency Imports
 
-When working with a registry, the keyword `unlocked-dep` is available to specify version requirements as ranges.
+When working with a registry, the keyword `unlocked-dep` is available to specify dependencies with package name and version requirements.  For example:
 
 ```wit
 world w {
