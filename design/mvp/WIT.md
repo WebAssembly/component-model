@@ -894,7 +894,7 @@ keyword ::= 'as'
           | 'u8'
           | 'use'
           | 'variant'
-          | 'wit'
+          | 'with'
           | 'world'
 ```
 
