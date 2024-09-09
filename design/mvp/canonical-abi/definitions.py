@@ -1420,6 +1420,7 @@ def pack_async_result(i, state):
 ### `canon resource.new`
 
 async def canon_resource_new(rt, task, rep):
+  trap_if(not task.inst.may_leave)
   h = HandleElem(rep, own=True)
   i = task.inst.handles.add(rt, h)
   return [i]
@@ -1427,6 +1428,7 @@ async def canon_resource_new(rt, task, rep):
 ### `canon resource.drop`
 
 async def canon_resource_drop(rt, sync, task, i):
+  trap_if(not task.inst.may_leave)
   inst = task.inst
   h = inst.handles.remove(rt, i)
   flat_results = [] if sync else [0]
@@ -1466,6 +1468,7 @@ async def canon_task_backpressure(task, flat_args):
 
 async def canon_task_start(task, core_ft, flat_args):
   assert(len(core_ft.params) == len(flat_args))
+  trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync)
   trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType([], task.ft.params), 'lower'))
   task.start()
@@ -1478,6 +1481,7 @@ async def canon_task_start(task, core_ft, flat_args):
 
 async def canon_task_return(task, core_ft, flat_args):
   assert(len(core_ft.params) == len(flat_args))
+  trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync)
   trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType(task.ft.results, []), 'lower'))
   task.return_()
@@ -1489,6 +1493,7 @@ async def canon_task_return(task, core_ft, flat_args):
 ### 🔀 `canon task.wait`
 
 async def canon_task_wait(task, ptr):
+  trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback is not None)
   event, payload = await task.wait()
   store(task, payload, U32(), ptr)
@@ -1497,6 +1502,7 @@ async def canon_task_wait(task, ptr):
 ### 🔀 `canon task.poll`
 
 async def canon_task_poll(task, ptr):
+  trap_if(not task.inst.may_leave)
   ret = task.poll()
   if ret is None:
     return [0]
@@ -1506,6 +1512,7 @@ async def canon_task_poll(task, ptr):
 ### 🔀 `canon task.yield`
 
 async def canon_task_yield(task):
+  trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback is not None)
   await task.yield_()
   return []
@@ -1513,6 +1520,7 @@ async def canon_task_yield(task):
 ### 🔀 `canon subtask.drop`
 
 async def canon_subtask_drop(task, i):
+  trap_if(not task.inst.may_leave)
   subtask = task.inst.async_subtasks.remove(i)
   trap_if(subtask.enqueued)
   trap_if(subtask.state != AsyncCallState.DONE)

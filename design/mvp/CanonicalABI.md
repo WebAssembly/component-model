@@ -2111,6 +2111,7 @@ containing the given resource representation in the current component
 instance's handle table:
 ```python
 async def canon_resource_new(rt, task, rep):
+  trap_if(not task.inst.may_leave)
   h = HandleElem(rep, own=True)
   i = task.inst.handles.add(rt, h)
   return [i]
@@ -2131,6 +2132,7 @@ current component instance's handle table and, if the handle was owning, calls
 the resource's destructor.
 ```python
 async def canon_resource_drop(rt, sync, task, i):
+  trap_if(not task.inst.may_leave)
   inst = task.inst
   h = inst.handles.remove(rt, i)
   flat_results = [] if sync else [0]
@@ -2223,6 +2225,7 @@ caller and lowers them into the current instance:
 ```python
 async def canon_task_start(task, core_ft, flat_args):
   assert(len(core_ft.params) == len(flat_args))
+  trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync)
   trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType([], task.ft.params), 'lower'))
   task.start()
@@ -2253,6 +2256,7 @@ current instance and passes them to the caller:
 ```python
 async def canon_task_return(task, core_ft, flat_args):
   assert(len(core_ft.params) == len(flat_args))
+  trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync)
   trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType(task.ft.results, []), 'lower'))
   task.return_()
@@ -2283,6 +2287,7 @@ returning the event (which is currently simply an `AsyncCallState` value)
 and writing the subtask index as an outparam:
 ```python
 async def canon_task_wait(task, ptr):
+  trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback is not None)
   event, payload = await task.wait()
   store(task, payload, U32(), ptr)
@@ -2312,6 +2317,7 @@ available, returning whether or not there was such an event as a boolean and,
 if there was an event, storing the `i32` event+payload pair as an outparam.
 ```python
 async def canon_task_poll(task, ptr):
+  trap_if(not task.inst.may_leave)
   ret = task.poll()
   if ret is None:
     return [0]
@@ -2333,6 +2339,7 @@ Calling `$f` calls `Task.yield_`, trapping if called when there is a `callback`.
 (When there is a callback, yielding is achieved by returning with the LSB set.)
 ```python
 async def canon_task_yield(task):
+  trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback is not None)
   await task.yield_()
   return []
@@ -2353,6 +2360,7 @@ on `enqueued` ensures that supertasks can only drop subtasks once they've been
 officially notified of their completion (via `task.wait` or callback).
 ```python
 async def canon_subtask_drop(task, i):
+  trap_if(not task.inst.may_leave)
   subtask = task.inst.async_subtasks.remove(i)
   trap_if(subtask.enqueued)
   trap_if(subtask.state != AsyncCallState.DONE)
