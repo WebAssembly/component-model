@@ -676,44 +676,65 @@ bindgen tooling that it should be used.
 
 The point of `unlocked-dep` is to specify a dependency on a _component implementation_ (or a semver *range* of implementations), rather than on an abstract WIT interface (with an unspecified implementation).
 
-### Example Unlocked Workflow
-Each language has its own toolchain for creating wasm components that should feel familiar to users of that language.  As an example, somebody authoring a rust component would add the component they're interested in to their `Cargo.toml`.
+### Example Unlocked Dependency Workflow
+Let's say someone authoring a Rust component `my:component` targeting the `wasi:http/proxy` world adds a dependency on another component `foo:bar` by adding the following (hypothetical) lines to their `Cargo.toml`:
 
 ```
-"foo:bar" = "x.x.x"
-```
+[package.metadata.component.target]
+target = "wasi:http/proxy@0.2.0"
 
-Say that the exports of this component match the exports of some `world exports`.  Then the wit used for the component being authored would end up as follows:
-
+[package.metadata.component.dependencies]
+"foo:bar" = "1.2"
+The language toolchain would first generate a new world that augments the target world with an additional unlocked dependency:   
 ```wit
-package my:component
+package my:component;
+world generated-world {
+  include wasi:http/proxy@0.2.0;
+  unlocked-dep foo:bar@{>=1.2.0};
+}
+```
 
-package foo:bar {
+Now say that `foo:bar@1.2.0` implements the following `exports` interface:
+```wit
+package foo:bar@1.2.0;
+interface exports {
+  calc: func(x: u64) -> u64;
+}
+```
+
+The next step is to expand `generated-world` with nested packages fetched from all the relevant registries, producing an all-in-one WIT file with no external references:  
+```wit
+package my:component;
+
+package wasi:http@0.2.0 {
+  ...
+  world proxy { ... }
+}
+
+package foo:bar@1.2.0 {
   interface exports {
-    nest some:other/interfacename
-    ...
+    calc: func(x: u64) -> u64;
   }
 }
 
-world w {
-  unlocked-dep foo:bar/exports@{>=x.x.x <y.y.y}
+world generated-world {
+  include wasi:http/proxy@0.2.0;
+  unlocked-dep foo:bar/exports@{>=1.2.0};
 }
 ```
-
-
-Once this wit is synthesized by the language toolchain based on the language's package file, bindings can be generated and a wasm binary can be compiled which will contain unlocked imports as defined in the [import definition section](Explainer.md#import-and-export-definitions) of the explainer.  Below is an example of the unlocked imports that will be present in the `wat`
-
+Note that `exports` is an arbitrary name and can be anything because the WIT bindings generation will always strip off the final interface name, leaving only the package name.  In particular, the Component Model type for this world is:
 ```wat
-(import "unlocked-dep=<foo:bar/exports@{>=1.0.0}>")
+(component
+  (import "wasi:http/types@0.2.0" (instance ...))
+  (import "wasi:http/outgoing-handler@0.2.0" (instance ...))
+  (import "unlocked-dep=<foo:bar@{>=1.2.0}>" (instance
+    (export "calc" (func (param "x" u64) (result u64)))
+  ))
+  (export "wasi:http/incoming-handler@0.2.0" (instance ...))
+)
 ```
 
-A wasm component binary that has unlocked imports is referred to as an unlocked component. In general, unlocked components are what would be published to a registry.   Registry aware tools have a command `lock` that will produce a  "locked" component when it resolves dependency versions.  As an example, today the warg cli has a [lock command](https://github.com/bytecodealliance/registry/blob/main/src/commands/lock.rs). This "locked"  component will use locked import statements, rather than unlocked import statements, with pinned version numbers and integrity hashes discovered during package resolution, as can be seen below.
-
-```wat
-(import "locked-dep=<foo:bar/example@1.0.0>,integrity=<sha256-7b582e13fd1f798ed86206850112fe01f837fcbf3210ce29eba8eb087e202f62>")
-```
-
-Locked components aren't runnable unless they are being run by a registry aware runtime.  They serve the role of a reproducible deployment artifact.  In order to run them with a runtime that is not registry aware, one would need to use a `bundle` command, also made available by registry aware toolchains, that will inline component definitions where locked imports exist in a locked component.  The warg cli also has a reference implementation of a [bundle command](https://github.com/bytecodealliance/registry/blob/main/src/commands/bundle.rs).
+A wasm component that contains `unlocked-dep` imports is referred to as an "unlocked component".  Unlocked components are what you normally would want to publish to a registry, since it allows users of the unlocked component to perform the final dependency solving across a DAG of components.
 ## WIT Functions
 [functions]: #wit-functions
 
