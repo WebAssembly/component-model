@@ -674,8 +674,7 @@ world w {
 The binary format has a corresponding [import definition](Explainer.md#import-and-export-definitions) and this WIT syntax informs
 bindgen tooling that it should be used.
 
-The key idea here is to be able to specify a dependency on a _component_, rather than on a wit interface.  Sometimes, as a component author, the goal is to have a dynamic import, where at a time after development is done, one of many implementations of a wit interface is specified, so that in essence your dependency makes your component configurable.  This workflow is well documented across a variety of tools.  Unlocked imports, on the other hand, are available for
-specifying a dependency on a specific implementation of an interface, with a semver range
+The point of `unlocked-dep` is to specify a dependency on a _component implementation_ (or a semver *range* of implementations), rather than on an abstract WIT interface (with an unspecified implementation).
 
 ### Example Unlocked Workflow
 Each language has its own toolchain for creating wasm components that should feel familiar to users of that language.  As an example, somebody authoring a rust component would add the component they're interested in to their `Cargo.toml`.
