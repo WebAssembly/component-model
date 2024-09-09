@@ -661,7 +661,7 @@ world w2 {
 > configure that a `use`'d interface is a particular import or a particular
 > export.
 
-## Unlocked Imports (semver)
+## Unlocked Dependency Imports
 
 When working with a registry, the keyword `unlocked-dep` is available to specify version requirements as ranges.
 
