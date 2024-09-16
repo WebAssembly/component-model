@@ -11,7 +11,7 @@ being specified here.
   * [Despecialization](#despecialization)
   * [Alignment](#alignment)
   * [Element Size](#element-size)
-  * [Call Context](#call-context)
+  * [Context](#context)
   * [Canonical ABI Options](#canonical-abi-options)
   * [Runtime State](#runtime-state)
   * [Loading](#loading)
@@ -223,23 +223,34 @@ def elem_size_flags(labels):
   return 4
 ```
 
-### Call Context
+### Context
 
-The subsequent definitions of loading and storing a value from linear memory
-require additional configuration and state, which is threaded through most
-subsequent definitions via the `cx` parameter of type `CallContext`:
+The subsequent definitions of lifting and lowering depend on three kinds of
+ambient information:
+* static ABI options supplied via [`canonopt`]
+* dynamic state in the containing component instance
+* dynamic state in the [current task]
+
+These sources of ambient context are stored as the respective `opts`, `inst`
+and `task` fields of the `Context` object:
 ```python
-@dataclass
-class CallContext:
+class Context:
   opts: CanonicalOptions
   inst: ComponentInstance
+  task: Task
+
+  def __init__(self, opts, inst, task):
+    self.opts = opts
+    self.inst = inst
+    self.task = task
 ```
-Note that the `Task` and `Subtask` classes defined below derive `CallContext`,
-adding additional state only used for export and import calls, resp.
+The `cx` parameter in functions below refers to the ambient `Context`. The
+`Task` and `Subtask` classes derive `Context` and thus having a `task` or
+`subtask` also establishes the ambient `Context`.
 
 ### Canonical ABI Options
 
-The `opts` field of `CallContext` contains all the possible `canonopt`
+The `opts` field of `CallContext` contains all the possible [`canonopt`]
 immediates that can be passed to the `canon` definition being implemented.
 ```python
 @dataclass
@@ -266,21 +277,21 @@ class ComponentInstance:
   handles: HandleTables
   async_subtasks: Table[AsyncSubtask]
   may_leave: bool
-  interruptible: asyncio.Event
   backpressure: bool
-  sync_call: bool
+  calling_sync_export: bool
   num_tasks: int
+  interruptible: asyncio.Event
   pending_tasks: list[tuple[Task, asyncio.Future]]
 
   def __init__(self):
     self.handles = HandleTables()
     self.async_subtasks = Table[AsyncSubtask]()
     self.may_leave = True
+    self.backpressure = False
+    self.calling_sync_export = False
+    self.num_tasks = 0
     self.interruptible = asyncio.Event()
     self.interruptible.set()
-    self.backpressure = False
-    self.sync_call = False
-    self.num_tasks = 0
     self.pending_tasks = []
 ```
 
@@ -429,7 +440,7 @@ created by `canon_lift` and `Subtask`, which is created by `canon_lower`.
 Additional sync-/async-specialized mutable state is added by the `AsyncTask`
 and `AsyncSubtask` subclasses.
 
-The `Task` class and its subclasses depend on the following three enums:
+The `Task` class and its subclasses depend on the following type definitions:
 ```python
 class AsyncCallState(IntEnum):
   STARTING = 0
@@ -444,6 +455,9 @@ class EventCode(IntEnum):
   CALL_DONE = AsyncCallState.DONE
   YIELDED = 4
 
+EventTuple = tuple[EventCode, int]
+EventCallback = Callable[[], EventTuple]
+
 class OnBlockResult(IntEnum):
   BLOCKED = 0
   COMPLETED = 1
@@ -453,8 +467,6 @@ call necessarily transitions through: [`STARTING`](Async.md#starting),
 `STARTED`, [`RETURNING`](Async.md#returning) and `DONE`. The `EventCode` enum
 shares common code values with `AsyncCallState` to define the set of integer
 event codes that are delivered to [waiting](Async.md#waiting) or polling tasks.
-The `OnBlockResult` enum conveys the two possible results of the `on_block`
-future used to tell callers whether or not the callee blocked.
 
 The `current_Task` global holds an `asyncio.Lock` that is used to prevent the
 Python runtime from arbitrarily switching between Python coroutines (`async
@@ -472,21 +484,25 @@ current_task = asyncio.Lock()
 
 A `Task` object is created for each call to `canon_lift` and is implicitly
 threaded through all core function calls. This implicit `Task` parameter
-represents "[the current task](Async.md#current-task)".
+represents the "[current task]". A `Task` is-a `Context`, with its `opts`
+corresponding to the `canonopt` supplied to the `canon lift` definition that
+the `Task` was created for.
 ```python
-class Task(CallContext):
+class Task(Context):
   caller: Optional[Task]
-  on_block: Optional[asyncio.Future[OnBlockResult]]
+  on_block: asyncio.Future[OnBlockResult]
   borrow_count: int
-  events: asyncio.Queue[AsyncSubtask]
+  events: list[EventCallback]
+  has_events: asyncio.Event
   num_async_subtasks: int
 
   def __init__(self, opts, inst, caller, on_block):
-    super().__init__(opts, inst)
+    super().__init__(opts, inst, self)
     self.caller = caller
     self.on_block = on_block
     self.borrow_count = 0
-    self.events = asyncio.Queue[AsyncSubtask]()
+    self.events = []
+    self.has_events = asyncio.Event()
     self.num_async_subtasks = 0
 ```
 The fields of `Task` are introduced in groups of related `Task` methods next.
@@ -524,10 +540,10 @@ with `may_enter` and `may_start_pending_task`, implements backpressure. If a
 (via `suspend`, shown next) and goes into a `pending_tasks` queue, waiting to
 be unblocked by another task calling `maybe_start_pending_task`. One key
 property of this backpressure scheme is that `pending_tasks` are only dequeued
-one at a time, ensuring that if an overloaded component instance enables
-backpressure (via `task.backpressure`) and then disables it, there will not be
-an unstoppable thundering herd of pending tasks started all at once that OOM
-the component before it can re-enable backpressure.
+one at a time, ensuring that if an overloaded component instance enables and
+then disables backpressure, there will not be an unstoppable thundering herd of
+pending tasks started all at once that OOM the component before it can
+re-enable backpressure.
 ```python
   async def enter(self):
     assert(current_task.locked())
@@ -536,15 +552,15 @@ the component before it can re-enable backpressure.
       f = asyncio.Future()
       self.inst.pending_tasks.append((self, f))
       await self.suspend(f)
-    self.inst.num_tasks += 1
     if self.opts.sync:
-      self.inst.sync_call = True
+      self.inst.calling_sync_export = True
+    self.inst.num_tasks += 1
 
   def may_enter(self, pending_task):
-    return self.inst.interruptible.is_set() and \
-           not self.inst.backpressure and \
-           not self.inst.sync_call and \
-           not (pending_task.opts.sync and self.inst.num_tasks > 0)
+    return not self.inst.backpressure and \
+           not self.inst.calling_sync_export and \
+           not (pending_task.opts.sync and self.inst.num_tasks > 0) and \
+           self.inst.interruptible.is_set()
 
   def maybe_start_pending_task(self):
     if self.inst.pending_tasks:
@@ -553,21 +569,31 @@ the component before it can re-enable backpressure.
         self.inst.pending_tasks.pop(0)
         future.set_result(None)
 ```
-The rules shown above also ensure that synchronously-lifted exports only
-execute when no other (sync or async) tasks are executing concurrently.
+Considering the 4 conditions in `may_enter`:
+* The `backpressure` check reflects explicit backpressure triggered by
+  core wasm code (via `canon task.backpressure`, defined below).
+* The next two conditions ensure that synchronous exports do not interleave
+  execution with any other task in the same component instance. The first
+  condition prevents async calls from starting while there is a sync call in
+  flight, while the second condition prevents sync calls from starting while
+  there are *any* other calls in flight.
+* The `interruptible` check is automatically set and cleared before and after
+  any synchronous `canon` built-in called by core wasm, temporarily preventing
+  any interleaved execution during synchronous call.
 
-The `suspend` method, called by `enter`, `wait` and `yield_`, takes a future
-to `await` and allows other tasks to make progress in the meantime. Since the
-`current_task` lock is shared by all linked component instances, releasing
-then acquiring it allows switching to any task in the same or different
-component instance. The final loop ensures that, when a component instance
-makes a `sync`-lowered import call, which is signalled by clearing
-`interruptible` for the duration of the call, no other tasks *in the same
-component instance* can execute (which would otherwise break the appearance of
-a *synchronous* call from the perspective of that component instance).
+The `suspend` method, called by `enter`, `wait` and `yield_`, takes a future to
+`await` and allows other tasks to make progress in the meantime. Since the
+`current_task` lock is shared by all linked component instances, releasing then
+acquiring it allows switching to any task in the same or different component
+instance. The final loop in `suspend` waits until `interruptible` is set to
+ensure that tasks that have been suspended cannot resume execution. Together
+with the guard `may_enter`, this ensures that clearing `interruptible` ensures
+traditional synchronous execution (for use in synchronous `canon` definitions
+below).
 ```python
   async def suspend(self, future):
-    if self.on_block and not self.on_block.done():
+    assert(self.inst.interruptible.is_set())
+    if not self.on_block.done():
       self.on_block.set_result(OnBlockResult.BLOCKED)
     else:
       current_task.release()
@@ -583,38 +609,87 @@ When there is an `async`-lowered caller waiting on the stack, the `on_block`
 field will point to an unresolved future. In this case, `suspend` sets the
 result of `on_block` and leaves `current_task` locked so that control flow
 transfers deterministically to `async`-lowered caller (in `canon_lower`,
-defined below). The `suspend` method is so named because this delicate use of
-Python's async functionality is essentially emulating the `suspend`/`resume`
-instructions of the [stack-switching] proposal. Thus, once stack-switching is
-implemented, a valid implementation technique would be to compile Canonical ABI
-adapters to Core WebAssembly using `suspend` and `resume`.
+defined below).
+
+The `suspend` method is so named because it uses Python's async machinery to
+emulate the `suspend` instruction of the [stack-switching] proposal. Similarly,
+the `handle_blocking` method below emulates the combination of the `cont.new`
+and `resume` instructions where `resume` handles the `on_block` effect raised
+by `suspend`. The combined effect of `handle_blocking` and `suspend` is that if
+the `callee` blocks, control flow is immediately transferred from the callee to
+the caller of `handle_blocking`, which can then use the return value to
+determine whether the call completed eagerly or blocked.
+```python
+  async def handle_blocking(self, callee) -> OnBlockResult:
+    on_block = asyncio.Future()
+    async def cont():
+      await callee(on_block)
+      if not on_block.done():
+        on_block.set_result(OnBlockResult.COMPLETED)
+      else:
+        current_task.release()
+    asyncio.create_task(cont())
+    return await on_block
+```
 
 While a task is running, it may call `wait` (via `canon task.wait` or, when a
 `callback` is present, by returning to the event loop) to block until there is
-progress on one of the task's async subtasks. Alternatively, the current task
-can call `poll` (via `canon task.poll`), which does not block and does not
-allow the runtime to switch to another task. Lastly, a task may cooperatively
-yield (via `canon task.yield`), allowing the switching but without waiting for
-any external events (as emulated in the Python code by awaiting `sleep(0)`.
+an event that will allow the `Task` to make progress. If there are no
+currently-pending events in the `events` list, `wait` suspends until the
+`has_events` `asyncio.Event` is set by `notify`. Once there is at least one
+event in the list, an event is popped non-deterministically to provide the
+runtime flexibility in event queueing and delivery.
 ```python
-  async def wait(self):
+  async def wait(self) -> EventTuple:
     self.maybe_start_pending_task()
-    subtask = await self.suspend(self.events.get())
-    return self.process_event(subtask)
+    if not self.events:
+      await self.suspend(self.has_events.wait())
+    return self.next_event()
 
-  def poll(self):
-    if self.events.empty():
-      return None
-    return self.process_event(self.events.get_nowait())
+  def next_event(self) -> EventTuple:
+    assert(self.events)
+    if DETERMINISTIC_PROFILE:
+      i = 0
+    else:
+      i = random.randrange(len(self.events))
+    event = self.events.pop(i)
+    if not self.events:
+      self.has_events.clear()
+    return event()
 
+  def notify(self, event: EventCallback):
+    self.events.append(event)
+    self.has_events.set()
+```
+Note that events are represented as *first-class functions* that are called by
+`next_event` to produce the tuple of scalar values that are actually delivered
+to core wasm. This allows an event source to report the latest status when the
+event is handed to the core wasm code instead of the status when the event was
+first generated. This allows multiple redundant events to be collapsed into
+one, reducing overhead.
+
+Although this Python code represents events as a list of closures, an
+optimizing implementation should be able to avoid actually allocating these
+things and instead embed a linked list of "ready" events into the table
+elements associated with the events.
+
+In addition to `wait`, the current task can also use `poll` (via `canon task.poll`),
+to not block and not allow the runtime to switch to another task:
+```python
+  def poll(self) -> Optional[EventTuple]:
+    if self.events:
+      return self.next_event()
+    return None
+```
+
+Lastly, a task may cooperatively yield (via `canon task.yield`), allowing the
+runtime to switch execution to another task without having to wait for any
+external I/O (as emulated in the Python code by awaiting `sleep(0)`:
+```python
   async def yield_(self):
     self.maybe_start_pending_task()
     await self.suspend(asyncio.sleep(0))
 ```
-Although this Python code uses an `asyncio.Queue` to coordinate async events,
-an optimized implementation should not have to create an actual queue; instead
-it should be possible to embed a "next ready" linked list in the elements of
-the `async_subtasks` table.
 
 All `Task`s (whether lifted `async` or not) are allowed to call `async`-lowered
 imports. Calling an `async`-lowered import creates an `AsyncSubtask` (defined
@@ -623,29 +698,13 @@ table and tracked by the current task's `num_async_subtasks` counter, which is
 guarded to be `0` in `Task.exit` (below) to ensure [structured concurrency].
 ```python
   def add_async_subtask(self, subtask):
-    assert(subtask.supertask is None and subtask.index is None)
-    subtask.supertask = self
-    subtask.index = self.inst.async_subtasks.add(subtask)
+    assert(subtask.task is self and not subtask.notify_supertask)
+    subtask.notify_supertask = True
     self.num_async_subtasks += 1
-    return subtask.index
-
-  def async_subtask_made_progress(self, subtask):
-    assert(subtask.supertask is self)
-    if subtask.enqueued:
-      return
-    subtask.enqueued = True
-    self.events.put_nowait(subtask)
-
-  def process_event(self, subtask):
-    assert(subtask.supertask is self)
-    subtask.enqueued = False
-    return (EventCode(subtask.state), subtask.index)
+    return self.inst.async_subtasks.add(subtask)
 ```
-Instead of simply enqueuing an `EventCode` when `async_subtask_made_progress`,
-the above code achieves the effect of collapsing multiple events into one,
-delivering only the newest state, by enqueing the mutable `AsyncSubtask` itself
-at most once and only reading its `state` when the event is being *popped* from
-the queue.
+The `notify_supertask` flag signals to `AsyncSubtask` methods (defined below)
+to notify this `Task` when the lowered callee makes progress.
 
 The `borrow_count` field is used by the following methods to track the number
 of borrowed handles that were passed as parameters to the export that have not
@@ -665,23 +724,27 @@ above and allows pending tasks to start.
 ```python
   def exit(self):
     assert(current_task.locked())
-    assert(self.events.empty())
+    assert(not self.events)
     assert(self.inst.num_tasks >= 1)
     trap_if(self.borrow_count != 0)
     trap_if(self.num_async_subtasks != 0)
     self.inst.num_tasks -= 1
     if self.opts.sync:
-      self.inst.sync_call = False
+      self.inst.calling_sync_export = False
     self.maybe_start_pending_task()
 ```
 
-While `canon_lift` creates `Task`s, `canon_lower` creates `Subtask` objects:
+While `canon_lift` creates `Task`s, `canon_lower` creates `Subtask` objects.
+Like `Task`, `Subtask` is a subclass of `Context`, gets its `opts` from the
+`canon lower`. Importantly, the `Context.task` field refers to the [current
+task] at the point of the `canon lower` call, thereby linking a subtask to its
+supertask.
 ```python
-class Subtask(CallContext):
+class Subtask(Context):
   lenders: list[HandleElem]
 
-  def __init__(self, opts, inst):
-    super().__init__(opts, inst)
+  def __init__(self, opts, task):
+    super().__init__(opts, task.inst, task)
     self.lenders = []
 
   def track_owning_lend(self, lending_handle):
@@ -740,49 +803,50 @@ class AsyncTask(Task):
 Finally, the `AsyncSubtask` class extends `Subtask` with fields that are used
 by the methods of `Task`, as shown above. `AsyncSubtask`s have the same linear
 state machine as `AsyncTask`s, except that the state transitions are guaranteed
-by the Canonical ABI to happen in the right order. Each time an async subtask
-advances a state, it notifies its "supertask", which was the current task when
-the async-lowered function was first called.
+by the Canonical ABI to happen in the right order, as asserted by the methods
+below.
 ```python
 class AsyncSubtask(Subtask):
   state: AsyncCallState
-  supertask: Optional[Task]
-  index: Optional[int]
+  notify_supertask: bool
   enqueued: bool
 
-  def __init__(self, opts, inst):
-    super().__init__(opts, inst)
+  def __init__(self, opts, task):
+    super().__init__(opts, task)
     self.state = AsyncCallState.STARTING
-    self.supertask = None
-    self.index = None
+    self.notify_supertask = False
     self.enqueued = False
+
+  def maybe_notify_supertask(self):
+    if self.notify_supertask and not self.enqueued:
+      self.enqueued = True
+      def event():
+        self.enqueued = False
+        return (EventCode(self.state), self.inst.async_subtasks.array.index(self))
+      self.task.notify(event)
 
   def start(self):
     assert(self.state == AsyncCallState.STARTING)
     self.state = AsyncCallState.STARTED
-    if self.supertask is not None:
-      self.supertask.async_subtask_made_progress(self)
+    self.maybe_notify_supertask()
 
   def return_(self):
     assert(self.state == AsyncCallState.STARTED)
     self.state = AsyncCallState.RETURNED
-    if self.supertask is not None:
-      self.supertask.async_subtask_made_progress(self)
+    self.maybe_notify_supertask()
 
   def finish(self):
     super().finish()
     assert(self.state == AsyncCallState.RETURNED)
     self.state = AsyncCallState.DONE
-    if self.supertask is not None:
-      self.supertask.async_subtask_made_progress(self)
+    self.maybe_notify_supertask()
 ```
-The `supertask` and `index` fields will be `None` when a subtask first starts
-executing, before it blocks and gets added to the `async_subtasks` table (by
-`canon_lower`, below). If a subtask advances all the way to the `DONE` state
-before blocking, the `async`-lowered call will indicate to the caller that the
-callee completed synchronously, avoiding the overhead of adding an
-`AsyncSubtask` altogether. Thus, progress events don't need to be delivered
-until the subtask has passed this "possibly synchronous early return" phase.
+The `maybe_notify_supertask` method only sends events to the supertask if this
+`AsyncSubtask` actually blocked and got added to the `async_subtasks` table
+(as signalled by `notify_supertask`). Additionally, `maybe_notify_supertask`
+uses the `enqueued` flag and the fact that "events" are first-class functions
+to collapse N events down to 1 if a subtask advances state multiple times
+before the supertask receives the event.
 
 ### Loading
 
@@ -1887,8 +1951,8 @@ When instantiating component instance `$inst`:
 The resulting function `$f` takes 4 runtime arguments:
 * `caller`: the caller's `Task` or, if this lifted function is being called by
   the host, `None`
-* `on_block`: an optional `asyncio.Future` that must be resolved with
-  `OnBlockResult.BLOCKED` if the callee blocks on I/O
+* `on_block`: a possibly-already-resolved `asyncio.Future` that the callee must
+   resolve (if not already) with `OnBlockResult.BLOCKED` if the callee blocks
 * `on_start`: a nullary function that must be called to return the caller's
   arguments as a list of component-level values
 * `on_return`: a unary function that must be called after `on_start`,
@@ -2008,20 +2072,19 @@ async def canon_lower(opts, callee, ft, task, flat_args):
   flat_args = CoreValueIter(flat_args)
   flat_results = None
   if opts.sync:
-    subtask = Subtask(opts, task.inst)
-    task.inst.interruptible.clear()
+    subtask = Subtask(opts, task)
     def on_start():
       return lift_flat_values(subtask, MAX_FLAT_PARAMS, flat_args, ft.param_types())
     def on_return(results):
       nonlocal flat_results
       flat_results = lower_flat_values(subtask, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
+    task.inst.interruptible.clear()
     await callee(task, task.on_block, on_start, on_return)
     task.inst.interruptible.set()
     subtask.finish()
   else:
-    subtask = AsyncSubtask(opts, task.inst)
-    on_block = asyncio.Future()
-    async def do_call():
+    subtask = AsyncSubtask(opts, task)
+    async def do_call(on_block):
       def on_start():
         subtask.start()
         return lift_flat_values(subtask, 1, flat_args, ft.param_types())
@@ -2030,12 +2093,7 @@ async def canon_lower(opts, callee, ft, task, flat_args):
         lower_flat_values(subtask, 0, results, ft.result_types(), flat_args)
       await callee(task, on_block, on_start, on_return)
       subtask.finish()
-      if on_block.done():
-        current_task.release()
-      else:
-        on_block.set_result(OnBlockResult.COMPLETED)
-    asyncio.create_task(do_call())
-    match await on_block:
+    match await task.handle_blocking(do_call):
       case OnBlockResult.BLOCKED:
         i = task.add_async_subtask(subtask)
         flat_results = [pack_async_result(i, subtask.state)]
@@ -2045,20 +2103,15 @@ async def canon_lower(opts, callee, ft, task, flat_args):
   assert(current_task.locked())
   return flat_results
 ```
-In the synchronous case, the import call is bracketed by clearing
-`interruptible` for the duration of the call. Clearing `interrupt` both
-prevents new tasks from starting (via `Task.may_enter`) and prevents suspended
-tasks from resuming execution (via `Task.suspend`). Propagating the caller's
-`on_block` future ensures that an `async`-lowered caller anywhere higher up on
-the stack still gets control flow if `callee` blocks.
+In the synchronous case, clearing `interruptible` prevents new tasks from
+starting (via `Task.may_enter`) and prevents suspended tasks from resuming
+execution (via `Task.suspend`). Propagating the caller's `on_block` future
+ensures that an `async`-lowered caller anywhere higher up on the stack still
+gets control flow if `callee` blocks.
 
-In the asynchronous case, the `on_block` future allows the caller to `await` to
-see if `callee` blocks on I/O before returning. Because `Task.suspend` (defined
-above) does not release the `current_task` lock when it resolves `on_block` to
-`BLOCKED`, control flow deterministically returns to the caller (without
-executing other tasks) when `callee` blocks. This is analogous to how the
-`resume` instruction of the [stack-switching] proposal would work if given
-`(cont.new $callee)` and handling an `on_block` event.
+In the asynchronous case, `Task.handle_blocking` immediately returns control
+flow from `canon lift` if `callee` blocks (in the host or in another
+component in `Task.suspend`).
 
 Whether or not the `callee` blocks, the `on_start` and `on_return` handlers
 will be called before the `callee` completes. Note that, in an `async`-lowered
@@ -2364,8 +2417,7 @@ async def canon_subtask_drop(task, i):
   subtask = task.inst.async_subtasks.remove(i)
   trap_if(subtask.enqueued)
   trap_if(subtask.state != AsyncCallState.DONE)
-  trap_if(subtask.supertask is not task)
-  task.num_async_subtasks -= 1
+  subtask.task.num_async_subtasks -= 1
   return []
 ```
 
@@ -2447,6 +2499,7 @@ def canon_thread_hw_concurrency():
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Shared-Everything Dynamic Linking]: examples/SharedEverythingDynamicLinking.md
 [Structured Concurrency]: Async.md#structured-concurrency
+[Current Task]: Async.md#current-task
 
 [Administrative Instructions]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-instr-admin
 [Implementation Limits]: https://webassembly.github.io/spec/core/appendix/implementation.html

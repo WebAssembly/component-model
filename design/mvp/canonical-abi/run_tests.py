@@ -1,6 +1,8 @@
 import definitions
 from definitions import *
 
+definitions.DETERMINISTIC_PROFILE = True
+
 asyncio.run(definitions.current_task.acquire())
 
 def equal_modulo_string_encoding(s, t):
@@ -46,7 +48,8 @@ def mk_opts(memory = bytearray(), encoding = 'utf8', realloc = None, post_return
 
 def mk_cx(memory = bytearray(), encoding = 'utf8', realloc = None, post_return = None):
   opts = mk_opts(memory, encoding, realloc, post_return)
-  return CallContext(opts, ComponentInstance())
+  inst = ComponentInstance()
+  return Context(opts, inst, Task(opts, inst, None, lambda:()))
 
 def mk_str(s):
   return (s, 'utf8', len(s.encode('utf-8')))
@@ -57,6 +60,11 @@ def mk_tup(*a):
       return { str(i):mk_tup_rec(v) for i,v in enumerate(x) }
     return x
   return { str(i):mk_tup_rec(v) for i,v in enumerate(a) }
+
+def mk_on_block():
+  f = asyncio.Future()
+  f.set_result(OnBlockResult.BLOCKED)
+  return f
 
 def fail(msg):
   raise BaseException(msg)
@@ -159,13 +167,13 @@ test_pairs(Enum(['a','b']), [(0,{'a':None}), (1,{'b':None}), (2,None)])
 def test_nan32(inbits, outbits):
   origf = decode_i32_as_float(inbits)
   f = lift_flat(mk_cx(), CoreValueIter([origf]), F32())
-  if DETERMINISTIC_PROFILE:
+  if definitions.DETERMINISTIC_PROFILE:
     assert(encode_float_as_i32(f) == outbits)
   else:
     assert(not math.isnan(origf) or math.isnan(f))
   cx = mk_cx(int.to_bytes(inbits, 4, 'little'))
   f = load(cx, 0, F32())
-  if DETERMINISTIC_PROFILE:
+  if definitions.DETERMINISTIC_PROFILE:
     assert(encode_float_as_i32(f) == outbits)
   else:
     assert(not math.isnan(origf) or math.isnan(f))
@@ -173,13 +181,13 @@ def test_nan32(inbits, outbits):
 def test_nan64(inbits, outbits):
   origf = decode_i64_as_float(inbits)
   f = lift_flat(mk_cx(), CoreValueIter([origf]), F64())
-  if DETERMINISTIC_PROFILE:
+  if definitions.DETERMINISTIC_PROFILE:
     assert(encode_float_as_i64(f) == outbits)
   else:
     assert(not math.isnan(origf) or math.isnan(f))
   cx = mk_cx(int.to_bytes(inbits, 8, 'little'))
   f = load(cx, 0, F64())
-  if DETERMINISTIC_PROFILE:
+  if definitions.DETERMINISTIC_PROFILE:
     assert(encode_float_as_i64(f) == outbits)
   else:
     assert(not math.isnan(origf) or math.isnan(f))
@@ -587,7 +595,7 @@ async def test_async_to_async():
     got = results
 
   consumer_inst = ComponentInstance()
-  await canon_lift(consumer_opts, consumer_inst, consumer, ft, None, None, on_start, on_return)
+  await canon_lift(consumer_opts, consumer_inst, consumer, ft, None, mk_on_block(), on_start, on_return)
   assert(len(got) == 1)
   assert(got[0] == 42)
 
@@ -658,7 +666,7 @@ async def test_async_callback():
   opts.sync = False
   opts.callback = callback
 
-  await canon_lift(opts, consumer_inst, consumer, consumer_ft, None, None, on_start, on_return)
+  await canon_lift(opts, consumer_inst, consumer, consumer_ft, None, mk_on_block(), on_start, on_return)
   assert(got[0] == 83)
 
 asyncio.run(test_async_callback())
@@ -734,7 +742,7 @@ async def test_async_to_sync():
     nonlocal got
     got = results
 
-  await canon_lift(consumer_opts, consumer_inst, consumer, consumer_ft, None, None, on_start, on_return)
+  await canon_lift(consumer_opts, consumer_inst, consumer, consumer_ft, None, mk_on_block(), on_start, on_return)
   assert(got[0] == 83)
 
 asyncio.run(test_async_to_sync())
@@ -814,10 +822,11 @@ async def test_async_backpressure():
     nonlocal got
     got = results
 
-  await canon_lift(consumer_opts, consumer_inst, consumer, consumer_ft, None, None, on_start, on_return)
+  await canon_lift(consumer_opts, consumer_inst, consumer, consumer_ft, None, mk_on_block(), on_start, on_return)
   assert(got[0] == 84)
 
-asyncio.run(test_async_backpressure())
+if definitions.DETERMINISTIC_PROFILE:
+  asyncio.run(test_async_backpressure())
 
 async def test_sync_using_wait():
   hostcall_opts = mk_opts()
@@ -863,7 +872,7 @@ async def test_sync_using_wait():
   inst = ComponentInstance()
   def on_start(): return []
   def on_return(results): pass
-  await canon_lift(mk_opts(), inst, core_func, ft, None, None, on_start, on_return)
+  await canon_lift(mk_opts(), inst, core_func, ft, None, mk_on_block(), on_start, on_return)
 
 asyncio.run(test_sync_using_wait())
 

@@ -272,12 +272,17 @@ def elem_size_flags(labels):
   if n <= 16: return 2
   return 4
 
-### Call Context
+### Context
 
-@dataclass
-class CallContext:
+class Context:
   opts: CanonicalOptions
   inst: ComponentInstance
+  task: Task
+
+  def __init__(self, opts, inst, task):
+    self.opts = opts
+    self.inst = inst
+    self.task = task
 
 ### Canonical ABI Options
 
@@ -296,21 +301,21 @@ class ComponentInstance:
   handles: HandleTables
   async_subtasks: Table[AsyncSubtask]
   may_leave: bool
-  interruptible: asyncio.Event
   backpressure: bool
-  sync_call: bool
+  calling_sync_export: bool
   num_tasks: int
+  interruptible: asyncio.Event
   pending_tasks: list[tuple[Task, asyncio.Future]]
 
   def __init__(self):
     self.handles = HandleTables()
     self.async_subtasks = Table[AsyncSubtask]()
     self.may_leave = True
+    self.backpressure = False
+    self.calling_sync_export = False
+    self.num_tasks = 0
     self.interruptible = asyncio.Event()
     self.interruptible.set()
-    self.backpressure = False
-    self.sync_call = False
-    self.num_tasks = 0
     self.pending_tasks = []
 
 class HandleTables:
@@ -399,25 +404,30 @@ class EventCode(IntEnum):
   CALL_DONE = AsyncCallState.DONE
   YIELDED = 4
 
+EventTuple = tuple[EventCode, int]
+EventCallback = Callable[[], EventTuple]
+
 class OnBlockResult(IntEnum):
   BLOCKED = 0
   COMPLETED = 1
 
 current_task = asyncio.Lock()
 
-class Task(CallContext):
+class Task(Context):
   caller: Optional[Task]
-  on_block: Optional[asyncio.Future[OnBlockResult]]
+  on_block: asyncio.Future[OnBlockResult]
   borrow_count: int
-  events: asyncio.Queue[AsyncSubtask]
+  events: list[EventCallback]
+  has_events: asyncio.Event
   num_async_subtasks: int
 
   def __init__(self, opts, inst, caller, on_block):
-    super().__init__(opts, inst)
+    super().__init__(opts, inst, self)
     self.caller = caller
     self.on_block = on_block
     self.borrow_count = 0
-    self.events = asyncio.Queue[AsyncSubtask]()
+    self.events = []
+    self.has_events = asyncio.Event()
     self.num_async_subtasks = 0
 
   def trap_if_on_the_stack(self, inst):
@@ -433,15 +443,15 @@ class Task(CallContext):
       f = asyncio.Future()
       self.inst.pending_tasks.append((self, f))
       await self.suspend(f)
-    self.inst.num_tasks += 1
     if self.opts.sync:
-      self.inst.sync_call = True
+      self.inst.calling_sync_export = True
+    self.inst.num_tasks += 1
 
   def may_enter(self, pending_task):
-    return self.inst.interruptible.is_set() and \
-           not self.inst.backpressure and \
-           not self.inst.sync_call and \
-           not (pending_task.opts.sync and self.inst.num_tasks > 0)
+    return not self.inst.backpressure and \
+           not self.inst.calling_sync_export and \
+           not (pending_task.opts.sync and self.inst.num_tasks > 0) and \
+           self.inst.interruptible.is_set()
 
   def maybe_start_pending_task(self):
     if self.inst.pending_tasks:
@@ -451,7 +461,8 @@ class Task(CallContext):
         future.set_result(None)
 
   async def suspend(self, future):
-    if self.on_block and not self.on_block.done():
+    assert(self.inst.interruptible.is_set())
+    if not self.on_block.done():
       self.on_block.set_result(OnBlockResult.BLOCKED)
     else:
       current_task.release()
@@ -463,38 +474,52 @@ class Task(CallContext):
       await current_task.acquire()
     return v
 
-  async def wait(self):
-    self.maybe_start_pending_task()
-    subtask = await self.suspend(self.events.get())
-    return self.process_event(subtask)
+  async def handle_blocking(self, callee) -> OnBlockResult:
+    on_block = asyncio.Future()
+    async def cont():
+      await callee(on_block)
+      if not on_block.done():
+        on_block.set_result(OnBlockResult.COMPLETED)
+      else:
+        current_task.release()
+    asyncio.create_task(cont())
+    return await on_block
 
-  def poll(self):
-    if self.events.empty():
-      return None
-    return self.process_event(self.events.get_nowait())
+  async def wait(self) -> EventTuple:
+    self.maybe_start_pending_task()
+    if not self.events:
+      await self.suspend(self.has_events.wait())
+    return self.next_event()
+
+  def next_event(self) -> EventTuple:
+    assert(self.events)
+    if DETERMINISTIC_PROFILE:
+      i = 0
+    else:
+      i = random.randrange(len(self.events))
+    event = self.events.pop(i)
+    if not self.events:
+      self.has_events.clear()
+    return event()
+
+  def notify(self, event: EventCallback):
+    self.events.append(event)
+    self.has_events.set()
+
+  def poll(self) -> Optional[EventTuple]:
+    if self.events:
+      return self.next_event()
+    return None
 
   async def yield_(self):
     self.maybe_start_pending_task()
     await self.suspend(asyncio.sleep(0))
 
   def add_async_subtask(self, subtask):
-    assert(subtask.supertask is None and subtask.index is None)
-    subtask.supertask = self
-    subtask.index = self.inst.async_subtasks.add(subtask)
+    assert(subtask.task is self and not subtask.notify_supertask)
+    subtask.notify_supertask = True
     self.num_async_subtasks += 1
-    return subtask.index
-
-  def async_subtask_made_progress(self, subtask):
-    assert(subtask.supertask is self)
-    if subtask.enqueued:
-      return
-    subtask.enqueued = True
-    self.events.put_nowait(subtask)
-
-  def process_event(self, subtask):
-    assert(subtask.supertask is self)
-    subtask.enqueued = False
-    return (EventCode(subtask.state), subtask.index)
+    return self.inst.async_subtasks.add(subtask)
 
   def create_borrow(self):
     self.borrow_count += 1
@@ -505,20 +530,20 @@ class Task(CallContext):
 
   def exit(self):
     assert(current_task.locked())
-    assert(self.events.empty())
+    assert(not self.events)
     assert(self.inst.num_tasks >= 1)
     trap_if(self.borrow_count != 0)
     trap_if(self.num_async_subtasks != 0)
     self.inst.num_tasks -= 1
     if self.opts.sync:
-      self.inst.sync_call = False
+      self.inst.calling_sync_export = False
     self.maybe_start_pending_task()
 
-class Subtask(CallContext):
+class Subtask(Context):
   lenders: list[HandleElem]
 
-  def __init__(self, opts, inst):
-    super().__init__(opts, inst)
+  def __init__(self, opts, task):
+    super().__init__(opts, task.inst, task)
     self.lenders = []
 
   def track_owning_lend(self, lending_handle):
@@ -558,35 +583,38 @@ class AsyncTask(Task):
 
 class AsyncSubtask(Subtask):
   state: AsyncCallState
-  supertask: Optional[Task]
-  index: Optional[int]
+  notify_supertask: bool
   enqueued: bool
 
-  def __init__(self, opts, inst):
-    super().__init__(opts, inst)
+  def __init__(self, opts, task):
+    super().__init__(opts, task)
     self.state = AsyncCallState.STARTING
-    self.supertask = None
-    self.index = None
+    self.notify_supertask = False
     self.enqueued = False
+
+  def maybe_notify_supertask(self):
+    if self.notify_supertask and not self.enqueued:
+      self.enqueued = True
+      def event():
+        self.enqueued = False
+        return (EventCode(self.state), self.inst.async_subtasks.array.index(self))
+      self.task.notify(event)
 
   def start(self):
     assert(self.state == AsyncCallState.STARTING)
     self.state = AsyncCallState.STARTED
-    if self.supertask is not None:
-      self.supertask.async_subtask_made_progress(self)
+    self.maybe_notify_supertask()
 
   def return_(self):
     assert(self.state == AsyncCallState.STARTED)
     self.state = AsyncCallState.RETURNED
-    if self.supertask is not None:
-      self.supertask.async_subtask_made_progress(self)
+    self.maybe_notify_supertask()
 
   def finish(self):
     super().finish()
     assert(self.state == AsyncCallState.RETURNED)
     self.state = AsyncCallState.DONE
-    if self.supertask is not None:
-      self.supertask.async_subtask_made_progress(self)
+    self.maybe_notify_supertask()
 
 ### Loading
 
@@ -1375,20 +1403,19 @@ async def canon_lower(opts, callee, ft, task, flat_args):
   flat_args = CoreValueIter(flat_args)
   flat_results = None
   if opts.sync:
-    subtask = Subtask(opts, task.inst)
-    task.inst.interruptible.clear()
+    subtask = Subtask(opts, task)
     def on_start():
       return lift_flat_values(subtask, MAX_FLAT_PARAMS, flat_args, ft.param_types())
     def on_return(results):
       nonlocal flat_results
       flat_results = lower_flat_values(subtask, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
+    task.inst.interruptible.clear()
     await callee(task, task.on_block, on_start, on_return)
     task.inst.interruptible.set()
     subtask.finish()
   else:
-    subtask = AsyncSubtask(opts, task.inst)
-    on_block = asyncio.Future()
-    async def do_call():
+    subtask = AsyncSubtask(opts, task)
+    async def do_call(on_block):
       def on_start():
         subtask.start()
         return lift_flat_values(subtask, 1, flat_args, ft.param_types())
@@ -1397,12 +1424,7 @@ async def canon_lower(opts, callee, ft, task, flat_args):
         lower_flat_values(subtask, 0, results, ft.result_types(), flat_args)
       await callee(task, on_block, on_start, on_return)
       subtask.finish()
-      if on_block.done():
-        current_task.release()
-      else:
-        on_block.set_result(OnBlockResult.COMPLETED)
-    asyncio.create_task(do_call())
-    match await on_block:
+    match await task.handle_blocking(do_call):
       case OnBlockResult.BLOCKED:
         i = task.add_async_subtask(subtask)
         flat_results = [pack_async_result(i, subtask.state)]
@@ -1524,6 +1546,5 @@ async def canon_subtask_drop(task, i):
   subtask = task.inst.async_subtasks.remove(i)
   trap_if(subtask.enqueued)
   trap_if(subtask.state != AsyncCallState.DONE)
-  trap_if(subtask.supertask is not task)
-  task.num_async_subtasks -= 1
+  subtask.task.num_async_subtasks -= 1
   return []
