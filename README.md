@@ -5,8 +5,8 @@ user-focused explanation, take a look at the **[Component Model Documentation]**
 
 This repository contains the high-level [goals], [use cases], [design choices]
 and [FAQ] of the Component Model as well as more-detailed, low-level explainer
-docs describing the [IDL], [text format], [binary format], [concurrency model]
-and [Canonical ABI].
+docs describing the [IDL], [text format], [binary format], [concurrency model],
+[Canonical ABI] and [Core WebAssembly Build Targets].
 
 In the future, this repository will additionally contain a [formal spec],
 reference interpreter and test suite.
@@ -34,6 +34,7 @@ To contribute to any of these repositories, see the Community Group's
 [Binary Format]: design/mvp/Binary.md
 [Concurrency Model]: design/mvp/Async.md
 [Canonical ABI]: design/mvp/CanonicalABI.md
+[Core WebAssembly Build Targets]: design/mvp/BuildTargets.md
 [formal spec]: spec/
 [W3C WebAssembly Community Group]: https://www.w3.org/community/webassembly/
 [Contributing Guidelines]: https://webassembly.org/community/contributing/
