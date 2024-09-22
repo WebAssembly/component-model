@@ -419,21 +419,24 @@ For now, this remains a [TODO](#todo) and validation will reject `async`-lifted
 
 ## TODO
 
-Native async support is being proposed in progressive chunks. The following
-features will be added in future chunks to complete "async" in Preview 3:
-* `future`/`stream`/`error`: add for use in function types for finer-grained
-  concurrency
-* `subtask.cancel`: allow a supertask to signal to a subtask that its result is
-  no longer wanted and to please wrap it up promptly
-* allow "tail-calling" a subtask so that the current wasm instance can be torn
-  down eagerly
-* `task.index`+`task.wake`: allow tasks in the same instance to wait on and
-  wake each other (async condvar-style)
+Native async support is being proposed incrementally. The following features
+will be added in future chunks roughly in the order list to complete the full
+"async" story:
+* add `error` type that can be included when closing a stream/future
 * `nonblocking` function type attribute: allow a function to declare in its
   type that it will not transitively do anything blocking
+* define what `async` means for `start` functions (top-level await + background
+  tasks), along with cross-task coordination built-ins
+* `subtask.cancel`: allow a supertask to signal to a subtask that its result is
+  no longer wanted and to please wrap it up promptly
+* zero-copy forwarding/splicing and built-in way to "tail-call" a subtask so
+  that the current wasm instance can be torn down eagerly while preserving
+  structured concurrency
+* some way to say "no more elements are coming for a while"
 * `recursive` function type attribute: allow a function to be reentered
-  recursively (instead of trapping)
-* enable `async` `start` functions
+  recursively (instead of trapping) and link inner and outer activations
+* allow pipelining multiple `stream.read`/`write` calls
+* allow chaining multiple async calls together ("promise pipelining")
 * integrate with `shared`: define how to lift and lower functions `async` *and*
   `shared`
 

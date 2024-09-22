@@ -1214,10 +1214,12 @@ validated to have parameters matching the callee's return type and empty
 results.
 
 🔀 The `async` option specifies that the component wants to make (for imports)
-or support (for exports) multiple concurrent (asynchronous) calls. This option
-can be applied to any component-level function type and changes the derived
-Canonical ABI significantly. See the [async explainer](Async.md) for more
-details.
+or support (for exports) multiple concurrent (asynchronous) calls. This
+option can be applied to any component-level function type and changes the
+derived Canonical ABI significantly. See the [async explainer](Async.md) for
+more details. When a function signature contains a `future` or `stream`,
+validation requires the `async` option to be set (since a synchronous call to
+a function using these types is likely to deadlock).
 
 🔀 The `(callback ...)` option may only be present in `canon lift` when the
 `async` option has also been set and specifies a core function that is
