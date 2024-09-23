@@ -849,8 +849,8 @@ def store(cx, v, t, ptr):
     case Record(fields) : store_record(cx, v, ptr, fields)
     case Variant(cases) : store_variant(cx, v, ptr, cases)
     case Flags(labels)  : store_flags(cx, v, ptr, labels)
-    case Own()          : store_int(cx, lower_own(cx.opts, v, t), ptr, 4)
-    case Borrow()       : store_int(cx, lower_borrow(cx.opts, v, t), ptr, 4)
+    case Own()          : store_int(cx, lower_own(cx, v, t), ptr, 4)
+    case Borrow()       : store_int(cx, lower_borrow(cx, v, t), ptr, 4)
 
 def store_int(cx, v, ptr, nbytes, signed = False):
   cx.opts.memory[ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed=signed)

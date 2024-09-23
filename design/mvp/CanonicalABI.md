@@ -1184,8 +1184,8 @@ def store(cx, v, t, ptr):
     case Record(fields) : store_record(cx, v, ptr, fields)
     case Variant(cases) : store_variant(cx, v, ptr, cases)
     case Flags(labels)  : store_flags(cx, v, ptr, labels)
-    case Own()          : store_int(cx, lower_own(cx.opts, v, t), ptr, 4)
-    case Borrow()       : store_int(cx, lower_borrow(cx.opts, v, t), ptr, 4)
+    case Own()          : store_int(cx, lower_own(cx, v, t), ptr, 4)
+    case Borrow()       : store_int(cx, lower_borrow(cx, v, t), ptr, 4)
 ```
 
 Integers are stored directly into memory. Because the input domain is exactly

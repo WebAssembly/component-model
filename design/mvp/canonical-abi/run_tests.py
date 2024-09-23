@@ -401,7 +401,7 @@ def test_handles():
   rt2 = ResourceType(inst, dtor) # only usable in exports
   opts = mk_opts()
 
-  async def host_import(task, on_start, on_return, on_suspend):
+  async def host_import(task, on_start, on_return, on_block):
     args = on_start()
     assert(len(args) == 2)
     assert(args[0] == 42)
