@@ -309,6 +309,7 @@ class CanonicalOptions:
   string_encoding: Optional[str] = None
   realloc: Optional[Callable] = None
   post_return: Optional[Callable] = None
+  sync_task_return: bool = False
   sync: bool = True # = !canonopt.async
   callback: Optional[Callable] = None
 
@@ -316,7 +317,7 @@ class CanonicalOptions:
 
 class ComponentInstance:
   handles: HandleTables
-  async_subtasks: Table[AsyncSubtask]
+  async_subtasks: Table[Subtask]
   num_tasks: int
   may_leave: bool
   backpressure: bool
@@ -325,7 +326,7 @@ class ComponentInstance:
 
   def __init__(self):
     self.handles = HandleTables()
-    self.async_subtasks = Table[AsyncSubtask]()
+    self.async_subtasks = Table[Subtask]()
     self.num_tasks = 0
     self.may_leave = True
     self.backpressure = False
@@ -406,17 +407,17 @@ class HandleElem:
     self.scope = scope
     self.lend_count = 0
 
-class AsyncCallState(IntEnum):
+class CallState(IntEnum):
   STARTING = 0
   STARTED = 1
   RETURNED = 2
   DONE = 3
 
 class EventCode(IntEnum):
-  CALL_STARTING = AsyncCallState.STARTING
-  CALL_STARTED = AsyncCallState.STARTED
-  CALL_RETURNED = AsyncCallState.RETURNED
-  CALL_DONE = AsyncCallState.DONE
+  CALL_STARTING = CallState.STARTING
+  CALL_STARTED = CallState.STARTED
+  CALL_RETURNED = CallState.RETURNED
+  CALL_DONE = CallState.DONE
   YIELDED = 4
 
 EventTuple = tuple[EventCode, int]
@@ -452,16 +453,20 @@ async def call_and_handle_blocking(callee):
   return await blocked
 
 class Task(Context):
+  ft: FuncType
   caller: Optional[Task]
+  on_return: Optional[Callable]
   on_block: OnBlockCallback
   borrow_count: int
   events: list[EventCallback]
   has_events: asyncio.Event
   num_async_subtasks: int
 
-  def __init__(self, opts, inst, caller, on_block):
+  def __init__(self, opts, inst, ft, caller, on_return, on_block):
     super().__init__(opts, inst, self)
+    self.ft = ft
     self.caller = caller
+    self.on_return = on_return
     self.on_block = on_block
     self.borrow_count = 0
     self.events = []
@@ -474,7 +479,7 @@ class Task(Context):
       trap_if(c.inst is inst)
       c = c.caller
 
-  async def enter(self):
+  async def enter(self, on_start):
     assert(current_task.locked())
     self.trap_if_on_the_stack(self.inst)
     if not self.may_enter(self) or self.inst.pending_tasks:
@@ -485,6 +490,7 @@ class Task(Context):
       assert(self.inst.interruptible.is_set())
       self.inst.interruptible.clear()
     self.inst.num_tasks += 1
+    return lower_flat_values(self, MAX_FLAT_PARAMS, on_start(), self.ft.param_types())
 
   def may_enter(self, pending_task):
     return self.inst.interruptible.is_set() and \
@@ -558,10 +564,22 @@ class Task(Context):
     assert(self.borrow_count > 0)
     self.borrow_count -= 1
 
+  def return_(self, flat_results):
+    trap_if(not self.on_return)
+    if self.opts.sync and not self.opts.sync_task_return:
+      maxflat = MAX_FLAT_RESULTS
+    else:
+      maxflat = MAX_FLAT_PARAMS
+    ts = self.ft.result_types()
+    vs = lift_flat_values(self, maxflat, CoreValueIter(flat_results), ts)
+    self.on_return(vs)
+    self.on_return = None
+
   def exit(self):
     assert(current_task.locked())
     assert(not self.events)
     assert(self.inst.num_tasks >= 1)
+    trap_if(self.on_return)
     trap_if(self.borrow_count != 0)
     trap_if(self.num_async_subtasks != 0)
     self.inst.num_tasks -= 1
@@ -571,57 +589,39 @@ class Task(Context):
     self.maybe_start_pending_task()
 
 class Subtask(Context):
-  lenders: list[HandleElem]
-
-  def __init__(self, opts, task):
-    super().__init__(opts, task.inst, task)
-    self.lenders = []
-
-  def track_owning_lend(self, lending_handle):
-    assert(lending_handle.own)
-    lending_handle.lend_count += 1
-    self.lenders.append(lending_handle)
-
-  def finish(self):
-    for h in self.lenders:
-      h.lend_count -= 1
-
-class AsyncTask(Task):
   ft: FuncType
-  on_start: Callable
-  on_return: Callable
-  state: AsyncCallState
-
-  def __init__(self, opts, inst, caller, on_block, ft, on_start, on_return):
-    super().__init__(opts, inst, caller, on_block)
-    self.ft = ft
-    self.on_start = on_start
-    self.on_return = on_return
-    self.state = AsyncCallState.STARTING
-
-  def start(self):
-    trap_if(self.state != AsyncCallState.STARTING)
-    self.state = AsyncCallState.STARTED
-
-  def return_(self):
-    trap_if(self.state != AsyncCallState.STARTED)
-    self.state = AsyncCallState.RETURNED
-
-  def exit(self):
-    trap_if(self.state != AsyncCallState.RETURNED)
-    self.state = AsyncCallState.DONE
-    super().exit()
-
-class AsyncSubtask(Subtask):
-  state: AsyncCallState
+  flat_args: CoreValueIter
+  flat_results: Optional[list[any]]
+  state: CallState
+  lenders: list[HandleElem]
   notify_supertask: bool
   enqueued: bool
 
-  def __init__(self, opts, task):
-    super().__init__(opts, task)
-    self.state = AsyncCallState.STARTING
+  def __init__(self, opts, ft, task, flat_args):
+    super().__init__(opts, task.inst, task)
+    self.ft = ft
+    self.flat_args = CoreValueIter(flat_args)
+    self.flat_results = None
+    self.state = CallState.STARTING
+    self.lenders = []
     self.notify_supertask = False
     self.enqueued = False
+
+  def on_start(self):
+    assert(self.state == CallState.STARTING)
+    self.state = CallState.STARTED
+    self.maybe_notify_supertask()
+    max_flat = MAX_FLAT_PARAMS if self.opts.sync else 1
+    ts = self.ft.param_types()
+    return lift_flat_values(self, max_flat, self.flat_args, ts)
+
+  def on_return(self, vs):
+    assert(self.state == CallState.STARTED)
+    self.state = CallState.RETURNED
+    self.maybe_notify_supertask()
+    max_flat = MAX_FLAT_RESULTS if self.opts.sync else 0
+    ts = self.ft.result_types()
+    self.flat_results = lower_flat_values(self, max_flat, vs, ts, self.flat_args)
 
   def maybe_notify_supertask(self):
     if self.notify_supertask and not self.enqueued:
@@ -632,21 +632,18 @@ class AsyncSubtask(Subtask):
         return (EventCode(self.state), i)
       self.task.notify(subtask_event)
 
-  def start(self):
-    assert(self.state == AsyncCallState.STARTING)
-    self.state = AsyncCallState.STARTED
-    self.maybe_notify_supertask()
-
-  def return_(self):
-    assert(self.state == AsyncCallState.STARTED)
-    self.state = AsyncCallState.RETURNED
-    self.maybe_notify_supertask()
+  def track_owning_lend(self, lending_handle):
+    assert(lending_handle.own)
+    lending_handle.lend_count += 1
+    self.lenders.append(lending_handle)
 
   def finish(self):
-    super().finish()
-    assert(self.state == AsyncCallState.RETURNED)
-    self.state = AsyncCallState.DONE
+    assert(self.state == CallState.RETURNED)
+    for h in self.lenders:
+      h.lend_count -= 1
+    self.state = CallState.DONE
     self.maybe_notify_supertask()
+    return self.flat_results
 
 ### Loading
 
@@ -1415,27 +1412,20 @@ def lower_heap_values(cx, vs, ts, out_param):
 
 ### `canon lift`
 
-async def canon_lift(opts, inst, callee, ft, caller, on_start, on_return, on_block = default_on_block):
+async def canon_lift(opts, inst, ft, callee, caller, on_start, on_return, on_block = default_on_block):
+  task = Task(opts, inst, ft, caller, on_return, on_block)
+  flat_args = await task.enter(on_start)
   if opts.sync:
-    task = Task(opts, inst, caller, on_block)
-    await task.enter()
-
-    flat_args = lower_flat_values(task, MAX_FLAT_PARAMS, on_start(), ft.param_types())
     flat_results = await call_and_trap_on_throw(callee, task, flat_args)
-    on_return(lift_flat_values(task, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types()))
-
-    if opts.post_return is not None:
-      [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
-
-    task.exit()
+    if not opts.sync_task_return:
+      task.return_(flat_results)
+      if opts.post_return is not None:
+        [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
   else:
-    task = AsyncTask(opts, inst, caller, on_block, ft, on_start, on_return)
-    await task.enter()
-
     if not opts.callback:
-      [] = await call_and_trap_on_throw(callee, task, [])
+      [] = await call_and_trap_on_throw(callee, task, flat_args)
     else:
-      [packed_ctx] = await call_and_trap_on_throw(callee, task, [])
+      [packed_ctx] = await call_and_trap_on_throw(callee, task, flat_args)
       while packed_ctx != 0:
         is_yield = bool(packed_ctx & 1)
         ctx = packed_ctx & ~1
@@ -1445,9 +1435,7 @@ async def canon_lift(opts, inst, callee, ft, caller, on_start, on_return, on_blo
         else:
           event, payload = await task.wait()
         [packed_ctx] = await call_and_trap_on_throw(opts.callback, task, [ctx, event, payload])
-
-    assert(opts.post_return is None)
-    task.exit()
+  task.exit()
 
 async def call_and_trap_on_throw(callee, task, args):
   try:
@@ -1457,37 +1445,21 @@ async def call_and_trap_on_throw(callee, task, args):
 
 ### `canon lower`
 
-async def canon_lower(opts, callee, ft, task, flat_args):
+async def canon_lower(opts, ft, callee, task, flat_args):
   trap_if(not task.inst.may_leave)
-
-  flat_args = CoreValueIter(flat_args)
-  flat_results = None
+  subtask = Subtask(opts, ft, task, flat_args)
   if opts.sync:
-    subtask = Subtask(opts, task)
-    def on_start():
-      return lift_flat_values(subtask, MAX_FLAT_PARAMS, flat_args, ft.param_types())
-    def on_return(results):
-      nonlocal flat_results
-      flat_results = lower_flat_values(subtask, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
-    await task.call_sync(callee, task, on_start, on_return)
-    subtask.finish()
+    await task.call_sync(callee, task, subtask.on_start, subtask.on_return)
+    flat_results = subtask.finish()
   else:
-    subtask = AsyncSubtask(opts, task)
-    def on_start():
-      subtask.start()
-      return lift_flat_values(subtask, 1, flat_args, ft.param_types())
-    def on_return(results):
-      subtask.return_()
-      lower_flat_values(subtask, 0, results, ft.result_types(), flat_args)
     async def do_call(on_block):
-      await callee(task, on_start, on_return, on_block)
-      subtask.finish()
+      await callee(task, subtask.on_start, subtask.on_return, on_block)
+      [] = subtask.finish()
     if await call_and_handle_blocking(do_call):
       i = task.add_async_subtask(subtask)
       flat_results = [pack_async_result(i, subtask.state)]
     else:
       flat_results = [0]
-
   return flat_results
 
 def pack_async_result(i, state):
@@ -1521,8 +1493,8 @@ async def canon_resource_drop(rt, sync, task, i):
         caller_opts = CanonicalOptions(sync = sync)
         callee_opts = CanonicalOptions(sync = rt.dtor_sync, callback = rt.dtor_callback)
         ft = FuncType([U32()],[])
-        callee = partial(canon_lift, callee_opts, rt.impl, rt.dtor, ft)
-        flat_results = await canon_lower(caller_opts, callee, ft, task, [h.rep, 0])
+        callee = partial(canon_lift, callee_opts, rt.impl, ft, rt.dtor)
+        flat_results = await canon_lower(caller_opts, ft, callee, task, [h.rep, 0])
       else:
         task.trap_if_on_the_stack(rt.impl)
   else:
@@ -1542,30 +1514,13 @@ async def canon_task_backpressure(task, flat_args):
   task.inst.backpressure = bool(flat_args[0])
   return []
 
-### 🔀 `canon task.start`
-
-async def canon_task_start(task, core_ft, flat_args):
-  assert(len(core_ft.params) == len(flat_args))
-  trap_if(not task.inst.may_leave)
-  trap_if(task.opts.sync)
-  trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType([], task.ft.params), 'lower'))
-  task.start()
-  args = task.on_start()
-  flat_results = lower_flat_values(task, MAX_FLAT_RESULTS, args, task.ft.param_types(), CoreValueIter(flat_args))
-  assert(len(core_ft.results) == len(flat_results))
-  return flat_results
-
 ### 🔀 `canon task.return`
 
 async def canon_task_return(task, core_ft, flat_args):
-  assert(len(core_ft.params) == len(flat_args))
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.sync)
+  trap_if(task.opts.sync and not task.opts.sync_task_return)
   trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType(task.ft.results, []), 'lower'))
-  task.return_()
-  results = lift_flat_values(task, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_types())
-  task.on_return(results)
-  assert(len(core_ft.results) == 0)
+  task.return_(flat_args)
   return []
 
 ### 🔀 `canon task.wait`
@@ -1601,6 +1556,6 @@ async def canon_subtask_drop(task, i):
   trap_if(not task.inst.may_leave)
   subtask = task.inst.async_subtasks.remove(i)
   trap_if(subtask.enqueued)
-  trap_if(subtask.state != AsyncCallState.DONE)
+  trap_if(subtask.state != CallState.DONE)
   subtask.task.num_async_subtasks -= 1
   return []

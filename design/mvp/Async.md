@@ -19,7 +19,6 @@ summary of the motivation and animated sketch of the design in action.
   * [Structured concurrency](#structured-concurrency)
   * [Waiting](#waiting)
   * [Backpressure](#backpressure)
-  * [Starting](#starting)
   * [Returning](#returning)
 * [Examples](#examples)
 * [Interaction with multi-threading](#interaction-with-multi-threading)
@@ -218,44 +217,30 @@ private resources (like linear memory), requiring the component to be able to
 exert *backpressure* to allow some tasks to finish (and release private
 resources) before admitting new async export calls. To do this, a component may
 call the `task.backpressure` built-in to set a "backpressure" flag that causes
-subsequent export calls to immediately return in the [starting](#starting)
-state without calling the component's Core WebAssembly code.
+subsequent export calls to immediately return in the "starting" state without
+calling the component's Core WebAssembly code.
 
-Once backpressure is enabled, the current task can [wait](#waiting) for
-existing tasks to finish and release their associated resources. Thus, a task
-can [wait](#waiting) with or without backpressure, depending on whether it
+Once task enables backpressure, it can [wait](#waiting) for existing tasks to
+finish and release their associated resources. Thus, a task can choose to
+[wait](#waiting) with or without backpressure enabled, depending on whether it
 wants to accept new accept new export calls while waiting or not.
 
 See the [`canon_task_backpressure`] function and [`Task.enter`] method in the
 Canonical ABI explainer for the setting and implementation of backpressure.
 
-### Starting
-
-When a component asynchronously lifts a function, instead of the function
-eagerly receiving its lowered parameters (as a synchronous function would) the
-asynchronously-lifted Core WebAssembly function is passed an empty list of
-arguments and must instead call an imported [`task.start`] built-in to lower
-and receive its arguments.
-
-The main reason to have `task.start` is so that an overloaded component can
-enable [backpressure](#backpressure) and then [wait](#waiting) for existing
-tasks to finish before the receiving the arguments to the current task. See the
-[`canon_task_start`] function in the Canonical ABI explainer for more details.
-
-Before a task has called `task.start`, it is considered in the "starting"
-state. After calling `task.start`, the task is in a "started" state.
+Once a task is allowed to start according to these backpressure rules, its
+arguments are lowered into the callee's linear memory and the task is in
+the "started" state.
 
 ### Returning
 
-Symmetric to starting, the way a Core WebAssembly function returns its value is
-by calling [`task.return`], passing the core values that are to be lifted.
+The way an async Core WebAssembly function returns its value is by calling
+[`task.return`], passing the core values that are to be lifted.
 
 The main reason to have `task.return` is so that a task can continue execution
 after returning its value. This is useful for various finalization tasks (such
 as logging, billing or metrics) that don't need to be on the critical path of
-returning a value to the caller. (It also subsumes and generalizes the
-Canonical ABI's `post_return` function used by synchronous functions to release
-memory.)
+returning a value to the caller.
 
 A task may not call `task.return` unless it is in the "started" state. Once
 `task.return` is called, the task is in the "returned" state. A task can only
@@ -273,12 +258,9 @@ replaced with `...` to focus on the overall flow of function calls.
   (import "fetch" (func $fetch (param "url" string) (result (list u8))))
   (core module $Main
     (import "" "fetch" (func $fetch (param i32 i32) (result i32)))
-    (import "" "task.start" (func $task_start (param i32)))
     (import "" "task.return" (func $task_return (param i32)))
     (import "" "task.wait" (func $wait (param i32) (result i32)))
-    (func (export "summarize")
-      ...
-      call $task_start   ;; receive the list of strings arguments
+    (func (export "summarize") (param i32 i32)
       ...
       loop
         ...
@@ -296,12 +278,10 @@ replaced with `...` to focus on the overall flow of function calls.
     )
   )
   (canon lower $fetch async (core func $fetch'))
-  (canon task.start (core func $task_start))
   (canon task.return (core func $task_return))
   (canon task.wait (core func $task_wait))
   (core instance $main (instantiate $Main (with "" (instance
     (export "fetch" (func $fetch'))
-    (export "task.start" (func $task_start))
     (export "task.return" (func $task_return))
     (export "task.wait" (func $task_wait))
   ))))
@@ -321,13 +301,13 @@ reclaim the memory passed arguments or use the results that have now been
 written to the outparam memory.
 
 Because the `summarize` function is `canon lift`ed with `async`, its core
-function type has no params or results, since parameters are passed in via
-`task.start` and results are passed out via `task.return`. It also means that
-multiple `summarize` calls can be active at once: once the first call to
-`task.wait` blocks, the runtime will suspend its callstack (fiber) and start a
-new stack for the new call to `summarize`. Thus, `summarize` must be careful to
-allocate a separate linear-memory stack in its entry point, if one is needed,
-and to save and restore this before and after calling `task.wait`.
+function type has no results, since results are passed out via `task.return`.
+It also means that multiple `summarize` calls can be active at once: once the
+first call to `task.wait` blocks, the runtime will suspend its callstack
+(fiber) and start a new stack for the new call to `summarize`. Thus,
+`summarize` must be careful to allocate a separate linear-memory stack in its
+entry point, if one is needed, and to save and restore this before and after
+calling `task.wait`.
 
 (Note that, for brevity this example ignores the `memory` and `realloc`
 immediates required by `canon lift` and `canon lower` to allocate the `list`
@@ -345,12 +325,9 @@ not externally-visible behavior.
   (import "fetch" (func $fetch (param "url" string) (result (list u8))))
   (core module $Main
     (import "" "fetch" (func $fetch (param i32 i32) (result i32)))
-    (import "" "task.start" (func $task_start (param i32)))
     (import "" "task.return" (func $task_return (param i32)))
     (import "" "task.wait" (func $wait (param i32) (result i32)))
-    (func (export "summarize") (result i32)
-      ...
-      call $task_start        ;; receive the list of strings arguments
+    (func (export "summarize") (param i32 i32) (result i32)
       ...
       loop
         ...
@@ -372,12 +349,10 @@ not externally-visible behavior.
     )
   )
   (canon lower $fetch async (core func $fetch'))
-  (canon task.start (core func $task_start))
   (canon task.return (core func $task_return))
   (canon task.wait (core func $task_wait))
   (core instance $main (instantiate $Main (with "" (instance
     (export "fetch" (func $fetch'))
-    (export "task.start" (func $task_start))
     (export "task.return" (func $task_return))
     (export "task.wait" (func $task_wait))
   ))))
@@ -388,9 +363,8 @@ not externally-visible behavior.
 ```
 While this example spawns all the subtasks in the initial call to `summarize`,
 subtasks can also be spawned from `cb` (even after the call to `task.return`).
-It's also possible for `summarize` to wait to call `task.start` from `cb` or,
-conversely, for `task.return` to be called eagerly in the initial call to
-`summarize`.
+It's also possible for `summarize` to call `task.return` called eagerly in the
+initial core `summarize` call.
 
 The `$event` and `$payload` parameters passed to `cb` are the same as the return
 values from `task.wait` in the previous example. The precise meaning of these
@@ -476,7 +450,6 @@ features will be added in future chunks to complete "async" in Preview 3:
 [Lift and Lower Definitions]: Explainer.md#canonical-definitions
 [Lifted]: Explainer.md#canonical-definitions
 [Canonical Built-in]: Explainer.md#canonical-built-ins
-[`task.start`]: Explainer.md#-async-built-ins
 [`task.return`]: Explainer.md#-async-built-ins
 [`task.wait`]: Explainer.md#-async-built-ins
 [`thread.spawn`]: Explainer.md#-threading-built-ins
@@ -488,7 +461,6 @@ features will be added in future chunks to complete "async" in Preview 3:
 [`canon_lower`]: CanonicalABI.md#canon-task-wait
 [`canon_task_wait`]: CanonicalABI.md#-canon-taskwait
 [`canon_task_backpressure`]: CanonicalABI.md#-canon-taskbackpressure
-[`canon_task_start`]: CanonicalABI.md#-canon-taskstart
 [`canon_task_return`]: CanonicalABI.md#-canon-taskreturn
 [`Task`]: CanonicalABI.md#runtime-state
 [`Task.enter`]: CanonicalABI.md#runtime-state

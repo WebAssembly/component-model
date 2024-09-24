@@ -275,15 +275,14 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x03 rt:<typeidx>                                   => (canon resource.drop rt (core func))
            | 0x07 rt:<typdidx>                                   => (canon resource.drop rt async (core func))
            | 0x04 rt:<typeidx>                                   => (canon resource.rep rt (core func))
-           | 0x05 ft:<typeidx>                                   => (canon thread.spawn ft (core func))
-           | 0x06                                                => (canon thread.hw_concurrency (core func))
-           | 0x08                                                => (canon task.backpressure (core func))
-           | 0x09 ft:<core:typeidx>                              => (canon task.start ft (core func))
-           | 0x0a ft:<core:typeidx>                              => (canon task.return ft (core func))
-           | 0x0b                                                => (canon task.wait (core func))
-           | 0x0c                                                => (canon task.poll (core func))
-           | 0x0d                                                => (canon task.yield (core func))
-           | 0x0e                                                => (canon subtask.drop (core func))
+           | 0x05 ft:<typeidx>                                   => (canon thread.spawn ft (core func)) 🧵
+           | 0x06                                                => (canon thread.hw_concurrency (core func)) 🧵
+           | 0x08                                                => (canon task.backpressure (core func)) 🔀
+           | 0x09 ft:<core:typeidx>                              => (canon task.return ft (core func)) 🔀
+           | 0x0a                                                => (canon task.wait (core func)) 🔀
+           | 0x0b                                                => (canon task.poll (core func)) 🔀
+           | 0x0c                                                => (canon task.yield (core func)) 🔀
+           | 0x0d                                                => (canon subtask.drop (core func)) 🔀
 opts     ::= opt*:vec(<canonopt>)                                => opt*
 canonopt ::= 0x00                                                => string-encoding=utf8
            | 0x01                                                => string-encoding=utf16
@@ -291,8 +290,9 @@ canonopt ::= 0x00                                                => string-encod
            | 0x03 m:<core:memidx>                                => (memory m)
            | 0x04 f:<core:funcidx>                               => (realloc f)
            | 0x05 f:<core:funcidx>                               => (post-return f)
-           | 0x06                                                => async
-           | 0x07 f:<core:funcidx>                               => (callback f)
+           | 0x06                                                => sync-task-return 🔀
+           | 0x07                                                => async 🔀
+           | 0x08 f:<core:funcidx>                               => (callback f) 🔀
 ```
 Notes:
 * The second `0x00` byte in `canon` stands for the `func` sort and thus the

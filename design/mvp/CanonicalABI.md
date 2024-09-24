@@ -27,7 +27,6 @@ being specified here.
   * [`canon resource.drop`](#canon-resourcedrop)
   * [`canon resource.rep`](#canon-resourcerep)
   * [`canon task.backpressure`](#-canon-taskbackpressure) 🔀
-  * [`canon task.start`](#-canon-taskstart) 🔀
   * [`canon task.return`](#-canon-taskreturn) 🔀
   * [`canon task.wait`](#-canon-taskwait) 🔀
   * [`canon task.poll`](#-canon-taskpoll) 🔀
@@ -275,6 +274,7 @@ class CanonicalOptions:
   string_encoding: Optional[str] = None
   realloc: Optional[Callable] = None
   post_return: Optional[Callable] = None
+  sync_task_return: bool = False
   sync: bool = True # = !canonopt.async
   callback: Optional[Callable] = None
 ```
@@ -291,7 +291,7 @@ Canonical ABI and introduced below as the fields are used.
 ```python
 class ComponentInstance:
   handles: HandleTables
-  async_subtasks: Table[AsyncSubtask]
+  async_subtasks: Table[Subtask]
   num_tasks: int
   may_leave: bool
   backpressure: bool
@@ -300,7 +300,7 @@ class ComponentInstance:
 
   def __init__(self):
     self.handles = HandleTables()
-    self.async_subtasks = Table[AsyncSubtask]()
+    self.async_subtasks = Table[Subtask]()
     self.num_tasks = 0
     self.may_leave = True
     self.backpressure = False
@@ -451,33 +451,31 @@ check that callers and callees uphold their respective parts of the call
 contract. This additional call state derives from `Context`, adding extra
 mutable fields. There are two subclasses of `Context`: `Task`, which is
 created by `canon_lift` and `Subtask`, which is created by `canon_lower`.
-Additional sync-/async-specialized mutable state is added by the `AsyncTask`
-and `AsyncSubtask` subclasses.
 
 The `Task` class and its subclasses depend on the following type definitions:
 ```python
-class AsyncCallState(IntEnum):
+class CallState(IntEnum):
   STARTING = 0
   STARTED = 1
   RETURNED = 2
   DONE = 3
 
 class EventCode(IntEnum):
-  CALL_STARTING = AsyncCallState.STARTING
-  CALL_STARTED = AsyncCallState.STARTED
-  CALL_RETURNED = AsyncCallState.RETURNED
-  CALL_DONE = AsyncCallState.DONE
+  CALL_STARTING = CallState.STARTING
+  CALL_STARTED = CallState.STARTED
+  CALL_RETURNED = CallState.RETURNED
+  CALL_DONE = CallState.DONE
   YIELDED = 4
 
 EventTuple = tuple[EventCode, int]
 EventCallback = Callable[[], EventTuple]
 OnBlockCallback = Callable[[Awaitable], any]
 ```
-The `AsyncCallState` enum describes the linear sequence of states that an async
-call necessarily transitions through: [`STARTING`](Async.md#starting),
-`STARTED`, [`RETURNING`](Async.md#returning) and `DONE`. The `EventCode` enum
-shares common code values with `AsyncCallState` to define the set of integer
-event codes that are delivered to [waiting](Async.md#waiting) or polling tasks.
+The `CallState` enum describes the linear sequence of states that an async call
+necessarily transitions through: [`STARTING`](Async.md#backpressure), `STARTED`,
+[`RETURNING`](Async.md#returning) and `DONE`. The `EventCode` enum shares
+common code values with `CallState` to define the set of integer event codes
+that are delivered to [waiting](Async.md#waiting) or polling tasks.
 
 The `current_task` global holds an `asyncio.Lock` that starts out locked and is
 strategically released and reacquired to control when and where the runtime can
@@ -553,21 +551,24 @@ when there is a need to make an `async` call.
 
 A `Task` object is created for each call to `canon_lift` and is implicitly
 threaded through all core function calls. This implicit `Task` parameter
-represents the "[current task]". A `Task` is-a `Context`, with its `opts`
-corresponding to the `canonopt` supplied to the `canon lift` definition that
-the `Task` was created for.
+represents the "[current task]". A `Task` is-a `Context`, with its `ft` and
+`opts` derived from the `canon lift` definition that created this `Task`.
 ```python
 class Task(Context):
+  ft: FuncType
   caller: Optional[Task]
+  on_return: Optional[Callable]
   on_block: OnBlockCallback
   borrow_count: int
   events: list[EventCallback]
   has_events: asyncio.Event
   num_async_subtasks: int
 
-  def __init__(self, opts, inst, caller, on_block):
+  def __init__(self, opts, inst, ft, caller, on_return, on_block):
     super().__init__(opts, inst, self)
+    self.ft = ft
     self.caller = caller
+    self.on_return = on_return
     self.on_block = on_block
     self.borrow_count = 0
     self.events = []
@@ -604,17 +605,17 @@ O(n) loop in `trap_if_on_the_stack`:
   instance a static bit position) that is passed by copy from caller to callee.
 
 The `enter` method is called immediately after constructing a `Task` and, along
-with `may_enter` and `may_start_pending_task`, implements backpressure. If a
-`Task` tries to `enter` when `may_enter` is false, the `Task` blocks (via
-`wait_on`, shown next) and goes into a `pending_tasks` queue, waiting to be
-unblocked by another task calling `maybe_start_pending_task`. One key property
-of this backpressure scheme is that `pending_tasks` are only executed one at a
-time, ensuring that if an overloaded component instance enables and then
-disables backpressure, there will not be an unstoppable thundering herd of
-pending tasks started all at once that OOM the component before it can
-re-enable backpressure.
+with `may_enter` and `may_start_pending_task`, enforces backpressure before
+lowering the arguments into the callee's memory. In particular, if `may_enter`
+signals that backpressure is needed, `enter` blocks by putting itself into a
+`pending_tasks` queue and waiting (via `wait_on`, defined next) to be released
+by `maybe_start_pending_task`. One key property of `maybe_start_pending_task`
+is that `pending_tasks` are only popped one at a time, ensuring that if an
+overloaded component instance enables and then disables backpressure, there
+will not be an unstoppable thundering herd of pending tasks started all at once
+that OOM the component before it can re-enable backpressure.
 ```python
-  async def enter(self):
+  async def enter(self, on_start):
     assert(current_task.locked())
     self.trap_if_on_the_stack(self.inst)
     if not self.may_enter(self) or self.inst.pending_tasks:
@@ -625,6 +626,7 @@ re-enable backpressure.
       assert(self.inst.interruptible.is_set())
       self.inst.interruptible.clear()
     self.inst.num_tasks += 1
+    return lower_flat_values(self, MAX_FLAT_PARAMS, on_start(), self.ft.param_types())
 
   def may_enter(self, pending_task):
     return self.inst.interruptible.is_set() and \
@@ -734,10 +736,10 @@ external I/O (as emulated in the Python code by awaiting `sleep(0)`:
 ```
 
 All `Task`s (whether lifted `async` or not) are allowed to call `async`-lowered
-imports. Calling an `async`-lowered import creates an `AsyncSubtask` (defined
-below) which is stored in the current component instance's `async_subtasks`
-table and tracked by the current task's `num_async_subtasks` counter, which is
-guarded to be `0` in `Task.exit` (below) to ensure [structured concurrency].
+imports. Calling an `async`-lowered import stores a `Subtask` (defined below)
+in the current component instance's `async_subtasks` table. The current task
+tracks the number of live async subtasks and guards this to be in `Task.exit`
+(below) to ensure [structured concurrency].
 ```python
   def add_async_subtask(self, subtask):
     assert(subtask.task is self and not subtask.notify_supertask)
@@ -745,8 +747,8 @@ guarded to be `0` in `Task.exit` (below) to ensure [structured concurrency].
     self.num_async_subtasks += 1
     return self.inst.async_subtasks.add(subtask)
 ```
-The `notify_supertask` flag signals to `AsyncSubtask` methods (defined below)
-to notify this `Task` when the lowered callee makes progress.
+The `notify_supertask` flag signals to the methods of `Subtask` (defined below)
+to notify this `Task` when the async call makes progress.
 
 The `borrow_count` field is used by the following methods to track the number
 of borrowed handles that were passed as parameters to the export that have not
@@ -761,13 +763,34 @@ after this export call finishes):
     self.borrow_count -= 1
 ```
 
+The `return_` method is called by either `canon_task_return` or `canon_lift`
+(both defined below) to lift and return results to the caller using the
+`on_return` callback that was supplied by the caller to `canon_lift`. Using a
+callback instead of simply returning the values from `canon_lift` enables the
+callee to keep executing after returning its results. However, it does
+introduce a dynamic error condition if `canon task.return` is called less or
+more than once which must be checked by `return_` and `exit`.
+```python
+  def return_(self, flat_results):
+    trap_if(not self.on_return)
+    if self.opts.sync and not self.opts.sync_task_return:
+      maxflat = MAX_FLAT_RESULTS
+    else:
+      maxflat = MAX_FLAT_PARAMS
+    ts = self.ft.result_types()
+    vs = lift_flat_values(self, maxflat, CoreValueIter(flat_results), ts)
+    self.on_return(vs)
+    self.on_return = None
+```
+
 Lastly, when a task exits, the runtime enforces the guard conditions mentioned
-above and allows pending tasks to start.
+above and allows a pending task to start.
 ```python
   def exit(self):
     assert(current_task.locked())
     assert(not self.events)
     assert(self.inst.num_tasks >= 1)
+    trap_if(self.on_return)
     trap_if(self.borrow_count != 0)
     trap_if(self.num_async_subtasks != 0)
     self.inst.num_tasks -= 1
@@ -778,88 +801,61 @@ above and allows pending tasks to start.
 ```
 
 While `canon_lift` creates `Task`s, `canon_lower` creates `Subtask` objects.
-Like `Task`, `Subtask` is a subclass of `Context`, gets its `opts` from the
-`canon lower`. Importantly, the `Context.task` field refers to the [current
-task] at the point of the `canon lower` call, thereby linking a subtask to its
-supertask.
+Like `Task`, `Subtask` is a subclass of `Context` and stores the `ft` and
+`opts` of its `canon lower`. Importantly, the `Context.task` field of a
+`Subtask` refers to the [current task] wwhich called `canon lower`, thereby
+linking all subtasks to their supertask, maintaining a (possibly asynchronous)
+call tree. The `on_start` and `on_return` methods of `Subtask` are passed (by
+`canon_lower` below) to the callee, which will call them to lift its arguments
+and lower its results. Using callbacks provides the callee the flexibility to
+control when arguments are lowered (which can vary due to backpressure) and
+when results are lifted (which can also vary due to when `task.return` is
+called).
 ```python
 class Subtask(Context):
-  lenders: list[HandleElem]
-
-  def __init__(self, opts, task):
-    super().__init__(opts, task.inst, task)
-    self.lenders = []
-
-  def track_owning_lend(self, lending_handle):
-    assert(lending_handle.own)
-    lending_handle.lend_count += 1
-    self.lenders.append(lending_handle)
-
-  def finish(self):
-    for h in self.lenders:
-      h.lend_count -= 1
-```
-A `Subtask` tracks the owned handles that have been lent for the duration of
-the call, ensuring that the caller doesn't drop them during the call (which
-might create a dangling borrowed handle in the callee). Note, the `lenders`
-list usually has a fixed size (in all cases except when a function signature
-has `borrow`s in `list`s) and thus can be stored inline in the native stack
-frame.
-
-The following `AsyncTask`/`AsyncSubtask` classes extend the preceding
-`Task`/`Subtask` classes with additional state and methods that apply only to
-the async case.
-
-The first 3 fields of `AsyncTask` are simply immutable copies of
-arguments/immediates passed to `canon_lift` and are used by the `task.start`
-and `task.return` built-ins below. The last field is used to check the
-above-mentioned state machine transitions from methods that are called by
-`task.start`, `task.return` and `canon_lift` below.
-```python
-class AsyncTask(Task):
   ft: FuncType
-  on_start: Callable
-  on_return: Callable
-  state: AsyncCallState
-
-  def __init__(self, opts, inst, caller, on_block, ft, on_start, on_return):
-    super().__init__(opts, inst, caller, on_block)
-    self.ft = ft
-    self.on_start = on_start
-    self.on_return = on_return
-    self.state = AsyncCallState.STARTING
-
-  def start(self):
-    trap_if(self.state != AsyncCallState.STARTING)
-    self.state = AsyncCallState.STARTED
-
-  def return_(self):
-    trap_if(self.state != AsyncCallState.STARTED)
-    self.state = AsyncCallState.RETURNED
-
-  def exit(self):
-    trap_if(self.state != AsyncCallState.RETURNED)
-    self.state = AsyncCallState.DONE
-    super().exit()
-```
-
-Finally, the `AsyncSubtask` class extends `Subtask` with fields that are used
-by the methods of `Task`, as shown above. `AsyncSubtask`s have the same linear
-state machine as `AsyncTask`s, except that the state transitions are guaranteed
-by the Canonical ABI to happen in the right order, as asserted by the methods
-below.
-```python
-class AsyncSubtask(Subtask):
-  state: AsyncCallState
+  flat_args: CoreValueIter
+  flat_results: Optional[list[any]]
+  state: CallState
+  lenders: list[HandleElem]
   notify_supertask: bool
   enqueued: bool
 
-  def __init__(self, opts, task):
-    super().__init__(opts, task)
-    self.state = AsyncCallState.STARTING
+  def __init__(self, opts, ft, task, flat_args):
+    super().__init__(opts, task.inst, task)
+    self.ft = ft
+    self.flat_args = CoreValueIter(flat_args)
+    self.flat_results = None
+    self.state = CallState.STARTING
+    self.lenders = []
     self.notify_supertask = False
     self.enqueued = False
 
+  def on_start(self):
+    assert(self.state == CallState.STARTING)
+    self.state = CallState.STARTED
+    self.maybe_notify_supertask()
+    max_flat = MAX_FLAT_PARAMS if self.opts.sync else 1
+    ts = self.ft.param_types()
+    return lift_flat_values(self, max_flat, self.flat_args, ts)
+
+  def on_return(self, vs):
+    assert(self.state == CallState.STARTED)
+    self.state = CallState.RETURNED
+    self.maybe_notify_supertask()
+    max_flat = MAX_FLAT_RESULTS if self.opts.sync else 0
+    ts = self.ft.result_types()
+    self.flat_results = lower_flat_values(self, max_flat, vs, ts, self.flat_args)
+```
+The `maybe_notify_supertask` method called by `on_start` and `on_return` only
+sends events to the supertask if this `Subtask` actually blocked and got added
+to the `async_subtasks` table (signalled by `notify_supertask` being set).
+Additionally, `maybe_notify_supertask` uses the `enqueued` flag and the fact
+that "events" are first-class functions to collapse N events down to 1 if a
+subtask advances state multiple times before the supertask receives the event
+which, in turn, avoids unnecessarily spamming the event loop when only the most
+recent state matters.
+```python
   def maybe_notify_supertask(self):
     if self.notify_supertask and not self.enqueued:
       self.enqueued = True
@@ -868,29 +864,27 @@ class AsyncSubtask(Subtask):
         i = self.inst.async_subtasks.array.index(self)
         return (EventCode(self.state), i)
       self.task.notify(subtask_event)
-
-  def start(self):
-    assert(self.state == AsyncCallState.STARTING)
-    self.state = AsyncCallState.STARTED
-    self.maybe_notify_supertask()
-
-  def return_(self):
-    assert(self.state == AsyncCallState.STARTED)
-    self.state = AsyncCallState.RETURNED
-    self.maybe_notify_supertask()
+```
+Lastly, a `Subtask` tracks the owned handles that have been lent for the
+duration of the call, ensuring that the caller doesn't drop them during the
+call (which might create a dangling borrowed handle in the callee). Note, the
+`lenders` list usually has a fixed size (in all cases except when a function
+signature has `borrow`s in `list`s) and thus can be stored inline in the native
+stack frame.
+```python
+  def track_owning_lend(self, lending_handle):
+    assert(lending_handle.own)
+    lending_handle.lend_count += 1
+    self.lenders.append(lending_handle)
 
   def finish(self):
-    super().finish()
-    assert(self.state == AsyncCallState.RETURNED)
-    self.state = AsyncCallState.DONE
+    assert(self.state == CallState.RETURNED)
+    for h in self.lenders:
+      h.lend_count -= 1
+    self.state = CallState.DONE
     self.maybe_notify_supertask()
+    return self.flat_results
 ```
-The `maybe_notify_supertask` method only sends events to the supertask if this
-`AsyncSubtask` actually blocked and got added to the `async_subtasks` table
-(as signalled by `notify_supertask`). Additionally, `maybe_notify_supertask`
-uses the `enqueued` flag and the fact that "events" are first-class functions
-to collapse N events down to 1 if a subtask advances state multiple times
-before the supertask receives the event.
 
 ### Loading
 
@@ -2026,7 +2020,7 @@ validation specifies:
 * if a `post-return` is present, it has type `(func (param flatten_functype({}, $ft, 'lift').results))`
 
 When instantiating component instance `$inst`:
-* Define `$f` to be the partially-bound closure `canon_lift($opts, $inst, $callee, $ft)`
+* Define `$f` to be the partially-bound closure `canon_lift($opts, $inst, $ft, $callee)`
 
 The resulting function `$f` takes 4 runtime arguments:
 * `caller`: the caller's `Task` or, if this lifted function is being called by
@@ -2059,27 +2053,20 @@ by a *single host-agnostic component*.
 
 Based on this, `canon_lift` is defined:
 ```python
-async def canon_lift(opts, inst, callee, ft, caller, on_start, on_return, on_block = default_on_block):
+async def canon_lift(opts, inst, ft, callee, caller, on_start, on_return, on_block = default_on_block):
+  task = Task(opts, inst, ft, caller, on_return, on_block)
+  flat_args = await task.enter(on_start)
   if opts.sync:
-    task = Task(opts, inst, caller, on_block)
-    await task.enter()
-
-    flat_args = lower_flat_values(task, MAX_FLAT_PARAMS, on_start(), ft.param_types())
     flat_results = await call_and_trap_on_throw(callee, task, flat_args)
-    on_return(lift_flat_values(task, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types()))
-
-    if opts.post_return is not None:
-      [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
-
-    task.exit()
+    if not opts.sync_task_return:
+      task.return_(flat_results)
+      if opts.post_return is not None:
+        [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
   else:
-    task = AsyncTask(opts, inst, caller, on_block, ft, on_start, on_return)
-    await task.enter()
-
     if not opts.callback:
-      [] = await call_and_trap_on_throw(callee, task, [])
+      [] = await call_and_trap_on_throw(callee, task, flat_args)
     else:
-      [packed_ctx] = await call_and_trap_on_throw(callee, task, [])
+      [packed_ctx] = await call_and_trap_on_throw(callee, task, flat_args)
       while packed_ctx != 0:
         is_yield = bool(packed_ctx & 1)
         ctx = packed_ctx & ~1
@@ -2089,28 +2076,13 @@ async def canon_lift(opts, inst, callee, ft, caller, on_start, on_return, on_blo
         else:
           event, payload = await task.wait()
         [packed_ctx] = await call_and_trap_on_throw(opts.callback, task, [ctx, event, payload])
-
-    assert(opts.post_return is None)
-    task.exit()
-
-async def call_and_trap_on_throw(callee, task, args):
-  try:
-    return await callee(task, args)
-  except CoreWebAssemblyException:
-    trap()
+  task.exit()
 ```
-The only fundamental difference between sync and async lifting is whether
-parameters/results are automatically lowered/lifted (with `canon_lift` calling
-`on_start` and `on_return`) or whether the `callee` explicitly triggers
-`on_start`/`on_return` via `task.start`/`task.return` (defined below).
+In the `sync` case, the `post-return` function is only called if
+`sync-task-return` is not set in the `canonopt`s. Later, `post-return` may be
+deprecated and removed, as `task.return` is more convenient and expressive.
 
-In a sync call, after the results have been copied from the callee's memory
-into the caller's memory, the callee's `post_return` function is called to
-allow the callee to reclaim any memory. An async call doesn't need a
-`post_return` function, since the callee can keep running after calling
-`task.return`.
-
-Within the async case, there are two sub-cases depending on whether the
+In the `async` case, there are two sub-cases depending on whether the
 `callback` `canonopt` was set. When `callback` is present, waiting happens in
 an "event loop" inside `canon_lift` which also allows yielding (i.e., allowing
 other tasks to run without blocking) by setting the LSB of the returned `i32`.
@@ -2123,7 +2095,14 @@ Python, C# and Rust).
 Uncaught Core WebAssembly [exceptions] result in a trap at component
 boundaries. Thus, if a component wishes to signal an error, it must use some
 sort of explicit type such as `result` (whose `error` case particular language
-bindings may choose to map to and from exceptions).
+bindings may choose to map to and from exceptions):
+```python
+async def call_and_trap_on_throw(callee, task, args):
+  try:
+    return await callee(task, args)
+  except CoreWebAssemblyException:
+    trap()
+```
 
 ### `canon lower`
 
@@ -2138,7 +2117,7 @@ where `$callee` has type `$ft`, validation specifies:
 * there is no `post-return` in `$opts`
 
 When instantiating component instance `$inst`:
-* Define `$f` to be the partially-bound closure: `canon_lower($opts, $callee, $ft)`
+* Define `$f` to be the partially-bound closure: `canon_lower($opts, $ft, $callee)`
 
 The resulting function `$f` takes 2 runtime arguments:
 * `task`: the `Task` that was created by `canon_lift` when entering the current
@@ -2147,56 +2126,39 @@ The resulting function `$f` takes 2 runtime arguments:
 
 Given this, `canon_lower` is defined:
 ```python
-async def canon_lower(opts, callee, ft, task, flat_args):
+async def canon_lower(opts, ft, callee, task, flat_args):
   trap_if(not task.inst.may_leave)
-
-  flat_args = CoreValueIter(flat_args)
-  flat_results = None
+  subtask = Subtask(opts, ft, task, flat_args)
   if opts.sync:
-    subtask = Subtask(opts, task)
-    def on_start():
-      return lift_flat_values(subtask, MAX_FLAT_PARAMS, flat_args, ft.param_types())
-    def on_return(results):
-      nonlocal flat_results
-      flat_results = lower_flat_values(subtask, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
-    await task.call_sync(callee, task, on_start, on_return)
-    subtask.finish()
+    await task.call_sync(callee, task, subtask.on_start, subtask.on_return)
+    flat_results = subtask.finish()
   else:
-    subtask = AsyncSubtask(opts, task)
-    def on_start():
-      subtask.start()
-      return lift_flat_values(subtask, 1, flat_args, ft.param_types())
-    def on_return(results):
-      subtask.return_()
-      lower_flat_values(subtask, 0, results, ft.result_types(), flat_args)
     async def do_call(on_block):
-      await callee(task, on_start, on_return, on_block)
-      subtask.finish()
+      await callee(task, subtask.on_start, subtask.on_return, on_block)
+      [] = subtask.finish()
     if await call_and_handle_blocking(do_call):
       i = task.add_async_subtask(subtask)
       flat_results = [pack_async_result(i, subtask.state)]
     else:
       flat_results = [0]
-
   return flat_results
 ```
-In the asynchronous case, `Task.call_and_handle_blocking` returns `True` if
-the call to `do_call` blocks. Whether or not the `callee` blocks, the
-`on_start` and `on_return` handlers will be called before the `callee`
-completes. Note that, in an `async`-lowered call, `on_start` and `on_return`
-can happen after `canon_lower` returns and thus the caller must `task.wait` for
-progress events to know when the supplied linear memory pointers can be
-reclaimed by the caller.
-
-If an `async`-lowered call blocks, the `AsyncSubtask` is added to the component
-instance's `async_subtasks` table, and the index and state are returned to the
-caller packed into a single `i32` as follows:
+In the asynchronous case, `Task.call_and_handle_blocking` returns `True` if the
+call to `do_call` blocks. If the `callee` blocks, `on_start` and `on_return`
+may be called after `canon_lower` has returned to the core wasm caller, which
+is signaled via the `subtask.state` packed into the result `i32`:
 ```python
 def pack_async_result(i, state):
   assert(0 < i < 2**30)
   assert(0 <= int(state) < 2**2)
   return i | (int(state) << 30)
 ```
+If the returned `state` is `CallState.STARTING`, the caller must keep the
+memory pointed by `flat_args` valid until `task.wait` indicates that subtask
+`i` has advanced to `STARTED`, `RETURNED` or `DONE`. Similarly, if the returned
+state is `STARTED`, the caller must keep the memory pointed to by the final
+`i32` parameter of `flat_args` valid until `task.wait` indicates that the
+subtask has advanced to `RETURNED` or `DONE`.
 
 The above definitions of sync/async `canon_lift`/`canon_lower` ensure that a
 sync-or-async `canon_lift` may call a sync-or-async `canon_lower`, with all
@@ -2243,7 +2205,7 @@ async def canon_resource_new(rt, task, rep):
 
 For a canonical definition:
 ```wasm
-(canon resource.drop $rt (core func $f))
+(canon resource.drop $rt $async? (core func $f))
 ```
 validation specifies:
 * `$rt` must refer to resource type
@@ -2269,8 +2231,8 @@ async def canon_resource_drop(rt, sync, task, i):
         caller_opts = CanonicalOptions(sync = sync)
         callee_opts = CanonicalOptions(sync = rt.dtor_sync, callback = rt.dtor_callback)
         ft = FuncType([U32()],[])
-        callee = partial(canon_lift, callee_opts, rt.impl, rt.dtor, ft)
-        flat_results = await canon_lower(caller_opts, callee, ft, task, [h.rep, 0])
+        callee = partial(canon_lift, callee_opts, rt.impl, ft, rt.dtor)
+        flat_results = await canon_lower(caller_opts, ft, callee, task, [h.rep, 0])
       else:
         task.trap_if_on_the_stack(rt.impl)
   else:
@@ -2333,37 +2295,6 @@ The `backpressure` flag is read by `Task.enter` (defined above) to prevent new
 tasks from entering the component instance and forcing the guest code to
 consume resources.
 
-### 🔀 `canon task.start`
-
-For a canonical definition:
-```wasm
-(canon task.start $ft (core func $f))
-```
-validation specifies:
-* `$f` is given type `$ft`, which validation requires to be a (core) function type
-
-Calling `$f` invokes the following function which extracts the arguments from the
-caller and lowers them into the current instance:
-```python
-async def canon_task_start(task, core_ft, flat_args):
-  assert(len(core_ft.params) == len(flat_args))
-  trap_if(not task.inst.may_leave)
-  trap_if(task.opts.sync)
-  trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType([], task.ft.params), 'lower'))
-  task.start()
-  args = task.on_start()
-  flat_results = lower_flat_values(task, MAX_FLAT_RESULTS, args, task.ft.param_types(), CoreValueIter(flat_args))
-  assert(len(core_ft.results) == len(flat_results))
-  return flat_results
-```
-An expected implementation of `task.start` would generate a core wasm function
-for each lowering of an `async`-lifted export that performs the fused copy of
-the arguments into the caller, storing the index of this function in the `Task`
-structure and using `call_indirect` to perform the function-type-equality check
-required here. The call to `Task.start` (defined above) ensures that `canon
-task.start` is called exactly once, before `canon task.return`, before an async
-call finishes.
-
 ### 🔀 `canon task.return`
 
 For a canonical definition:
@@ -2373,27 +2304,21 @@ For a canonical definition:
 validation specifies:
 * `$f` is given type `$ft`, which validation requires to be a (core) function type
 
-Calling `$f` invokes the following function which lifts the results from the
-current instance and passes them to the caller:
+Calling `$f` invokes the following function which uses `Task.return_` to lift
+and pass the results to the caller:
 ```python
 async def canon_task_return(task, core_ft, flat_args):
-  assert(len(core_ft.params) == len(flat_args))
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.sync)
+  trap_if(task.opts.sync and not task.opts.sync_task_return)
   trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType(task.ft.results, []), 'lower'))
-  task.return_()
-  results = lift_flat_values(task, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_types())
-  task.on_return(results)
-  assert(len(core_ft.results) == 0)
+  task.return_(flat_args)
   return []
 ```
 An expected implementation of `task.return` would generate a core wasm function
 for each lowering of an `async`-lifted export that performs the fused copy of
 the results into the caller, storing the index of this function in the `Task`
 structure and using `call_indirect` to perform the function-type-equality check
-required here. The call to `Task.return_` (defined above) ensures that `canon
-task.return` is called exactly once, after `canon task.start`, before an async
-call finishes.
+required here.
 
 ### 🔀 `canon task.wait`
 
@@ -2405,7 +2330,7 @@ validation specifies:
 * `$f` is given type `(func (param i32) (result i32))`
 
 Calling `$f` waits for progress to be made in a subtask of the current task,
-returning the event (which is currently simply an `AsyncCallState` value)
+returning the event (which is currently simply an `CallState` value)
 and writing the subtask index as an outparam:
 ```python
 async def canon_task_wait(task, ptr):
@@ -2485,7 +2410,7 @@ async def canon_subtask_drop(task, i):
   trap_if(not task.inst.may_leave)
   subtask = task.inst.async_subtasks.remove(i)
   trap_if(subtask.enqueued)
-  trap_if(subtask.state != AsyncCallState.DONE)
+  trap_if(subtask.state != CallState.DONE)
   subtask.task.num_async_subtasks -= 1
   return []
 ```
