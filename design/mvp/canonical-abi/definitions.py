@@ -171,124 +171,6 @@ class Own(ValType):
 class Borrow(ValType):
   rt: ResourceType
 
-### Despecialization
-
-def despecialize(t):
-  match t:
-    case Tuple(ts)         : return Record([ Field(str(i), t) for i,t in enumerate(ts) ])
-    case Enum(labels)      : return Variant([ Case(l, None) for l in labels ])
-    case Option(t)         : return Variant([ Case("none", None), Case("some", t) ])
-    case Result(ok, error) : return Variant([ Case("ok", ok), Case("error", error) ])
-    case _                 : return t
-
-### Alignment
-
-def alignment(t):
-  match despecialize(t):
-    case Bool()             : return 1
-    case S8() | U8()        : return 1
-    case S16() | U16()      : return 2
-    case S32() | U32()      : return 4
-    case S64() | U64()      : return 8
-    case F32()              : return 4
-    case F64()              : return 8
-    case Char()             : return 4
-    case String()           : return 4
-    case List(t, l)         : return alignment_list(t, l)
-    case Record(fields)     : return alignment_record(fields)
-    case Variant(cases)     : return alignment_variant(cases)
-    case Flags(labels)      : return alignment_flags(labels)
-    case Own(_) | Borrow(_) : return 4
-
-def alignment_list(elem_type, maybe_length):
-  if maybe_length is not None:
-    return alignment(elem_type)
-  return 4
-
-def alignment_record(fields):
-  a = 1
-  for f in fields:
-    a = max(a, alignment(f.t))
-  return a
-
-def alignment_variant(cases):
-  return max(alignment(discriminant_type(cases)), max_case_alignment(cases))
-
-def discriminant_type(cases):
-  n = len(cases)
-  assert(0 < n < (1 << 32))
-  match math.ceil(math.log2(n)/8):
-    case 0: return U8()
-    case 1: return U8()
-    case 2: return U16()
-    case 3: return U32()
-
-def max_case_alignment(cases):
-  a = 1
-  for c in cases:
-    if c.t is not None:
-      a = max(a, alignment(c.t))
-  return a
-
-def alignment_flags(labels):
-  n = len(labels)
-  assert(0 < n <= 32)
-  if n <= 8: return 1
-  if n <= 16: return 2
-  return 4
-
-### Element Size
-
-def elem_size(t):
-  match despecialize(t):
-    case Bool()             : return 1
-    case S8() | U8()        : return 1
-    case S16() | U16()      : return 2
-    case S32() | U32()      : return 4
-    case S64() | U64()      : return 8
-    case F32()              : return 4
-    case F64()              : return 8
-    case Char()             : return 4
-    case String()           : return 8
-    case List(t, l)         : return elem_size_list(t, l)
-    case Record(fields)     : return elem_size_record(fields)
-    case Variant(cases)     : return elem_size_variant(cases)
-    case Flags(labels)      : return elem_size_flags(labels)
-    case Own(_) | Borrow(_) : return 4
-
-def elem_size_list(elem_type, maybe_length):
-  if maybe_length is not None:
-    return maybe_length * elem_size(elem_type)
-  return 8
-
-def elem_size_record(fields):
-  s = 0
-  for f in fields:
-    s = align_to(s, alignment(f.t))
-    s += elem_size(f.t)
-  assert(s > 0)
-  return align_to(s, alignment_record(fields))
-
-def align_to(ptr, alignment):
-  return math.ceil(ptr / alignment) * alignment
-
-def elem_size_variant(cases):
-  s = elem_size(discriminant_type(cases))
-  s = align_to(s, max_case_alignment(cases))
-  cs = 0
-  for c in cases:
-    if c.t is not None:
-      cs = max(cs, elem_size(c.t))
-  s += cs
-  return align_to(s, alignment_variant(cases))
-
-def elem_size_flags(labels):
-  n = len(labels)
-  assert(0 < n <= 32)
-  if n <= 8: return 1
-  if n <= 16: return 2
-  return 4
-
 ### Context
 
 class Context:
@@ -644,6 +526,124 @@ class Subtask(Context):
     self.state = CallState.DONE
     self.maybe_notify_supertask()
     return self.flat_results
+
+### Despecialization
+
+def despecialize(t):
+  match t:
+    case Tuple(ts)         : return Record([ Field(str(i), t) for i,t in enumerate(ts) ])
+    case Enum(labels)      : return Variant([ Case(l, None) for l in labels ])
+    case Option(t)         : return Variant([ Case("none", None), Case("some", t) ])
+    case Result(ok, error) : return Variant([ Case("ok", ok), Case("error", error) ])
+    case _                 : return t
+
+### Alignment
+
+def alignment(t):
+  match despecialize(t):
+    case Bool()             : return 1
+    case S8() | U8()        : return 1
+    case S16() | U16()      : return 2
+    case S32() | U32()      : return 4
+    case S64() | U64()      : return 8
+    case F32()              : return 4
+    case F64()              : return 8
+    case Char()             : return 4
+    case String()           : return 4
+    case List(t, l)         : return alignment_list(t, l)
+    case Record(fields)     : return alignment_record(fields)
+    case Variant(cases)     : return alignment_variant(cases)
+    case Flags(labels)      : return alignment_flags(labels)
+    case Own(_) | Borrow(_) : return 4
+
+def alignment_list(elem_type, maybe_length):
+  if maybe_length is not None:
+    return alignment(elem_type)
+  return 4
+
+def alignment_record(fields):
+  a = 1
+  for f in fields:
+    a = max(a, alignment(f.t))
+  return a
+
+def alignment_variant(cases):
+  return max(alignment(discriminant_type(cases)), max_case_alignment(cases))
+
+def discriminant_type(cases):
+  n = len(cases)
+  assert(0 < n < (1 << 32))
+  match math.ceil(math.log2(n)/8):
+    case 0: return U8()
+    case 1: return U8()
+    case 2: return U16()
+    case 3: return U32()
+
+def max_case_alignment(cases):
+  a = 1
+  for c in cases:
+    if c.t is not None:
+      a = max(a, alignment(c.t))
+  return a
+
+def alignment_flags(labels):
+  n = len(labels)
+  assert(0 < n <= 32)
+  if n <= 8: return 1
+  if n <= 16: return 2
+  return 4
+
+### Element Size
+
+def elem_size(t):
+  match despecialize(t):
+    case Bool()             : return 1
+    case S8() | U8()        : return 1
+    case S16() | U16()      : return 2
+    case S32() | U32()      : return 4
+    case S64() | U64()      : return 8
+    case F32()              : return 4
+    case F64()              : return 8
+    case Char()             : return 4
+    case String()           : return 8
+    case List(t, l)         : return elem_size_list(t, l)
+    case Record(fields)     : return elem_size_record(fields)
+    case Variant(cases)     : return elem_size_variant(cases)
+    case Flags(labels)      : return elem_size_flags(labels)
+    case Own(_) | Borrow(_) : return 4
+
+def elem_size_list(elem_type, maybe_length):
+  if maybe_length is not None:
+    return maybe_length * elem_size(elem_type)
+  return 8
+
+def elem_size_record(fields):
+  s = 0
+  for f in fields:
+    s = align_to(s, alignment(f.t))
+    s += elem_size(f.t)
+  assert(s > 0)
+  return align_to(s, alignment_record(fields))
+
+def align_to(ptr, alignment):
+  return math.ceil(ptr / alignment) * alignment
+
+def elem_size_variant(cases):
+  s = elem_size(discriminant_type(cases))
+  s = align_to(s, max_case_alignment(cases))
+  cs = 0
+  for c in cases:
+    if c.t is not None:
+      cs = max(cs, elem_size(c.t))
+  s += cs
+  return align_to(s, alignment_variant(cases))
+
+def elem_size_flags(labels):
+  n = len(labels)
+  assert(0 < n <= 32)
+  if n <= 8: return 1
+  if n <= 16: return 2
+  return 4
 
 ### Loading
 

@@ -8,12 +8,12 @@ walkthrough of the static structure of a component and the
 being specified here.
 
 * [Supporting definitions](#supporting-definitions)
-  * [Despecialization](#despecialization)
-  * [Alignment](#alignment)
-  * [Element Size](#element-size)
   * [Context](#context)
   * [Canonical ABI Options](#canonical-abi-options)
   * [Runtime State](#runtime-state)
+  * [Despecialization](#despecialization)
+  * [Alignment](#alignment)
+  * [Element Size](#element-size)
   * [Loading](#loading)
   * [Storing](#storing)
   * [Flattening](#flattening)
@@ -71,177 +71,9 @@ intentionally propagate OOM into the appropriate explicit return value of the
 function's declared return type.
 
 
-### Despecialization
-
-[In the explainer][Type Definitions], component value types are classified as
-either *fundamental* or *specialized*, where the specialized value types are
-defined by expansion into fundamental value types. In most cases, the canonical
-ABI of a specialized value type is the same as its expansion so, to avoid
-repetition, the other definitions below use the following `despecialize`
-function to replace specialized value types with their expansion:
-```python
-def despecialize(t):
-  match t:
-    case Tuple(ts)         : return Record([ Field(str(i), t) for i,t in enumerate(ts) ])
-    case Enum(labels)      : return Variant([ Case(l, None) for l in labels ])
-    case Option(t)         : return Variant([ Case("none", None), Case("some", t) ])
-    case Result(ok, error) : return Variant([ Case("ok", ok), Case("error", error) ])
-    case _                 : return t
-```
-The specialized value types `string` and `flags` are missing from this list
-because they are given specialized canonical ABI representations distinct from
-their respective expansions.
-
-
-### Alignment
-
-Each value type is assigned an [alignment] which is used by subsequent
-Canonical ABI definitions. Presenting the definition of `alignment` piecewise,
-we start with the top-level case analysis:
-```python
-def alignment(t):
-  match despecialize(t):
-    case Bool()             : return 1
-    case S8() | U8()        : return 1
-    case S16() | U16()      : return 2
-    case S32() | U32()      : return 4
-    case S64() | U64()      : return 8
-    case F32()              : return 4
-    case F64()              : return 8
-    case Char()             : return 4
-    case String()           : return 4
-    case List(t, l)         : return alignment_list(t, l)
-    case Record(fields)     : return alignment_record(fields)
-    case Variant(cases)     : return alignment_variant(cases)
-    case Flags(labels)      : return alignment_flags(labels)
-    case Own(_) | Borrow(_) : return 4
-```
-
-List alignment is the same as tuple alignment when the length is fixed and
-otherwise uses the alignment of pointers.
-```python
-def alignment_list(elem_type, maybe_length):
-  if maybe_length is not None:
-    return alignment(elem_type)
-  return 4
-```
-
-Record alignment is tuple alignment, with the definitions split for reuse below:
-```python
-def alignment_record(fields):
-  a = 1
-  for f in fields:
-    a = max(a, alignment(f.t))
-  return a
-```
-
-As an optimization, `variant` discriminants are represented by the smallest integer
-covering the number of cases in the variant (with cases numbered in order from
-`0` to `len(cases)-1`). Depending on the payload type, this can allow more
-compact representations of variants in memory. This smallest integer type is
-selected by the following function, used above and below:
-```python
-def alignment_variant(cases):
-  return max(alignment(discriminant_type(cases)), max_case_alignment(cases))
-
-def discriminant_type(cases):
-  n = len(cases)
-  assert(0 < n < (1 << 32))
-  match math.ceil(math.log2(n)/8):
-    case 0: return U8()
-    case 1: return U8()
-    case 2: return U16()
-    case 3: return U32()
-
-def max_case_alignment(cases):
-  a = 1
-  for c in cases:
-    if c.t is not None:
-      a = max(a, alignment(c.t))
-  return a
-```
-
-As an optimization, `flags` are represented as packed bit-vectors. Like variant
-discriminants, `flags` use the smallest integer that fits all the bits, falling
-back to sequences of `i32`s when there are more than 32 flags.
-```python
-def alignment_flags(labels):
-  n = len(labels)
-  assert(0 < n <= 32)
-  if n <= 8: return 1
-  if n <= 16: return 2
-  return 4
-```
-
-Handle types are passed as `i32` indices into the `Table[HandleElem]`
-introduced below.
-
-
-### Element Size
-
-Each value type is also assigned an `elem_size` which is the number of bytes
-used when values of the type are stored as elements of a `list`. Having this
-byte size be a static property of the type instead of attempting to use a
-variable-length element-encoding scheme both simplifies the implementation and
-maps well to languages which represent `list`s as random-access arrays. Empty
-types, such as records with no fields, are not permitted, to avoid
-complications in source languages.
-```python
-def elem_size(t):
-  match despecialize(t):
-    case Bool()             : return 1
-    case S8() | U8()        : return 1
-    case S16() | U16()      : return 2
-    case S32() | U32()      : return 4
-    case S64() | U64()      : return 8
-    case F32()              : return 4
-    case F64()              : return 8
-    case Char()             : return 4
-    case String()           : return 8
-    case List(t, l)         : return elem_size_list(t, l)
-    case Record(fields)     : return elem_size_record(fields)
-    case Variant(cases)     : return elem_size_variant(cases)
-    case Flags(labels)      : return elem_size_flags(labels)
-    case Own(_) | Borrow(_) : return 4
-
-def elem_size_list(elem_type, maybe_length):
-  if maybe_length is not None:
-    return maybe_length * elem_size(elem_type)
-  return 8
-
-def elem_size_record(fields):
-  s = 0
-  for f in fields:
-    s = align_to(s, alignment(f.t))
-    s += elem_size(f.t)
-  assert(s > 0)
-  return align_to(s, alignment_record(fields))
-
-def align_to(ptr, alignment):
-  return math.ceil(ptr / alignment) * alignment
-
-def elem_size_variant(cases):
-  s = elem_size(discriminant_type(cases))
-  s = align_to(s, max_case_alignment(cases))
-  cs = 0
-  for c in cases:
-    if c.t is not None:
-      cs = max(cs, elem_size(c.t))
-  s += cs
-  return align_to(s, alignment_variant(cases))
-
-def elem_size_flags(labels):
-  n = len(labels)
-  assert(0 < n <= 32)
-  if n <= 8: return 1
-  if n <= 16: return 2
-  return 4
-```
-
 ### Context
 
-The subsequent definitions of lifting and lowering depend on three kinds of
-ambient information:
+The subsequent definitions depend on three kinds of ambient information:
 * static ABI options supplied via [`canonopt`]
 * dynamic state in the containing component instance
 * dynamic state in the [current task]
@@ -263,6 +95,7 @@ The `cx` parameter in functions below refers to the ambient `Context`. The
 `Task` and `Subtask` classes derive `Context` and thus having a `task` or
 `subtask` also establishes the ambient `Context`.
 
+
 ### Canonical ABI Options
 
 The `opts` field of `Context` contains all the possible [`canonopt`]
@@ -281,6 +114,7 @@ class CanonicalOptions:
 (Note that the `async` `canonopt` is inverted to `sync` here for the practical
 reason that `async` is a keyword and most branches below want to start with the
 `sync = True` case.)
+
 
 ### Runtime State
 
@@ -884,6 +718,174 @@ stack frame.
     self.state = CallState.DONE
     self.maybe_notify_supertask()
     return self.flat_results
+```
+
+
+### Despecialization
+
+[In the explainer][Type Definitions], component value types are classified as
+either *fundamental* or *specialized*, where the specialized value types are
+defined by expansion into fundamental value types. In most cases, the canonical
+ABI of a specialized value type is the same as its expansion so, to avoid
+repetition, the other definitions below use the following `despecialize`
+function to replace specialized value types with their expansion:
+```python
+def despecialize(t):
+  match t:
+    case Tuple(ts)         : return Record([ Field(str(i), t) for i,t in enumerate(ts) ])
+    case Enum(labels)      : return Variant([ Case(l, None) for l in labels ])
+    case Option(t)         : return Variant([ Case("none", None), Case("some", t) ])
+    case Result(ok, error) : return Variant([ Case("ok", ok), Case("error", error) ])
+    case _                 : return t
+```
+The specialized value types `string` and `flags` are missing from this list
+because they are given specialized canonical ABI representations distinct from
+their respective expansions.
+
+
+### Alignment
+
+Each value type is assigned an [alignment] which is used by subsequent
+Canonical ABI definitions. Presenting the definition of `alignment` piecewise,
+we start with the top-level case analysis:
+```python
+def alignment(t):
+  match despecialize(t):
+    case Bool()             : return 1
+    case S8() | U8()        : return 1
+    case S16() | U16()      : return 2
+    case S32() | U32()      : return 4
+    case S64() | U64()      : return 8
+    case F32()              : return 4
+    case F64()              : return 8
+    case Char()             : return 4
+    case String()           : return 4
+    case List(t, l)         : return alignment_list(t, l)
+    case Record(fields)     : return alignment_record(fields)
+    case Variant(cases)     : return alignment_variant(cases)
+    case Flags(labels)      : return alignment_flags(labels)
+    case Own(_) | Borrow(_) : return 4
+```
+
+List alignment is the same as tuple alignment when the length is fixed and
+otherwise uses the alignment of pointers.
+```python
+def alignment_list(elem_type, maybe_length):
+  if maybe_length is not None:
+    return alignment(elem_type)
+  return 4
+```
+
+Record alignment is tuple alignment, with the definitions split for reuse below:
+```python
+def alignment_record(fields):
+  a = 1
+  for f in fields:
+    a = max(a, alignment(f.t))
+  return a
+```
+
+As an optimization, `variant` discriminants are represented by the smallest integer
+covering the number of cases in the variant (with cases numbered in order from
+`0` to `len(cases)-1`). Depending on the payload type, this can allow more
+compact representations of variants in memory. This smallest integer type is
+selected by the following function, used above and below:
+```python
+def alignment_variant(cases):
+  return max(alignment(discriminant_type(cases)), max_case_alignment(cases))
+
+def discriminant_type(cases):
+  n = len(cases)
+  assert(0 < n < (1 << 32))
+  match math.ceil(math.log2(n)/8):
+    case 0: return U8()
+    case 1: return U8()
+    case 2: return U16()
+    case 3: return U32()
+
+def max_case_alignment(cases):
+  a = 1
+  for c in cases:
+    if c.t is not None:
+      a = max(a, alignment(c.t))
+  return a
+```
+
+As an optimization, `flags` are represented as packed bit-vectors. Like variant
+discriminants, `flags` use the smallest integer that fits all the bits, falling
+back to sequences of `i32`s when there are more than 32 flags.
+```python
+def alignment_flags(labels):
+  n = len(labels)
+  assert(0 < n <= 32)
+  if n <= 8: return 1
+  if n <= 16: return 2
+  return 4
+```
+
+Handle types are passed as `i32` indices into the `Table[HandleElem]`
+introduced below.
+
+
+### Element Size
+
+Each value type is also assigned an `elem_size` which is the number of bytes
+used when values of the type are stored as elements of a `list`. Having this
+byte size be a static property of the type instead of attempting to use a
+variable-length element-encoding scheme both simplifies the implementation and
+maps well to languages which represent `list`s as random-access arrays. Empty
+types, such as records with no fields, are not permitted, to avoid
+complications in source languages.
+```python
+def elem_size(t):
+  match despecialize(t):
+    case Bool()             : return 1
+    case S8() | U8()        : return 1
+    case S16() | U16()      : return 2
+    case S32() | U32()      : return 4
+    case S64() | U64()      : return 8
+    case F32()              : return 4
+    case F64()              : return 8
+    case Char()             : return 4
+    case String()           : return 8
+    case List(t, l)         : return elem_size_list(t, l)
+    case Record(fields)     : return elem_size_record(fields)
+    case Variant(cases)     : return elem_size_variant(cases)
+    case Flags(labels)      : return elem_size_flags(labels)
+    case Own(_) | Borrow(_) : return 4
+
+def elem_size_list(elem_type, maybe_length):
+  if maybe_length is not None:
+    return maybe_length * elem_size(elem_type)
+  return 8
+
+def elem_size_record(fields):
+  s = 0
+  for f in fields:
+    s = align_to(s, alignment(f.t))
+    s += elem_size(f.t)
+  assert(s > 0)
+  return align_to(s, alignment_record(fields))
+
+def align_to(ptr, alignment):
+  return math.ceil(ptr / alignment) * alignment
+
+def elem_size_variant(cases):
+  s = elem_size(discriminant_type(cases))
+  s = align_to(s, max_case_alignment(cases))
+  cs = 0
+  for c in cases:
+    if c.t is not None:
+      cs = max(cs, elem_size(c.t))
+  s += cs
+  return align_to(s, alignment_variant(cases))
+
+def elem_size_flags(labels):
+  n = len(labels)
+  assert(0 < n <= 32)
+  if n <= 8: return 1
+  if n <= 16: return 2
+  return 4
 ```
 
 ### Loading
