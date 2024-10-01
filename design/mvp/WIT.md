@@ -512,6 +512,37 @@ interface my-interface {
 }
 ```
 
+Worlds may import and export the same interface which can be useful for
+creating components that can be linked together in a call chain. For example:
+```wit
+interface processor {
+  resource datum { ... }
+  process: func(d: datum);
+}
+
+world layer {
+  import processor;
+  export processor;
+}
+```
+Components targeting this `layer` world can be linked together,
+export-to-import.
+
+If a `world` contains a `use` of an interface that is both imported and
+exported, this is currently rejected as ambiguous.  For example, this world
+is ambiguous:
+```wit
+world invalid {
+  import processor;
+  export processor;
+  use processor.{datum};
+  frob: func(d: datum) -> datum;
+}
+```
+> **Note**: It's planned in the future to allow `use` to explicitly specify
+> whether to use the imported or exported version of the named interface.
+
+
 #### Top-level `use`
 
 If a package being referred to has a version number, then using the above syntax
@@ -638,9 +669,13 @@ imported into the component as well.
 Note that the name `"local:demo/shared"` here is derived from the name of the
 `interface` plus the package name `local:demo`.
 
-For `export`ed interfaces, any transitively `use`d interface is assumed to be an
-import unless it's explicitly listed as an export. For example, here `w1` is
-equivalent to `w2`:
+For `export`ed interfaces, any transitively `use`d interface must have already
+been either imported or exported. If not, the `world` is invalid because it's
+ambiguous whether the `use`d interface was meant to be imported or exported. If
+a `use`d interface is *both* imported and exported, the export takes
+precedence, "shadowing" the import.
+
+For example, the following worlds are valid and resolved as commented:
 ```wit
 interface a {
   resource r;
@@ -651,11 +686,23 @@ interface b {
 }
 
 world w1 {
-  export b;
+  import a;
+  export b; // b ~~> imported a.r
 }
 world w2 {
+  export a;
+  export b; // b ~~> exported a.r
+}
+world w3 {
   import a;
-  export b;
+  export a;
+  export b; // b ~~> exported a.r
+}
+```
+whereas the following world would be invalid:
+```wit
+world invalid {
+  export b; // error: unresolved 'use' of 'a' in 'b'
 }
 ```
 
