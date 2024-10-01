@@ -636,15 +636,9 @@ above and allows a pending task to start.
 
 While `canon_lift` creates `Task`s, `canon_lower` creates `Subtask` objects.
 Like `Task`, `Subtask` is a subclass of `Context` and stores the `ft` and
-`opts` of its `canon lower`. Importantly, the `Context.task` field of a
-`Subtask` refers to the [current task] wwhich called `canon lower`, thereby
-linking all subtasks to their supertask, maintaining a (possibly asynchronous)
-call tree. The `on_start` and `on_return` methods of `Subtask` are passed (by
-`canon_lower` below) to the callee, which will call them to lift its arguments
-and lower its results. Using callbacks provides the callee the flexibility to
-control when arguments are lowered (which can vary due to backpressure) and
-when results are lifted (which can also vary due to when `task.return` is
-called).
+`opts` of its `canon lower`. Importantly, the `task` field of a `Subtask`
+refers to the [current task] which called `canon lower`, thereby linking all
+subtasks to their supertask, maintaining the (possibly asynchronous) call tree.
 ```python
 class Subtask(Context):
   ft: FuncType
@@ -664,7 +658,57 @@ class Subtask(Context):
     self.lenders = []
     self.notify_supertask = False
     self.enqueued = False
+```
 
+The `lenders` field of `Subtask` maintains a list of all the owned handles
+that have been lent to a subtask and must therefor not be dropped until the
+subtask completes. The `add_lender` method is called (below) when lifting an
+owned handle and increments the `lend_count` of the owned handle, which is
+guarded to be zero by `canon_resource_drop` (below). The `release_lenders`
+method releases all the `lend_count`s of all such handles lifted for the
+subtask and is called (below) when the subtask finishes.
+```python
+  def add_lender(self, lending_handle):
+    assert(lending_handle.own)
+    lending_handle.lend_count += 1
+    self.lenders.append(lending_handle)
+
+  def release_lenders(self):
+    for h in self.lenders:
+      h.lend_count -= 1
+```
+Note, the `lenders` list usually has a fixed size (in all cases except when a
+function signature has `borrow`s in `list`s or `stream`s) and thus can be
+stored inline in the native stack frame.
+
+The `maybe_notify_supertask` method called by `on_start`, `on_return` and
+`finish` (next) only sends events to the supertask if this `Subtask` actually
+blocked and got added to the `async_subtasks` table (signalled by
+`notify_supertask` being set). Additionally, `maybe_notify_supertask` uses the
+`enqueued` flag and the fact that "events" are first-class functions to
+collapse N events down to 1 if a subtask advances state multiple times before
+the supertask receives the event which, in turn, avoids unnecessarily spamming
+the event loop when only the most recent state matters.
+```python
+  def maybe_notify_supertask(self):
+    if self.notify_supertask and not self.enqueued:
+      self.enqueued = True
+      def subtask_event():
+        self.enqueued = False
+        i = self.inst.async_subtasks.array.index(self)
+        if self.state == CallState.DONE:
+          self.release_lenders()
+        return (EventCode(self.state), i)
+      self.task.notify(subtask_event)
+```
+
+The `on_start` and `on_return` methods of `Subtask` are passed (by
+`canon_lower` below) to the callee to be called to lift its arguments and
+lower its results. Using callbacks provides the callee the flexibility to
+control when arguments are lowered (which can vary due to backpressure) and
+when results are lifted (which can also vary due to when `task.return` is
+called).
+```python
   def on_start(self):
     assert(self.state == CallState.STARTING)
     self.state = CallState.STARTED
@@ -681,42 +725,20 @@ class Subtask(Context):
     ts = self.ft.result_types()
     self.flat_results = lower_flat_values(self, max_flat, vs, ts, self.flat_args)
 ```
-The `maybe_notify_supertask` method called by `on_start` and `on_return` only
-sends events to the supertask if this `Subtask` actually blocked and got added
-to the `async_subtasks` table (signalled by `notify_supertask` being set).
-Additionally, `maybe_notify_supertask` uses the `enqueued` flag and the fact
-that "events" are first-class functions to collapse N events down to 1 if a
-subtask advances state multiple times before the supertask receives the event
-which, in turn, avoids unnecessarily spamming the event loop when only the most
-recent state matters.
-```python
-  def maybe_notify_supertask(self):
-    if self.notify_supertask and not self.enqueued:
-      self.enqueued = True
-      def subtask_event():
-        self.enqueued = False
-        i = self.inst.async_subtasks.array.index(self)
-        return (EventCode(self.state), i)
-      self.task.notify(subtask_event)
-```
-Lastly, a `Subtask` tracks the owned handles that have been lent for the
-duration of the call, ensuring that the caller doesn't drop them during the
-call (which might create a dangling borrowed handle in the callee). Note, the
-`lenders` list usually has a fixed size (in all cases except when a function
-signature has `borrow`s in `list`s) and thus can be stored inline in the native
-stack frame.
-```python
-  def track_owning_lend(self, lending_handle):
-    assert(lending_handle.own)
-    lending_handle.lend_count += 1
-    self.lenders.append(lending_handle)
 
+Lastly, when a `Subtask` finishes, it calls `release_lenders` to allow owned
+handles passed to this subtask to be dropped. In the synchronous or eager case
+this happens immediately before returning to the caller. In the
+asynchronous+blocking case, this happens right before the `CallState.DONE`
+event is delivered to the guest program.
+```python
   def finish(self):
     assert(self.state == CallState.RETURNED)
-    for h in self.lenders:
-      h.lend_count -= 1
     self.state = CallState.DONE
-    self.maybe_notify_supertask()
+    if self.opts.sync or not self.notify_supertask:
+      self.release_lenders()
+    else:
+      self.maybe_notify_supertask()
     return self.flat_results
 ```
 
@@ -1141,12 +1163,12 @@ def lift_borrow(cx, i, t):
   assert(isinstance(cx, Subtask))
   h = cx.inst.handles.get(t.rt, i)
   if h.own:
-    cx.track_owning_lend(h)
+    cx.add_lender(h)
   return h.rep
 ```
-The `track_owning_lend` call to `Context` participates in the enforcement
-of the dynamic borrow rules, which keep the source `own` handle alive until the
-end of the call (as an intentionally-conservative upper bound on how long the
+The `add_lender` call to `Context` participates in the enforcement of the
+dynamic borrow rules, which keep the source `own` handle alive until the end
+of the call (as an intentionally-conservative upper bound on how long the
 `borrow` handle can be held). This tracking is only required when `h` is an
 `own` handle because, when `h` is a `borrow` handle, this tracking has already
 happened (when the originating `own` handle was lifted) for a strictly longer

@@ -489,6 +489,26 @@ class Subtask(Context):
     self.notify_supertask = False
     self.enqueued = False
 
+  def add_lender(self, lending_handle):
+    assert(lending_handle.own)
+    lending_handle.lend_count += 1
+    self.lenders.append(lending_handle)
+
+  def release_lenders(self):
+    for h in self.lenders:
+      h.lend_count -= 1
+
+  def maybe_notify_supertask(self):
+    if self.notify_supertask and not self.enqueued:
+      self.enqueued = True
+      def subtask_event():
+        self.enqueued = False
+        i = self.inst.async_subtasks.array.index(self)
+        if self.state == CallState.DONE:
+          self.release_lenders()
+        return (EventCode(self.state), i)
+      self.task.notify(subtask_event)
+
   def on_start(self):
     assert(self.state == CallState.STARTING)
     self.state = CallState.STARTED
@@ -505,26 +525,13 @@ class Subtask(Context):
     ts = self.ft.result_types()
     self.flat_results = lower_flat_values(self, max_flat, vs, ts, self.flat_args)
 
-  def maybe_notify_supertask(self):
-    if self.notify_supertask and not self.enqueued:
-      self.enqueued = True
-      def subtask_event():
-        self.enqueued = False
-        i = self.inst.async_subtasks.array.index(self)
-        return (EventCode(self.state), i)
-      self.task.notify(subtask_event)
-
-  def track_owning_lend(self, lending_handle):
-    assert(lending_handle.own)
-    lending_handle.lend_count += 1
-    self.lenders.append(lending_handle)
-
   def finish(self):
     assert(self.state == CallState.RETURNED)
-    for h in self.lenders:
-      h.lend_count -= 1
     self.state = CallState.DONE
-    self.maybe_notify_supertask()
+    if self.opts.sync or not self.notify_supertask:
+      self.release_lenders()
+    else:
+      self.maybe_notify_supertask()
     return self.flat_results
 
 ### Despecialization
@@ -820,7 +827,7 @@ def lift_borrow(cx, i, t):
   assert(isinstance(cx, Subtask))
   h = cx.inst.handles.get(t.rt, i)
   if h.own:
-    cx.track_owning_lend(h)
+    cx.add_lender(h)
   return h.rep
 
 ### Storing
