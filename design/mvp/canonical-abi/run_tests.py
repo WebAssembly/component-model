@@ -560,24 +560,20 @@ async def test_async_to_async():
     ptr = consumer_heap.realloc(0, 0, 1, 1)
     [ret] = await canon_lower(consumer_opts, eager_ft, eager_callee, task, [0, ptr])
     assert(ret == 0)
-    assert(task.num_async_subtasks == 0)
     u8 = consumer_heap.memory[ptr]
     assert(u8 == 43)
     [ret] = await canon_lower(consumer_opts, toggle_ft, toggle_callee, task, [])
     assert(ret == (1 | (CallState.STARTED << 30)))
-    assert(task.num_async_subtasks == 1)
     retp = ptr
     consumer_heap.memory[retp] = 13
     [ret] = await canon_lower(consumer_opts, blocking_ft, blocking_callee, task, [83, retp])
     assert(ret == (2 | (CallState.STARTING << 30)))
-    assert(task.num_async_subtasks == 2)
     assert(consumer_heap.memory[retp] == 13)
     fut1.set_result(None)
     event, callidx = await task.wait()
     assert(event == EventCode.CALL_DONE)
     assert(callidx == 1)
     [] = await canon_subtask_drop(task, callidx)
-    assert(task.num_async_subtasks == 1)
     event, callidx = await task.wait()
     assert(event == EventCode.CALL_STARTED)
     assert(callidx == 2)
@@ -588,12 +584,10 @@ async def test_async_to_async():
     assert(callidx == 2)
     assert(consumer_heap.memory[retp] == 44)
     fut3.set_result(None)
-    assert(task.num_async_subtasks == 1)
     event, callidx = await task.wait()
     assert(event == EventCode.CALL_DONE)
     assert(callidx == 2)
     [] = await canon_subtask_drop(task, callidx)
-    assert(task.num_async_subtasks == 0)
 
     dtor_fut = asyncio.Future()
     dtor_value = None
@@ -609,14 +603,12 @@ async def test_async_to_async():
     assert(dtor_value is None)
     [ret] = await canon_resource_drop(rt, False, task, 1)
     assert(ret == (2 | (CallState.STARTED << 30)))
-    assert(task.num_async_subtasks == 1)
     assert(dtor_value is None)
     dtor_fut.set_result(None)
     event, callidx = await task.wait()
     assert(event == CallState.DONE)
     assert(callidx == 2)
     [] = await canon_subtask_drop(task, callidx)
-    assert(task.num_async_subtasks == 0)
 
     [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [42])
     return []

@@ -339,10 +339,9 @@ class Task(CallContext):
   caller: Optional[Task]
   on_return: Optional[Callable]
   on_block: OnBlockCallback
-  borrow_count: int
+  need_to_drop: int
   events: list[EventCallback]
   has_events: asyncio.Event
-  num_async_subtasks: int
 
   def __init__(self, opts, inst, ft, caller, on_return, on_block):
     super().__init__(opts, inst, self)
@@ -350,10 +349,9 @@ class Task(CallContext):
     self.caller = caller
     self.on_return = on_return
     self.on_block = on_block
-    self.borrow_count = 0
+    self.need_to_drop = 0
     self.events = []
     self.has_events = asyncio.Event()
-    self.num_async_subtasks = 0
 
   def trap_if_on_the_stack(self, inst):
     c = self.caller
@@ -433,19 +431,6 @@ class Task(CallContext):
     self.maybe_start_pending_task()
     await self.wait_on(asyncio.sleep(0))
 
-  def add_async_subtask(self, subtask):
-    assert(subtask.task is self and not subtask.notify_supertask)
-    subtask.notify_supertask = True
-    self.num_async_subtasks += 1
-    return self.inst.async_subtasks.add(subtask)
-
-  def create_borrow(self):
-    self.borrow_count += 1
-
-  def drop_borrow(self):
-    assert(self.borrow_count > 0)
-    self.borrow_count -= 1
-
   def return_(self, flat_results):
     trap_if(not self.on_return)
     if self.opts.sync and not self.opts.sync_task_return:
@@ -462,8 +447,7 @@ class Task(CallContext):
     assert(not self.events)
     assert(self.inst.num_tasks >= 1)
     trap_if(self.on_return)
-    trap_if(self.borrow_count != 0)
-    trap_if(self.num_async_subtasks != 0)
+    trap_if(self.need_to_drop != 0)
     self.inst.num_tasks -= 1
     if self.opts.sync:
       assert(not self.inst.interruptible.is_set())
@@ -533,6 +517,11 @@ class Subtask(CallContext):
     else:
       self.maybe_notify_supertask()
     return self.flat_results
+
+  def drop(self):
+    trap_if(self.enqueued)
+    trap_if(self.state != CallState.DONE)
+    self.task.need_to_drop -= 1
 
 ### Despecialization
 
@@ -1116,7 +1105,7 @@ def lower_borrow(cx, rep, t):
   if cx.inst is t.rt.impl:
     return rep
   h = ResourceHandle(rep, own=False, scope=cx)
-  cx.create_borrow()
+  cx.need_to_drop += 1
   return cx.inst.resources.add(t.rt, h)
 
 ### Flattening
@@ -1466,7 +1455,9 @@ async def canon_lower(opts, ft, callee, task, flat_args):
       await callee(task, subtask.on_start, subtask.on_return, on_block)
       [] = subtask.finish()
     if await call_and_handle_blocking(do_call):
-      i = task.add_async_subtask(subtask)
+      subtask.notify_supertask = True
+      task.need_to_drop += 1
+      i = task.inst.async_subtasks.add(subtask)
       flat_results = [pack_async_result(i, subtask.state)]
     else:
       flat_results = [0]
@@ -1508,7 +1499,7 @@ async def canon_resource_drop(rt, sync, task, i):
       else:
         task.trap_if_on_the_stack(rt.impl)
   else:
-    h.scope.drop_borrow()
+    h.scope.need_to_drop -= 1
   return flat_results
 
 ### `canon resource.rep`
@@ -1564,8 +1555,5 @@ async def canon_task_yield(task):
 
 async def canon_subtask_drop(task, i):
   trap_if(not task.inst.may_leave)
-  subtask = task.inst.async_subtasks.remove(i)
-  trap_if(subtask.enqueued)
-  trap_if(subtask.state != CallState.DONE)
-  subtask.task.num_async_subtasks -= 1
+  task.inst.async_subtasks.remove(i).drop()
   return []

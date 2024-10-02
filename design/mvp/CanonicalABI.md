@@ -394,10 +394,9 @@ class Task(CallContext):
   caller: Optional[Task]
   on_return: Optional[Callable]
   on_block: OnBlockCallback
-  borrow_count: int
+  need_to_drop: int
   events: list[EventCallback]
   has_events: asyncio.Event
-  num_async_subtasks: int
 
   def __init__(self, opts, inst, ft, caller, on_return, on_block):
     super().__init__(opts, inst, self)
@@ -405,10 +404,9 @@ class Task(CallContext):
     self.caller = caller
     self.on_return = on_return
     self.on_block = on_block
-    self.borrow_count = 0
+    self.need_to_drop = 0
     self.events = []
     self.has_events = asyncio.Event()
-    self.num_async_subtasks = 0
 ```
 The fields of `Task` are introduced in groups of related `Task` methods next.
 Using a conservative syntactic analysis of the component-level definitions of
@@ -570,34 +568,6 @@ external I/O (as emulated in the Python code by awaiting `sleep(0)`:
     await self.wait_on(asyncio.sleep(0))
 ```
 
-All `Task`s (whether lifted `async` or not) are allowed to call `async`-lowered
-imports. Calling an `async`-lowered import stores a `Subtask` (defined below)
-in the current component instance's `async_subtasks` table. The current task
-tracks the number of live async subtasks and guards this to be in `Task.exit`
-(below) to ensure [structured concurrency].
-```python
-  def add_async_subtask(self, subtask):
-    assert(subtask.task is self and not subtask.notify_supertask)
-    subtask.notify_supertask = True
-    self.num_async_subtasks += 1
-    return self.inst.async_subtasks.add(subtask)
-```
-The `notify_supertask` flag signals to the methods of `Subtask` (defined below)
-to notify this `Task` when the async call makes progress.
-
-The `borrow_count` field is used by the following methods to track the number
-of borrowed handles that were passed as parameters to the export that have not
-yet been dropped (and thus might dangle if the caller destroys the resource
-after this export call finishes):
-```python
-  def create_borrow(self):
-    self.borrow_count += 1
-
-  def drop_borrow(self):
-    assert(self.borrow_count > 0)
-    self.borrow_count -= 1
-```
-
 The `return_` method is called by either `canon_task_return` or `canon_lift`
 (both defined below) to lift and return results to the caller using the
 `on_return` callback that was supplied by the caller to `canon_lift`. Using a
@@ -619,15 +589,16 @@ more than once which must be checked by `return_` and `exit`.
 ```
 
 Lastly, when a task exits, the runtime enforces the guard conditions mentioned
-above and allows a pending task to start.
+above and allows a pending task to start. The `need_to_drop` counter is
+incremented and decremented below as a way of ensuring that a task does
+something (like dropping a resource or subtask handle) before the task exits.
 ```python
   def exit(self):
     assert(current_task.locked())
     assert(not self.events)
     assert(self.inst.num_tasks >= 1)
     trap_if(self.on_return)
-    trap_if(self.borrow_count != 0)
-    trap_if(self.num_async_subtasks != 0)
+    trap_if(self.need_to_drop != 0)
     self.inst.num_tasks -= 1
     if self.opts.sync:
       assert(not self.inst.interruptible.is_set())
@@ -728,9 +699,9 @@ called).
     self.flat_results = lower_flat_values(self, max_flat, vs, ts, self.flat_args)
 ```
 
-Lastly, when a `Subtask` finishes, it calls `release_lenders` to allow owned
-handles passed to this subtask to be dropped. In the synchronous or eager case
-this happens immediately before returning to the caller. In the
+When a `Subtask` finishes, it calls `release_lenders` to allow owned handles
+passed to this subtask to be dropped. In the synchronous or eager case this
+happens immediately before returning to the caller. In the
 asynchronous+blocking case, this happens right before the `CallState.DONE`
 event is delivered to the guest program.
 ```python
@@ -744,6 +715,14 @@ event is delivered to the guest program.
     return self.flat_results
 ```
 
+Lastly, after a `Subtask` has finished and notified its supertask (thereby
+clearing `enqueued`), it may be dropped from the `async_subtasks` table:
+```python
+  def drop(self):
+    trap_if(self.enqueued)
+    trap_if(self.state != CallState.DONE)
+    self.task.need_to_drop -= 1
+```
 
 ### Despecialization
 
@@ -1568,7 +1547,9 @@ def pack_flags_into_int(v, labels):
 ```
 
 Finally, `own` and `borrow` handles are lowered by initializing new handle
-elements in the current component instance's handle table:
+elements in the current component instance's handle table. The increment of
+`need_to_drop` is complemented by a decrement in `canon_resource_drop` and
+ensures that all borrowed handles are dropped before the end of the task. 
 ```python
 def lower_own(cx, rep, t):
   h = ResourceHandle(rep, own=True)
@@ -1579,7 +1560,7 @@ def lower_borrow(cx, rep, t):
   if cx.inst is t.rt.impl:
     return rep
   h = ResourceHandle(rep, own=False, scope=cx)
-  cx.create_borrow()
+  cx.need_to_drop += 1
   return cx.inst.resources.add(t.rt, h)
 ```
 The special case in `lower_borrow` is an optimization, recognizing that, when
@@ -1587,6 +1568,7 @@ a borrowed handle is passed to the component that implemented the resource
 type, the only thing the borrowed handle is good for is calling
 `resource.rep`, so lowering might as well avoid the overhead of creating an
 intermediate borrow handle.
+
 
 ### Flattening
 
@@ -2166,16 +2148,24 @@ async def canon_lower(opts, ft, callee, task, flat_args):
       await callee(task, subtask.on_start, subtask.on_return, on_block)
       [] = subtask.finish()
     if await call_and_handle_blocking(do_call):
-      i = task.add_async_subtask(subtask)
+      subtask.notify_supertask = True
+      task.need_to_drop += 1
+      i = task.inst.async_subtasks.add(subtask)
       flat_results = [pack_async_result(i, subtask.state)]
     else:
       flat_results = [0]
   return flat_results
 ```
 In the asynchronous case, `Task.call_and_handle_blocking` returns `True` if the
-call to `do_call` blocks. If the `callee` blocks, `on_start` and `on_return`
-may be called after `canon_lower` has returned to the core wasm caller, which
-is signaled via the `subtask.state` packed into the result `i32`:
+call to `do_call` blocks. In this blocking case, the `Subtask` is added to
+stored in an instance-wide table and given an `i32` index that is later
+returned by `task.wait` to indicate that the subtask made progress. The
+`need_to_drop` increment is matched by a decrement in `canon_subtask_drop` and
+ensures that all subtasks of a supertask are allowed to complete before the
+supertask completes. The `notify_supertask` flag is set to tell `Subtask`
+methods (below) to asynchronously notify the supertask of progress. Lastly,
+the current state of the subtask is eagerly returned to the caller, packed
+with the `i32` subtask index:
 ```python
 def pack_async_result(i, state):
   assert(0 < i < 2**30)
@@ -2265,7 +2255,7 @@ async def canon_resource_drop(rt, sync, task, i):
       else:
         task.trap_if_on_the_stack(rt.impl)
   else:
-    h.scope.drop_borrow()
+    h.scope.need_to_drop -= 1
   return flat_results
 ```
 In general, the call to a resource's destructor is treated like a
@@ -2431,16 +2421,11 @@ validation specifies:
 * `$f` is given type `(func (param i32))`
 
 Calling `$f` removes the indicated subtask from the instance's table, trapping
-if the subtask isn't done or isn't a subtask of the current task. The guard
-on `enqueued` ensures that supertasks can only drop subtasks once they've been
-officially notified of their completion (via `task.wait` or callback).
+if various conditions aren't met in `Subtask.drop()`.
 ```python
 async def canon_subtask_drop(task, i):
   trap_if(not task.inst.may_leave)
-  subtask = task.inst.async_subtasks.remove(i)
-  trap_if(subtask.enqueued)
-  trap_if(subtask.state != CallState.DONE)
-  subtask.task.num_async_subtasks -= 1
+  task.inst.async_subtasks.remove(i).drop()
   return []
 ```
 
