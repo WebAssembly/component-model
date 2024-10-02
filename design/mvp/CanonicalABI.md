@@ -8,7 +8,7 @@ walkthrough of the static structure of a component and the
 being specified here.
 
 * [Supporting definitions](#supporting-definitions)
-  * [Context](#context)
+  * [Call Context](#call-context)
   * [Canonical ABI Options](#canonical-abi-options)
   * [Runtime State](#runtime-state)
   * [Despecialization](#despecialization)
@@ -71,7 +71,7 @@ intentionally propagate OOM into the appropriate explicit return value of the
 function's declared return type.
 
 
-### Context
+### Call Context
 
 The subsequent definitions depend on three kinds of ambient information:
 * static ABI options supplied via [`canonopt`]
@@ -79,9 +79,9 @@ The subsequent definitions depend on three kinds of ambient information:
 * dynamic state in the [current task]
 
 These sources of ambient context are stored as the respective `opts`, `inst`
-and `task` fields of the `Context` object:
+and `task` fields of the `CallContext` object:
 ```python
-class Context:
+class CallContext:
   opts: CanonicalOptions
   inst: ComponentInstance
   task: Task
@@ -91,14 +91,14 @@ class Context:
     self.inst = inst
     self.task = task
 ```
-The `cx` parameter in functions below refers to the ambient `Context`. The
-`Task` and `Subtask` classes derive `Context` and thus having a `task` or
-`subtask` also establishes the ambient `Context`.
+The `cx` parameter in functions below refers to the ambient `CallContext`. The
+`Task` and `Subtask` classes derive `CallContext` and thus having a `task` or
+`subtask` also establishes the ambient `CallContext`.
 
 
 ### Canonical ABI Options
 
-The `opts` field of `Context` contains all the possible [`canonopt`]
+The `opts` field of `CallContext` contains all the possible [`canonopt`]
 immediates that can be passed to the `canon` definition being implemented.
 ```python
 @dataclass
@@ -118,13 +118,13 @@ reason that `async` is a keyword and most branches below want to start with the
 
 ### Runtime State
 
-The `inst` field of `Context` points to the component instance which the
+The `inst` field of `CallContext` points to the component instance which the
 `canon`-generated function is closed over. Component instances contain all the
 core wasm instance as well as some extra state that is used exclusively by the
 Canonical ABI and introduced below as the fields are used.
 ```python
 class ComponentInstance:
-  handles: HandleTables
+  resources: ResourceTables
   async_subtasks: Table[Subtask]
   num_tasks: int
   may_leave: bool
@@ -133,7 +133,7 @@ class ComponentInstance:
   pending_tasks: list[tuple[Task, asyncio.Future]]
 
   def __init__(self):
-    self.handles = HandleTables()
+    self.resources = ResourceTables()
     self.async_subtasks = Table[Subtask]()
     self.num_tasks = 0
     self.may_leave = True
@@ -143,19 +143,19 @@ class ComponentInstance:
     self.pending_tasks = []
 ```
 
-The `HandleTables` class stored in `ComponentInstance.handles` maps
-`ResourceType`s to `Table`s of `HandleElem`s (defined next), establishing a
-separate `i32`-indexed array per resource type:
+The `ResourceTables` stored in the `resources` field maps `ResourceType`s to
+`Table`s of `ResourceHandle`s (defined next), establishing a separate
+`i32`-indexed array per resource type:
 ```python
-class HandleTables:
-  rt_to_table: MutableMapping[ResourceType, Table[HandleElem]]
+class ResourceTables:
+  rt_to_table: MutableMapping[ResourceType, Table[ResourceHandle]]
 
   def __init__(self):
     self.rt_to_table = dict()
 
   def table(self, rt):
     if rt not in self.rt_to_table:
-      self.rt_to_table[rt] = Table[HandleElem]()
+      self.rt_to_table[rt] = Table[ResourceHandle]()
     return self.rt_to_table[rt]
 
   def get(self, rt, i):
@@ -176,7 +176,7 @@ a global variable.
 
 The `ResourceType` class represents a concrete resource type that has been
 created by the component instance `impl`. `ResourceType` objects are used as
-keys by `HandleTables` above and thus we assume that Python object identity
+keys by `ResourceTables` above and thus we assume that Python object identity
 corresponds to resource type equality, as defined by [type checking] rules.
 ```python
 class ResourceType(Type):
@@ -191,7 +191,7 @@ class ResourceType(Type):
     self.dtor_sync = dtor_sync
     self.dtor_callback = dtor_callback
 ```
-The `Table` class, used by `HandleTables` above, encapsulates a single
+The `Table` class, used by `ResourceTables` above, encapsulates a single
 mutable, growable array of generic elements, indexed by Core WebAssembly
 `i32`s.
 ```python
@@ -243,10 +243,10 @@ The limit of `2**30` ensures that the high 2 bits of table indices are unset
 and available for other use in guest code (e.g., for tagging, packed words or
 sentinel values).
 
-The `HandleElem` class defines the elements of the per-resource-type `Table`s
-stored in `HandleTables`:
+The `ResourceHandle` class defines the elements of the per-resource-type
+`Table`s stored in `ResourceTables`:
 ```python
-class HandleElem:
+class ResourceHandle:
   rep: int
   own: bool
   scope: Optional[Task]
@@ -258,16 +258,17 @@ class HandleElem:
     self.scope = scope
     self.lend_count = 0
 ```
-The `rep` field of `HandleElem` stores the resource representation (currently
-fixed to be an `i32`) passed to `resource.new`.
+The `rep` field of `ResourceHandle` stores the resource representation
+(currently fixed to be an `i32`) passed to `resource.new`.
 
 The `own` field indicates whether this element was created from an `own` type
 (or, if false, a `borrow` type).
 
 The `scope` field stores the `Task` that created the borrowed handle. When a
-component only uses sync-lifted exports, due to lack of reentrance, there is at
-most one `Task` alive in a component instance at any time and thus an
-optimizing implementation doesn't need to store the `Task` per `HandleElem`.
+component only uses sync-lifted exports, due to lack of reentrance, there is
+at most one `Task` alive in a component instance at any time and thus an
+optimizing implementation doesn't need to store the `Task` per
+`ResourceHandle`.
 
 The `lend_count` field maintains a conservative approximation of the number of
 live handles that were lent from this `own` handle (by calls to `borrow`-taking
@@ -282,8 +283,8 @@ and guards thereof.
 
 Additional runtime state is required to implement the canonical built-ins and
 check that callers and callees uphold their respective parts of the call
-contract. This additional call state derives from `Context`, adding extra
-mutable fields. There are two subclasses of `Context`: `Task`, which is
+contract. This additional call state derives from `CallContext`, adding extra
+mutable fields. There are two subclasses of `CallContext`: `Task`, which is
 created by `canon_lift` and `Subtask`, which is created by `canon_lower`.
 
 The `Task` class and its subclasses depend on the following type definitions:
@@ -385,10 +386,10 @@ when there is a need to make an `async` call.
 
 A `Task` object is created for each call to `canon_lift` and is implicitly
 threaded through all core function calls. This implicit `Task` parameter
-represents the "[current task]". A `Task` is-a `Context`, with its `ft` and
-`opts` derived from the `canon lift` definition that created this `Task`.
+represents the "[current task]". A `Task` is-a `CallContext`, with its `ft`
+and `opts` derived from the `canon lift` definition that created this `Task`.
 ```python
-class Task(Context):
+class Task(CallContext):
   ft: FuncType
   caller: Optional[Task]
   on_return: Optional[Callable]
@@ -410,10 +411,10 @@ class Task(Context):
     self.num_async_subtasks = 0
 ```
 The fields of `Task` are introduced in groups of related `Task` methods next.
-Using a conservative syntactic analysis of the component-level definitions of a
-linked component DAG, an optimizing implementation can statically eliminate
-these fields when the particular feature (`borrow` handles, `async` imports) is
-not used.
+Using a conservative syntactic analysis of the component-level definitions of
+a linked component DAG, an optimizing implementation can statically eliminate
+these fields when the particular feature (`borrow` handles, `async` imports)
+is not used.
 
 The `trap_if_on_stack` helper method is called (below) to prevent reentrance.
 The definition uses the `caller` field which points to the task's supertask in
@@ -635,17 +636,18 @@ above and allows a pending task to start.
 ```
 
 While `canon_lift` creates `Task`s, `canon_lower` creates `Subtask` objects.
-Like `Task`, `Subtask` is a subclass of `Context` and stores the `ft` and
+Like `Task`, `Subtask` is a subclass of `CallContext` and stores the `ft` and
 `opts` of its `canon lower`. Importantly, the `task` field of a `Subtask`
 refers to the [current task] which called `canon lower`, thereby linking all
-subtasks to their supertask, maintaining the (possibly asynchronous) call tree.
+subtasks to their supertask, maintaining the (possibly asynchronous) call
+tree.
 ```python
-class Subtask(Context):
+class Subtask(CallContext):
   ft: FuncType
   flat_args: CoreValueIter
   flat_results: Optional[list[any]]
   state: CallState
-  lenders: list[HandleElem]
+  lenders: list[ResourceHandle]
   notify_supertask: bool
   enqueued: bool
 
@@ -754,11 +756,11 @@ function to replace specialized value types with their expansion:
 ```python
 def despecialize(t):
   match t:
-    case Tuple(ts)         : return Record([ Field(str(i), t) for i,t in enumerate(ts) ])
-    case Enum(labels)      : return Variant([ Case(l, None) for l in labels ])
-    case Option(t)         : return Variant([ Case("none", None), Case("some", t) ])
-    case Result(ok, error) : return Variant([ Case("ok", ok), Case("error", error) ])
-    case _                 : return t
+    case TupleType(ts)       : return RecordType([ FieldType(str(i), t) for i,t in enumerate(ts) ])
+    case EnumType(labels)    : return VariantType([ CaseType(l, None) for l in labels ])
+    case OptionType(t)       : return VariantType([ CaseType("none", None), CaseType("some", t) ])
+    case ResultType(ok, err) : return VariantType([ CaseType("ok", ok), CaseType("error", err) ])
+    case _                   : return t
 ```
 The specialized value types `string` and `flags` are missing from this list
 because they are given specialized canonical ABI representations distinct from
@@ -773,20 +775,21 @@ we start with the top-level case analysis:
 ```python
 def alignment(t):
   match despecialize(t):
-    case Bool()             : return 1
-    case S8() | U8()        : return 1
-    case S16() | U16()      : return 2
-    case S32() | U32()      : return 4
-    case S64() | U64()      : return 8
-    case F32()              : return 4
-    case F64()              : return 8
-    case Char()             : return 4
-    case String()           : return 4
-    case List(t, l)         : return alignment_list(t, l)
-    case Record(fields)     : return alignment_record(fields)
-    case Variant(cases)     : return alignment_variant(cases)
-    case Flags(labels)      : return alignment_flags(labels)
-    case Own(_) | Borrow(_) : return 4
+    case BoolType()            : return 1
+    case S8Type() | U8Type()   : return 1
+    case S16Type() | U16Type() : return 2
+    case S32Type() | U32Type() : return 4
+    case S64Type() | U64Type() : return 8
+    case F32Type()             : return 4
+    case F64Type()             : return 8
+    case CharType()            : return 4
+    case StringType()          : return 4
+    case ListType(t, l)        : return alignment_list(t, l)
+    case RecordType(fields)    : return alignment_record(fields)
+    case VariantType(cases)    : return alignment_variant(cases)
+    case FlagsType(labels)     : return alignment_flags(labels)
+    case OwnType()             : return 4
+    case BorrowType()          : return 4
 ```
 
 List alignment is the same as tuple alignment when the length is fixed and
@@ -820,10 +823,10 @@ def discriminant_type(cases):
   n = len(cases)
   assert(0 < n < (1 << 32))
   match math.ceil(math.log2(n)/8):
-    case 0: return U8()
-    case 1: return U8()
-    case 2: return U16()
-    case 3: return U32()
+    case 0: return U8Type()
+    case 1: return U8Type()
+    case 2: return U16Type()
+    case 3: return U32Type()
 
 def max_case_alignment(cases):
   a = 1
@@ -845,7 +848,7 @@ def alignment_flags(labels):
   return 4
 ```
 
-Handle types are passed as `i32` indices into the `Table[HandleElem]`
+Handle types are passed as `i32` indices into the `Table[ResourceHandle]`
 introduced below.
 
 
@@ -861,20 +864,21 @@ complications in source languages.
 ```python
 def elem_size(t):
   match despecialize(t):
-    case Bool()             : return 1
-    case S8() | U8()        : return 1
-    case S16() | U16()      : return 2
-    case S32() | U32()      : return 4
-    case S64() | U64()      : return 8
-    case F32()              : return 4
-    case F64()              : return 8
-    case Char()             : return 4
-    case String()           : return 8
-    case List(t, l)         : return elem_size_list(t, l)
-    case Record(fields)     : return elem_size_record(fields)
-    case Variant(cases)     : return elem_size_variant(cases)
-    case Flags(labels)      : return elem_size_flags(labels)
-    case Own(_) | Borrow(_) : return 4
+    case BoolType()            : return 1
+    case S8Type() | U8Type()   : return 1
+    case S16Type() | U16Type() : return 2
+    case S32Type() | U32Type() : return 4
+    case S64Type() | U64Type() : return 8
+    case F32Type()             : return 4
+    case F64Type()             : return 8
+    case CharType()            : return 4
+    case StringType()          : return 8
+    case ListType(t, l)        : return elem_size_list(t, l)
+    case RecordType(fields)    : return elem_size_record(fields)
+    case VariantType(cases)    : return elem_size_variant(cases)
+    case FlagsType(labels)     : return elem_size_flags(labels)
+    case OwnType()             : return 4
+    case BorrowType()          : return 4
 
 def elem_size_list(elem_type, maybe_length):
   if maybe_length is not None:
@@ -921,25 +925,25 @@ def load(cx, ptr, t):
   assert(ptr == align_to(ptr, alignment(t)))
   assert(ptr + elem_size(t) <= len(cx.opts.memory))
   match despecialize(t):
-    case Bool()         : return convert_int_to_bool(load_int(cx, ptr, 1))
-    case U8()           : return load_int(cx, ptr, 1)
-    case U16()          : return load_int(cx, ptr, 2)
-    case U32()          : return load_int(cx, ptr, 4)
-    case U64()          : return load_int(cx, ptr, 8)
-    case S8()           : return load_int(cx, ptr, 1, signed=True)
-    case S16()          : return load_int(cx, ptr, 2, signed=True)
-    case S32()          : return load_int(cx, ptr, 4, signed=True)
-    case S64()          : return load_int(cx, ptr, 8, signed=True)
-    case F32()          : return decode_i32_as_float(load_int(cx, ptr, 4))
-    case F64()          : return decode_i64_as_float(load_int(cx, ptr, 8))
-    case Char()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
-    case String()       : return load_string(cx, ptr)
-    case List(t, l)     : return load_list(cx, ptr, t, l)
-    case Record(fields) : return load_record(cx, ptr, fields)
-    case Variant(cases) : return load_variant(cx, ptr, cases)
-    case Flags(labels)  : return load_flags(cx, ptr, labels)
-    case Own()          : return lift_own(cx, load_int(cx, ptr, 4), t)
-    case Borrow()       : return lift_borrow(cx, load_int(cx, ptr, 4), t)
+    case BoolType()         : return convert_int_to_bool(load_int(cx, ptr, 1))
+    case U8Type()           : return load_int(cx, ptr, 1)
+    case U16Type()          : return load_int(cx, ptr, 2)
+    case U32Type()          : return load_int(cx, ptr, 4)
+    case U64Type()          : return load_int(cx, ptr, 8)
+    case S8Type()           : return load_int(cx, ptr, 1, signed=True)
+    case S16Type()          : return load_int(cx, ptr, 2, signed=True)
+    case S32Type()          : return load_int(cx, ptr, 4, signed=True)
+    case S64Type()          : return load_int(cx, ptr, 8, signed=True)
+    case F32Type()          : return decode_i32_as_float(load_int(cx, ptr, 4))
+    case F64Type()          : return decode_i64_as_float(load_int(cx, ptr, 8))
+    case CharType()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
+    case StringType()       : return load_string(cx, ptr)
+    case ListType(t, l)     : return load_list(cx, ptr, t, l)
+    case RecordType(fields) : return load_record(cx, ptr, fields)
+    case VariantType(cases) : return load_variant(cx, ptr, cases)
+    case FlagsType(labels)  : return load_flags(cx, ptr, labels)
+    case OwnType()          : return lift_own(cx, load_int(cx, ptr, 4), t)
+    case BorrowType()       : return lift_borrow(cx, load_int(cx, ptr, 4), t)
 ```
 
 Integers are loaded directly from memory, with their high-order bit interpreted
@@ -1143,7 +1147,7 @@ possible, for example if the index was actually a `borrow` or if the `own`
 handle is currently being lent out as borrows.
 ```python
 def lift_own(cx, i, t):
-  h = cx.inst.handles.remove(t.rt, i)
+  h = cx.inst.resources.remove(t.rt, i)
   trap_if(h.lend_count != 0)
   trap_if(not h.own)
   return h.rep
@@ -1161,12 +1165,12 @@ component instance's handle table:
 ```python
 def lift_borrow(cx, i, t):
   assert(isinstance(cx, Subtask))
-  h = cx.inst.handles.get(t.rt, i)
+  h = cx.inst.resources.get(t.rt, i)
   if h.own:
     cx.add_lender(h)
   return h.rep
 ```
-The `add_lender` call to `Context` participates in the enforcement of the
+The `add_lender` call to `CallContext` participates in the enforcement of the
 dynamic borrow rules, which keep the source `own` handle alive until the end
 of the call (as an intentionally-conservative upper bound on how long the
 `borrow` handle can be held). This tracking is only required when `h` is an
@@ -1185,25 +1189,25 @@ def store(cx, v, t, ptr):
   assert(ptr == align_to(ptr, alignment(t)))
   assert(ptr + elem_size(t) <= len(cx.opts.memory))
   match despecialize(t):
-    case Bool()         : store_int(cx, int(bool(v)), ptr, 1)
-    case U8()           : store_int(cx, v, ptr, 1)
-    case U16()          : store_int(cx, v, ptr, 2)
-    case U32()          : store_int(cx, v, ptr, 4)
-    case U64()          : store_int(cx, v, ptr, 8)
-    case S8()           : store_int(cx, v, ptr, 1, signed=True)
-    case S16()          : store_int(cx, v, ptr, 2, signed=True)
-    case S32()          : store_int(cx, v, ptr, 4, signed=True)
-    case S64()          : store_int(cx, v, ptr, 8, signed=True)
-    case F32()          : store_int(cx, encode_float_as_i32(v), ptr, 4)
-    case F64()          : store_int(cx, encode_float_as_i64(v), ptr, 8)
-    case Char()         : store_int(cx, char_to_i32(v), ptr, 4)
-    case String()       : store_string(cx, v, ptr)
-    case List(t, l)     : store_list(cx, v, ptr, t, l)
-    case Record(fields) : store_record(cx, v, ptr, fields)
-    case Variant(cases) : store_variant(cx, v, ptr, cases)
-    case Flags(labels)  : store_flags(cx, v, ptr, labels)
-    case Own()          : store_int(cx, lower_own(cx, v, t), ptr, 4)
-    case Borrow()       : store_int(cx, lower_borrow(cx, v, t), ptr, 4)
+    case BoolType()         : store_int(cx, int(bool(v)), ptr, 1)
+    case U8Type()           : store_int(cx, v, ptr, 1)
+    case U16Type()          : store_int(cx, v, ptr, 2)
+    case U32Type()          : store_int(cx, v, ptr, 4)
+    case U64Type()          : store_int(cx, v, ptr, 8)
+    case S8Type()           : store_int(cx, v, ptr, 1, signed=True)
+    case S16Type()          : store_int(cx, v, ptr, 2, signed=True)
+    case S32Type()          : store_int(cx, v, ptr, 4, signed=True)
+    case S64Type()          : store_int(cx, v, ptr, 8, signed=True)
+    case F32Type()          : store_int(cx, encode_float_as_i32(v), ptr, 4)
+    case F64Type()          : store_int(cx, encode_float_as_i64(v), ptr, 8)
+    case CharType()         : store_int(cx, char_to_i32(v), ptr, 4)
+    case StringType()       : store_string(cx, v, ptr)
+    case ListType(t, l)     : store_list(cx, v, ptr, t, l)
+    case RecordType(fields) : store_record(cx, v, ptr, fields)
+    case VariantType(cases) : store_variant(cx, v, ptr, cases)
+    case FlagsType(labels)  : store_flags(cx, v, ptr, labels)
+    case OwnType()          : store_int(cx, lower_own(cx, v, t), ptr, 4)
+    case BorrowType()       : store_int(cx, lower_borrow(cx, v, t), ptr, 4)
 ```
 
 Integers are stored directly into memory. Because the input domain is exactly
@@ -1567,16 +1571,16 @@ Finally, `own` and `borrow` handles are lowered by initializing new handle
 elements in the current component instance's handle table:
 ```python
 def lower_own(cx, rep, t):
-  h = HandleElem(rep, own=True)
-  return cx.inst.handles.add(t.rt, h)
+  h = ResourceHandle(rep, own=True)
+  return cx.inst.resources.add(t.rt, h)
 
 def lower_borrow(cx, rep, t):
   assert(isinstance(cx, Task))
   if cx.inst is t.rt.impl:
     return rep
-  h = HandleElem(rep, own=False, scope=cx)
+  h = ResourceHandle(rep, own=False, scope=cx)
   cx.create_borrow()
-  return cx.inst.handles.add(t.rt, h)
+  return cx.inst.resources.add(t.rt, h)
 ```
 The special case in `lower_borrow` is an optimization, recognizing that, when
 a borrowed handle is passed to the component that implemented the resource
@@ -1654,19 +1658,20 @@ top-level case analysis:
 ```python
 def flatten_type(t):
   match despecialize(t):
-    case Bool()               : return ['i32']
-    case U8() | U16() | U32() : return ['i32']
-    case S8() | S16() | S32() : return ['i32']
-    case S64() | U64()        : return ['i64']
-    case F32()                : return ['f32']
-    case F64()                : return ['f64']
-    case Char()               : return ['i32']
-    case String()             : return ['i32', 'i32']
-    case List(t, l)           : return flatten_list(t, l)
-    case Record(fields)       : return flatten_record(fields)
-    case Variant(cases)       : return flatten_variant(cases)
-    case Flags(labels)        : return ['i32']
-    case Own(_) | Borrow(_)   : return ['i32']
+    case BoolType()                       : return ['i32']
+    case U8Type() | U16Type() | U32Type() : return ['i32']
+    case S8Type() | S16Type() | S32Type() : return ['i32']
+    case S64Type() | U64Type()            : return ['i64']
+    case F32Type()                        : return ['f32']
+    case F64Type()                        : return ['f64']
+    case CharType()                       : return ['i32']
+    case StringType()                     : return ['i32', 'i32']
+    case ListType(t, l)                   : return flatten_list(t, l)
+    case RecordType(fields)               : return flatten_record(fields)
+    case VariantType(cases)               : return flatten_variant(cases)
+    case FlagsType(labels)                : return ['i32']
+    case OwnType()                        : return ['i32']
+    case BorrowType()                     : return ['i32']
 ```
 
 List flattening of a fixed-length list uses the same flattening as a tuple
@@ -1742,25 +1747,25 @@ piecewise, we start with the top-level case analysis:
 ```python
 def lift_flat(cx, vi, t):
   match despecialize(t):
-    case Bool()         : return convert_int_to_bool(vi.next('i32'))
-    case U8()           : return lift_flat_unsigned(vi, 32, 8)
-    case U16()          : return lift_flat_unsigned(vi, 32, 16)
-    case U32()          : return lift_flat_unsigned(vi, 32, 32)
-    case U64()          : return lift_flat_unsigned(vi, 64, 64)
-    case S8()           : return lift_flat_signed(vi, 32, 8)
-    case S16()          : return lift_flat_signed(vi, 32, 16)
-    case S32()          : return lift_flat_signed(vi, 32, 32)
-    case S64()          : return lift_flat_signed(vi, 64, 64)
-    case F32()          : return canonicalize_nan32(vi.next('f32'))
-    case F64()          : return canonicalize_nan64(vi.next('f64'))
-    case Char()         : return convert_i32_to_char(cx, vi.next('i32'))
-    case String()       : return lift_flat_string(cx, vi)
-    case List(t, l)     : return lift_flat_list(cx, vi, t, l)
-    case Record(fields) : return lift_flat_record(cx, vi, fields)
-    case Variant(cases) : return lift_flat_variant(cx, vi, cases)
-    case Flags(labels)  : return lift_flat_flags(vi, labels)
-    case Own()          : return lift_own(cx, vi.next('i32'), t)
-    case Borrow()       : return lift_borrow(cx, vi.next('i32'), t)
+    case BoolType()         : return convert_int_to_bool(vi.next('i32'))
+    case U8Type()           : return lift_flat_unsigned(vi, 32, 8)
+    case U16Type()          : return lift_flat_unsigned(vi, 32, 16)
+    case U32Type()          : return lift_flat_unsigned(vi, 32, 32)
+    case U64Type()          : return lift_flat_unsigned(vi, 64, 64)
+    case S8Type()           : return lift_flat_signed(vi, 32, 8)
+    case S16Type()          : return lift_flat_signed(vi, 32, 16)
+    case S32Type()          : return lift_flat_signed(vi, 32, 32)
+    case S64Type()          : return lift_flat_signed(vi, 64, 64)
+    case F32Type()          : return canonicalize_nan32(vi.next('f32'))
+    case F64Type()          : return canonicalize_nan64(vi.next('f64'))
+    case CharType()         : return convert_i32_to_char(cx, vi.next('i32'))
+    case StringType()       : return lift_flat_string(cx, vi)
+    case ListType(t, l)     : return lift_flat_list(cx, vi, t, l)
+    case RecordType(fields) : return lift_flat_record(cx, vi, fields)
+    case VariantType(cases) : return lift_flat_variant(cx, vi, cases)
+    case FlagsType(labels)  : return lift_flat_flags(vi, labels)
+    case OwnType()          : return lift_own(cx, vi.next('i32'), t)
+    case BorrowType()       : return lift_borrow(cx, vi.next('i32'), t)
 ```
 
 Integers are lifted from core `i32` or `i64` values using the signedness of the
@@ -1868,25 +1873,25 @@ piecewise, we start with the top-level case analysis:
 ```python
 def lower_flat(cx, v, t):
   match despecialize(t):
-    case Bool()         : return [int(v)]
-    case U8()           : return [v]
-    case U16()          : return [v]
-    case U32()          : return [v]
-    case U64()          : return [v]
-    case S8()           : return lower_flat_signed(v, 32)
-    case S16()          : return lower_flat_signed(v, 32)
-    case S32()          : return lower_flat_signed(v, 32)
-    case S64()          : return lower_flat_signed(v, 64)
-    case F32()          : return [maybe_scramble_nan32(v)]
-    case F64()          : return [maybe_scramble_nan64(v)]
-    case Char()         : return [char_to_i32(v)]
-    case String()       : return lower_flat_string(cx, v)
-    case List(t, l)     : return lower_flat_list(cx, v, t, l)
-    case Record(fields) : return lower_flat_record(cx, v, fields)
-    case Variant(cases) : return lower_flat_variant(cx, v, cases)
-    case Flags(labels)  : return lower_flat_flags(v, labels)
-    case Own()          : return [lower_own(cx, v, t)]
-    case Borrow()       : return [lower_borrow(cx, v, t)]
+    case BoolType()         : return [int(v)]
+    case U8Type()           : return [v]
+    case U16Type()          : return [v]
+    case U32Type()          : return [v]
+    case U64Type()          : return [v]
+    case S8Type()           : return lower_flat_signed(v, 32)
+    case S16Type()          : return lower_flat_signed(v, 32)
+    case S32Type()          : return lower_flat_signed(v, 32)
+    case S64Type()          : return lower_flat_signed(v, 64)
+    case F32Type()          : return [maybe_scramble_nan32(v)]
+    case F64Type()          : return [maybe_scramble_nan64(v)]
+    case CharType()         : return [char_to_i32(v)]
+    case StringType()       : return lower_flat_string(cx, v)
+    case ListType(t, l)     : return lower_flat_list(cx, v, t, l)
+    case RecordType(fields) : return lower_flat_record(cx, v, fields)
+    case VariantType(cases) : return lower_flat_variant(cx, v, cases)
+    case FlagsType(labels)  : return lower_flat_flags(v, labels)
+    case OwnType()          : return [lower_own(cx, v, t)]
+    case BorrowType()       : return [lower_borrow(cx, v, t)]
 ```
 
 Since component-level values are assumed in-range and, as previously stated,
@@ -1979,7 +1984,7 @@ def lift_flat_values(cx, max_flat, vi, ts):
 
 def lift_heap_values(cx, vi, ts):
   ptr = vi.next('i32')
-  tuple_type = Tuple(ts)
+  tuple_type = TupleType(ts)
   trap_if(ptr != align_to(ptr, alignment(tuple_type)))
   trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
   return list(load(cx, ptr, tuple_type).values())
@@ -2005,7 +2010,7 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
   return flat_vals
 
 def lower_heap_values(cx, vs, ts, out_param):
-  tuple_type = Tuple(ts)
+  tuple_type = TupleType(ts)
   tuple_value = {str(i): v for i,v in enumerate(vs)}
   if out_param is None:
     ptr = cx.opts.realloc(0, 0, alignment(tuple_type), elem_size(tuple_type))
@@ -2220,8 +2225,8 @@ instance's handle table:
 ```python
 async def canon_resource_new(rt, task, rep):
   trap_if(not task.inst.may_leave)
-  h = HandleElem(rep, own=True)
-  i = task.inst.handles.add(rt, h)
+  h = ResourceHandle(rep, own=True)
+  i = task.inst.resources.add(rt, h)
   return [i]
 ```
 
@@ -2242,7 +2247,7 @@ the resource's destructor.
 async def canon_resource_drop(rt, sync, task, i):
   trap_if(not task.inst.may_leave)
   inst = task.inst
-  h = inst.handles.remove(rt, i)
+  h = inst.resources.remove(rt, i)
   flat_results = [] if sync else [0]
   if h.own:
     assert(h.scope is None)
@@ -2254,7 +2259,7 @@ async def canon_resource_drop(rt, sync, task, i):
       if rt.dtor:
         caller_opts = CanonicalOptions(sync = sync)
         callee_opts = CanonicalOptions(sync = rt.dtor_sync, callback = rt.dtor_callback)
-        ft = FuncType([U32()],[])
+        ft = FuncType([U32Type()],[])
         callee = partial(canon_lift, callee_opts, rt.impl, ft, rt.dtor)
         flat_results = await canon_lower(caller_opts, ft, callee, task, [h.rep, 0])
       else:
@@ -2292,7 +2297,7 @@ Calling `$f` invokes the following function, which extracts the resource
 representation from the handle.
 ```python
 async def canon_resource_rep(rt, task, i):
-  h = task.inst.handles.get(rt, i)
+  h = task.inst.resources.get(rt, i)
   return [h.rep]
 ```
 Note that the "locally-defined" requirement above ensures that only the
@@ -2361,7 +2366,7 @@ async def canon_task_wait(task, ptr):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback is not None)
   event, payload = await task.wait()
-  store(task, payload, U32(), ptr)
+  store(task, payload, U32Type(), ptr)
   return [event]
 ```
 The `trap_if` ensures that, when a component uses a `callback` all events flow
@@ -2392,7 +2397,7 @@ async def canon_task_poll(task, ptr):
   ret = task.poll()
   if ret is None:
     return [0]
-  store(task, ret, Tuple([U32(), U32()]), ptr)
+  store(task, ret, TupleType([U32Type(), U32Type()]), ptr)
   return [1]
 ```
 Note that there is no `await` of `poll` and thus no possible task switching.

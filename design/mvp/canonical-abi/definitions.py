@@ -104,76 +104,76 @@ class TypeType(ExternType):
 class PrimValType(ValType):
   pass
 
-class Bool(PrimValType): pass
-class S8(PrimValType): pass
-class U8(PrimValType): pass
-class S16(PrimValType): pass
-class U16(PrimValType): pass
-class S32(PrimValType): pass
-class U32(PrimValType): pass
-class S64(PrimValType): pass
-class U64(PrimValType): pass
-class F32(PrimValType): pass
-class F64(PrimValType): pass
-class Char(PrimValType): pass
-class String(PrimValType): pass
+class BoolType(PrimValType): pass
+class S8Type(PrimValType): pass
+class U8Type(PrimValType): pass
+class S16Type(PrimValType): pass
+class U16Type(PrimValType): pass
+class S32Type(PrimValType): pass
+class U32Type(PrimValType): pass
+class S64Type(PrimValType): pass
+class U64Type(PrimValType): pass
+class F32Type(PrimValType): pass
+class F64Type(PrimValType): pass
+class CharType(PrimValType): pass
+class StringType(PrimValType): pass
 
 @dataclass
-class List(ValType):
+class ListType(ValType):
   t: ValType
   l: Optional[int] = None
 
 @dataclass
-class Field:
+class FieldType:
   label: str
   t: ValType
 
 @dataclass
-class Record(ValType):
-  fields: list[Field]
+class RecordType(ValType):
+  fields: list[FieldType]
 
 @dataclass
-class Tuple(ValType):
+class TupleType(ValType):
   ts: list[ValType]
 
 @dataclass
-class Case:
+class CaseType:
   label: str
   t: Optional[ValType]
   refines: Optional[str] = None
 
 @dataclass
-class Variant(ValType):
-  cases: list[Case]
+class VariantType(ValType):
+  cases: list[CaseType]
 
 @dataclass
-class Enum(ValType):
+class EnumType(ValType):
   labels: list[str]
 
 @dataclass
-class Option(ValType):
+class OptionType(ValType):
   t: ValType
 
 @dataclass
-class Result(ValType):
+class ResultType(ValType):
   ok: Optional[ValType]
   error: Optional[ValType]
 
 @dataclass
-class Flags(ValType):
+class FlagsType(ValType):
   labels: list[str]
 
 @dataclass
-class Own(ValType):
+class OwnType(ValType):
   rt: ResourceType
 
 @dataclass
-class Borrow(ValType):
+class BorrowType(ValType):
   rt: ResourceType
 
-### Context
+### CallContext
 
-class Context:
+class CallContext:
   opts: CanonicalOptions
   inst: ComponentInstance
   task: Task
@@ -198,7 +198,7 @@ class CanonicalOptions:
 ### Runtime State
 
 class ComponentInstance:
-  handles: HandleTables
+  resources: ResourceTables
   async_subtasks: Table[Subtask]
   num_tasks: int
   may_leave: bool
@@ -207,7 +207,7 @@ class ComponentInstance:
   pending_tasks: list[tuple[Task, asyncio.Future]]
 
   def __init__(self):
-    self.handles = HandleTables()
+    self.resources = ResourceTables()
     self.async_subtasks = Table[Subtask]()
     self.num_tasks = 0
     self.may_leave = True
@@ -216,15 +216,15 @@ class ComponentInstance:
     self.interruptible.set()
     self.pending_tasks = []
 
-class HandleTables:
-  rt_to_table: MutableMapping[ResourceType, Table[HandleElem]]
+class ResourceTables:
+  rt_to_table: MutableMapping[ResourceType, Table[ResourceHandle]]
 
   def __init__(self):
     self.rt_to_table = dict()
 
   def table(self, rt):
     if rt not in self.rt_to_table:
-      self.rt_to_table[rt] = Table[HandleElem]()
+      self.rt_to_table[rt] = Table[ResourceHandle]()
     return self.rt_to_table[rt]
 
   def get(self, rt, i):
@@ -277,7 +277,7 @@ class Table(Generic[ElemT]):
     self.free.append(i)
     return e
 
-class HandleElem:
+class ResourceHandle:
   rep: int
   own: bool
   scope: Optional[Task]
@@ -334,7 +334,7 @@ async def call_and_handle_blocking(callee):
   asyncio.create_task(do_call())
   return await blocked
 
-class Task(Context):
+class Task(CallContext):
   ft: FuncType
   caller: Optional[Task]
   on_return: Optional[Callable]
@@ -470,12 +470,12 @@ class Task(Context):
       self.inst.interruptible.set()
     self.maybe_start_pending_task()
 
-class Subtask(Context):
+class Subtask(CallContext):
   ft: FuncType
   flat_args: CoreValueIter
   flat_results: Optional[list[any]]
   state: CallState
-  lenders: list[HandleElem]
+  lenders: list[ResourceHandle]
   notify_supertask: bool
   enqueued: bool
 
@@ -538,30 +538,31 @@ class Subtask(Context):
 
 def despecialize(t):
   match t:
-    case Tuple(ts)         : return Record([ Field(str(i), t) for i,t in enumerate(ts) ])
-    case Enum(labels)      : return Variant([ Case(l, None) for l in labels ])
-    case Option(t)         : return Variant([ Case("none", None), Case("some", t) ])
-    case Result(ok, error) : return Variant([ Case("ok", ok), Case("error", error) ])
-    case _                 : return t
+    case TupleType(ts)       : return RecordType([ FieldType(str(i), t) for i,t in enumerate(ts) ])
+    case EnumType(labels)    : return VariantType([ CaseType(l, None) for l in labels ])
+    case OptionType(t)       : return VariantType([ CaseType("none", None), CaseType("some", t) ])
+    case ResultType(ok, err) : return VariantType([ CaseType("ok", ok), CaseType("error", err) ])
+    case _                   : return t
 
 ### Alignment
 
 def alignment(t):
   match despecialize(t):
-    case Bool()             : return 1
-    case S8() | U8()        : return 1
-    case S16() | U16()      : return 2
-    case S32() | U32()      : return 4
-    case S64() | U64()      : return 8
-    case F32()              : return 4
-    case F64()              : return 8
-    case Char()             : return 4
-    case String()           : return 4
-    case List(t, l)         : return alignment_list(t, l)
-    case Record(fields)     : return alignment_record(fields)
-    case Variant(cases)     : return alignment_variant(cases)
-    case Flags(labels)      : return alignment_flags(labels)
-    case Own(_) | Borrow(_) : return 4
+    case BoolType()            : return 1
+    case S8Type() | U8Type()   : return 1
+    case S16Type() | U16Type() : return 2
+    case S32Type() | U32Type() : return 4
+    case S64Type() | U64Type() : return 8
+    case F32Type()             : return 4
+    case F64Type()             : return 8
+    case CharType()            : return 4
+    case StringType()          : return 4
+    case ListType(t, l)        : return alignment_list(t, l)
+    case RecordType(fields)    : return alignment_record(fields)
+    case VariantType(cases)    : return alignment_variant(cases)
+    case FlagsType(labels)     : return alignment_flags(labels)
+    case OwnType()             : return 4
+    case BorrowType()          : return 4
 
 def alignment_list(elem_type, maybe_length):
   if maybe_length is not None:
@@ -581,10 +582,10 @@ def discriminant_type(cases):
   n = len(cases)
   assert(0 < n < (1 << 32))
   match math.ceil(math.log2(n)/8):
-    case 0: return U8()
-    case 1: return U8()
-    case 2: return U16()
-    case 3: return U32()
+    case 0: return U8Type()
+    case 1: return U8Type()
+    case 2: return U16Type()
+    case 3: return U32Type()
 
 def max_case_alignment(cases):
   a = 1
@@ -604,20 +605,21 @@ def alignment_flags(labels):
 
 def elem_size(t):
   match despecialize(t):
-    case Bool()             : return 1
-    case S8() | U8()        : return 1
-    case S16() | U16()      : return 2
-    case S32() | U32()      : return 4
-    case S64() | U64()      : return 8
-    case F32()              : return 4
-    case F64()              : return 8
-    case Char()             : return 4
-    case String()           : return 8
-    case List(t, l)         : return elem_size_list(t, l)
-    case Record(fields)     : return elem_size_record(fields)
-    case Variant(cases)     : return elem_size_variant(cases)
-    case Flags(labels)      : return elem_size_flags(labels)
-    case Own(_) | Borrow(_) : return 4
+    case BoolType()            : return 1
+    case S8Type() | U8Type()   : return 1
+    case S16Type() | U16Type() : return 2
+    case S32Type() | U32Type() : return 4
+    case S64Type() | U64Type() : return 8
+    case F32Type()             : return 4
+    case F64Type()             : return 8
+    case CharType()            : return 4
+    case StringType()          : return 8
+    case ListType(t, l)        : return elem_size_list(t, l)
+    case RecordType(fields)    : return elem_size_record(fields)
+    case VariantType(cases)    : return elem_size_variant(cases)
+    case FlagsType(labels)     : return elem_size_flags(labels)
+    case OwnType()             : return 4
+    case BorrowType()          : return 4
 
 def elem_size_list(elem_type, maybe_length):
   if maybe_length is not None:
@@ -658,25 +660,25 @@ def load(cx, ptr, t):
   assert(ptr == align_to(ptr, alignment(t)))
   assert(ptr + elem_size(t) <= len(cx.opts.memory))
   match despecialize(t):
-    case Bool()         : return convert_int_to_bool(load_int(cx, ptr, 1))
-    case U8()           : return load_int(cx, ptr, 1)
-    case U16()          : return load_int(cx, ptr, 2)
-    case U32()          : return load_int(cx, ptr, 4)
-    case U64()          : return load_int(cx, ptr, 8)
-    case S8()           : return load_int(cx, ptr, 1, signed=True)
-    case S16()          : return load_int(cx, ptr, 2, signed=True)
-    case S32()          : return load_int(cx, ptr, 4, signed=True)
-    case S64()          : return load_int(cx, ptr, 8, signed=True)
-    case F32()          : return decode_i32_as_float(load_int(cx, ptr, 4))
-    case F64()          : return decode_i64_as_float(load_int(cx, ptr, 8))
-    case Char()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
-    case String()       : return load_string(cx, ptr)
-    case List(t, l)     : return load_list(cx, ptr, t, l)
-    case Record(fields) : return load_record(cx, ptr, fields)
-    case Variant(cases) : return load_variant(cx, ptr, cases)
-    case Flags(labels)  : return load_flags(cx, ptr, labels)
-    case Own()          : return lift_own(cx, load_int(cx, ptr, 4), t)
-    case Borrow()       : return lift_borrow(cx, load_int(cx, ptr, 4), t)
+    case BoolType()         : return convert_int_to_bool(load_int(cx, ptr, 1))
+    case U8Type()           : return load_int(cx, ptr, 1)
+    case U16Type()          : return load_int(cx, ptr, 2)
+    case U32Type()          : return load_int(cx, ptr, 4)
+    case U64Type()          : return load_int(cx, ptr, 8)
+    case S8Type()           : return load_int(cx, ptr, 1, signed=True)
+    case S16Type()          : return load_int(cx, ptr, 2, signed=True)
+    case S32Type()          : return load_int(cx, ptr, 4, signed=True)
+    case S64Type()          : return load_int(cx, ptr, 8, signed=True)
+    case F32Type()          : return decode_i32_as_float(load_int(cx, ptr, 4))
+    case F64Type()          : return decode_i64_as_float(load_int(cx, ptr, 8))
+    case CharType()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
+    case StringType()       : return load_string(cx, ptr)
+    case ListType(t, l)     : return load_list(cx, ptr, t, l)
+    case RecordType(fields) : return load_record(cx, ptr, fields)
+    case VariantType(cases) : return load_variant(cx, ptr, cases)
+    case FlagsType(labels)  : return load_flags(cx, ptr, labels)
+    case OwnType()          : return lift_own(cx, load_int(cx, ptr, 4), t)
+    case BorrowType()       : return lift_borrow(cx, load_int(cx, ptr, 4), t)
 
 def load_int(cx, ptr, nbytes, signed = False):
   return int.from_bytes(cx.opts.memory[ptr : ptr+nbytes], 'little', signed=signed)
@@ -818,14 +820,14 @@ def unpack_flags_from_int(i, labels):
   return record
 
 def lift_own(cx, i, t):
-  h = cx.inst.handles.remove(t.rt, i)
+  h = cx.inst.resources.remove(t.rt, i)
   trap_if(h.lend_count != 0)
   trap_if(not h.own)
   return h.rep
 
 def lift_borrow(cx, i, t):
   assert(isinstance(cx, Subtask))
-  h = cx.inst.handles.get(t.rt, i)
+  h = cx.inst.resources.get(t.rt, i)
   if h.own:
     cx.add_lender(h)
   return h.rep
@@ -836,25 +838,25 @@ def store(cx, v, t, ptr):
   assert(ptr == align_to(ptr, alignment(t)))
   assert(ptr + elem_size(t) <= len(cx.opts.memory))
   match despecialize(t):
-    case Bool()         : store_int(cx, int(bool(v)), ptr, 1)
-    case U8()           : store_int(cx, v, ptr, 1)
-    case U16()          : store_int(cx, v, ptr, 2)
-    case U32()          : store_int(cx, v, ptr, 4)
-    case U64()          : store_int(cx, v, ptr, 8)
-    case S8()           : store_int(cx, v, ptr, 1, signed=True)
-    case S16()          : store_int(cx, v, ptr, 2, signed=True)
-    case S32()          : store_int(cx, v, ptr, 4, signed=True)
-    case S64()          : store_int(cx, v, ptr, 8, signed=True)
-    case F32()          : store_int(cx, encode_float_as_i32(v), ptr, 4)
-    case F64()          : store_int(cx, encode_float_as_i64(v), ptr, 8)
-    case Char()         : store_int(cx, char_to_i32(v), ptr, 4)
-    case String()       : store_string(cx, v, ptr)
-    case List(t, l)     : store_list(cx, v, ptr, t, l)
-    case Record(fields) : store_record(cx, v, ptr, fields)
-    case Variant(cases) : store_variant(cx, v, ptr, cases)
-    case Flags(labels)  : store_flags(cx, v, ptr, labels)
-    case Own()          : store_int(cx, lower_own(cx, v, t), ptr, 4)
-    case Borrow()       : store_int(cx, lower_borrow(cx, v, t), ptr, 4)
+    case BoolType()         : store_int(cx, int(bool(v)), ptr, 1)
+    case U8Type()           : store_int(cx, v, ptr, 1)
+    case U16Type()          : store_int(cx, v, ptr, 2)
+    case U32Type()          : store_int(cx, v, ptr, 4)
+    case U64Type()          : store_int(cx, v, ptr, 8)
+    case S8Type()           : store_int(cx, v, ptr, 1, signed=True)
+    case S16Type()          : store_int(cx, v, ptr, 2, signed=True)
+    case S32Type()          : store_int(cx, v, ptr, 4, signed=True)
+    case S64Type()          : store_int(cx, v, ptr, 8, signed=True)
+    case F32Type()          : store_int(cx, encode_float_as_i32(v), ptr, 4)
+    case F64Type()          : store_int(cx, encode_float_as_i64(v), ptr, 8)
+    case CharType()         : store_int(cx, char_to_i32(v), ptr, 4)
+    case StringType()       : store_string(cx, v, ptr)
+    case ListType(t, l)     : store_list(cx, v, ptr, t, l)
+    case RecordType(fields) : store_record(cx, v, ptr, fields)
+    case VariantType(cases) : store_variant(cx, v, ptr, cases)
+    case FlagsType(labels)  : store_flags(cx, v, ptr, labels)
+    case OwnType()          : store_int(cx, lower_own(cx, v, t), ptr, 4)
+    case BorrowType()       : store_int(cx, lower_borrow(cx, v, t), ptr, 4)
 
 def store_int(cx, v, ptr, nbytes, signed = False):
   cx.opts.memory[ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed=signed)
@@ -1106,16 +1108,16 @@ def pack_flags_into_int(v, labels):
   return i
 
 def lower_own(cx, rep, t):
-  h = HandleElem(rep, own=True)
-  return cx.inst.handles.add(t.rt, h)
+  h = ResourceHandle(rep, own=True)
+  return cx.inst.resources.add(t.rt, h)
 
 def lower_borrow(cx, rep, t):
   assert(isinstance(cx, Task))
   if cx.inst is t.rt.impl:
     return rep
-  h = HandleElem(rep, own=False, scope=cx)
+  h = ResourceHandle(rep, own=False, scope=cx)
   cx.create_borrow()
-  return cx.inst.handles.add(t.rt, h)
+  return cx.inst.resources.add(t.rt, h)
 
 ### Flattening
 
@@ -1154,19 +1156,20 @@ def flatten_types(ts):
 
 def flatten_type(t):
   match despecialize(t):
-    case Bool()               : return ['i32']
-    case U8() | U16() | U32() : return ['i32']
-    case S8() | S16() | S32() : return ['i32']
-    case S64() | U64()        : return ['i64']
-    case F32()                : return ['f32']
-    case F64()                : return ['f64']
-    case Char()               : return ['i32']
-    case String()             : return ['i32', 'i32']
-    case List(t, l)           : return flatten_list(t, l)
-    case Record(fields)       : return flatten_record(fields)
-    case Variant(cases)       : return flatten_variant(cases)
-    case Flags(labels)        : return ['i32']
-    case Own(_) | Borrow(_)   : return ['i32']
+    case BoolType()                       : return ['i32']
+    case U8Type() | U16Type() | U32Type() : return ['i32']
+    case S8Type() | S16Type() | S32Type() : return ['i32']
+    case S64Type() | U64Type()            : return ['i64']
+    case F32Type()                        : return ['f32']
+    case F64Type()                        : return ['f64']
+    case CharType()                       : return ['i32']
+    case StringType()                     : return ['i32', 'i32']
+    case ListType(t, l)                   : return flatten_list(t, l)
+    case RecordType(fields)               : return flatten_record(fields)
+    case VariantType(cases)               : return flatten_variant(cases)
+    case FlagsType(labels)                : return ['i32']
+    case OwnType()                        : return ['i32']
+    case BorrowType()                     : return ['i32']
 
 def flatten_list(elem_type, maybe_length):
   if maybe_length is not None:
@@ -1214,25 +1217,25 @@ class CoreValueIter:
 
 def lift_flat(cx, vi, t):
   match despecialize(t):
-    case Bool()         : return convert_int_to_bool(vi.next('i32'))
-    case U8()           : return lift_flat_unsigned(vi, 32, 8)
-    case U16()          : return lift_flat_unsigned(vi, 32, 16)
-    case U32()          : return lift_flat_unsigned(vi, 32, 32)
-    case U64()          : return lift_flat_unsigned(vi, 64, 64)
-    case S8()           : return lift_flat_signed(vi, 32, 8)
-    case S16()          : return lift_flat_signed(vi, 32, 16)
-    case S32()          : return lift_flat_signed(vi, 32, 32)
-    case S64()          : return lift_flat_signed(vi, 64, 64)
-    case F32()          : return canonicalize_nan32(vi.next('f32'))
-    case F64()          : return canonicalize_nan64(vi.next('f64'))
-    case Char()         : return convert_i32_to_char(cx, vi.next('i32'))
-    case String()       : return lift_flat_string(cx, vi)
-    case List(t, l)     : return lift_flat_list(cx, vi, t, l)
-    case Record(fields) : return lift_flat_record(cx, vi, fields)
-    case Variant(cases) : return lift_flat_variant(cx, vi, cases)
-    case Flags(labels)  : return lift_flat_flags(vi, labels)
-    case Own()          : return lift_own(cx, vi.next('i32'), t)
-    case Borrow()       : return lift_borrow(cx, vi.next('i32'), t)
+    case BoolType()         : return convert_int_to_bool(vi.next('i32'))
+    case U8Type()           : return lift_flat_unsigned(vi, 32, 8)
+    case U16Type()          : return lift_flat_unsigned(vi, 32, 16)
+    case U32Type()          : return lift_flat_unsigned(vi, 32, 32)
+    case U64Type()          : return lift_flat_unsigned(vi, 64, 64)
+    case S8Type()           : return lift_flat_signed(vi, 32, 8)
+    case S16Type()          : return lift_flat_signed(vi, 32, 16)
+    case S32Type()          : return lift_flat_signed(vi, 32, 32)
+    case S64Type()          : return lift_flat_signed(vi, 64, 64)
+    case F32Type()          : return canonicalize_nan32(vi.next('f32'))
+    case F64Type()          : return canonicalize_nan64(vi.next('f64'))
+    case CharType()         : return convert_i32_to_char(cx, vi.next('i32'))
+    case StringType()       : return lift_flat_string(cx, vi)
+    case ListType(t, l)     : return lift_flat_list(cx, vi, t, l)
+    case RecordType(fields) : return lift_flat_record(cx, vi, fields)
+    case VariantType(cases) : return lift_flat_variant(cx, vi, cases)
+    case FlagsType(labels)  : return lift_flat_flags(vi, labels)
+    case OwnType()          : return lift_own(cx, vi.next('i32'), t)
+    case BorrowType()       : return lift_borrow(cx, vi.next('i32'), t)
 
 def lift_flat_unsigned(vi, core_width, t_width):
   i = vi.next('i' + str(core_width))
@@ -1305,25 +1308,25 @@ def lift_flat_flags(vi, labels):
 
 def lower_flat(cx, v, t):
   match despecialize(t):
-    case Bool()         : return [int(v)]
-    case U8()           : return [v]
-    case U16()          : return [v]
-    case U32()          : return [v]
-    case U64()          : return [v]
-    case S8()           : return lower_flat_signed(v, 32)
-    case S16()          : return lower_flat_signed(v, 32)
-    case S32()          : return lower_flat_signed(v, 32)
-    case S64()          : return lower_flat_signed(v, 64)
-    case F32()          : return [maybe_scramble_nan32(v)]
-    case F64()          : return [maybe_scramble_nan64(v)]
-    case Char()         : return [char_to_i32(v)]
-    case String()       : return lower_flat_string(cx, v)
-    case List(t, l)     : return lower_flat_list(cx, v, t, l)
-    case Record(fields) : return lower_flat_record(cx, v, fields)
-    case Variant(cases) : return lower_flat_variant(cx, v, cases)
-    case Flags(labels)  : return lower_flat_flags(v, labels)
-    case Own()          : return [lower_own(cx, v, t)]
-    case Borrow()       : return [lower_borrow(cx, v, t)]
+    case BoolType()         : return [int(v)]
+    case U8Type()           : return [v]
+    case U16Type()          : return [v]
+    case U32Type()          : return [v]
+    case U64Type()          : return [v]
+    case S8Type()           : return lower_flat_signed(v, 32)
+    case S16Type()          : return lower_flat_signed(v, 32)
+    case S32Type()          : return lower_flat_signed(v, 32)
+    case S64Type()          : return lower_flat_signed(v, 64)
+    case F32Type()          : return [maybe_scramble_nan32(v)]
+    case F64Type()          : return [maybe_scramble_nan64(v)]
+    case CharType()         : return [char_to_i32(v)]
+    case StringType()       : return lower_flat_string(cx, v)
+    case ListType(t, l)     : return lower_flat_list(cx, v, t, l)
+    case RecordType(fields) : return lower_flat_record(cx, v, fields)
+    case VariantType(cases) : return lower_flat_variant(cx, v, cases)
+    case FlagsType(labels)  : return lower_flat_flags(v, labels)
+    case OwnType()          : return [lower_own(cx, v, t)]
+    case BorrowType()       : return [lower_borrow(cx, v, t)]
 
 def lower_flat_signed(i, core_bits):
   if i < 0:
@@ -1386,7 +1389,7 @@ def lift_flat_values(cx, max_flat, vi, ts):
 
 def lift_heap_values(cx, vi, ts):
   ptr = vi.next('i32')
-  tuple_type = Tuple(ts)
+  tuple_type = TupleType(ts)
   trap_if(ptr != align_to(ptr, alignment(tuple_type)))
   trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
   return list(load(cx, ptr, tuple_type).values())
@@ -1404,7 +1407,7 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
   return flat_vals
 
 def lower_heap_values(cx, vs, ts, out_param):
-  tuple_type = Tuple(ts)
+  tuple_type = TupleType(ts)
   tuple_value = {str(i): v for i,v in enumerate(vs)}
   if out_param is None:
     ptr = cx.opts.realloc(0, 0, alignment(tuple_type), elem_size(tuple_type))
@@ -1478,8 +1481,8 @@ def pack_async_result(i, state):
 
 async def canon_resource_new(rt, task, rep):
   trap_if(not task.inst.may_leave)
-  h = HandleElem(rep, own=True)
-  i = task.inst.handles.add(rt, h)
+  h = ResourceHandle(rep, own=True)
+  i = task.inst.resources.add(rt, h)
   return [i]
 
 ### `canon resource.drop`
@@ -1487,7 +1490,7 @@ async def canon_resource_new(rt, task, rep):
 async def canon_resource_drop(rt, sync, task, i):
   trap_if(not task.inst.may_leave)
   inst = task.inst
-  h = inst.handles.remove(rt, i)
+  h = inst.resources.remove(rt, i)
   flat_results = [] if sync else [0]
   if h.own:
     assert(h.scope is None)
@@ -1499,7 +1502,7 @@ async def canon_resource_drop(rt, sync, task, i):
       if rt.dtor:
         caller_opts = CanonicalOptions(sync = sync)
         callee_opts = CanonicalOptions(sync = rt.dtor_sync, callback = rt.dtor_callback)
-        ft = FuncType([U32()],[])
+        ft = FuncType([U32Type()],[])
         callee = partial(canon_lift, callee_opts, rt.impl, ft, rt.dtor)
         flat_results = await canon_lower(caller_opts, ft, callee, task, [h.rep, 0])
       else:
@@ -1511,7 +1514,7 @@ async def canon_resource_drop(rt, sync, task, i):
 ### `canon resource.rep`
 
 async def canon_resource_rep(rt, task, i):
-  h = task.inst.handles.get(rt, i)
+  h = task.inst.resources.get(rt, i)
   return [h.rep]
 
 ### 🔀 `canon task.backpressure`
@@ -1536,7 +1539,7 @@ async def canon_task_wait(task, ptr):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback is not None)
   event, payload = await task.wait()
-  store(task, payload, U32(), ptr)
+  store(task, payload, U32Type(), ptr)
   return [event]
 
 ### 🔀 `canon task.poll`
@@ -1546,7 +1549,7 @@ async def canon_task_poll(task, ptr):
   ret = task.poll()
   if ret is None:
     return [0]
-  store(task, ret, Tuple([U32(), U32()]), ptr)
+  store(task, ret, TupleType([U32Type(), U32Type()]), ptr)
   return [1]
 
 ### 🔀 `canon task.yield`

@@ -47,7 +47,7 @@ def mk_opts(memory = bytearray(), encoding = 'utf8', realloc = None, post_return
 def mk_cx(memory = bytearray(), encoding = 'utf8', realloc = None, post_return = None):
   opts = mk_opts(memory, encoding, realloc, post_return)
   inst = ComponentInstance()
-  return Task(opts, inst, None, None, lambda:(), lambda:())
+  return CallContext(opts, inst, None)
 
 def mk_str(s):
   return (s, 'utf8', len(s.encode('utf-8')))
@@ -101,37 +101,44 @@ def test(t, vals_to_lift, v,
     fail("{} re-lift expected {} but got {}".format(test_name(), lower_v, got))
 
 # Empty record types are not permitted yet.
-#test(Record([]), [], {})
-test(Record([Field('x',U8()), Field('y',U16()), Field('z',U32())]), [1,2,3], {'x':1,'y':2,'z':3})
-test(Tuple([Tuple([U8(),U8()]),U8()]), [1,2,3], {'0':{'0':1,'1':2},'1':3})
-test(List(U8(),3), [1,2,3], [1,2,3])
-test(List(List(U8(),2),3), [1,2,3,4,5,6], [[1,2],[3,4],[5,6]])
+#test(RecordType([]), [], {})
+test(RecordType([FieldType('x',U8Type()),
+                 FieldType('y',U16Type()),
+                 FieldType('z',U32Type())]),
+     [1,2,3],
+     {'x':1,'y':2,'z':3})
+test(TupleType([TupleType([U8Type(),U8Type()]),U8Type()]), [1,2,3], {'0':{'0':1,'1':2},'1':3})
+test(ListType(U8Type(),3), [1,2,3], [1,2,3])
+test(ListType(ListType(U8Type(),2),3), [1,2,3,4,5,6], [[1,2],[3,4],[5,6]])
 # Empty flags types are not permitted yet.
-#t = Flags([])
+#t = FlagsType([])
 #test(t, [], {})
-t = Flags(['a','b'])
+t = FlagsType(['a','b'])
 test(t, [0], {'a':False,'b':False})
 test(t, [2], {'a':False,'b':True})
 test(t, [3], {'a':True,'b':True})
 test(t, [4], {'a':False,'b':False})
-test(Flags([str(i) for i in range(32)]), [0xffffffff], { str(i):True for i in range(32) })
-t = Variant([Case('x',U8()),Case('y',F32()),Case('z',None)])
+test(FlagsType([str(i) for i in range(32)]), [0xffffffff], { str(i):True for i in range(32) })
+t = VariantType([CaseType('x',U8Type()),CaseType('y',F32Type()),CaseType('z',None)])
 test(t, [0,42], {'x': 42})
 test(t, [0,256], {'x': 0})
 test(t, [1,0x4048f5c3], {'y': 3.140000104904175})
 test(t, [2,0xffffffff], {'z': None})
-t = Option(F32())
+t = OptionType(F32Type())
 test(t, [0,3.14], {'none':None})
 test(t, [1,3.14], {'some':3.14})
-t = Result(U8(),U32())
+t = ResultType(U8Type(),U32Type())
 test(t, [0, 42], {'ok':42})
 test(t, [1, 1000], {'error':1000})
-t = Variant([Case('w',U8()), Case('x',U8(),'w'), Case('y',U8()), Case('z',U8(),'x')])
+t = VariantType([CaseType('w',U8Type()),
+                 CaseType('x',U8Type(),'w'),
+                 CaseType('y',U8Type()),
+                 CaseType('z',U8Type(),'x')])
 test(t, [0, 42], {'w':42})
 test(t, [1, 42], {'x|w':42})
 test(t, [2, 42], {'y':42})
 test(t, [3, 42], {'z|x|w':42})
-t2 = Variant([Case('w',U8())])
+t2 = VariantType([CaseType('w',U8Type())])
 test(t, [0, 42], {'w':42}, lower_t=t2, lower_v={'w':42})
 test(t, [1, 42], {'x|w':42}, lower_t=t2, lower_v={'w':42})
 test(t, [3, 42], {'z|x|w':42}, lower_t=t2, lower_v={'w':42})
@@ -140,34 +147,34 @@ def test_pairs(t, pairs):
   for arg,expect in pairs:
     test(t, [arg], expect)
 
-test_pairs(Bool(), [(0,False),(1,True),(2,True),(4294967295,True)])
-test_pairs(U8(), [(127,127),(128,128),(255,255),(256,0),
-                  (4294967295,255),(4294967168,128),(4294967167,127)])
-test_pairs(S8(), [(127,127),(128,-128),(255,-1),(256,0),
-                  (4294967295,-1),(4294967168,-128),(4294967167,127)])
-test_pairs(U16(), [(32767,32767),(32768,32768),(65535,65535),(65536,0),
-                   ((1<<32)-1,65535),((1<<32)-32768,32768),((1<<32)-32769,32767)])
-test_pairs(S16(), [(32767,32767),(32768,-32768),(65535,-1),(65536,0),
-                   ((1<<32)-1,-1),((1<<32)-32768,-32768),((1<<32)-32769,32767)])
-test_pairs(U32(), [((1<<31)-1,(1<<31)-1),(1<<31,1<<31),(((1<<32)-1),(1<<32)-1)])
-test_pairs(S32(), [((1<<31)-1,(1<<31)-1),(1<<31,-(1<<31)),((1<<32)-1,-1)])
-test_pairs(U64(), [((1<<63)-1,(1<<63)-1), (1<<63,1<<63), ((1<<64)-1,(1<<64)-1)])
-test_pairs(S64(), [((1<<63)-1,(1<<63)-1), (1<<63,-(1<<63)), ((1<<64)-1,-1)])
-test_pairs(F32(), [(3.14,3.14)])
-test_pairs(F64(), [(3.14,3.14)])
-test_pairs(Char(), [(0,'\x00'), (65,'A'), (0xD7FF,'\uD7FF'), (0xD800,None), (0xDFFF,None)])
-test_pairs(Char(), [(0xE000,'\uE000'), (0x10FFFF,'\U0010FFFF'), (0x110000,None), (0xFFFFFFFF,None)])
-test_pairs(Enum(['a','b']), [(0,{'a':None}), (1,{'b':None}), (2,None)])
+test_pairs(BoolType(), [(0,False),(1,True),(2,True),(4294967295,True)])
+test_pairs(U8Type(), [(127,127),(128,128),(255,255),(256,0),
+                      (4294967295,255),(4294967168,128),(4294967167,127)])
+test_pairs(S8Type(), [(127,127),(128,-128),(255,-1),(256,0),
+                      (4294967295,-1),(4294967168,-128),(4294967167,127)])
+test_pairs(U16Type(), [(32767,32767),(32768,32768),(65535,65535),(65536,0),
+                       ((1<<32)-1,65535),((1<<32)-32768,32768),((1<<32)-32769,32767)])
+test_pairs(S16Type(), [(32767,32767),(32768,-32768),(65535,-1),(65536,0),
+                       ((1<<32)-1,-1),((1<<32)-32768,-32768),((1<<32)-32769,32767)])
+test_pairs(U32Type(), [((1<<31)-1,(1<<31)-1),(1<<31,1<<31),(((1<<32)-1),(1<<32)-1)])
+test_pairs(S32Type(), [((1<<31)-1,(1<<31)-1),(1<<31,-(1<<31)),((1<<32)-1,-1)])
+test_pairs(U64Type(), [((1<<63)-1,(1<<63)-1), (1<<63,1<<63), ((1<<64)-1,(1<<64)-1)])
+test_pairs(S64Type(), [((1<<63)-1,(1<<63)-1), (1<<63,-(1<<63)), ((1<<64)-1,-1)])
+test_pairs(F32Type(), [(3.14,3.14)])
+test_pairs(F64Type(), [(3.14,3.14)])
+test_pairs(CharType(), [(0,'\x00'), (65,'A'), (0xD7FF,'\uD7FF'), (0xD800,None), (0xDFFF,None)])
+test_pairs(CharType(), [(0xE000,'\uE000'), (0x10FFFF,'\U0010FFFF'), (0x110000,None), (0xFFFFFFFF,None)])
+test_pairs(EnumType(['a','b']), [(0,{'a':None}), (1,{'b':None}), (2,None)])
 
 def test_nan32(inbits, outbits):
   origf = decode_i32_as_float(inbits)
-  f = lift_flat(mk_cx(), CoreValueIter([origf]), F32())
+  f = lift_flat(mk_cx(), CoreValueIter([origf]), F32Type())
   if definitions.DETERMINISTIC_PROFILE:
     assert(encode_float_as_i32(f) == outbits)
   else:
     assert(not math.isnan(origf) or math.isnan(f))
   cx = mk_cx(int.to_bytes(inbits, 4, 'little'))
-  f = load(cx, 0, F32())
+  f = load(cx, 0, F32Type())
   if definitions.DETERMINISTIC_PROFILE:
     assert(encode_float_as_i32(f) == outbits)
   else:
@@ -175,13 +182,13 @@ def test_nan32(inbits, outbits):
 
 def test_nan64(inbits, outbits):
   origf = decode_i64_as_float(inbits)
-  f = lift_flat(mk_cx(), CoreValueIter([origf]), F64())
+  f = lift_flat(mk_cx(), CoreValueIter([origf]), F64Type())
   if definitions.DETERMINISTIC_PROFILE:
     assert(encode_float_as_i64(f) == outbits)
   else:
     assert(not math.isnan(origf) or math.isnan(f))
   cx = mk_cx(int.to_bytes(inbits, 8, 'little'))
-  f = load(cx, 0, F64())
+  f = load(cx, 0, F64Type())
   if definitions.DETERMINISTIC_PROFILE:
     assert(encode_float_as_i64(f) == outbits)
   else:
@@ -207,7 +214,7 @@ def test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_uni
   heap.memory[:] = encoded[:]
   cx = mk_cx(heap.memory, src_encoding)
   v = (s, src_encoding, tagged_code_units)
-  test(String(), [0, tagged_code_units], v, cx, dst_encoding)
+  test(StringType(), [0, tagged_code_units], v, cx, dst_encoding)
 
 def test_string(src_encoding, dst_encoding, s):
   if src_encoding == 'utf8':
@@ -246,71 +253,84 @@ def test_heap(t, expect, args, byte_array):
   test(t, args, expect, cx)
 
 # Empty record types are not permitted yet.
-#test_heap(List(Record([])), [{},{},{}], [0,3], [])
-test_heap(List(Bool()), [True,False,True], [0,3], [1,0,1])
-test_heap(List(Bool()), [True,False,True], [0,3], [1,0,2])
-test_heap(List(Bool()), [True,False,True], [3,3], [0xff,0xff,0xff, 1,0,1])
-test_heap(List(U8()), [1,2,3], [0,3], [1,2,3])
-test_heap(List(U16()), [1,2,3], [0,3], [1,0, 2,0, 3,0 ])
-test_heap(List(U16()), None, [1,3], [0, 1,0, 2,0, 3,0 ])
-test_heap(List(U32()), [1,2,3], [0,3], [1,0,0,0, 2,0,0,0, 3,0,0,0])
-test_heap(List(U64()), [1,2], [0,2], [1,0,0,0,0,0,0,0, 2,0,0,0,0,0,0,0])
-test_heap(List(S8()), [-1,-2,-3], [0,3], [0xff,0xfe,0xfd])
-test_heap(List(S16()), [-1,-2,-3], [0,3], [0xff,0xff, 0xfe,0xff, 0xfd,0xff])
-test_heap(List(S32()), [-1,-2,-3], [0,3], [0xff,0xff,0xff,0xff, 0xfe,0xff,0xff,0xff, 0xfd,0xff,0xff,0xff])
-test_heap(List(S64()), [-1,-2], [0,2], [0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff, 0xfe,0xff,0xff,0xff,0xff,0xff,0xff,0xff])
-test_heap(List(Char()), ['A','B','c'], [0,3], [65,00,00,00, 66,00,00,00, 99,00,00,00])
-test_heap(List(String()), [mk_str("hi"),mk_str("wat")], [0,2],
+#test_heap(ListType(RecordType([])), [{},{},{}], [0,3], [])
+test_heap(ListType(BoolType()), [True,False,True], [0,3], [1,0,1])
+test_heap(ListType(BoolType()), [True,False,True], [0,3], [1,0,2])
+test_heap(ListType(BoolType()), [True,False,True], [3,3], [0xff,0xff,0xff, 1,0,1])
+test_heap(ListType(U8Type()), [1,2,3], [0,3], [1,2,3])
+test_heap(ListType(U16Type()), [1,2,3], [0,3], [1,0, 2,0, 3,0 ])
+test_heap(ListType(U16Type()), None, [1,3], [0, 1,0, 2,0, 3,0 ])
+test_heap(ListType(U32Type()), [1,2,3], [0,3], [1,0,0,0, 2,0,0,0, 3,0,0,0])
+test_heap(ListType(U64Type()), [1,2], [0,2], [1,0,0,0,0,0,0,0, 2,0,0,0,0,0,0,0])
+test_heap(ListType(S8Type()), [-1,-2,-3], [0,3], [0xff,0xfe,0xfd])
+test_heap(ListType(S16Type()), [-1,-2,-3], [0,3], [0xff,0xff,
+                                                   0xfe,0xff,
+                                                   0xfd,0xff])
+test_heap(ListType(S32Type()), [-1,-2,-3], [0,3], [0xff,0xff,0xff,0xff,
+                                                   0xfe,0xff,0xff,0xff,
+                                                   0xfd,0xff,0xff,0xff])
+test_heap(ListType(S64Type()), [-1,-2], [0,2], [0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+                                                0xfe,0xff,0xff,0xff,0xff,0xff,0xff,0xff])
+test_heap(ListType(CharType()), ['A','B','c'], [0,3], [65,00,00,00, 66,00,00,00, 99,00,00,00])
+test_heap(ListType(StringType()), [mk_str("hi"),mk_str("wat")], [0,2],
           [16,0,0,0, 2,0,0,0, 21,0,0,0, 3,0,0,0,
            ord('h'), ord('i'),   0xf,0xf,0xf,   ord('w'), ord('a'), ord('t')])
-test_heap(List(List(U8())), [[3,4,5],[],[6,7]], [0,3],
+test_heap(ListType(ListType(U8Type())), [[3,4,5],[],[6,7]], [0,3],
           [24,0,0,0, 3,0,0,0, 0,0,0,0, 0,0,0,0, 27,0,0,0, 2,0,0,0,
           3,4,5,  6,7])
-test_heap(List(List(U16())), [[5,6]], [0,1],
+test_heap(ListType(ListType(U16Type())), [[5,6]], [0,1],
           [8,0,0,0, 2,0,0,0,
           5,0, 6,0])
-test_heap(List(List(U16())), None, [0,1],
+test_heap(ListType(ListType(U16Type())), None, [0,1],
           [9,0,0,0, 2,0,0,0,
           0, 5,0, 6,0])
-test_heap(List(List(U8(),2)), [[1,2],[3,4]], [0,2],
+test_heap(ListType(ListType(U8Type(),2)), [[1,2],[3,4]], [0,2],
           [1,2, 3,4])
-test_heap(List(List(U32(),2)), [[1,2],[3,4]], [0,2],
+test_heap(ListType(ListType(U32Type(),2)), [[1,2],[3,4]], [0,2],
           [1,0,0,0,2,0,0,0, 3,0,0,0,4,0,0,0])
-test_heap(List(List(U32(),2)), None, [1,2],
+test_heap(ListType(ListType(U32Type(),2)), None, [1,2],
           [0, 1,0,0,0,2,0,0,0, 3,0,0,0,4,0,0,0])
-test_heap(List(Tuple([U8(),U8(),U16(),U32()])), [mk_tup(6,7,8,9),mk_tup(4,5,6,7)], [0,2],
+test_heap(ListType(TupleType([U8Type(),U8Type(),U16Type(),U32Type()])),
+          [mk_tup(6,7,8,9),mk_tup(4,5,6,7)],
+          [0,2],
           [6, 7, 8,0, 9,0,0,0,   4, 5, 6,0, 7,0,0,0])
-test_heap(List(Tuple([U8(),U16(),U8(),U32()])), [mk_tup(6,7,8,9),mk_tup(4,5,6,7)], [0,2],
+test_heap(ListType(TupleType([U8Type(),U16Type(),U8Type(),U32Type()])),
+          [mk_tup(6,7,8,9),mk_tup(4,5,6,7)],
+          [0,2],
           [6,0xff, 7,0, 8,0xff,0xff,0xff, 9,0,0,0,   4,0xff, 5,0, 6,0xff,0xff,0xff, 7,0,0,0])
-test_heap(List(Tuple([U16(),U8()])), [mk_tup(6,7),mk_tup(8,9)], [0,2],
+test_heap(ListType(TupleType([U16Type(),U8Type()])),
+          [mk_tup(6,7),mk_tup(8,9)],
+          [0,2],
           [6,0, 7, 0x0ff, 8,0, 9, 0xff])
-test_heap(List(Tuple([Tuple([U16(),U8()]),U8()])), [mk_tup([4,5],6),mk_tup([7,8],9)], [0,2],
+test_heap(ListType(TupleType([TupleType([U16Type(),U8Type()]),U8Type()])),
+          [mk_tup([4,5],6),mk_tup([7,8],9)],
+          [0,2],
           [4,0, 5,0xff, 6,0xff,  7,0, 8,0xff, 9,0xff])
 # Empty flags types are not permitted yet.
-#t = List(Flags([]))
+#t = ListType(FlagsType([]))
 #test_heap(t, [{},{},{}], [0,3],
 #          [])
-#t = List(Tuple([Flags([]), U8()]))
+#t = ListType(TupleType([FlagsType([]), U8Type()]))
 #test_heap(t, [mk_tup({}, 42), mk_tup({}, 43), mk_tup({}, 44)], [0,3],
 #          [42,43,44])
-t = List(Flags(['a','b']))
+t = ListType(FlagsType(['a','b']))
 test_heap(t, [{'a':False,'b':False},{'a':False,'b':True},{'a':True,'b':True}], [0,3],
           [0,2,3])
 test_heap(t, [{'a':False,'b':False},{'a':False,'b':True},{'a':False,'b':False}], [0,3],
           [0,2,4])
-t = List(Flags([str(i) for i in range(9)]))
+t = ListType(FlagsType([str(i) for i in range(9)]))
 v = [{ str(i):b for i in range(9) } for b in [True,False]]
 test_heap(t, v, [0,2],
           [0xff,0x1, 0,0])
 test_heap(t, v, [0,2],
           [0xff,0x3, 0,0])
-t = List(Flags([str(i) for i in range(17)]))
+t = ListType(FlagsType([str(i) for i in range(17)]))
 v = [{ str(i):b for i in range(17) } for b in [True,False]]
 test_heap(t, v, [0,2],
           [0xff,0xff,0x1,0, 0,0,0,0])
 test_heap(t, v, [0,2],
           [0xff,0xff,0x3,0, 0,0,0,0])
-t = List(Flags([str(i) for i in range(32)]))
+t = ListType(FlagsType([str(i) for i in range(32)]))
 v = [{ str(i):b for i in range(32) } for b in [True,False]]
 test_heap(t, v, [0,2],
           [0xff,0xff,0xff,0xff, 0,0,0,0])
@@ -332,14 +352,14 @@ def test_flatten(t, params, results):
   got = flatten_functype(CanonicalOptions(), t, 'lower')
   assert(got == expect)
 
-test_flatten(FuncType([U8(),F32(),F64()],[]), ['i32','f32','f64'], [])
-test_flatten(FuncType([U8(),F32(),F64()],[F32()]), ['i32','f32','f64'], ['f32'])
-test_flatten(FuncType([U8(),F32(),F64()],[U8()]), ['i32','f32','f64'], ['i32'])
-test_flatten(FuncType([U8(),F32(),F64()],[Tuple([F32()])]), ['i32','f32','f64'], ['f32'])
-test_flatten(FuncType([U8(),F32(),F64()],[Tuple([F32(),F32()])]), ['i32','f32','f64'], ['f32','f32'])
-test_flatten(FuncType([U8(),F32(),F64()],[F32(),F32()]), ['i32','f32','f64'], ['f32','f32'])
-test_flatten(FuncType([U8() for _ in range(17)],[]), ['i32' for _ in range(17)], [])
-test_flatten(FuncType([U8() for _ in range(17)],[Tuple([U8(),U8()])]), ['i32' for _ in range(17)], ['i32','i32'])
+test_flatten(FuncType([U8Type(),F32Type(),F64Type()],[]), ['i32','f32','f64'], [])
+test_flatten(FuncType([U8Type(),F32Type(),F64Type()],[F32Type()]), ['i32','f32','f64'], ['f32'])
+test_flatten(FuncType([U8Type(),F32Type(),F64Type()],[U8Type()]), ['i32','f32','f64'], ['i32'])
+test_flatten(FuncType([U8Type(),F32Type(),F64Type()],[TupleType([F32Type()])]), ['i32','f32','f64'], ['f32'])
+test_flatten(FuncType([U8Type(),F32Type(),F64Type()],[TupleType([F32Type(),F32Type()])]), ['i32','f32','f64'], ['f32','f32'])
+test_flatten(FuncType([U8Type(),F32Type(),F64Type()],[F32Type(),F32Type()]), ['i32','f32','f64'], ['f32','f32'])
+test_flatten(FuncType([U8Type() for _ in range(17)],[]), ['i32' for _ in range(17)], [])
+test_flatten(FuncType([U8Type() for _ in range(17)],[TupleType([U8Type(),U8Type()])]), ['i32' for _ in range(17)], ['i32','i32'])
 
 def test_roundtrip(t, v):
   before = definitions.MAX_FLAT_RESULTS
@@ -378,13 +398,16 @@ def test_roundtrip(t, v):
 
   definitions.MAX_FLAT_RESULTS = before
 
-test_roundtrip(S8(), -1)
-test_roundtrip(Tuple([U16(),U16()]), mk_tup(3,4))
-test_roundtrip(List(String()), [mk_str("hello there")])
-test_roundtrip(List(List(String())), [[mk_str("one"),mk_str("two")],[mk_str("three")]])
-test_roundtrip(List(Option(Tuple([String(),U16()]))), [{'some':mk_tup(mk_str("answer"),42)}])
-test_roundtrip(Variant([Case('x', Tuple([U32(),U32(),U32(),U32(), U32(),U32(),U32(),U32(),
-                                         U32(),U32(),U32(),U32(), U32(),U32(),U32(),U32(), String()]))]),
+test_roundtrip(S8Type(), -1)
+test_roundtrip(TupleType([U16Type(),U16Type()]), mk_tup(3,4))
+test_roundtrip(ListType(StringType()), [mk_str("hello there")])
+test_roundtrip(ListType(ListType(StringType())), [[mk_str("one"),mk_str("two")],[mk_str("three")]])
+test_roundtrip(ListType(OptionType(TupleType([StringType(),U16Type()]))), [{'some':mk_tup(mk_str("answer"),42)}])
+test_roundtrip(VariantType([CaseType('x', TupleType([U32Type(),U32Type(),U32Type(),U32Type(),
+                                                     U32Type(),U32Type(),U32Type(),U32Type(),
+                                                     U32Type(),U32Type(),U32Type(),U32Type(),
+                                                     U32Type(),U32Type(),U32Type(),U32Type(),
+                                                     StringType()]))]),
                {'x': mk_tup(1,2,3,4, 5,6,7,8, 9,10,11,12, 13,14,15,16, mk_str("wat"))})
 
 def test_handles():
@@ -413,8 +436,8 @@ def test_handles():
     nonlocal dtor_value
 
     assert(len(args) == 4)
-    assert(len(inst.handles.table(rt).array) == 4)
-    assert(inst.handles.table(rt).array[0] is None)
+    assert(len(inst.resources.table(rt).array) == 4)
+    assert(inst.resources.table(rt).array[0] is None)
     assert(args[0] == 1)
     assert(args[1] == 2)
     assert(args[2] == 3)
@@ -424,10 +447,10 @@ def test_handles():
     assert((await canon_resource_rep(rt, task, 3))[0] == 44)
 
     host_ft = FuncType([
-      Borrow(rt),
-      Borrow(rt)
+      BorrowType(rt),
+      BorrowType(rt)
     ],[
-      Own(rt)
+      OwnType(rt)
     ])
     args = [
       1,
@@ -441,34 +464,34 @@ def test_handles():
     dtor_value = None
     await canon_resource_drop(rt, True, task, 1)
     assert(dtor_value == 42)
-    assert(len(inst.handles.table(rt).array) == 5)
-    assert(inst.handles.table(rt).array[1] is None)
-    assert(len(inst.handles.table(rt).free) == 1)
+    assert(len(inst.resources.table(rt).array) == 5)
+    assert(inst.resources.table(rt).array[1] is None)
+    assert(len(inst.resources.table(rt).free) == 1)
 
     h = (await canon_resource_new(rt, task, 46))[0]
     assert(h == 1)
-    assert(len(inst.handles.table(rt).array) == 5)
-    assert(inst.handles.table(rt).array[1] is not None)
-    assert(len(inst.handles.table(rt).free) == 0)
+    assert(len(inst.resources.table(rt).array) == 5)
+    assert(inst.resources.table(rt).array[1] is not None)
+    assert(len(inst.resources.table(rt).free) == 0)
 
     dtor_value = None
     await canon_resource_drop(rt, True, task, 3)
     assert(dtor_value is None)
-    assert(len(inst.handles.table(rt).array) == 5)
-    assert(inst.handles.table(rt).array[3] is None)
-    assert(len(inst.handles.table(rt).free) == 1)
+    assert(len(inst.resources.table(rt).array) == 5)
+    assert(inst.resources.table(rt).array[3] is None)
+    assert(len(inst.resources.table(rt).free) == 1)
 
     return [1, 2, 4]
 
   ft = FuncType([
-    Own(rt),
-    Own(rt),
-    Borrow(rt),
-    Borrow(rt2)
+    OwnType(rt),
+    OwnType(rt),
+    BorrowType(rt),
+    BorrowType(rt2)
   ],[
-    Own(rt),
-    Own(rt),
-    Own(rt)
+    OwnType(rt),
+    OwnType(rt),
+    OwnType(rt)
   ])
 
   def on_start():
@@ -485,9 +508,9 @@ def test_handles():
   assert(got[0] == 46)
   assert(got[1] == 43)
   assert(got[2] == 45)
-  assert(len(inst.handles.table(rt).array) == 5)
-  assert(all(inst.handles.table(rt).array[i] is None for i in range(4)))
-  assert(len(inst.handles.table(rt).free) == 4)
+  assert(len(inst.resources.table(rt).array) == 5)
+  assert(all(inst.resources.table(rt).array[i] is None for i in range(4)))
+  assert(len(inst.resources.table(rt).free) == 4)
   definitions.MAX_FLAT_RESULTS = before
 
 test_handles()
@@ -499,7 +522,7 @@ async def test_async_to_async():
 
   producer_inst = ComponentInstance()
 
-  eager_ft = FuncType([], [U8()])
+  eager_ft = FuncType([], [U8Type()])
   async def core_eager_producer(task, args):
     assert(len(args) == 0)
     [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [43])
@@ -518,7 +541,7 @@ async def test_async_to_async():
   toggle_callee = partial(canon_lift, producer_opts, producer_inst, toggle_ft, core_toggle)
 
   fut2, fut3 = asyncio.Future(), asyncio.Future()
-  blocking_ft = FuncType([U8()], [U8()])
+  blocking_ft = FuncType([U8Type()], [U8Type()])
   async def core_blocking_producer(task, args):
     [x] = args
     assert(x == 83)
@@ -598,7 +621,7 @@ async def test_async_to_async():
     [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [42])
     return []
 
-  ft = FuncType([Bool()],[U8()])
+  ft = FuncType([BoolType()],[U8Type()])
 
   def on_start():
     return [ True ]
@@ -633,7 +656,7 @@ async def test_async_callback():
   core_producer2 = partial(core_producer_pre, fut2)
   producer2 = partial(canon_lift, producer_opts, producer_inst, producer_ft, core_producer2)
 
-  consumer_ft = FuncType([],[U32()])
+  consumer_ft = FuncType([],[U32Type()])
   async def consumer(task, args):
     assert(len(args) == 0)
 
@@ -711,7 +734,7 @@ async def test_async_to_sync():
   consumer_opts = mk_opts()
   consumer_opts.sync = False
 
-  consumer_ft = FuncType([],[U8()])
+  consumer_ft = FuncType([],[U8Type()])
   async def consumer(task, args):
     assert(len(args) == 0)
 
@@ -789,7 +812,7 @@ async def test_async_backpressure():
   consumer_opts = CanonicalOptions()
   consumer_opts.sync = False
 
-  consumer_ft = FuncType([],[U8()])
+  consumer_ft = FuncType([],[U8Type()])
   async def consumer(task, args):
     assert(len(args) == 0)
 
