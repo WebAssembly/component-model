@@ -7,7 +7,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from functools import partial
-from typing import Optional, Callable, Awaitable, Literal, MutableMapping, TypeVar, Generic
+from typing import Any, Optional, Callable, Awaitable, Literal, MutableMapping, TypeVar, Generic
 from enum import IntEnum
 import math
 import struct
@@ -304,7 +304,7 @@ class EventCode(IntEnum):
 
 EventTuple = tuple[EventCode, int]
 EventCallback = Callable[[], EventTuple]
-OnBlockCallback = Callable[[Awaitable], any]
+OnBlockCallback = Callable[[Awaitable], Any]
 
 current_task = asyncio.Lock()
 asyncio.run(current_task.acquire())
@@ -315,24 +315,26 @@ async def default_on_block(f):
   await current_task.acquire()
   return v
 
-async def call_and_handle_blocking(callee):
-  blocked = asyncio.Future()
+class Blocked: pass
+
+async def call_and_handle_blocking(callee, *args) -> Blocked|Any:
+  blocked_or_result = asyncio.Future[Blocked|Any]()
   async def on_block(f):
-    if not blocked.done():
-      blocked.set_result(True)
+    if not blocked_or_result.done():
+      blocked_or_result.set_result(Blocked())
     else:
       current_task.release()
     v = await f
     await current_task.acquire()
     return v
   async def do_call():
-    await callee(on_block)
-    if not blocked.done():
-      blocked.set_result(False)
+    result = await callee(*args, on_block)
+    if not blocked_or_result.done():
+      blocked_or_result.set_result(result)
     else:
       current_task.release()
   asyncio.create_task(do_call())
-  return await blocked
+  return await blocked_or_result
 
 class Task(CallContext):
   ft: FuncType
@@ -457,7 +459,7 @@ class Task(CallContext):
 class Subtask(CallContext):
   ft: FuncType
   flat_args: CoreValueIter
-  flat_results: Optional[list[any]]
+  flat_results: Optional[list[Any]]
   state: CallState
   lenders: list[ResourceHandle]
   notify_supertask: bool
@@ -1454,13 +1456,14 @@ async def canon_lower(opts, ft, callee, task, flat_args):
     async def do_call(on_block):
       await callee(task, subtask.on_start, subtask.on_return, on_block)
       [] = subtask.finish()
-    if await call_and_handle_blocking(do_call):
-      subtask.notify_supertask = True
-      task.need_to_drop += 1
-      i = task.inst.async_subtasks.add(subtask)
-      flat_results = [pack_async_result(i, subtask.state)]
-    else:
-      flat_results = [0]
+    match await call_and_handle_blocking(do_call):
+      case Blocked():
+        subtask.notify_supertask = True
+        task.need_to_drop += 1
+        i = task.inst.async_subtasks.add(subtask)
+        flat_results = [pack_async_result(i, subtask.state)]
+      case None:
+        flat_results = [0]
   return flat_results
 
 def pack_async_result(i, state):
