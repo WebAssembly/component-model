@@ -405,29 +405,25 @@ class Task(CallContext):
 
   async def wait(self) -> EventTuple:
     self.maybe_start_pending_task()
-    if not self.events:
+    while not (e := self.poll()):
       await self.wait_on(self.has_events.wait())
-    return self.next_event()
+    return e
 
-  def next_event(self) -> EventTuple:
-    assert(self.events)
-    if DETERMINISTIC_PROFILE:
-      i = 0
-    else:
-      i = random.randrange(len(self.events))
-    event = self.events.pop(i)
-    if not self.events:
-      self.has_events.clear()
-    return event()
+  def poll(self) -> Optional[EventTuple]:
+    if self.events:
+      if DETERMINISTIC_PROFILE:
+        i = 0
+      else:
+        i = random.randrange(len(self.events))
+      event = self.events.pop(i)
+      if not self.events:
+        self.has_events.clear()
+      return event()
+    return None
 
   def notify(self, event: EventCallback):
     self.events.append(event)
     self.has_events.set()
-
-  def poll(self) -> Optional[EventTuple]:
-    if self.events:
-      return self.next_event()
-    return None
 
   async def yield_(self):
     self.maybe_start_pending_task()

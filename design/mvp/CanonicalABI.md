@@ -512,30 +512,31 @@ export call and so there are no other tasks to worry about and thus `wait_on`
 *must not* wait for `interrupt` to be re-set (which won't happen until the
 current task finishes via `exit`, defined below).
 
-While a task is running, it may call `wait` (via `canon task.wait` or, when a
-`callback` is present, by returning to the event loop) to block until there is
-an event that will allow the `Task` to make progress. If there are no
-currently-pending events in the `events` list, `wait` blocks until the
-`has_events` `asyncio.Event` is set by `notify`. Once there is at least one
-event in the list, an event is popped non-deterministically to provide the
-runtime flexibility in event queueing and delivery.
+While a task is running, it may call `wait` or `poll` (via `canon` built-ins
+`task.wait`/`task.poll` or, when using a `callback`, by returning to the event
+loop) to learn about progress on async subtasks. `poll` returns either an event
+or `None` without ever blocking while `wait` blocks until there is an event.
+When there are multiple events ready to be delivered, the Python code selects a
+random event as a way to specify that the event delivery order is
+non-deterministic.
 ```python
   async def wait(self) -> EventTuple:
     self.maybe_start_pending_task()
-    if not self.events:
+    while not (e := self.poll()):
       await self.wait_on(self.has_events.wait())
-    return self.next_event()
+    return e
 
-  def next_event(self) -> EventTuple:
-    assert(self.events)
-    if DETERMINISTIC_PROFILE:
-      i = 0
-    else:
-      i = random.randrange(len(self.events))
-    event = self.events.pop(i)
-    if not self.events:
-      self.has_events.clear()
-    return event()
+  def poll(self) -> Optional[EventTuple]:
+    if self.events:
+      if DETERMINISTIC_PROFILE:
+        i = 0
+      else:
+        i = random.randrange(len(self.events))
+      event = self.events.pop(i)
+      if not self.events:
+        self.has_events.clear()
+      return event()
+    return None
 
   def notify(self, event: EventCallback):
     self.events.append(event)
@@ -552,15 +553,6 @@ Although this Python code represents events as a list of closures, an
 optimizing implementation should be able to avoid actually allocating these
 things and instead embed a linked list of "ready" events into the table
 elements associated with the events.
-
-In addition to `wait`, the current task can also use `poll` (via `canon task.poll`),
-to not block and not allow the runtime to switch to another task:
-```python
-  def poll(self) -> Optional[EventTuple]:
-    if self.events:
-      return self.next_event()
-    return None
-```
 
 Lastly, a task may cooperatively yield (via `canon task.yield`), allowing the
 runtime to switch execution to another task without having to wait for any
