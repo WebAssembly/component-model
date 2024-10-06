@@ -107,7 +107,6 @@ class CanonicalOptions:
   string_encoding: Optional[str] = None
   realloc: Optional[Callable] = None
   post_return: Optional[Callable] = None
-  sync_task_return: bool = False
   sync: bool = True # = !canonopt.async
   callback: Optional[Callable] = None
 ```
@@ -341,47 +340,50 @@ async def default_on_block(f):
   return v
 
 class Blocked: pass
+class Returned: pass
 
-async def call_and_handle_blocking(callee, *args) -> Blocked|Any:
-  blocked_or_result = asyncio.Future[Blocked|Any]()
+async def call_and_handle_blocking(callee, *args) -> Blocked|Returned:
+  ret = asyncio.Future[Blocked|Returned]()
   async def on_block(f):
-    if not blocked_or_result.done():
-      blocked_or_result.set_result(Blocked())
+    if not ret.done():
+      ret.set_result(Blocked())
     else:
       current_task.release()
     v = await f
     await current_task.acquire()
     return v
   async def do_call():
-    result = await callee(*args, on_block)
-    if not blocked_or_result.done():
-      blocked_or_result.set_result(result)
+    await callee(*args, on_block)
+    if not ret.done():
+      ret.set_result(Returned())
     else:
       current_task.release()
   asyncio.create_task(do_call())
-  return await blocked_or_result
+  return await ret
 ```
 Talking through this little Python pretzel of control flow:
 1. `call_and_handle_blocking` starts by running `do_call` in a fresh Python
-   task and then immediately `await`ing a future that will be resolved by
+   task and then immediately `await`ing `ret`, which will be resolved by
    `do_call`. Since `current_task` isn't `release()`d or `acquire()`d as part
    of this process, the net effect is to directly transfer control flow from
-   `call_and_handle_blocking` to `do_call` task without allowing other tasks to
-   run (as if by the `cont.new` + `resume` instructions of [stack-switching]).
+   `call_and_handle_blocking` to `do_call` task without allowing other tasks
+   to run (as if by the `cont.new` and `resume` instructions of
+   [stack-switching]).
 2. `do_call` passes the local `on_block` closure to `callee`, which the
    Canonical ABI ensures will be called whenever there is a need to block on
    I/O (represented by the future `f`).
 3. If `on_block` is called, the first time it is called it will signal that
-   the `callee` has `Blocked` before `await`ing the future. Because the
-   `current_task` lock is not `release()`d , control flow is transferred
-   directly from `on_block` to `call_and_handle_blocking` without allowing any
-   other tasks to execute (as if by the `suspend` instruction of
+   the `callee` has blocked by setting `ret` to `Blocked()` before `await`.
+   Because the `current_task` lock is not `release()`d , control flow is
+   transferred directly from `on_block` to `call_and_handle_blocking` without
+   allowing any other tasks to execute (as if by the `suspend` instruction of
    [stack-switching]).
 4. If `on_block` is called more than once, there is no longer a caller to
    directly switch to, so the `current_task` lock is `release()`d so that the
    Python async scheduler can pick another task to switch to.
-5. If `do_call` finishes without `on_block` ever having been called, it
-   resolves `blocking` to the (not-`Blocking`) return value of `callee`.
+5. If `callee` returns and `ret` hasn't been set, then `on_block` hasn't been
+   called and thus `callee` was never suspsended, so `ret` is set to
+   `Returned`.
 
 With these tricky primitives defined, the rest of the logic below can simply
 use `on_block` when there is a need to block and `call_and_handle_blocking`
@@ -573,7 +575,7 @@ more than once which must be checked by `return_` and `exit`.
 ```python
   def return_(self, flat_results):
     trap_if(not self.on_return)
-    if self.opts.sync and not self.opts.sync_task_return:
+    if self.opts.sync:
       maxflat = MAX_FLAT_RESULTS
     else:
       maxflat = MAX_FLAT_PARAMS
@@ -749,21 +751,20 @@ we start with the top-level case analysis:
 ```python
 def alignment(t):
   match despecialize(t):
-    case BoolType()            : return 1
-    case S8Type() | U8Type()   : return 1
-    case S16Type() | U16Type() : return 2
-    case S32Type() | U32Type() : return 4
-    case S64Type() | U64Type() : return 8
-    case F32Type()             : return 4
-    case F64Type()             : return 8
-    case CharType()            : return 4
-    case StringType()          : return 4
-    case ListType(t, l)        : return alignment_list(t, l)
-    case RecordType(fields)    : return alignment_record(fields)
-    case VariantType(cases)    : return alignment_variant(cases)
-    case FlagsType(labels)     : return alignment_flags(labels)
-    case OwnType()             : return 4
-    case BorrowType()          : return 4
+    case BoolType()                  : return 1
+    case S8Type() | U8Type()         : return 1
+    case S16Type() | U16Type()       : return 2
+    case S32Type() | U32Type()       : return 4
+    case S64Type() | U64Type()       : return 8
+    case F32Type()                   : return 4
+    case F64Type()                   : return 8
+    case CharType()                  : return 4
+    case StringType()                : return 4
+    case ListType(t, l)              : return alignment_list(t, l)
+    case RecordType(fields)          : return alignment_record(fields)
+    case VariantType(cases)          : return alignment_variant(cases)
+    case FlagsType(labels)           : return alignment_flags(labels)
+    case OwnType() | BorrowType()    : return 4
 ```
 
 List alignment is the same as tuple alignment when the length is fixed and
@@ -838,21 +839,20 @@ complications in source languages.
 ```python
 def elem_size(t):
   match despecialize(t):
-    case BoolType()            : return 1
-    case S8Type() | U8Type()   : return 1
-    case S16Type() | U16Type() : return 2
-    case S32Type() | U32Type() : return 4
-    case S64Type() | U64Type() : return 8
-    case F32Type()             : return 4
-    case F64Type()             : return 8
-    case CharType()            : return 4
-    case StringType()          : return 8
-    case ListType(t, l)        : return elem_size_list(t, l)
-    case RecordType(fields)    : return elem_size_record(fields)
-    case VariantType(cases)    : return elem_size_variant(cases)
-    case FlagsType(labels)     : return elem_size_flags(labels)
-    case OwnType()             : return 4
-    case BorrowType()          : return 4
+    case BoolType()                  : return 1
+    case S8Type() | U8Type()         : return 1
+    case S16Type() | U16Type()       : return 2
+    case S32Type() | U32Type()       : return 4
+    case S64Type() | U64Type()       : return 8
+    case F32Type()                   : return 4
+    case F64Type()                   : return 8
+    case CharType()                  : return 4
+    case StringType()                : return 8
+    case ListType(t, l)              : return elem_size_list(t, l)
+    case RecordType(fields)          : return elem_size_record(fields)
+    case VariantType(cases)          : return elem_size_variant(cases)
+    case FlagsType(labels)           : return elem_size_flags(labels)
+    case OwnType() | BorrowType()    : return 4
 
 def elem_size_list(elem_type, maybe_length):
   if maybe_length is not None:
@@ -1647,8 +1647,7 @@ def flatten_type(t):
     case RecordType(fields)               : return flatten_record(fields)
     case VariantType(cases)               : return flatten_variant(cases)
     case FlagsType(labels)                : return ['i32']
-    case OwnType()                        : return ['i32']
-    case BorrowType()                     : return ['i32']
+    case OwnType() | BorrowType()         : return ['i32']
 ```
 
 List flattening of a fixed-length list uses the same flattening as a tuple
@@ -2064,10 +2063,9 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_return, on_blo
   flat_args = await task.enter(on_start)
   if opts.sync:
     flat_results = await call_and_trap_on_throw(callee, task, flat_args)
-    if not opts.sync_task_return:
-      task.return_(flat_results)
-      if opts.post_return is not None:
-        [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
+    task.return_(flat_results)
+    if opts.post_return is not None:
+      [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
   else:
     if not opts.callback:
       [] = await call_and_trap_on_throw(callee, task, flat_args)
@@ -2084,10 +2082,6 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_return, on_blo
         [packed_ctx] = await call_and_trap_on_throw(opts.callback, task, [ctx, event, payload])
   task.exit()
 ```
-In the `sync` case, the `post-return` function is only called if
-`sync-task-return` is not set in the `canonopt`s. Later, `post-return` may be
-deprecated and removed, as `task.return` is more convenient and expressive.
-
 In the `async` case, there are two sub-cases depending on whether the
 `callback` `canonopt` was set. When `callback` is present, waiting happens in
 an "event loop" inside `canon_lift` which also allows yielding (i.e., allowing
@@ -2148,7 +2142,7 @@ async def canon_lower(opts, ft, callee, task, flat_args):
         task.need_to_drop += 1
         i = task.inst.async_subtasks.add(subtask)
         flat_results = [pack_async_result(i, subtask.state)]
-      case None:
+      case Returned():
         flat_results = [0]
   return flat_results
 ```
@@ -2323,7 +2317,7 @@ and pass the results to the caller:
 ```python
 async def canon_task_return(task, core_ft, flat_args):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.sync and not task.opts.sync_task_return)
+  trap_if(task.opts.sync)
   trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType(task.ft.results, []), 'lower'))
   task.return_(flat_args)
   return []

@@ -298,9 +298,8 @@ canonopt ::= 0x00                                                => string-encod
            | 0x03 m:<core:memidx>                                => (memory m)
            | 0x04 f:<core:funcidx>                               => (realloc f)
            | 0x05 f:<core:funcidx>                               => (post-return f)
-           | 0x06                                                => sync-task-return 🔀
-           | 0x07                                                => async 🔀
-           | 0x08 f:<core:funcidx>                               => (callback f) 🔀
+           | 0x06                                                => async 🔀
+           | 0x07 f:<core:funcidx>                               => (callback f) 🔀
 ```
 Notes:
 * The second `0x00` byte in `canon` stands for the `func` sort and thus the

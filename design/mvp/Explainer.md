@@ -1173,7 +1173,6 @@ canonopt ::= string-encoding=utf8
            | (memory <core:memidx>)
            | (realloc <core:funcidx>)
            | (post-return <core:funcidx>)
-           | sync-task-return 🔀
            | async 🔀
            | (callback <core:funcidx>) 🔀
 ```
@@ -1213,13 +1212,6 @@ after they have finished being read, allowing memory to be deallocated and
 destructors called. This immediate is always optional but, if present, is
 validated to have parameters matching the callee's return type and empty
 results.
-
-🔀 The `sync-task-return` option may only be present in `canon lift` when
-neither `post-return` nor `async` is not set and specifies that the lifted
-synchronous function will call `canon task.return` to return its results
-instead of returning them. This is a simpler alternative to `post-return` for
-freeing memory after lifting and thus `post-return` may be deprecated in the
-future.
 
 🔀 The `async` option specifies that the component wants to make (for imports)
 or support (for exports) multiple concurrent (asynchronous) calls. This option
@@ -1388,14 +1380,12 @@ This allows the component to exert [backpressure](Async.md#backpressure).
 
 The `task.return` built-in takes as parameters the result values of the
 currently-executing task. This built-in must be called exactly once per export
-activation. After calling `task.return`, the callee can continue executing for
-an arbitrary amount of time before returning to the caller, making `task.return`
-a more generalized version of `post-return`. The `canon task.return` definition
-takes the type index of a core function type and produces a core function with
-exactly that type. When called, the declared core function type is checked to
-match the lowered function type of a component-level function taking the result
-types of the current task. (See also [Returning](Async.md#returning) in the
-async explainer and [`canon_task_return`] in the Canonical ABI explainer.)
+activation. The `canon task.return` definition takes the type index of a core
+function type and produces a core function with exactly that type. When called,
+the declared core function type is checked to match the lowered function type
+of a component-level function taking the result types of the current task. (See
+also [Returning](Async.md#returning) in the async explainer and
+[`canon_task_return`] in the Canonical ABI explainer.)
 
 The `task.wait` built-in has type `[i32] -> [i32]`, returning an event and
 storing the 4-byte payload of the event at the address passed as parameter.
