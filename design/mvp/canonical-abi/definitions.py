@@ -215,6 +215,8 @@ class ComponentInstance:
     self.interruptible.set()
     self.pending_tasks = []
 
+#### Resource State
+
 class ResourceTables:
   rt_to_table: MutableMapping[ResourceType, Table[ResourceHandle]]
 
@@ -250,6 +252,8 @@ class Table(Generic[ElemT]):
   array: list[Optional[ElemT]]
   free: list[int]
 
+  MAX_LENGTH = 2**30 - 1
+
   def __init__(self):
     self.array = [None]
     self.free = []
@@ -266,7 +270,7 @@ class Table(Generic[ElemT]):
       self.array[i] = e
     else:
       i = len(self.array)
-      trap_if(i >= 2**30)
+      trap_if(i > Table.MAX_LENGTH)
       self.array.append(e)
     return i
 
@@ -287,6 +291,8 @@ class ResourceHandle:
     self.own = own
     self.scope = scope
     self.lend_count = 0
+
+#### Async State
 
 class CallState(IntEnum):
   STARTING = 0
@@ -1449,15 +1455,12 @@ async def canon_lower(opts, ft, callee, task, flat_args):
         subtask.notify_supertask = True
         task.need_to_drop += 1
         i = task.inst.async_subtasks.add(subtask)
-        flat_results = [pack_async_result(i, subtask.state)]
+        assert(0 < i <= Table.MAX_LENGTH < 2**30)
+        assert(0 <= int(subtask.state) < 2**2)
+        flat_results = [i | (int(subtask.state) << 30)]
       case Returned():
         flat_results = [0]
   return flat_results
-
-def pack_async_result(i, state):
-  assert(0 < i < 2**30)
-  assert(0 <= int(state) < 2**2)
-  return i | (int(state) << 30)
 
 ### `canon resource.new`
 

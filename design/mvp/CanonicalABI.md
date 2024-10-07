@@ -11,6 +11,8 @@ being specified here.
   * [Call Context](#call-context)
   * [Canonical ABI Options](#canonical-abi-options)
   * [Runtime State](#runtime-state)
+    * [Resource State](#resource-state)
+    * [Async State](#async-state)
   * [Despecialization](#despecialization)
   * [Alignment](#alignment)
   * [Element Size](#element-size)
@@ -142,6 +144,9 @@ class ComponentInstance:
     self.pending_tasks = []
 ```
 
+
+#### Resource State
+
 The `ResourceTables` stored in the `resources` field maps `ResourceType`s to
 `Table`s of `ResourceHandle`s (defined next), establishing a separate
 `i32`-indexed array per resource type:
@@ -199,6 +204,8 @@ class Table(Generic[ElemT]):
   array: list[Optional[ElemT]]
   free: list[int]
 
+  MAX_LENGTH = 2**30 - 1
+
   def __init__(self):
     self.array = [None]
     self.free = []
@@ -215,7 +222,7 @@ class Table(Generic[ElemT]):
       self.array[i] = e
     else:
       i = len(self.array)
-      trap_if(i >= 2**30)
+      trap_if(i > Table.MAX_LENGTH)
       self.array.append(e)
     return i
 
@@ -279,6 +286,9 @@ in a component to statically determine that a given resource type's handle
 table only contains `own` or `borrow` handles and then, based on this,
 statically eliminate the `own` and the `lend_count` xor `scope` fields,
 and guards thereof.
+
+
+#### Async State
 
 Additional runtime state is required to implement the canonical built-ins and
 check that callers and callees uphold their respective parts of the call
@@ -2134,32 +2144,28 @@ async def canon_lower(opts, ft, callee, task, flat_args):
         subtask.notify_supertask = True
         task.need_to_drop += 1
         i = task.inst.async_subtasks.add(subtask)
-        flat_results = [pack_async_result(i, subtask.state)]
+        assert(0 < i <= Table.MAX_LENGTH < 2**30)
+        assert(0 <= int(subtask.state) < 2**2)
+        flat_results = [i | (int(subtask.state) << 30)]
       case Returned():
         flat_results = [0]
   return flat_results
 ```
 In the asynchronous case, if `do_call` blocks before `Subtask.finish`
-(signalled by `callee` calling `on_block`), the `Subtask` is added to an
-instance-wide table and given an `i32` index that is later returned by
-`task.wait` to signal subtask's progress. The `need_to_drop` increment is
-matched by a decrement in `canon_subtask_drop` and ensures that all subtasks
-of a supertask are allowed to complete before the supertask completes. The
-`notify_supertask` flag is set to tell `Subtask` methods (below) to
-asynchronously notify the supertask of progress. Lastly, the current progress
-of the subtask is returned to the caller, packed with the `i32` subtask index:
-```python
-def pack_async_result(i, state):
-  assert(0 < i < 2**30)
-  assert(0 <= int(state) < 2**2)
-  return i | (int(state) << 30)
-```
-If the returned `state` is `CallState.STARTING`, the caller must keep the
-memory pointed by `flat_args` valid until `task.wait` indicates that subtask
-`i` has advanced to `STARTED`, `RETURNED` or `DONE`. Similarly, if the returned
-state is `STARTED`, the caller must keep the memory pointed to by the final
-`i32` parameter of `flat_args` valid until `task.wait` indicates that the
-subtask has advanced to `RETURNED` or `DONE`.
+(signalled by `callee` calling `on_block`), the `Subtask` is added to the
+current component instance's `async_subtasks` table, giving it an `i32` index
+that will be returned by `task.wait` to signal progress on this subtask. The
+`need_to_drop` increment is matched by a decrement in `canon_subtask_drop`
+and ensures that all subtasks of a supertask complete before the supertask
+completes. The `notify_supertask` flag is set to tell `Subtask` methods
+(below) to asynchronously notify the supertask of progress.
+
+Based on this, if the returned `subtask.state` is `STARTING`, the caller must
+keep the memory pointed by `flat_args` valid until `task.wait` indicates that
+subtask `i` has advanced to `STARTED`, `RETURNED` or `DONE`. Similarly, if
+the returned state is `STARTED`, the caller must keep the memory pointed to
+by the final `i32` parameter of `flat_args` valid until `task.wait` indicates
+that the subtask has advanced to `RETURNED` or `DONE`.
 
 The above definitions of sync/async `canon_lift`/`canon_lower` ensure that a
 sync-or-async `canon_lift` may call a sync-or-async `canon_lower`, with all
