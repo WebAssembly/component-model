@@ -518,9 +518,6 @@ While a task is running, it may call `wait` or `poll` (via `canon` built-ins
 `task.wait`/`task.poll` or, when using a `callback`, by returning to the event
 loop) to learn about progress on async subtasks. `poll` returns either an event
 or `None` without ever blocking while `wait` blocks until there is an event.
-When there are multiple events ready to be delivered, the Python code selects a
-random event as a way to specify that the event delivery order is
-non-deterministic.
 ```python
   async def wait(self) -> EventTuple:
     self.maybe_start_pending_task()
@@ -530,11 +527,7 @@ non-deterministic.
 
   def poll(self) -> Optional[EventTuple]:
     if self.events:
-      if DETERMINISTIC_PROFILE:
-        i = 0
-      else:
-        i = random.randrange(len(self.events))
-      event = self.events.pop(i)
+      event = self.events.pop(0)
       if not self.events:
         self.has_events.clear()
       return event()

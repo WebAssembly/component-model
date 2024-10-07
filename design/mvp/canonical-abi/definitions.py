@@ -411,11 +411,7 @@ class Task(CallContext):
 
   def poll(self) -> Optional[EventTuple]:
     if self.events:
-      if DETERMINISTIC_PROFILE:
-        i = 0
-      else:
-        i = random.randrange(len(self.events))
-      event = self.events.pop(i)
+      event = self.events.pop(0)
       if not self.events:
         self.has_events.clear()
       return event()
