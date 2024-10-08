@@ -132,6 +132,7 @@ class ComponentInstance:
   backpressure: bool
   interruptible: asyncio.Event
   pending_tasks: list[tuple[Task, asyncio.Future]]
+  starting_pending_task: bool
 
   def __init__(self):
     self.resources = ResourceTables()
@@ -142,6 +143,7 @@ class ComponentInstance:
     self.interruptible = asyncio.Event()
     self.interruptible.set()
     self.pending_tasks = []
+    self.starting_pending_task = False
 ```
 
 
@@ -469,7 +471,9 @@ that OOM the component before it can re-enable backpressure.
     if not self.may_enter(self) or self.inst.pending_tasks:
       f = asyncio.Future()
       self.inst.pending_tasks.append((self, f))
-      await self.wait_on(f)
+      await self.on_block(f)
+      assert(self.inst.starting_pending_task)
+      self.inst.starting_pending_task = False
     if self.opts.sync:
       assert(self.inst.interruptible.is_set())
       self.inst.interruptible.clear()
@@ -482,11 +486,12 @@ that OOM the component before it can re-enable backpressure.
            not self.inst.backpressure
 
   def maybe_start_pending_task(self):
-    if self.inst.pending_tasks:
-      pending_task, future = self.inst.pending_tasks[0]
+    if self.inst.pending_tasks and not self.inst.starting_pending_task:
+      pending_task, pending_future = self.inst.pending_tasks[0]
       if self.may_enter(pending_task):
         self.inst.pending_tasks.pop(0)
-        future.set_result(None)
+        self.inst.starting_pending_task = True
+        pending_future.set_result(None)
 ```
 The conditions in `may_enter` ensure two invariants:
 * While a synchronously-lifted export or synchronously-lowered import is being
@@ -494,7 +499,7 @@ The conditions in `may_enter` ensure two invariants:
 * While the wasm-controlled `backpressure` flag is set, no new tasks start
   execution.
 
-The `wait_on` method, called by `enter`, `wait` and `yield_`, blocks the
+The `wait_on` method, called by `wait` and `yield_` below, blocks the
 current task until the given future is resolved, allowing other tasks to make
 progress in the meantime. While blocked, another asynchronous task can make a
 synchronous import call via `call_sync`, in which case, to preserve
@@ -502,6 +507,7 @@ synchronicity, `wait_on` must wait until the synchronous import call is
 finished (signalled by `interrupt` being re-set).
 ```python
   async def wait_on(self, f):
+    self.maybe_start_pending_task()
     if self.inst.interruptible.is_set():
       v = await self.on_block(f)
       while not self.inst.interruptible.is_set():
@@ -526,10 +532,9 @@ current task finishes via `exit`, defined below).
 
 While a task is running, it may call `wait` (via `canon task.wait` or when
 using a `callback`, by returning to the event loop) to learn about progress
-made by async subtasks.
+made by async subtasks which are reported to this task by `notify`.
 ```python
   async def wait(self) -> EventTuple:
-    self.maybe_start_pending_task()
     await self.wait_on(self.has_events.wait())
     return self.next_event()
 
@@ -558,7 +563,6 @@ runtime to switch execution to another task without having to wait for any
 external I/O (as emulated in the Python code by awaiting `sleep(0)`:
 ```python
   async def yield_(self):
-    self.maybe_start_pending_task()
     await self.wait_on(asyncio.sleep(0))
 ```
 
@@ -606,6 +610,7 @@ something (like dropping a resource or subtask handle) before the task exits.
     assert(self.inst.num_tasks >= 1)
     trap_if(self.on_return)
     trap_if(self.need_to_drop != 0)
+    trap_if(self.inst.num_tasks == 1 and self.inst.backpressure)
     self.inst.num_tasks -= 1
     if self.opts.sync:
       assert(not self.inst.interruptible.is_set())

@@ -204,6 +204,7 @@ class ComponentInstance:
   backpressure: bool
   interruptible: asyncio.Event
   pending_tasks: list[tuple[Task, asyncio.Future]]
+  starting_pending_task: bool
 
   def __init__(self):
     self.resources = ResourceTables()
@@ -214,6 +215,7 @@ class ComponentInstance:
     self.interruptible = asyncio.Event()
     self.interruptible.set()
     self.pending_tasks = []
+    self.starting_pending_task = False
 
 #### Resource State
 
@@ -373,7 +375,9 @@ class Task(CallContext):
     if not self.may_enter(self) or self.inst.pending_tasks:
       f = asyncio.Future()
       self.inst.pending_tasks.append((self, f))
-      await self.wait_on(f)
+      await self.on_block(f)
+      assert(self.inst.starting_pending_task)
+      self.inst.starting_pending_task = False
     if self.opts.sync:
       assert(self.inst.interruptible.is_set())
       self.inst.interruptible.clear()
@@ -386,13 +390,15 @@ class Task(CallContext):
            not self.inst.backpressure
 
   def maybe_start_pending_task(self):
-    if self.inst.pending_tasks:
-      pending_task, future = self.inst.pending_tasks[0]
+    if self.inst.pending_tasks and not self.inst.starting_pending_task:
+      pending_task, pending_future = self.inst.pending_tasks[0]
       if self.may_enter(pending_task):
         self.inst.pending_tasks.pop(0)
-        future.set_result(None)
+        self.inst.starting_pending_task = True
+        pending_future.set_result(None)
 
   async def wait_on(self, f):
+    self.maybe_start_pending_task()
     if self.inst.interruptible.is_set():
       v = await self.on_block(f)
       while not self.inst.interruptible.is_set():
@@ -410,7 +416,6 @@ class Task(CallContext):
       await callee(*args, self.on_block)
 
   async def wait(self) -> EventTuple:
-    self.maybe_start_pending_task()
     await self.wait_on(self.has_events.wait())
     return self.next_event()
 
@@ -425,7 +430,6 @@ class Task(CallContext):
     self.has_events.set()
 
   async def yield_(self):
-    self.maybe_start_pending_task()
     await self.wait_on(asyncio.sleep(0))
 
   async def poll(self) -> Optional[EventTuple]:
@@ -451,6 +455,7 @@ class Task(CallContext):
     assert(self.inst.num_tasks >= 1)
     trap_if(self.on_return)
     trap_if(self.need_to_drop != 0)
+    trap_if(self.inst.num_tasks == 1 and self.inst.backpressure)
     self.inst.num_tasks -= 1
     if self.opts.sync:
       assert(not self.inst.interruptible.is_set())
