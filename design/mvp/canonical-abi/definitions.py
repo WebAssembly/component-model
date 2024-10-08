@@ -411,17 +411,14 @@ class Task(CallContext):
 
   async def wait(self) -> EventTuple:
     self.maybe_start_pending_task()
-    while not (e := self.poll()):
-      await self.wait_on(self.has_events.wait())
-    return e
+    await self.wait_on(self.has_events.wait())
+    return self.next_event()
 
-  def poll(self) -> Optional[EventTuple]:
-    if self.events:
-      event = self.events.pop(0)
-      if not self.events:
-        self.has_events.clear()
-      return event()
-    return None
+  def next_event(self) -> EventTuple:
+    event = self.events.pop(0)
+    if not self.events:
+      self.has_events.clear()
+    return event()
 
   def notify(self, event: EventCallback):
     self.events.append(event)
@@ -430,6 +427,12 @@ class Task(CallContext):
   async def yield_(self):
     self.maybe_start_pending_task()
     await self.wait_on(asyncio.sleep(0))
+
+  async def poll(self) -> Optional[EventTuple]:
+    await self.yield_()
+    if not self.events:
+      return None
+    return self.next_event()
 
   def return_(self, flat_results):
     trap_if(not self.on_return)

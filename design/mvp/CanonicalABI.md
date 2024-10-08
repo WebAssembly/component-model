@@ -524,48 +524,55 @@ export call and so there are no other tasks to worry about and thus `wait_on`
 *must not* wait for `interrupt` to be re-set (which won't happen until the
 current task finishes via `exit`, defined below).
 
-While a task is running, it may call `wait` or `poll` (via `canon` built-ins
-`task.wait`/`task.poll` or, when using a `callback`, by returning to the event
-loop) to learn about progress on async subtasks. `poll` returns either an event
-or `None` without ever blocking while `wait` blocks until there is an event.
+While a task is running, it may call `wait` (via `canon task.wait` or when
+using a `callback`, by returning to the event loop) to learn about progress
+made by async subtasks.
 ```python
   async def wait(self) -> EventTuple:
     self.maybe_start_pending_task()
-    while not (e := self.poll()):
-      await self.wait_on(self.has_events.wait())
-    return e
+    await self.wait_on(self.has_events.wait())
+    return self.next_event()
 
-  def poll(self) -> Optional[EventTuple]:
-    if self.events:
-      event = self.events.pop(0)
-      if not self.events:
-        self.has_events.clear()
-      return event()
-    return None
+  def next_event(self) -> EventTuple:
+    event = self.events.pop(0)
+    if not self.events:
+      self.has_events.clear()
+    return event()
 
   def notify(self, event: EventCallback):
     self.events.append(event)
     self.has_events.set()
 ```
 Note that events are represented as *first-class functions* that are called by
-`next_event` to produce the tuple of scalar values that are actually delivered
-to core wasm. This allows an event source to report the latest status when the
-event is handed to the core wasm code instead of the status when the event was
-first generated. This allows multiple redundant events to be collapsed into
-one, reducing overhead.
+`maybe_next_event` to produce the tuple of scalar values that are actually
+delivered to core wasm. This allows an event source to report the latest status
+when the event is handed to the core wasm code instead of the status when the
+event was first generated. This allows multiple redundant events to be
+collapsed into one, reducing overhead. Although this Python code represents
+events as a list of closures, an optimizing implementation should be able to
+avoid actually allocating these things and instead embed a linked list of
+"ready" events into the table elements associated with the events.
 
-Although this Python code represents events as a list of closures, an
-optimizing implementation should be able to avoid actually allocating these
-things and instead embed a linked list of "ready" events into the table
-elements associated with the events.
-
-Lastly, a task may cooperatively yield (via `canon task.yield`), allowing the
+A task may also cooperatively yield (via `canon task.yield`), allowing the
 runtime to switch execution to another task without having to wait for any
 external I/O (as emulated in the Python code by awaiting `sleep(0)`:
 ```python
   async def yield_(self):
     self.maybe_start_pending_task()
     await self.wait_on(asyncio.sleep(0))
+```
+
+Putting these together, a task may also poll (via `canon task.poll`) for an
+event that is ready without actually blocking if there is no such event.
+Importantly, `poll` starts by yielding execution (to avoid unintentionally
+starving other tasks) which means that the code calling `task.poll` must
+assume other tasks can execute, just like with `task.wait`.
+```python
+  async def poll(self) -> Optional[EventTuple]:
+    await self.yield_()
+    if not self.events:
+      return None
+    return self.next_event()
 ```
 
 The `return_` method is called by either `canon_task_return` or `canon_lift`

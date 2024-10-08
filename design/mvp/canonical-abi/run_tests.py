@@ -534,7 +534,7 @@ async def test_async_to_async():
   async def core_toggle(task, args):
     assert(len(args) == 0)
     [] = await canon_task_backpressure(task, [1])
-    await task.wait_on(fut1)
+    await task.on_block(fut1)
     [] = await canon_task_backpressure(task, [0])
     [] = await canon_task_return(task, CoreFuncType([],[]), [])
     return []
@@ -545,9 +545,9 @@ async def test_async_to_async():
   async def core_blocking_producer(task, args):
     [x] = args
     assert(x == 83)
-    await task.wait_on(fut2)
+    await task.on_block(fut2)
     [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [44])
-    await task.wait_on(fut3)
+    await task.on_block(fut3)
     return []
   blocking_callee = partial(canon_lift, producer_opts, producer_inst, blocking_ft, core_blocking_producer) 
 
@@ -594,7 +594,7 @@ async def test_async_to_async():
     async def dtor(task, args):
       nonlocal dtor_value
       assert(len(args) == 1)
-      await task.wait_on(dtor_fut)
+      await task.on_block(dtor_fut)
       dtor_value = args[0]
     rt = ResourceType(producer_inst, dtor)
 
@@ -638,7 +638,7 @@ async def test_async_callback():
 
   async def core_producer_pre(fut, task, args):
     assert(len(args) == 0)
-    await task.wait_on(fut)
+    await task.on_block(fut)
     await canon_task_return(task, CoreFuncType([],[]), [])
     return []
   fut1 = asyncio.Future()
@@ -708,7 +708,7 @@ async def test_async_to_sync():
   async def producer1_core(task, args):
     nonlocal producer1_done
     assert(len(args) == 0)
-    await task.wait_on(fut)
+    await task.on_block(fut)
     producer1_done = True
     return []
 
@@ -736,7 +736,7 @@ async def test_async_to_sync():
     [ret] = await canon_lower(consumer_opts, producer_ft, producer2, task, [0, 0])
     assert(ret == (2 | (CallState.STARTING << 30)))
 
-    assert(task.poll() is None)
+    assert(await task.poll() is None)
 
     fut.set_result(None)
     assert(producer1_done == False)
@@ -749,13 +749,13 @@ async def test_async_to_sync():
     assert(producer2_done == False)
     await canon_task_yield(task)
     assert(producer2_done == True)
-    event, callidx = task.poll()
+    event, callidx = await task.poll()
     assert(event == EventCode.CALL_DONE)
     assert(callidx == 2)
     await canon_subtask_drop(task, callidx)
     assert(producer2_done == True)
 
-    assert(task.poll() is None)
+    assert(await task.poll() is None)
 
     await canon_task_return(task, CoreFuncType(['i32'],[]), [83])
     return []
@@ -785,7 +785,7 @@ async def test_async_backpressure():
     nonlocal producer1_done
     await canon_task_return(task, CoreFuncType([],[]), [])
     await canon_task_backpressure(task, [1])
-    await task.wait_on(fut)
+    await task.on_block(fut)
     await canon_task_backpressure(task, [0])
     producer1_done = True
     return []
@@ -814,7 +814,7 @@ async def test_async_backpressure():
     [ret] = await canon_lower(consumer_opts, producer_ft, producer2, task, [0, 0])
     assert(ret == (2 | (CallState.STARTING << 30)))
 
-    assert(task.poll() is None)
+    assert(await task.poll() is None)
 
     fut.set_result(None)
     assert(producer1_done == False)
@@ -824,7 +824,7 @@ async def test_async_backpressure():
     assert(callidx == 1)
     assert(producer1_done == True)
     assert(producer2_done == True)
-    event, callidx = task.poll()
+    event, callidx = await task.poll()
     assert(event == EventCode.CALL_DONE)
     assert(callidx == 2)
     assert(producer2_done == True)
@@ -832,7 +832,7 @@ async def test_async_backpressure():
     await canon_subtask_drop(task, 1)
     await canon_subtask_drop(task, 2)
 
-    assert(task.poll() is None)
+    assert(await task.poll() is None)
 
     await canon_task_return(task, CoreFuncType(['i32'],[]), [84])
     return []
@@ -858,7 +858,7 @@ async def test_sync_using_wait():
   ft = FuncType([], [])
 
   async def core_hostcall_pre(fut, task, args):
-    await task.wait_on(fut)
+    await task.on_block(fut)
     [] = await canon_task_return(task, CoreFuncType([],[]), [])
     return []
   fut1 = asyncio.Future()
