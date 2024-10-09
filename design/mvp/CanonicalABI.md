@@ -2385,13 +2385,14 @@ if there was an event, storing the `i32` event+payload pair as an outparam.
 ```python
 async def canon_task_poll(task, ptr):
   trap_if(not task.inst.may_leave)
-  ret = task.poll()
+  ret = await task.poll()
   if ret is None:
     return [0]
   store(task, ret, TupleType([U32Type(), U32Type()]), ptr)
   return [1]
 ```
-Note that there is no `await` of `poll` and thus no possible task switching.
+Note that the `await` of `task.poll` indicates that `task.poll` can yield to
+other tasks (in this or other components) as part of polling for an event.
 
 ### 🔀 `canon task.yield`
 

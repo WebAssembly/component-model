@@ -1541,7 +1541,7 @@ async def canon_task_wait(task, ptr):
 
 async def canon_task_poll(task, ptr):
   trap_if(not task.inst.may_leave)
-  ret = task.poll()
+  ret = await task.poll()
   if ret is None:
     return [0]
   store(task, ret, TupleType([U32Type(), U32Type()]), ptr)
