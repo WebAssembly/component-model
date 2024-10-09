@@ -171,7 +171,7 @@ class OwnType(ValType):
 class BorrowType(ValType):
   rt: ResourceType
 
-### CallContext
+### Call Context
 
 class CallContext:
   opts: CanonicalOptions
@@ -311,7 +311,7 @@ class EventCode(IntEnum):
 
 EventTuple = tuple[EventCode, int]
 EventCallback = Callable[[], EventTuple]
-OnBlockCallback = Callable[[Awaitable], Any]
+OnBlockCallback = Callable[[Awaitable], Awaitable]
 
 current_task = asyncio.Lock()
 asyncio.run(current_task.acquire())

@@ -315,7 +315,7 @@ class EventCode(IntEnum):
 
 EventTuple = tuple[EventCode, int]
 EventCallback = Callable[[], EventTuple]
-OnBlockCallback = Callable[[Awaitable], Any]
+OnBlockCallback = Callable[[Awaitable], Awaitable]
 ```
 The `CallState` enum describes the linear sequence of states that an async call
 necessarily transitions through: [`STARTING`](Async.md#backpressure), `STARTED`,
