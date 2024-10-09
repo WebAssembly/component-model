@@ -825,6 +825,8 @@ def lift_borrow(cx, i, t):
   h = cx.inst.resources.get(t.rt, i)
   if h.own:
     cx.add_lender(h)
+  else:
+    trap_if(cx.task is not h.scope)
   return h.rep
 
 ### Storing

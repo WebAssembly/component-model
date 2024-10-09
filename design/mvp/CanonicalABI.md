@@ -1157,15 +1157,16 @@ def lift_borrow(cx, i, t):
   h = cx.inst.resources.get(t.rt, i)
   if h.own:
     cx.add_lender(h)
+  else:
+    trap_if(cx.task is not h.scope)
   return h.rep
 ```
 The `add_lender` call to `CallContext` participates in the enforcement of the
-dynamic borrow rules, which keep the source `own` handle alive until the end
-of the call (as an intentionally-conservative upper bound on how long the
-`borrow` handle can be held). This tracking is only required when `h` is an
-`own` handle because, when `h` is a `borrow` handle, this tracking has already
-happened (when the originating `own` handle was lifted) for a strictly longer
-call scope than the current call.
+dynamic borrow rules, which keep the source `own` handle alive until the end of
+the call (as an intentionally-conservative upper bound on how long the `borrow`
+handle can be held). When `h` is a `borrow` handle, we just need to make sure
+that the callee task has a shorter liftime than the current task, which is only
+guaranteed if the callee is a subtask of the current task.
 
 
 ### Storing
