@@ -16,6 +16,7 @@ more user-focused explanation, take a look at the
       * [Numeric types](#numeric-types)
       * [Container types](#container-types)
       * [Handle types](#handle-types)
+      * [Asynchronous value types](#asynchronous-value-types)
     * [Specialized value types](#specialized-value-types)
     * [Definition types](#definition-types)
     * [Declarators](#declarators)
@@ -551,6 +552,8 @@ defvaltype    ::= bool
                 | (result <valtype>? (error <valtype>)?)
                 | (own <typeidx>)
                 | (borrow <typeidx>)
+                | (stream <typeidx>)
+                | (future <typeidx>)
 valtype       ::= <typeidx>
                 | <defvaltype>
 resourcetype  ::= (resource (rep i32) (dtor async? <funcidx> (callback <funcidx>)?)?)
@@ -601,6 +604,8 @@ sets of abstract values:
 | `list`                    | homogeneous, variable- or fixed-length [sequences] of values |
 | `own`                     | a unique, opaque address of a resource that will be destroyed when this value is dropped |
 | `borrow`                  | an opaque address of a resource that must be dropped before the current export call returns |
+| `stream`                  | an asynchronously-passed list of homogeneous values |
+| `future`                  | an asynchronously-passed single value |
 
 How these abstract values are produced and consumed from Core WebAssembly
 values and linear memory is configured by the component via *canonical lifting
@@ -655,6 +660,47 @@ by the Component Model through these canonical definitions. The `typeidx`
 immediate of a handle type must refer to a `resource` type (described below)
 that statically classifies the particular kinds of resources the handle can
 point to.
+
+##### Asynchronous value types
+
+The `stream` and `future` value types are both *asynchronous value types* that
+are used to deliver values incrementally over the course of a single async
+function call, instead of copying the values all-at-once as with other
+(synchronous) value types like `list`. The mechanism for performing these
+incremental copies avoids the need for intermediate buffering inside the
+`stream` or `future` value itself and instead uses buffers of memory whose
+size and allocation is controlled by the core wasm in the source and
+destination components. Thus, in the abstract, `stream` and `future` can be
+thought of as inter-component control-flow or synchronization mechanisms.
+
+Just like with handles, in the Component Model, async value types are
+lifted-from and lowered-into `i32` values that index an encapsulated
+per-component-instance table that is maintained by the canonical ABI built-ins
+[below](#canonical-definitions). The Component-Model-defined ABI for creating,
+writing-to and reading-from `stream` and `future` values is meant to be bound
+to analogous source-language features like promises, futures, streams,
+iterators, generators and channels so that developers can use these familiar
+high-level concepts when working directly with component types, without the
+need to manually write low-level async glue code. For languages like C without
+language-level concurrency support, these ABIs (described in detail in the
+[Canonical ABI explainer]) can be exposed directly as function imports and used
+like normal low-level Operation System I/O APIs.
+
+A `stream<T>` asynchronously passes zero or more `T` values in one direction
+between a source and destination, batched in chunks for efficiency. Streams
+are useful for:
+* improving latency by incrementally processing values as they arrive;
+* delivering potentially-large lists of values that might OOM wasm if passed
+  as a `list<T>`;
+* long-running or infinite streams of events.
+
+A `future` is a special case of `stream` and (in non-error scenarios) delivers
+exactly one value before being automatically closed. Because all imports can
+be [called asynchronously](Async.md), futures are not necessary to express a
+traditional `async` function -- all functions are effectively `async`. Instead
+futures are useful in more advanced scenarios where a parameter or result
+value may not be ready at the same time as the other synchronous parameters or
+results.
 
 #### Specialized value types
 
@@ -1175,6 +1221,7 @@ canonopt ::= string-encoding=utf8
            | (post-return <core:funcidx>)
            | async 🔀
            | (callback <core:funcidx>) 🔀
+           | always-task-return 🔀
 ```
 While the production `externdesc` accepts any `sort`, the validation rules
 for `canon lift` would only allow the `func` sort. In the future, other sorts
@@ -1217,7 +1264,9 @@ results.
 or support (for exports) multiple concurrent (asynchronous) calls. This option
 can be applied to any component-level function type and changes the derived
 Canonical ABI significantly. See the [async explainer](Async.md) for more
-details.
+details. When a function signature contains a `future` or `stream`, validation
+requires the `async` option to be set (since a synchronous call to a function
+using these types is highly likely to deadlock).
 
 🔀 The `(callback ...)` option may only be present in `canon lift` when the
 `async` option has also been set and specifies a core function that is
@@ -1229,6 +1278,13 @@ validated to have the following core function type:
       (result $done i32))
 ```
 Again, see the [async explainer](Async.md) for more details.
+
+🔀 The `always-task-return` option may only be present in `canon lift` when
+`post-return` is not set and specifies that even synchronously-lifted functions
+will call `canon task.return` to return their results instead of returning
+them as core function results. This is a simpler alternative to `post-return`
+for freeing memory after lifting and thus `post-return` may be deprecated in
+the future.
 
 Based on this description of the AST, the [Canonical ABI explainer] gives a
 detailed walkthrough of the static and dynamic semantics of `lift` and `lower`.
@@ -1316,7 +1372,17 @@ canon ::= ...
         | (canon task.wait (memory <core:memidx>) (core func <id>?)) 🔀
         | (canon task.poll (memory <core:memidx>) (core func <id>?)) 🔀
         | (canon task.yield (core func <id>?)) 🔀
-        | (canon subtask.drop (core func <id>?)) 🔀
+        | (canon stream.new <typeidx> (core func <id>?)) 🔀
+        | (canon stream.read (core func <id>?)) 🔀
+        | (canon stream.write (core func <id>?)) 🔀
+        | (canon stream.cancel-read async? (core func <id>?)) 🔀
+        | (canon stream.cancel-write async? (core func <id>?)) 🔀
+        | (canon future.new <typeidx> (core func <id>?)) 🔀
+        | (canon future.read (core func <id>?)) 🔀
+        | (canon future.write (core func <id>?)) 🔀
+        | (canon future.cancel-read async? (core func <id>?)) 🔀
+        | (canon future.cancel-write async? (core func <id>?)) 🔀
+        | (canon waitable.drop (core func <id>?)) 🔀
         | (canon thread.spawn <typeidx> (core func <id>?)) 🧵
         | (canon thread.hw_concurrency (core func <id>?)) 🧵
 ```
@@ -1404,9 +1470,40 @@ switch to another task, allowing a long-running computation to cooperatively
 interleave with other tasks. (See also [`canon_task_yield`] in the Canonical
 ABI explainer.)
 
-The `subtask.drop` built-in has type `[i32] -> []` and removes the indicated
-[subtask](Async.md#subtask-and-supertask) from the current instance's subtask
-table, trapping if the subtask isn't done.
+The `{stream,future}.new` built-ins have type `[] -> [i32]` and return a new
+[writable end](Async.md#streams-and-futures) of a stream or future. (See
+[`canon_stream_new`] in the Canonical ABI explainer for details.)
+
+The `stream.{read,write]` built-ins have type `[i32 i32 i32] -> [i32]` and
+take an index to the matching [readable or writable end](Async.md#streams-and-futures)
+of a stream as the first parameter, a pointer to linear memory buffer as the
+second parameter and the number of elements worth of available space in the
+buffer. The return value is either the non-zero number of elements that have
+been eagerly read or else a sentinel "`BLOCKED`" value. (See
+[`canon_stream_read`] in the Canonical ABI explainer for details.)
+
+The `future.{read,write}` built-ins have type `[i32 i32] -> [i32]` and
+take an index to the matching [readable or writable end](Async.md#streams-and-futures)
+of a future as the first parameter and a pointer linear memory as the second
+parameter. The return value is either `1` if the future value was eagerly
+read or written to the pointer or the sentinel "`BLOCKED`" value otherwise.
+(See [`canon_future_read`] in the Canonical ABI explainer for details.)
+
+The `{stream,future}.cancel-{read,write}` built-ins have type `[i32] -> [i32]`
+and take an index to the matching [readable or writable end](Async.md#streams-and-futures)
+of a stream or future that has an outstanding "`BLOCKED`" read or write. If
+cancellation finished eagerly, the return value is the number of elements read
+or written into the given buffer (`0` or `1` for a `future`). If cancellation
+blocks, the return value is the sentinel "`BLOCKED`" value and the caller must
+`task.wait` for a `{STREAM,FUTURE}_{READ,WRITE}` event to indicate the
+completion of the `read` or `write`. (See [`canon_stream_cancel_read`] in the
+Canonical ABI explainer for details.)
+
+The `waitable.drop` built-in has type `[i32] -> []` and removes the indicated
+[subtask](Async.md#subtask-and-supertask) or [stream or future](Async.md#streams-and-futures)
+from the current instance's [waitables](Async.md#waiting) table, trapping if
+the subtask isn't done or the stream or future is in the middle of reading
+or writing.
 
 ##### 🧵 Threading built-ins
 
@@ -2237,6 +2334,10 @@ For some use-case-focused, worked examples, see:
 [`canon_task_wait`]: CanonicalABI.md#-canon-taskwait
 [`canon_task_poll`]: CanonicalABI.md#-canon-taskpoll
 [`canon_task_yield`]: CanonicalABI.md#-canon-taskyield
+[`canon_stream_new`]: CanonicalABI.md#-canon-streamfuturenew
+[`canon_stream_read`]: CanonicalABI.md#-canon-streamfuturereadwrite
+[`canon_future_read`]: CanonicalABI.md#-canon-streamfuturereadwrite
+[`canon_stream_cancel_read`]: CanonicalABI.md#-canon-streamfuturecancel-readwrite
 [Shared-Nothing]: ../high-level/Choices.md
 [Use Cases]: ../high-level/UseCases.md
 [Host Embeddings]: ../high-level/UseCases.md#hosts-embedding-components
