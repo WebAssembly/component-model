@@ -12,8 +12,10 @@ being specified here.
   * [Canonical ABI Options](#canonical-abi-options)
   * [Runtime State](#runtime-state)
     * [Resource State](#resource-state)
-    * [Async State](#async-state)
+    * [Task State](#task-state)
+    * [Buffer, Stream and Future State](#buffer-stream-and-future-state)
   * [Despecialization](#despecialization)
+  * [Type Predicates](#type-predicates)
   * [Alignment](#alignment)
   * [Element Size](#element-size)
   * [Loading](#loading)
@@ -33,6 +35,10 @@ being specified here.
   * [`canon task.wait`](#-canon-taskwait) 🔀
   * [`canon task.poll`](#-canon-taskpoll) 🔀
   * [`canon task.yield`](#-canon-taskyield) 🔀
+  * [`canon {stream,future}.new`](#-canon-streamfuturenew) 🔀
+  * [`canon {stream,future}.{read,write}`](#-canon-streamfuturereadwrite) 🔀
+  * [`canon {stream,future}.cancel-{read,write}`](#-canon-streamfuturecancel-readwrite) 🔀
+  * [`canon waitable.drop`](#-canon-waitabledrop) 🔀
 
 
 ## Supporting definitions
@@ -75,27 +81,37 @@ function's declared return type.
 
 ### Call Context
 
-The subsequent definitions depend on three kinds of ambient information:
-* static ABI options supplied via [`canonopt`]
-* dynamic state in the containing component instance
-* dynamic state in the [current task]
+Most Canonical ABI definitions depend on some ambient information which is
+established by the `canon lift`- or `canon lower`-defined function that is
+being called:
+* the ABI options supplied via [`canonopt`]
+* the containing component instance
+* the [current task]
 
-These sources of ambient context are stored as the respective `opts`, `inst`
-and `task` fields of the `CallContext` object:
+These pieces of ambient information are stored in the first three fields of
+the `CallContext` that is threaded through all the Python functions below as
+the `cx` parameter/field.
 ```python
 class CallContext:
   opts: CanonicalOptions
   inst: ComponentInstance
   task: Task
+  todo: int
 
   def __init__(self, opts, inst, task):
     self.opts = opts
     self.inst = inst
     self.task = task
+    self.todo = 0
+
+  def end_call(self):
+    trap_if(self.todo)
 ```
-The `cx` parameter in functions below refers to the ambient `CallContext`. The
-`Task` and `Subtask` classes derive `CallContext` and thus having a `task` or
-`subtask` also establishes the ambient `CallContext`.
+Additionally, import and export calls have a `todo` count that is incremented
+and decremented by various Canonical ABI rules below to track outstanding
+obligations to do something (e.g., drop a `borrow`ed handle) before the end of
+the call. The `Task` and `Subtask` classes derive `CallContext` and call
+`self.end_call()` when they complete.
 
 
 ### Canonical ABI Options
@@ -111,6 +127,7 @@ class CanonicalOptions:
   post_return: Optional[Callable] = None
   sync: bool = True # = !canonopt.async
   callback: Optional[Callable] = None
+  always_task_return: bool = False
 ```
 (Note that the `async` `canonopt` is inverted to `sync` here for the practical
 reason that `async` is a keyword and most branches below want to start with the
@@ -126,7 +143,7 @@ Canonical ABI and introduced below as the fields are used.
 ```python
 class ComponentInstance:
   resources: ResourceTables
-  async_subtasks: Table[Subtask]
+  waitables: Table[Subtask|StreamHandle|FutureHandle]
   num_tasks: int
   may_leave: bool
   backpressure: bool
@@ -136,7 +153,7 @@ class ComponentInstance:
 
   def __init__(self):
     self.resources = ResourceTables()
-    self.async_subtasks = Table[Subtask]()
+    self.waitables = Table[Subtask|StreamHandle|FutureHandle]()
     self.num_tasks = 0
     self.may_leave = True
     self.backpressure = False
@@ -290,7 +307,7 @@ statically eliminate the `own` and the `lend_count` xor `scope` fields,
 and guards thereof.
 
 
-#### Async State
+#### Task State
 
 Additional runtime state is required to implement the canonical built-ins and
 check that callers and callees uphold their respective parts of the call
@@ -312,9 +329,13 @@ class EventCode(IntEnum):
   CALL_RETURNED = CallState.RETURNED
   CALL_DONE = CallState.DONE
   YIELDED = 4
+  STREAM_READ = 5
+  STREAM_WRITE = 6
+  FUTURE_READ = 7
+  FUTURE_WRITE = 8
 
-EventTuple = tuple[EventCode, int]
-EventCallback = Callable[[], EventTuple]
+EventTuple = tuple[EventCode, int, int]
+EventCallback = Callable[[], Optional[EventTuple]]
 OnBlockCallback = Callable[[Awaitable], Awaitable]
 ```
 The `CallState` enum describes the linear sequence of states that an async call
@@ -411,7 +432,6 @@ class Task(CallContext):
   caller: Optional[Task]
   on_return: Optional[Callable]
   on_block: OnBlockCallback
-  need_to_drop: int
   events: list[EventCallback]
   has_events: asyncio.Event
 
@@ -421,7 +441,6 @@ class Task(CallContext):
     self.caller = caller
     self.on_return = on_return
     self.on_block = on_block
-    self.need_to_drop = 0
     self.events = []
     self.has_events = asyncio.Event()
 ```
@@ -535,28 +554,35 @@ using a `callback`, by returning to the event loop) to learn about progress
 made by async subtasks which are reported to this task by `notify`.
 ```python
   async def wait(self) -> EventTuple:
-    await self.wait_on(self.has_events.wait())
-    return self.next_event()
+    while True:
+      await self.wait_on(self.has_events.wait())
+      if (e := self.maybe_next_event()):
+        return e
 
-  def next_event(self) -> EventTuple:
-    event = self.events.pop(0)
-    if not self.events:
-      self.has_events.clear()
-    return event()
+  def maybe_next_event(self) -> EventTuple:
+    while self.events:
+      event = self.events.pop(0)
+      if (e := event()):
+        return e
+    self.has_events.clear()
+    return None
 
   def notify(self, event: EventCallback):
     self.events.append(event)
     self.has_events.set()
 ```
-Note that events are represented as *first-class functions* that are called by
-`maybe_next_event` to produce the tuple of scalar values that are actually
-delivered to core wasm. This allows an event source to report the latest status
-when the event is handed to the core wasm code instead of the status when the
-event was first generated. This allows multiple redundant events to be
-collapsed into one, reducing overhead. Although this Python code represents
-events as a list of closures, an optimizing implementation should be able to
-avoid actually allocating these things and instead embed a linked list of
-"ready" events into the table elements associated with the events.
+Note that events are represented as closures (first class functions) that
+either return a tuple of scalar values to deliver to core wasm, or `None`. This
+flexibility allows multiple redundant events to be collapsed into one (e.g.,
+when a `Subtask` advances `CallState` multiple times before the event enqueued
+by the initial state change is delivered) and also for events to be
+retroactively removed (e.g., when a `stream.cancel-read` "steals" a pending
+`STREAM_READ` event that was enqueued but not yet delivered). Although this
+Python code represents `events` as a list of closures, an optimizing
+implementation should be able to avoid dynamically allocating this list and
+instead represent `events` as a linked list embedded in the elements of the
+`waitables` table (noting that, by design, any given `watiables` element can be
+in the `events` list at most once).
 
 A task may also cooperatively yield (via `canon task.yield`), allowing the
 runtime to switch execution to another task without having to wait for any
@@ -574,9 +600,7 @@ assume other tasks can execute, just like with `task.wait`.
 ```python
   async def poll(self) -> Optional[EventTuple]:
     await self.yield_()
-    if not self.events:
-      return None
-    return self.next_event()
+    return self.maybe_next_event()
 ```
 
 The `return_` method is called by either `canon_task_return` or `canon_lift`
@@ -589,7 +613,7 @@ more than once which must be checked by `return_` and `exit`.
 ```python
   def return_(self, flat_results):
     trap_if(not self.on_return)
-    if self.opts.sync:
+    if self.opts.sync and not self.opts.always_task_return:
       maxflat = MAX_FLAT_RESULTS
     else:
       maxflat = MAX_FLAT_PARAMS
@@ -598,24 +622,26 @@ more than once which must be checked by `return_` and `exit`.
     self.on_return(vs)
     self.on_return = None
 ```
+The maximum flattened core wasm values depends on whether this is a normal
+synchronous call (in which return values are returned by core wasm) or a newer
+async or sychronous-using-`always-task-return` call, in which return values
+are passed as parameters to `canon task.return`.
 
 Lastly, when a task exits, the runtime enforces the guard conditions mentioned
-above and allows a pending task to start. The `need_to_drop` counter is
-incremented and decremented below as a way of ensuring that a task does
-something (like dropping a resource or subtask handle) before the task exits.
+above and allows a pending task to start.
 ```python
   def exit(self):
     assert(current_task.locked())
-    assert(not self.events)
+    assert(not self.maybe_next_event())
     assert(self.inst.num_tasks >= 1)
     trap_if(self.on_return)
-    trap_if(self.need_to_drop != 0)
     trap_if(self.inst.num_tasks == 1 and self.inst.backpressure)
     self.inst.num_tasks -= 1
     if self.opts.sync:
       assert(not self.inst.interruptible.is_set())
       self.inst.interruptible.set()
     self.maybe_start_pending_task()
+    self.end_call()
 ```
 
 While `canon_lift` creates `Task`s, `canon_lower` creates `Subtask` objects.
@@ -668,7 +694,7 @@ stored inline in the native stack frame.
 
 The `maybe_notify_supertask` method called by `on_start`, `on_return` and
 `finish` (next) only sends events to the supertask if this `Subtask` actually
-blocked and got added to the `async_subtasks` table (signalled by
+blocked and got added to the `waitables` table (as indicated by
 `notify_supertask` being set). Additionally, `maybe_notify_supertask` uses the
 `enqueued` flag and the fact that "events" are first-class functions to
 collapse N events down to 1 if a subtask advances state multiple times before
@@ -680,10 +706,10 @@ the event loop when only the most recent state matters.
       self.enqueued = True
       def subtask_event():
         self.enqueued = False
-        i = self.inst.async_subtasks.array.index(self)
+        i = self.inst.waitables.array.index(self)
         if self.state == CallState.DONE:
           self.release_lenders()
-        return (EventCode(self.state), i)
+        return (EventCode(self.state), i, 0)
       self.task.notify(subtask_event)
 ```
 
@@ -728,13 +754,321 @@ when the subtask finishes.
 ```
 
 Lastly, after a `Subtask` has finished and notified its supertask (thereby
-clearing `enqueued`), it may be dropped from the `async_subtasks` table:
+clearing `enqueued`), it may be dropped from the `waitables` table which
+effectively ends the call from the perspective of the caller and guards that
+the `Subtask`'s `todo` count is zero.
 ```python
   def drop(self):
     trap_if(self.enqueued)
     trap_if(self.state != CallState.DONE)
-    self.task.need_to_drop -= 1
+    self.task.todo -= 1
+    self.end_call()
 ```
+
+
+#### Buffer, Stream and Future State
+
+At a high level, values of `stream` or `future` type are handles to special
+resources that components use to synchronize the directional copy of values
+between buffers supplied by the components involved, avoiding the need for
+intermediate buffers or copies. In support of the general [virtualization
+goals] of the Component Model, the host can be on either side of the copy
+unbeknownst to the component on the other side. Thus, the Python representation
+of lifted `future` and `stream` values are *abstract interfaces* that are meant
+to be implemented either by arbitrary host code *or* by wasm code using the
+Python classes below that end with `GuestImpl`:
+```python
+class Buffer:
+  MAX_LENGTH = 2**30 - 1
+
+class WritableBuffer(Buffer):
+  remain: Callable[[], int]
+  lower: Callable[[list[any]]]
+
+class ReadableStream:
+  closed: Callable[[], bool]
+  read: Callable[[WritableBuffer, OnBlockCallback], Awaitable]
+  cancel_read: Callable[[WritableBuffer, OnBlockCallback], Awaitable]
+  close: Callable[[]]
+```
+Going through the methods in these interfaces:
+* `remain` returns how many values may be `lower`ed into the `WritableBuffer`.
+* `read` may only be called if `!closed`. `read` is asynchronous (as indicated
+  by the `Awaitable` return type) and can block. If `read` blocks, it must call
+  the given `OnBlockCallback` to allow the async caller to make progress in the
+  meantime. `read` returns its values by calling `lower` 0..N times on the
+  given `WritableBuffer`. Once `read` returns, it must not hold onto a
+  reference to the given `WritableBuffer` (as if it was passed via `borrow`).
+* `cancel_read` must only be called while there is an outstanding blocked
+  `read` and must be given the same `WritableBuffer` that was passed to `read`.
+  `cancel_read` is async and must call `OnBlockCallback` if it blocks.
+  `cancel_read` must only return once the given `WritableBuffer` is guaranteed
+  not to be used again by the `read` being cancelled.
+* `close` may only be called if there is no active `read` and leaves the stream
+  `closed` without possibility of blocking.
+
+The abstract `WritableBuffer` interface is implemented by the
+`WritableBufferGuestImpl` class below. The `ReadableBufferGuestImpl` class is
+used by the stream implementation code below and is symmetric. The functions
+`load_list_from_valid_range` and `store_list_into_valid_range` used by these
+classes are defined below as part of normal `list` parameter lifting and
+lowering.
+```python
+class BufferGuestImpl(Buffer):
+  cx: CallContext
+  t: ValType
+  ptr: int
+  progress: int
+  length: int
+
+  def __init__(self, cx, t, ptr, length):
+    trap_if(length == 0 or length > Buffer.MAX_LENGTH)
+    trap_if(ptr != align_to(ptr, alignment(t)))
+    trap_if(ptr + length * elem_size(t) > len(cx.opts.memory))
+    self.cx = cx
+    self.t = t
+    self.ptr = ptr
+    self.progress = 0
+    self.length = length
+
+  def remain(self):
+    return self.length - self.progress
+
+class ReadableBufferGuestImpl(BufferGuestImpl):
+  def lift(self, n):
+    assert(n <= self.remain())
+    vs = load_list_from_valid_range(self.cx, self.ptr, n, self.t)
+    self.ptr += n * elem_size(self.t)
+    self.progress += n
+    return vs
+
+class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
+  def lower(self, vs):
+    assert(len(vs) <= self.remain())
+    store_list_into_valid_range(self.cx, vs, self.ptr, self.t)
+    self.ptr += len(vs) * elem_size(self.t)
+    self.progress += len(vs)
+```
+
+The `ReadableStreamGuestImpl` class implements `ReadableStream` for a stream
+created by wasm (via `canon stream.new`) and encapsulates the synchronization
+performed between the writer and reader ends of a `stream`. In addition to the
+`read` method defined as part of `ReadableStream` that can be called by the
+consumer of the `ReadableStream`, a `write` method is also defined that will be
+called (below) by the writable end of this same stream. Other than the fact
+that they copy in different directions, reading and writing work the same way
+and thus are defined by a single internal `rendezvous` method. The first time
+`rendezvous` is called, it will block until it is woken by a second call to
+`rendezvous` (necessarily in the opposite direction, as ensured by the CABI).
+Once this second `rendezvous` call arives, there is both a `ReadableBuffer` and
+`WritableBuffer` on hand, so a direct copy can be immediately performed (noting
+that `dst.lower(src.lift(...))` is meant to be fused into a single copy from
+`src`'s memory into `dst`'s memory).
+```python
+class ReadableStreamGuestImpl(ReadableStream):
+  is_closed: bool
+  other_buffer: Optional[Buffer]
+  other_future: Optional[asyncio.Future]
+
+  def __init__(self):
+    self.is_closed = False
+    self.other_buffer = None
+    self.other_future = None
+
+  def closed(self):
+    return self.is_closed
+
+  async def read(self, dst, on_block):
+    await self.rendezvous(dst, self.other_buffer, dst, on_block)
+  async def write(self, src, on_block):
+    await self.rendezvous(src, src, self.other_buffer, on_block)
+  async def rendezvous(self, this_buffer, src, dst, on_block):
+    assert(not self.is_closed)
+    if self.other_buffer:
+      ncopy = min(src.remain(), dst.remain())
+      assert(ncopy > 0)
+      dst.lower(src.lift(ncopy))
+      if not self.other_buffer.remain():
+        self.other_buffer = None
+      if self.other_future:
+        self.other_future.set_result(None)
+        self.other_future = None
+    else:
+      assert(not self.other_future)
+      self.other_buffer = this_buffer
+      self.other_future = asyncio.Future()
+      await on_block(self.other_future)
+      if self.other_buffer is this_buffer:
+        self.other_buffer = None
+```
+In this logic, we can see that `read` and `write` eagerly return once *any*
+values are read or written. Thus, if a source-language API needs to read or
+write an exact number of elements, it must loop. (New `read-full`/`write-full`
+variations could be added in the future that do not complete until
+`remain = 0`, but this would only be an optimization taht minimized call
+overhead, not a change in expressive power or algorithmic complexity.)
+
+One optimization intentionally enabled by the code above is that, after a
+rendezvous completes with some `n < remain` values being copied, the
+`other_buffer` is kept around (even after the `other_future` is resolved) to
+allow future rendezvous to keep reading or writing into the same buffer until
+the `await other_future` is resumed by the scheduler. Due to cooperative
+concurrency, this time window can be significant and thus this optimization can
+reduce task-switching overhead by batching up partial reads and writes into
+bigger reads or writes.
+
+However, this optimization creates a subtle corner case handled by the above
+code that is worth pointing out: between `other_future` being resolved and the
+`await other_future` resuming, `other_buffer` *may or may not* get cleared by
+another `rendezvous` and then subsequently replaced by another buffer waiting
+in the opposite direction. This case is handled by the `other_buffer is this_buffer`
+test before clearing `other_buffer`. Cancellation must use this same condition
+to determine whether to resolve `other_future` or not when cancelling a read or
+write:
+```python
+  async def cancel_read(self, dst, on_block):
+    await self.cancel_rendezvous(dst, on_block)
+  async def cancel_write(self, src, on_block):
+    await self.cancel_rendezvous(src, on_block)
+  async def cancel_rendezvous(self, this_buffer, on_block):
+    assert(not self.is_closed)
+    if not DETERMINISTIC_PROFILE and random.randint(0,1):
+      await on_block(asyncio.sleep(0))
+    if self.other_buffer is this_buffer:
+      self.other_buffer = None
+      if self.other_future:
+        self.other_future.set_result(None)
+        self.other_future = None
+```
+The random choice of whether or not to call `on_block` models the fact that, in
+general, cancelling a read or write operation may require a blocking operation
+to ensure that access to the buffer has been fully relinquished (e.g., the
+buffer may have been handed to the kernel or hardware and thus there may be a
+need to block to confirm that the kernel or hardware is done with the buffer,
+with [terrible bugs] otherwise).
+
+When called via the `ReadableStream` abstract interface, the `close` method can
+assume as a precondition that there is not an outstanding `read` and thus there
+is no need to block on a `cancel_read`. There may however be a pending write
+`await`ing `other_future`, but since we're on the reader end and we know that
+there are no concurrent `read`s, we can simple resolve `other_future` and move
+on without blocking on anything. `close` can also be called (below) from the
+writer direction, in which case all the above logic applies, in the opposite
+direction. Thus, there is only a single direction-agnostic `close` that is
+shared by both the reader and writer ends.
+```python
+  def close(self):
+    if not self.is_closed:
+      self.is_closed = True
+      self.other_buffer = None
+      if self.other_future:
+        self.other_future.set_result(None)
+        self.other_future = None
+    else:
+      assert(not self.other_buffer and not self.other_future)
+```
+
+With the above complex synchronization rules encapsulated by
+`ReadableStreamGuestImpl`, we can move on to the remaining rules and state that
+apply separately to the readable and writable handles that are stored in the
+`waitables` table. Both readable and writable handles store a reference to a
+`ReadableStream`. In the case of a `ReadableStreamHandle`, this
+`ReadableStream` can be host- or guet-implemented. However, in the case of
+`WritableStreamHandle`, the `ReadableStream` is definitely implemented by
+`ReadableStreamGuestImpl`. The point of these handles is to implement
+direction-agnostic `copy`, `cancel_copy` and `drop` methods that are called by
+the shared `canon stream.*` built-in code below.
+```python
+class StreamHandle:
+  stream: ReadableStream
+  t: ValType
+  cx: Optional[CallContext]
+  copying_buffer: Optional[Buffer]
+
+  def __init__(self, stream, t, cx):
+    self.stream = stream
+    self.t = t
+    self.cx = cx
+    self.copying_buffer = None
+
+  def drop(self):
+    trap_if(self.copying_buffer)
+    self.stream.close()
+    if self.cx:
+      self.cx.todo -= 1
+
+class ReadableStreamHandle(StreamHandle):
+  async def copy(self, dst, on_block):
+    await self.stream.read(dst, on_block)
+  async def cancel_copy(self, dst, on_block):
+    await self.stream.cancel_read(dst, on_block)
+
+class WritableStreamHandle(ReadableStreamGuestImpl, StreamHandle):
+  def __init__(self, t):
+    ReadableStreamGuestImpl.__init__(self)
+    StreamHandle.__init__(self, self, t, cx = None)
+  async def copy(self, src, on_block):
+    await self.write(src, on_block)
+  async def cancel_copy(self, src, on_block):
+    await self.cancel_write(src, on_block)
+```
+Considering the logic in `drop` (which is called polymorphically by
+`canon waitable.drop` below):
+* The trap if `copying_buffer` is set ensures the above-stated precondition
+  that `close` can only be called when there is no pending `read`/`write`.
+  `copying_buffer` is set below when `stream.{read,write}` starts and cleared
+  once wasm is notified of completion.
+* The `todo` decrement matches an increment when the handle's `cx`
+  field was set and is used to ensure that `cx` never points to a dead
+  `Subtask` (whose own `todo` increment ensures that `cx.task` also never
+  points to a dead `Task`).
+
+Given the above definition of how `stream` works, a `future` can simply be
+defined as a `stream` of exactly 1 value by having the `copy` and `cancel_copy`
+methods `close()` the stream as soon as they detect that the 1 `remain`ing
+value has been successfully copied:
+```python
+class FutureHandle(StreamHandle): pass
+
+class ReadableFutureHandle(FutureHandle):
+  async def copy(self, dst, on_block):
+    assert(dst.remain() == 1)
+    await self.stream.read(dst, on_block)
+    if dst.remain() == 0:
+      self.stream.close()
+
+  async def cancel_copy(self, dst, on_block):
+    await self.stream.cancel_read(dst, on_block)
+    if dst.remain() == 0:
+      self.stream.close()
+
+class WritableFutureHandle(ReadableStreamGuestImpl, FutureHandle):
+  def __init__(self, t):
+    ReadableStreamGuestImpl.__init__(self)
+    FutureHandle.__init__(self, self, t, cx = None)
+
+  async def copy(self, src, on_block):
+    assert(src.remain() == 1)
+    await self.write(src, on_block)
+    if src.remain() == 0:
+      self.close()
+
+  async def cancel_copy(self, src, on_block):
+    await self.cancel_write(src, on_block)
+    if src.remain() == 0:
+      self.close()
+
+  def drop(self):
+    trap_if(not self.closed())
+    FutureHandle.drop(self)
+```
+The overridden `WritableFutureHandle.drop` method traps if the internal stream
+has not been closed (and thus the future value has not been written). (*Note
+that there is a [TODO](Async.md#TODO) to add an `error` type and new built-ins
+for dropping a stream or future handle with an `error` which will **not** trap,
+thus allowing a `future` to be resolved without producing a value iff it
+produces an `error`.*)
+
 
 ### Despecialization
 
@@ -758,6 +1092,36 @@ because they are given specialized canonical ABI representations distinct from
 their respective expansions.
 
 
+### Type Predicates
+
+The `contains_borrow` and `contains_async_value` predicates return whether the
+given type contains a `borrow` or `future/`stream`, respectively.
+```python
+def contains_borrow(t):
+  return contains(t, lambda u: isinstance(u, BorrowType))
+
+def contains_async_value(t):
+  return contains(t, lambda u: isinstance(u, StreamType | FutureType))
+
+def contains(t, p):
+  t = despecialize(t)
+  match t:
+    case None:
+      return False
+    case PrimValType() | OwnType() | BorrowType():
+      return p(t)
+    case ListType(u) | StreamType(u) | FutureType(u):
+      return p(t) or contains(u, p)
+    case RecordType(fields):
+      return p(t) or any(contains(f.t, p) for f in fields)
+    case VariantType(cases):
+      return p(t) or any(contains(c.t, p) for c in cases)
+    case FuncType():
+      return any(p(u) for u in t.param_types() + t.result_types())
+    case _:
+      assert(False)
+```
+
 ### Alignment
 
 Each value type is assigned an [alignment] which is used by subsequent
@@ -780,6 +1144,7 @@ def alignment(t):
     case VariantType(cases)          : return alignment_variant(cases)
     case FlagsType(labels)           : return alignment_flags(labels)
     case OwnType() | BorrowType()    : return 4
+    case StreamType() | FutureType() : return 4
 ```
 
 List alignment is the same as tuple alignment when the length is fixed and
@@ -868,6 +1233,7 @@ def elem_size(t):
     case VariantType(cases)          : return elem_size_variant(cases)
     case FlagsType(labels)           : return elem_size_flags(labels)
     case OwnType() | BorrowType()    : return 4
+    case StreamType() | FutureType() : return 4
 
 def elem_size_list(elem_type, maybe_length):
   if maybe_length is not None:
@@ -933,6 +1299,8 @@ def load(cx, ptr, t):
     case FlagsType(labels)  : return load_flags(cx, ptr, labels)
     case OwnType()          : return lift_own(cx, load_int(cx, ptr, 4), t)
     case BorrowType()       : return lift_borrow(cx, load_int(cx, ptr, 4), t)
+    case StreamType(t)      : return lift_stream(cx, load_int(cx, ptr, 4), t)
+    case FutureType(t)      : return lift_future(cx, load_int(cx, ptr, 4), t)
 ```
 
 Integers are loaded directly from memory, with their high-order bit interpreted
@@ -1168,6 +1536,58 @@ handle can be held). When `h` is a `borrow` handle, we just need to make sure
 that the callee task has a shorter liftime than the current task, which is only
 guaranteed if the callee is a subtask of the current task.
 
+Streams and futures are lifted in almost the same way, with the only difference
+being that it is a dynamic error to attempt to lift a `future` that has already
+been successfully read (`closed()`). In both cases, lifting the readable end
+transfers ownership of it while lifting the writable end leaves the writable
+end in place, but traps if the writable end has already been lifted before.
+Together, this ensures that at most one component holds each of the readable
+and writable ends of a stream. The `todo` increments must be matched by
+decrements in `StreamHandle.drop` for `CallContext.end_call` to not trap; this
+ensures that the writable stream handles cannot outlive the `Task` to which
+their events are sent (via `h.cx.task.notify()`).
+```python
+def lift_stream(cx, i, t):
+  return lift_async_value(ReadableStreamHandle, WritableStreamHandle, cx, i, t)
+
+def lift_future(cx, i, t):
+  v = lift_async_value(ReadableFutureHandle, WritableFutureHandle, cx, i, t)
+  trap_if(v.closed())
+  return v
+
+def lift_async_value(ReadableHandleT, WritableHandleT, cx, i, t):
+  h = cx.inst.waitables.get(i)
+  match h:
+    case ReadableHandleT():
+      trap_if(h.copying_buffer)
+      trap_if(contains_borrow(t) and cx.task is not h.cx)
+      h.cx.todo -= 1
+      cx.inst.waitables.remove(i)
+    case WritableHandleT():
+      trap_if(h.cx is not None)
+      assert(not h.copying_buffer)
+      h.cx = cx
+      h.cx.todo += 1
+    case _:
+      trap()
+  trap_if(h.t != t)
+  return h.stream
+```
+It's useful to observe that there are no lifetime issues with a `stream` or
+`future` of `borrow` handles due to the following:
+* Validation ensures that `stream<borrow<R>>` or `future<borrow<R>>` can only
+  be lifted as part of the parameters of an import call.
+* When lifting the writable end of a `stream` or `future` for an import call,
+  the code above stores the `Subtask` of the import call in the `cx` field of
+  the `WritableStreamHandle` so that when `ReadableBuffer.lift` transitively
+  calls `lift_borrow` (above), this same `Subtask` is passed as the `cx`
+  argument, thereby triggering the same bookkeeping as if the `borrow` was
+  passed as a normal synchronous parameter of the `Subtask`.
+* When lifting the readable end of a `stream` or `future` for an import call,
+  the `cx.task is not h.cx` condition ensures that `borrow`s are only copied
+  into subtasks with the same `Task` as scope (matching the analogous guard in
+  `lift_borrow`).
+
 
 ### Storing
 
@@ -1198,6 +1618,8 @@ def store(cx, v, t, ptr):
     case FlagsType(labels)  : store_flags(cx, v, ptr, labels)
     case OwnType()          : store_int(cx, lower_own(cx, v, t), ptr, 4)
     case BorrowType()       : store_int(cx, lower_borrow(cx, v, t), ptr, 4)
+    case StreamType(t)      : store_int(cx, lower_stream(cx, v, t), ptr, 4)
+    case FutureType(t)      : store_int(cx, lower_future(cx, v, t), ptr, 4)
 ```
 
 Integers are stored directly into memory. Because the input domain is exactly
@@ -1559,8 +1981,8 @@ def pack_flags_into_int(v, labels):
 
 Finally, `own` and `borrow` handles are lowered by initializing new handle
 elements in the current component instance's handle table. The increment of
-`need_to_drop` is complemented by a decrement in `canon_resource_drop` and
-ensures that all borrowed handles are dropped before the end of the task. 
+`todo` is complemented by a decrement in `canon_resource_drop` and ensures
+that all borrowed handles are dropped before the end of the task. 
 ```python
 def lower_own(cx, rep, t):
   h = ResourceHandle(rep, own=True)
@@ -1571,7 +1993,7 @@ def lower_borrow(cx, rep, t):
   if cx.inst is t.rt.impl:
     return rep
   h = ResourceHandle(rep, own=False, scope=cx)
-  cx.need_to_drop += 1
+  cx.todo += 1
   return cx.inst.resources.add(t.rt, h)
 ```
 The special case in `lower_borrow` is an optimization, recognizing that, when
@@ -1579,6 +2001,59 @@ a borrowed handle is passed to the component that implemented the resource
 type, the only thing the borrowed handle is good for is calling
 `resource.rep`, so lowering might as well avoid the overhead of creating an
 intermediate borrow handle.
+
+Lowering a `stream` or `future` is entirely symmetric. The
+`trap_if(v.closed())` in `lift_future` ensures the validity of the
+`assert(not v.closed())` in `lower_future`.
+```python
+def lower_stream(cx, v, t):
+  return lower_async_value(ReadableStreamHandle, WritableStreamHandle, cx, v, t)
+
+def lower_future(cx, v, t):
+  assert(not v.closed())
+  return lower_async_value(ReadableFutureHandle, WritableFutureHandle, cx, v, t)
+
+def lower_async_value(ReadableHandleT, WritableHandleT, cx, v, t):
+  assert(isinstance(v, ReadableStream))
+  if isinstance(v, WritableHandleT) and cx.inst is v.cx.inst:
+    i = cx.inst.waitables.array.index(v)
+    v.cx.todo -= 1
+    v.cx = None
+    assert(2**31 > Table.MAX_LENGTH >= i)
+    return i | (2**31)
+  else:
+    h = ReadableHandleT(v, t, cx)
+    h.cx.todo += 1
+    return cx.inst.waitables.add(h)
+```
+In the ordinary case, the abstract `ReadableStream` (which may come from the
+host or the guest) is stored in a `ReadableHandle` in the `waitables` table,
+incrementing `todo` to ensure that `StreamHandle.drop` is called before
+`Task.exit` so that readable stream and future handles cannot outlive the
+`Task` to which their events are sent (via `h.cx.task.notify()`).
+
+The interesting case is when a component receives back a `ReadableStream` that
+it itself holds the `WritableStreamHandle` for. Without specially handling
+this case, this would lead to copies from a single linear memory into itself
+which is both inefficient and raises subtle semantic interleaving questions
+that we would rather avoid. To avoid both, this case is detected and the
+`ReadableStream` is "unwrapped" to writable handle, returning the existing
+index of it in the `waitables` table, setting the high bit to signal this fact
+to guest code. Guest code must therefore handle this special case by
+collapsing the two ends of the stream to work fully without guest code (since
+the Canonical ABI is now wholly unnecessary to pass values from writer to
+reader).
+
+As with `lift_async_value`, it's useful to observe that there are no lifetime
+issues with a `stream` or `future` of `borrow` handles due to the following:
+* Validation ensures that `stream<borrow<R>>` or `future<borrow<R>>` can only
+  be lowered as part of the parameters of an export call.
+* When lowering a `stream` or `future`, the code above stores the `Task` of
+  the export call in the `cx` field of the `ReadableStreamHandle` so that when
+  `WritableBuffer.lower` transitively calls `lower_borrow` (above), this same
+  `Task` is passed as the `cx` argument, thereby triggering the same
+  bookkeeping as if the `borrow` was passed as a normal synchronous parameter
+  of the `Task`.
 
 
 ### Flattening
@@ -1664,6 +2139,7 @@ def flatten_type(t):
     case VariantType(cases)               : return flatten_variant(cases)
     case FlagsType(labels)                : return ['i32']
     case OwnType() | BorrowType()         : return ['i32']
+    case StreamType() | FutureType()      : return ['i32']
 ```
 
 List flattening of a fixed-length list uses the same flattening as a tuple
@@ -1758,6 +2234,8 @@ def lift_flat(cx, vi, t):
     case FlagsType(labels)  : return lift_flat_flags(vi, labels)
     case OwnType()          : return lift_own(cx, vi.next('i32'), t)
     case BorrowType()       : return lift_borrow(cx, vi.next('i32'), t)
+    case StreamType(t)      : return lift_stream(cx, vi.next('i32'), t)
+    case FutureType(t)      : return lift_future(cx, vi.next('i32'), t)
 ```
 
 Integers are lifted from core `i32` or `i64` values using the signedness of the
@@ -1884,6 +2362,8 @@ def lower_flat(cx, v, t):
     case FlagsType(labels)  : return lower_flat_flags(v, labels)
     case OwnType()          : return [lower_own(cx, v, t)]
     case BorrowType()       : return [lower_borrow(cx, v, t)]
+    case StreamType(t)      : return [lower_stream(cx, v, t)]
+    case FutureType(t)      : return [lower_future(cx, v, t)]
 ```
 
 Since component-level values are assumed in-range and, as previously stated,
@@ -2079,9 +2559,10 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_return, on_blo
   flat_args = await task.enter(on_start)
   if opts.sync:
     flat_results = await call_and_trap_on_throw(callee, task, flat_args)
-    task.return_(flat_results)
-    if opts.post_return is not None:
-      [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
+    if not opts.always_task_return:
+      task.return_(flat_results)
+      if opts.post_return is not None:
+        [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
   else:
     if not opts.callback:
       [] = await call_and_trap_on_throw(callee, task, flat_args)
@@ -2092,12 +2573,16 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_return, on_blo
         ctx = packed_ctx & ~1
         if is_yield:
           await task.yield_()
-          event, payload = (EventCode.YIELDED, 0)
+          event, p1, p2 = (EventCode.YIELDED, 0, 0)
         else:
-          event, payload = await task.wait()
-        [packed_ctx] = await call_and_trap_on_throw(opts.callback, task, [ctx, event, payload])
+          event, p1, p2 = await task.wait()
+        [packed_ctx] = await call_and_trap_on_throw(opts.callback, task, [ctx, event, p1, p2])
   task.exit()
 ```
+In the `sync` case, if the `always-task-return` ABI option is *not* set, then
+`task.return_` will be called by `callee` to return values; otherwise,
+`task.return_` must be called by `canon_lift`.
+
 In the `async` case, there are two sub-cases depending on whether the
 `callback` `canonopt` was set. When `callback` is present, waiting happens in
 an "event loop" inside `canon_lift` which also allows yielding (i.e., allowing
@@ -2131,6 +2616,7 @@ where `$callee` has type `$ft`, validation specifies:
 * a `memory` is present if required by lifting and is a subtype of `(memory 1)`
 * a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
 * there is no `post-return` in `$opts`
+* if `contains_async_value($ft)`, then `$opts.async` must be set
 
 When instantiating component instance `$inst`:
 * Define `$f` to be the partially-bound closure: `canon_lower($opts, $ft, $callee)`
@@ -2146,6 +2632,7 @@ async def canon_lower(opts, ft, callee, task, flat_args):
   trap_if(not task.inst.may_leave)
   subtask = Subtask(opts, ft, task, flat_args)
   if opts.sync:
+    assert(not contains_async_value(ft))
     await task.call_sync(callee, task, subtask.on_start, subtask.on_return)
     flat_results = subtask.finish()
   else:
@@ -2155,8 +2642,8 @@ async def canon_lower(opts, ft, callee, task, flat_args):
     match await call_and_handle_blocking(do_call):
       case Blocked():
         subtask.notify_supertask = True
-        task.need_to_drop += 1
-        i = task.inst.async_subtasks.add(subtask)
+        task.todo += 1
+        i = task.inst.waitables.add(subtask)
         assert(0 < i <= Table.MAX_LENGTH < 2**30)
         assert(0 <= int(subtask.state) < 2**2)
         flat_results = [i | (int(subtask.state) << 30)]
@@ -2164,14 +2651,22 @@ async def canon_lower(opts, ft, callee, task, flat_args):
         flat_results = [0]
   return flat_results
 ```
-In the asynchronous case, if `do_call` blocks before `Subtask.finish`
-(signalled by `callee` calling `on_block`), the `Subtask` is added to the
-current component instance's `async_subtasks` table, giving it an `i32` index
-that will be returned by `task.wait` to signal progress on this subtask. The
-`need_to_drop` increment is matched by a decrement in `canon_subtask_drop`
-and ensures that all subtasks of a supertask complete before the supertask
-completes. The `notify_supertask` flag is set to tell `Subtask` methods
-(below) to asynchronously notify the supertask of progress.
+In the `sync` case, `Task.call_sync` ensures a fully-synchronous call to
+`callee` (that prevents any interleaved execution until `callee` returns). The
+`not contains_async_value(ft)` assertion is ensured by validation and reflects
+the fact that a function that takes or returns a `future` or `stream` is
+extremely likely to deadlock if called in this manner (since the whole point
+of these types is to allow control flow to switch back and forth between
+caller and callee).
+
+In the `async` case, if `do_call` blocks before `Subtask.finish` (signalled by
+`callee` calling `on_block`), the `Subtask` is added to the current component
+instance's `waitables` table, giving it an `i32` index that will be returned
+by `task.wait` to signal progress on this subtask. The `todo` increment is
+matched by a decrement in `canon_waitable_drop` and ensures that all subtasks
+of a supertask complete before the supertask completes. The `notify_supertask`
+flag is set to tell `Subtask` methods (below) to asynchronously notify the
+supertask of progress.
 
 Based on this, if the returned `subtask.state` is `STARTING`, the caller must
 keep the memory pointed by `flat_args` valid until `task.wait` indicates that
@@ -2256,7 +2751,7 @@ async def canon_resource_drop(rt, sync, task, i):
       else:
         task.trap_if_on_the_stack(rt.impl)
   else:
-    h.scope.need_to_drop -= 1
+    h.scope.todo -= 1
   return flat_results
 ```
 In general, the call to a resource's destructor is treated like a
@@ -2329,7 +2824,7 @@ and pass the results to the caller:
 ```python
 async def canon_task_return(task, core_ft, flat_args):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.sync)
+  trap_if(task.opts.sync and not task.opts.always_task_return)
   trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType(task.ft.results, []), 'lower'))
   task.return_(flat_args)
   return []
@@ -2350,15 +2845,16 @@ validation specifies:
 * `$f` is given type `(func (param i32) (result i32))`
 
 Calling `$f` waits for progress to be made in a subtask of the current task,
-returning the event (which is currently simply an `CallState` value)
-and writing the subtask index as an outparam:
+returning the event (which is currently simply a `CallState` value) and
+writing the subtask index as an outparam:
 ```python
 async def canon_task_wait(opts, task, ptr):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback is not None)
-  event, payload = await task.wait()
+  event, p1, p2 = await task.wait()
   cx = CallContext(opts, task.inst, task)
-  store(cx, payload, U32Type(), ptr)
+  store(cx, p1, U32Type(), ptr)
+  store(cx, p2, U32Type(), ptr + 4)
   return [event]
 ```
 The `trap_if` ensures that, when a component uses a `callback` all events flow
@@ -2382,14 +2878,15 @@ validation specifies:
 
 Calling `$f` does a non-blocking check for whether an event is already
 available, returning whether or not there was such an event as a boolean and,
-if there was an event, storing the `i32` event+payload pair as an outparam.
+if there was an event, storing the `i32` event and payloads as outparams.
 ```python
-async def canon_task_poll(task, ptr):
+async def canon_task_poll(opts, task, ptr):
   trap_if(not task.inst.may_leave)
   ret = await task.poll()
   if ret is None:
     return [0]
-  store(task, ret, TupleType([U32Type(), U32Type()]), ptr)
+  cx = CallContext(opts, task.inst, task)
+  store(cx, ret, TupleType([U32Type(), U32Type(), U32Type()]), ptr)
   return [1]
 ```
 Note that the `await` of `task.poll` indicates that `task.poll` can yield to
@@ -2414,21 +2911,221 @@ async def canon_task_yield(task):
   return []
 ```
 
-### 🔀 `canon subtask.drop`
+### 🔀 `canon {stream,future}.new`
+
+For canonical definitions:
+```wasm
+(canon stream.new $t (core func $f))
+(canon future.new $t (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (result i32))`
+
+Calling `$f` calls `canon_{stream,future}_new` which add a new writable end to
+the stream or future to the `waitables` table and return its index.
+```python
+async def canon_stream_new(elem_type, task):
+  trap_if(not task.inst.may_leave)
+  h = WritableStreamHandle(elem_type)
+  return [ task.inst.waitables.add(h) ]
+
+async def canon_future_new(t, task):
+  trap_if(not task.inst.may_leave)
+  h = WritableFutureHandle(t)
+  return [ task.inst.waitables.add(h) ]
+```
+Note that the new writable end initially has its `StreamHandle.cx` field set
+to `None` which means it can't be used to `read` or `write` (defined next)
+until it has been lifted as an import parameter or export result. Lifting this
+readable handle sets `cx` and creates a readable end on the other side of the
+call so that  can commence.
+
+### 🔀 `canon {stream,future}.{read,write}`
+
+For canonical definitions:
+```wasm
+(canon stream.read (core func $f))
+(canon stream.write (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param i32 i32 i32) (result i32))`
+
+For canonical definitions:
+```wasm
+(canon future.read (core func $f))
+(canon future.write (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param i32 i32) (result i32))`
+
+The implementation of these four built-ins all funnel down to a single type-
+and `EventCode`-parameterized `async_copy` function. `async_copy` reuses the
+same `call_and_handle_blocking` machinery that `async` `canon lower` used
+above to model `read`s and `write`s as-if they were async import calls. For
+the same reason that `canon lower` does not allow synchronously lowering
+functions that contain `stream` or `future` types in their signature (high
+likelihood of deadlock), there is no synchronous option for `read` or `write`.
+The actual copy happens via polymorphic dispatch to `copy`, which has been
+defined above by the 4 `{Readable,Writable}{Stream,Future}Handle` types:
+```python
+async def canon_stream_read(task, i, ptr, n):
+  return await async_copy(ReadableStreamHandle, WritableBufferGuestImpl,
+                          EventCode.STREAM_READ, task, i, ptr, n)
+
+async def canon_stream_write(task, i, ptr, n):
+  return await async_copy(WritableStreamHandle, ReadableBufferGuestImpl,
+                          EventCode.STREAM_WRITE, task, i, ptr, n)
+
+async def canon_future_read(task, i, ptr):
+  return await async_copy(ReadableFutureHandle, WritableBufferGuestImpl,
+                          EventCode.FUTURE_READ, task, i, ptr, 1)
+
+async def canon_future_write(task, i, ptr):
+  return await async_copy(WritableFutureHandle, ReadableBufferGuestImpl,
+                          EventCode.FUTURE_WRITE, task, i, ptr, 1)
+
+async def async_copy(HandleT, BufferT, event_code, task, i, ptr, n):
+  trap_if(not task.inst.may_leave)
+  h = task.inst.waitables.get(i)
+  trap_if(not isinstance(h, HandleT))
+  trap_if(not h.cx)
+  trap_if(h.copying_buffer)
+  buffer = BufferT(h.cx, h.t, ptr, n)
+  if h.stream.closed():
+    flat_results = [CLOSED]
+  else:
+    async def do_copy(on_block):
+      await h.copy(buffer, on_block)
+      def copy_event():
+        if h.copying_buffer is buffer:
+          h.copying_buffer = None
+          return (event_code, i, pack_async_copy_result(buffer, h))
+        else:
+          return None
+      h.cx.task.notify(copy_event)
+    match await call_and_handle_blocking(do_copy):
+      case Blocked():
+        h.copying_buffer = buffer
+        flat_results = [BLOCKED]
+      case Returned():
+        flat_results = [pack_async_copy_result(buffer, h)]
+  return flat_results
+```
+The trap if `not h.cx` prevents `write`s on the writable end of streams or
+futures that have not yet been lifted. The `copying_buffer` field serves as a
+boolean indication of whether an async `read` or `write` is already in
+progress, preventing multiple overlapping calls to `read` or `write`. (This
+restriction could be relaxed [in the future](Async.md#TODO) to allow greater
+pipeline parallelism.)
+
+One subtle corner case handled by this code that is worth pointing out is that,
+between the `h.cx.task.notify(copy_event)` and the wasm guest code calling
+`task.wait` to receive this event, the wasm guest code can first call
+`{stream,future}.cancel-{read,write}` (defined next) which will return the copy
+progress to the wasm guest code and reset `copying_buffer` to `None` to allow
+future `read`s or `write`s. Then the wasm guest code can call
+`{stream,future}.{read,write}` *again*, setting `copying_buffer` to a *new*
+buffer. Thus, `copy_event` must check `h.copying_buffer is buffer` at the last
+moment and remove the event otherwise (here: by returning `None`, which
+`task.wait` handles by discarding and waiting for the next event).
+
+When the copy completes, the progress is reported to the caller. The order of
+tests here indicates that, if some progress was made and then the stream was
+closed, only the progress is reported and the `CLOSED` status is left to be
+discovered on the next `read` or `write` call.
+```python
+BLOCKED = 0xffff_ffff
+CLOSED  = 0x8000_0000
+
+def pack_async_copy_result(buffer, h):
+  assert(buffer.progress <= Buffer.MAX_LENGTH < CLOSED < BLOCKED)
+  if buffer.progress:
+    return buffer.progress
+  if h.stream.closed():
+    return CLOSED
+  return 0
+```
+(When [`error`](Async.md#TODO) is added in a future PR, when the `CLOSED` bit
+is set, the low 31 bits will optionally contain the non-zero index of an
+`error` value in some new `errors` table.)
+
+### 🔀 `canon {stream,future}.cancel-{read,write}`
+
+For canonical definitions:
+```wasm
+(canon stream.cancel-read $async? (core func $f))
+(canon stream.cancel-write $async? (core func $f))
+(canon future.cancel-read $async? (core func $f))
+(canon future.cancel-write $async? (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param i32) (result i32))`
+
+The implementation of these four built-ins all funnel down to a single
+type-parameterized `cancel_async_copy` function which makes a polymorphic call
+to `cancel_copy`, which has been defined above by the 4
+`{Readable,Writable}{Stream,Future}Handle` types. Unlike `read` and `write`,
+`cancel-read` and `cancel-write` *do* provide a synchronous calling option
+(represented as an optional `async` immediate in the `canon` definition)
+since there is not the same deadlock hazard. The ability to synchronously
+cancel a `read` or `write` (and regain ownership of the passed buffer) is
+crucial since some languages will need to cancel reading or writing from
+within the synchronous context of a destructor.
+```python
+async def canon_stream_cancel_read(sync, task, i):
+  return await cancel_async_copy(ReadableStreamHandle, sync, task, i)
+
+async def canon_stream_cancel_write(sync, task, i):
+  return await cancel_async_copy(WritableStreamHandle, sync, task, i)
+
+async def canon_future_cancel_read(sync, task, i):
+  return await cancel_async_copy(ReadableFutureHandle, sync, task, i)
+
+async def canon_future_cancel_write(sync, task, i):
+  return await cancel_async_copy(WritableFutureHandle, sync, task, i)
+
+async def cancel_async_copy(HandleT, sync, task, i):
+  trap_if(not task.inst.may_leave)
+  h = task.inst.waitables.get(i)
+  trap_if(not isinstance(h, HandleT))
+  trap_if(not h.copying_buffer)
+  if sync:
+    await task.call_sync(h.cancel_copy, h.copying_buffer)
+    flat_results = [h.copying_buffer.progress]
+    h.copying_buffer = None
+  else:
+    match await call_and_handle_blocking(h.cancel_copy, h.copying_buffer):
+      case Blocked():
+        flat_results = [BLOCKED]
+      case Returned():
+        flat_results = [h.copying_buffer.progress]
+        h.copying_buffer = None
+  return flat_results
+```
+As mentioned above for `async_copy`, if cancellation doesn't block, the
+buffer's progress is synchronously returned and the `copying_buffer` field of
+the `StreamHandle` is immediately reset to `None`, preventing any subsequent
+`{STREAM,FUTURE}_{READ,WRITE}` events from being delivered for the cancelled
+`read` or `write` in the future. In the `BLOCKED` case, there is no new
+`waitable` element allocated; the cancellation is simply reported as a normal
+`{STREAM,FUTURE}_{READ,WRITE}` event by the now-unblocked `read` or `write`.
+
+### 🔀 `canon waitable.drop`
 
 For a canonical definition:
 ```wasm
-(canon subtask.drop (core func $f))
+(canon waitable.drop (core func $f))
 ```
 validation specifies:
 * `$f` is given type `(func (param i32))`
 
-Calling `$f` removes the indicated subtask from the instance's table, trapping
-if various conditions aren't met in `Subtask.drop()`.
+Calling `$f` removes the indicated waitable (subtask, stream or future) from
+the instance's table, trapping if various conditions aren't met in the
+waitable's `drop()` method.
 ```python
-async def canon_subtask_drop(task, i):
+async def canon_waitable_drop(task, i):
   trap_if(not task.inst.may_leave)
-  task.inst.async_subtasks.remove(i).drop()
+  task.inst.waitables.remove(i).drop()
   return []
 ```
 
@@ -2500,6 +3197,7 @@ def canon_thread_hw_concurrency():
     return [NUM_ALLOWED_THREADS]
 ```
 
+[Virtualization Goals]: Goals.md
 [Canonical Definitions]: Explainer.md#canonical-definitions
 [`canonopt`]: Explainer.md#canonical-definitions
 [`canon`]: Explainer.md#canonical-definitions
@@ -2540,3 +3238,5 @@ def canon_thread_hw_concurrency():
 [Arbitrary Thread Parameters]: https://github.com/WebAssembly/shared-everything-threads/discussions/3
 [wasi-libc Convention]: https://github.com/WebAssembly/wasi-libc/blob/925ad6d7/libc-top-half/musl/src/thread/pthread_create.c#L318
 [Shared-Everything Threads]: https://github.com/WebAssembly/shared-everything-threads/blob/main/proposals/shared-everything-threads/Overview.md
+
+[Terrible Bugs]: https://devblogs.microsoft.com/oldnewthing/20110202-00/?p=11613
