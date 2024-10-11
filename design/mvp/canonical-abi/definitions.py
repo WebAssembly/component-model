@@ -520,10 +520,10 @@ class Subtask(CallContext):
   def finish(self):
     assert(self.state == CallState.RETURNED)
     self.state = CallState.DONE
-    if self.opts.sync or not self.notify_supertask:
-      self.release_lenders()
-    else:
+    if self.notify_supertask:
       self.maybe_notify_supertask()
+    else:
+      self.release_lenders()
     return self.flat_results
 
   def drop(self):

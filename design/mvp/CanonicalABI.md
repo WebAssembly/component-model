@@ -712,18 +712,18 @@ called).
 ```
 
 When a `Subtask` finishes, it calls `release_lenders` to allow owned handles
-passed to this subtask to be dropped. In the synchronous or eager case this
-happens immediately before returning to the caller. In the
-asynchronous+blocking case, this happens right before the `CallState.DONE`
-event is delivered to the guest program.
+passed to this subtask to be dropped. In the asynchronous blocking case, this
+happens right before the `CallState.DONE` event is delivered to the guest
+program in `subtask_event()` (above). Otherwise, it happens synchronously
+when the subtask finishes.
 ```python
   def finish(self):
     assert(self.state == CallState.RETURNED)
     self.state = CallState.DONE
-    if self.opts.sync or not self.notify_supertask:
-      self.release_lenders()
-    else:
+    if self.notify_supertask:
       self.maybe_notify_supertask()
+    else:
+      self.release_lenders()
     return self.flat_results
 ```
 
