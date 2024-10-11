@@ -24,7 +24,7 @@ custom scenarios, this might be appropriate.
 
 ### Does the Component Model force every (module | package | library) to have a separate memory?
 
-No, as described in [Linking.md](Linking.md), the Component Model supports a
+No, as described in [Linking.md](../mvp/Linking.md), the Component Model supports a
 combination of "shared-everything" and "shared-nothing" linking, allowing
 developers and producer toolchains to choose the appropriate kind of linking
 to use in a particular situation.
