@@ -37,6 +37,6 @@ To contribute to any of these repositories, see the Community Group's
 [formal spec]: spec/
 [W3C WebAssembly Community Group]: https://www.w3.org/community/webassembly/
 [Contributing Guidelines]: https://webassembly.org/community/contributing/
-[WASI Preview 2]: https://github.com/WebAssembly/WASI/tree/main/preview2
-[WASI Preview 3]: https://github.com/WebAssembly/WASI/tree/main/preview2#looking-forward-to-preview-3
+[WASI Preview 2]: https://github.com/WebAssembly/WASI/tree/main/wasip2#readme
+[WASI Preview 3]: https://github.com/WebAssembly/WASI/tree/main/wasip2#looking-forward-to-preview-3
 [Async Support]: https://docs.google.com/presentation/d/1MNVOZ8hdofO3tI0szg_i-Yoy0N2QPU2C--LzVuoGSlE/edit?usp=share_link
