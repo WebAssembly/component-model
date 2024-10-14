@@ -287,8 +287,8 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x06                                                => (canon thread.hw_concurrency (core func)) 🧵
            | 0x08                                                => (canon task.backpressure (core func)) 🔀
            | 0x09 ft:<core:typeidx>                              => (canon task.return ft (core func)) 🔀
-           | 0x0a                                                => (canon task.wait (core func)) 🔀
-           | 0x0b                                                => (canon task.poll (core func)) 🔀
+           | 0x0a m:<core:memdix>                                => (canon task.wait (memory m) (core func)) 🔀
+           | 0x0b m:<core:memidx>                                => (canon task.poll (memory m) (core func)) 🔀
            | 0x0c                                                => (canon task.yield (core func)) 🔀
            | 0x0d                                                => (canon subtask.drop (core func)) 🔀
 opts     ::= opt*:vec(<canonopt>)                                => opt*

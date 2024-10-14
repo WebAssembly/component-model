@@ -2353,11 +2353,12 @@ Calling `$f` waits for progress to be made in a subtask of the current task,
 returning the event (which is currently simply an `CallState` value)
 and writing the subtask index as an outparam:
 ```python
-async def canon_task_wait(task, ptr):
+async def canon_task_wait(opts, task, ptr):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback is not None)
   event, payload = await task.wait()
-  store(task, payload, U32Type(), ptr)
+  cx = CallContext(opts, task.inst, task)
+  store(cx, payload, U32Type(), ptr)
   return [event]
 ```
 The `trap_if` ensures that, when a component uses a `callback` all events flow

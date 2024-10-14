@@ -1313,8 +1313,8 @@ canon ::= ...
         | (canon resource.rep <typeidx> (core func <id>?))
         | (canon task.backpressure (core func <id>?)) 🔀
         | (canon task.return <core:typeidx> (core func <id>?)) 🔀
-        | (canon task.wait (core func <id>?)) 🔀
-        | (canon task.poll (core func <id>?)) 🔀
+        | (canon task.wait (memory <core:memidx>) (core func <id>?)) 🔀
+        | (canon task.poll (memory <core:memidx>) (core func <id>?)) 🔀
         | (canon task.yield (core func <id>?)) 🔀
         | (canon subtask.drop (core func <id>?)) 🔀
         | (canon thread.spawn <typeidx> (core func <id>?)) 🧵

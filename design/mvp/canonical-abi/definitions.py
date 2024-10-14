@@ -1530,21 +1530,23 @@ async def canon_task_return(task, core_ft, flat_args):
 
 ### 🔀 `canon task.wait`
 
-async def canon_task_wait(task, ptr):
+async def canon_task_wait(opts, task, ptr):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback is not None)
   event, payload = await task.wait()
-  store(task, payload, U32Type(), ptr)
+  cx = CallContext(opts, task.inst, task)
+  store(cx, payload, U32Type(), ptr)
   return [event]
 
 ### 🔀 `canon task.poll`
 
-async def canon_task_poll(task, ptr):
+async def canon_task_poll(opts, task, ptr):
   trap_if(not task.inst.may_leave)
   ret = await task.poll()
   if ret is None:
     return [0]
-  store(task, ret, TupleType([U32Type(), U32Type()]), ptr)
+  cx = CallContext(opts, task.inst, task)
+  store(cx, ret, TupleType([U32Type(), U32Type()]), ptr)
   return [1]
 
 ### 🔀 `canon task.yield`
