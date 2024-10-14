@@ -202,6 +202,8 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x6a t?:<valtype>? u?:<valtype>?        => (result t? (error u)?)
                 | 0x69 i:<typeidx>                        => (own i)
                 | 0x68 i:<typeidx>                        => (borrow i)
+                | 0x66 i:<typeidx>                        => (stream i)
+                | 0x65 i:<typeidx>                        => (future i)
 labelvaltype  ::= l:<label'> t:<valtype>                  => l t
 case          ::= l:<label'> t?:<valtype>? 0x00           => (case l t?)
 label'        ::= len:<u32> l:<label>                     => l    (if len = |l|)
@@ -290,7 +292,19 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x0a m:<core:memdix>                                => (canon task.wait (memory m) (core func)) 🔀
            | 0x0b m:<core:memidx>                                => (canon task.poll (memory m) (core func)) 🔀
            | 0x0c                                                => (canon task.yield (core func)) 🔀
-           | 0x0d                                                => (canon subtask.drop (core func)) 🔀
+           | 0x0d                                                => (canon waitable.drop (core func)) 🔀
+           | 0x0e t:<typeidx>                                    => (canon stream.new t (core func)) 🔀
+           | 0x0f                                                => (canon stream.read (core func)) 🔀
+           | 0x10                                                => (canon stream.write (core func)) 🔀
+           | 0x11 async?:<async?>                                => (canon stream.cancel-read async? (core func)) 🔀
+           | 0x12 async?:<async?>                                => (canon stream.cancel-write async? (core func)) 🔀
+           | 0x13 t:<typeidx>                                    => (canon future.new t (core func)) 🔀
+           | 0x14                                                => (canon future.read (core func)) 🔀
+           | 0x15                                                => (canon future.write (core func)) 🔀
+           | 0x16 async?:<async?>                                => (canon future.cancel-read async? (core func)) 🔀
+           | 0x17 async?:<async?>                                => (canon future.cancel-write async? (core func)) 🔀
+async?   ::= 0x00                                                =>
+           | 0x01                                                => async
 opts     ::= opt*:vec(<canonopt>)                                => opt*
 canonopt ::= 0x00                                                => string-encoding=utf8
            | 0x01                                                => string-encoding=utf16
@@ -300,6 +314,7 @@ canonopt ::= 0x00                                                => string-encod
            | 0x05 f:<core:funcidx>                               => (post-return f)
            | 0x06                                                => async 🔀
            | 0x07 f:<core:funcidx>                               => (callback f) 🔀
+           | 0x08                                                => always-task-return 🔀
 ```
 Notes:
 * The second `0x00` byte in `canon` stands for the `func` sort and thus the
