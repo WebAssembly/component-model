@@ -52,6 +52,17 @@ class CoreFuncType(CoreExternType):
   def __eq__(self, other):
     return self.params == other.params and self.results == other.results
 
+def types_match_values(ts, vs):
+  if len(ts) != len(vs):
+    return False
+  return all(type_matches_value(t, v) for t,v in zip(ts, vs))
+
+def type_matches_value(t, v):
+  match t:
+    case 'i32' | 'i64': return type(v) == int
+    case 'f32' | 'f64': return type(v) == float
+  assert(False)
+
 @dataclass
 class CoreMemoryType(CoreExternType):
   initial: list[int]
@@ -1138,8 +1149,10 @@ def flatten_functype(opts, ft, context):
   else:
     match context:
       case 'lift':
-        flat_params = []
-        flat_results = []
+        if opts.callback:
+          flat_results = ['i32']
+        else:
+          flat_results = []
       case 'lower':
         if len(flat_params) > 1:
           flat_params = ['i32']
@@ -1421,16 +1434,21 @@ def lower_heap_values(cx, vs, ts, out_param):
 async def canon_lift(opts, inst, ft, callee, caller, on_start, on_return, on_block = default_on_block):
   task = Task(opts, inst, ft, caller, on_return, on_block)
   flat_args = await task.enter(on_start)
+  flat_ft = flatten_functype(opts, ft, 'lift')
+  assert(types_match_values(flat_ft.params, flat_args))
   if opts.sync:
     flat_results = await call_and_trap_on_throw(callee, task, flat_args)
+    assert(types_match_values(flat_ft.results, flat_results))
     task.return_(flat_results)
     if opts.post_return is not None:
       [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
   else:
     if not opts.callback:
       [] = await call_and_trap_on_throw(callee, task, flat_args)
+      assert(types_match_values(flat_ft.results, []))
     else:
       [packed_ctx] = await call_and_trap_on_throw(callee, task, flat_args)
+      assert(types_match_values(flat_ft.results, [packed_ctx]))
       while packed_ctx != 0:
         is_yield = bool(packed_ctx & 1)
         ctx = packed_ctx & ~1
@@ -1452,6 +1470,8 @@ async def call_and_trap_on_throw(callee, task, args):
 
 async def canon_lower(opts, ft, callee, task, flat_args):
   trap_if(not task.inst.may_leave)
+  flat_ft = flatten_functype(opts, ft, 'lower')
+  assert(types_match_values(flat_ft.params, flat_args))
   subtask = Subtask(opts, ft, task, flat_args)
   if opts.sync:
     await task.call_sync(callee, task, subtask.on_start, subtask.on_return)
@@ -1470,6 +1490,7 @@ async def canon_lower(opts, ft, callee, task, flat_args):
         flat_results = [i | (int(subtask.state) << 30)]
       case Returned():
         flat_results = [0]
+  assert(types_match_values(flat_ft.results, flat_results))
   return flat_results
 
 ### `canon resource.new`
@@ -1499,7 +1520,7 @@ async def canon_resource_drop(rt, sync, task, i):
         callee_opts = CanonicalOptions(sync = rt.dtor_sync, callback = rt.dtor_callback)
         ft = FuncType([U32Type()],[])
         callee = partial(canon_lift, callee_opts, rt.impl, ft, rt.dtor)
-        flat_results = await canon_lower(caller_opts, ft, callee, task, [h.rep, 0])
+        flat_results = await canon_lower(caller_opts, ft, callee, task, [h.rep])
       else:
         task.trap_if_on_the_stack(rt.impl)
   else:

@@ -419,6 +419,7 @@ def test_handles():
     nonlocal dtor_value
     assert(len(args) == 1)
     dtor_value = args[0]
+    return []
 
   rt = ResourceType(ComponentInstance(), dtor) # usable in imports and exports
   inst = ComponentInstance()
@@ -558,7 +559,7 @@ async def test_async_to_async():
   async def consumer(task, args):
     [b] = args
     ptr = consumer_heap.realloc(0, 0, 1, 1)
-    [ret] = await canon_lower(consumer_opts, eager_ft, eager_callee, task, [0, ptr])
+    [ret] = await canon_lower(consumer_opts, eager_ft, eager_callee, task, [ptr])
     assert(ret == 0)
     u8 = consumer_heap.memory[ptr]
     assert(u8 == 43)
@@ -596,6 +597,7 @@ async def test_async_to_async():
       assert(len(args) == 1)
       await task.on_block(dtor_fut)
       dtor_value = args[0]
+      return []
     rt = ResourceType(producer_inst, dtor)
 
     [i] = await canon_resource_new(rt, task, 50)
@@ -652,10 +654,10 @@ async def test_async_callback():
   async def consumer(task, args):
     assert(len(args) == 0)
 
-    [ret] = await canon_lower(opts, producer_ft, producer1, task, [0, 0])
+    [ret] = await canon_lower(opts, producer_ft, producer1, task, [])
     assert(ret == (1 | (CallState.STARTED << 30)))
 
-    [ret] = await canon_lower(opts, producer_ft, producer2, task, [0, 0])
+    [ret] = await canon_lower(opts, producer_ft, producer2, task, [])
     assert(ret == (2 | (CallState.STARTED << 30)))
 
     fut1.set_result(None)
@@ -730,10 +732,10 @@ async def test_async_to_sync():
   async def consumer(task, args):
     assert(len(args) == 0)
 
-    [ret] = await canon_lower(consumer_opts, producer_ft, producer1, task, [0, 0])
+    [ret] = await canon_lower(consumer_opts, producer_ft, producer1, task, [])
     assert(ret == (1 | (CallState.STARTED << 30)))
 
-    [ret] = await canon_lower(consumer_opts, producer_ft, producer2, task, [0, 0])
+    [ret] = await canon_lower(consumer_opts, producer_ft, producer2, task, [])
     assert(ret == (2 | (CallState.STARTING << 30)))
 
     assert(await task.poll() is None)
@@ -808,10 +810,10 @@ async def test_async_backpressure():
   async def consumer(task, args):
     assert(len(args) == 0)
 
-    [ret] = await canon_lower(consumer_opts, producer_ft, producer1, task, [0, 0])
+    [ret] = await canon_lower(consumer_opts, producer_ft, producer1, task, [])
     assert(ret == (1 | (CallState.RETURNED << 30)))
 
-    [ret] = await canon_lower(consumer_opts, producer_ft, producer2, task, [0, 0])
+    [ret] = await canon_lower(consumer_opts, producer_ft, producer2, task, [])
     assert(ret == (2 | (CallState.STARTING << 30)))
 
     assert(await task.poll() is None)
@@ -872,9 +874,9 @@ async def test_sync_using_wait():
   lower_opts.sync = False
 
   async def core_func(task, args):
-    [ret] = await canon_lower(lower_opts, ft, hostcall1, task, [0,0])
+    [ret] = await canon_lower(lower_opts, ft, hostcall1, task, [])
     assert(ret == (1 | (CallState.STARTED << 30)))
-    [ret] = await canon_lower(lower_opts, ft, hostcall2, task, [0,0])
+    [ret] = await canon_lower(lower_opts, ft, hostcall2, task, [])
     assert(ret == (2 | (CallState.STARTED << 30)))
 
     fut1.set_result(None)
