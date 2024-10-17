@@ -142,10 +142,9 @@ interface types {
 
 More information about [`use`][use] and [types] are described below, but this
 is an example of a collection of items within an `interface`. All items defined
-in an `interface`, including [`use`][use] items, are considered as exports from
-the interface. This means that types can further be used from the interface by
-other interfaces. An interface has a single namespace which means that none of
-the defined names can collide.
+in an `interface` are considered as exports from the interface. This means that
+types can further be used from the interface by other interfaces. An interface
+has a single namespace which means that none of the defined names can collide.
 
 A WIT package can contain any number of interfaces listed at the top-level and
 in any order. The WIT validator will ensure that all references between
@@ -589,10 +588,8 @@ use wasi:http/types@2.0.0 as http-types2;
 ### Transitive imports and worlds
 
 A `use` statement is not implemented by copying type information around but
-instead retains that it's a reference to a type defined elsewhere. This
-representation is plumbed all the way through to the final component, meaning
-that `use`d types have an impact on the structure of the final generated
-component.
+instead retains that it's a reference to a type that must have already been
+imported or exported.
 
 For example this document:
 
@@ -600,12 +597,13 @@ For example this document:
 package local:demo;
 
 interface shared {
-  record metadata {
+  resource metadata {
     // ...
   }
 }
 
 world my-world {
+  import shared;  // required by 'use'
   import host: interface {
     use shared.{metadata};
 
@@ -617,52 +615,53 @@ world my-world {
 would generate this component:
 
 ```wasm
-(component
+(component $C
   (import "local:demo/shared" (instance $shared
-    (type $metadata (record (; ... ;)))
-    (export "metadata" (type (eq $metadata)))
+    (export "metadata" (type (sub resource)))
   ))
   (alias export $shared "metadata" (type $metadata_from_shared))
   (import "host" (instance $host
-    (export $metadata_in_host "metadata" (type (eq $metadata_from_shared)))
-    (export "get" (func (result $metadata_in_host)))
+    (alias outer $C $metadata_from_shared (type $metadata))
+    (export "get" (func (result $metadata)))
   ))
 )
 ```
 
-Here it can be seen that despite the `world` only listing `host` as an import
-the component additionally imports a `local:demo/shared` interface. This is due
-to the fact that the `use shared.{ ... }` implicitly requires that `shared` is
-imported into the component as well.
+Thus, the `metadata` resource type defined in the `shared` interface is
+directly shared (via Component Model `alias` definitions) with the `host`
+interface. If the `import shared;` line were deleted, this WIT document would
+fail to validate since there is no `shared.metadata` type to `use`.
 
 Note that the name `"local:demo/shared"` here is derived from the name of the
 `interface` plus the package name `local:demo`.
 
-For `export`ed interfaces, any transitively `use`d interface is assumed to be an
-import unless it's explicitly listed as an export. For example, here `w1` is
-equivalent to `w2`:
+For `export`ed interfaces, any transitively `use`d interfaces can be satisfied
+by *either* imports or exports.
+
+For example, the following world `w` uses both the imported `r` defined by `a`
+and the exported `s` defined by `b`:
 ```wit
 interface a {
   resource r;
 }
 interface b {
-  use a.{r};
-  foo: func() -> r;
+  resource s;
 }
-
-world w1 {
-  export b;
-}
-world w2 {
+world w {
   import a;
   export b;
+  export converter: interface {
+    use a.{r};
+    use b.{s};
+    convert: func(in: r) -> s;
+  }
 }
 ```
 
-> **Note**: It's planned in the future to have "power user syntax" to configure
-> this on a more fine-grained basis for exports, for example being able to
-> configure that a `use`'d interface is a particular import or a particular
-> export.
+> **Note**: It's planned in the future to add additional syntax to support and
+> disambiguate the case where the same interface is both imported and exported.
+> With this addition, `w` could contain `import b` and `converter` could `use`
+> *both* the imported `s` *and* the exported `s`.
 
 ## WIT Functions
 [functions]: #wit-functions
@@ -1898,6 +1897,7 @@ package wasi:http;
 
 world proxy {
   import wasi:logging/logger;
+  import types;
   import handler;
   export handler;
 }
