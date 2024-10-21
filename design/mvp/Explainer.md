@@ -1495,9 +1495,10 @@ of a stream or future that has an outstanding "`BLOCKED`" read or write. If
 cancellation finished eagerly, the return value is the number of elements read
 or written into the given buffer (`0` or `1` for a `future`). If cancellation
 blocks, the return value is the sentinel "`BLOCKED`" value and the caller must
-`task.wait` for a `{STREAM,FUTURE}_{READ,WRITE}` event to indicate the
-completion of the `read` or `write`. (See [`canon_stream_cancel_read`] in the
-Canonical ABI explainer for details.)
+`task.wait` (or, if using `callback`, return to the event loop) to receive a
+`{STREAM,FUTURE}_{READ,WRITE}` event to indicate the completion of the `read`
+or `write`. (See [`canon_stream_cancel_read`] in the Canonical ABI explainer
+for details.)
 
 The `waitable.drop` built-in has type `[i32] -> []` and removes the indicated
 [subtask](Async.md#subtask-and-supertask) or [stream or future](Async.md#streams-and-futures)
