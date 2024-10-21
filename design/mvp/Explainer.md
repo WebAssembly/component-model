@@ -1486,7 +1486,7 @@ The `future.{read,write}` built-ins have type `[i32 i32] -> [i32]` and
 take an index to the matching [readable or writable end](Async.md#streams-and-futures)
 of a future as the first parameter and a pointer linear memory as the second
 parameter. The return value is either `1` if the future value was eagerly
-read or written to the pointer or the sentinel "`BLOCKED`" value otherwise.
+read from or written to the pointer or the sentinel "`BLOCKED`" value otherwise.
 (See [`canon_future_read`] in the Canonical ABI explainer for details.)
 
 The `{stream,future}.cancel-{read,write}` built-ins have type `[i32] -> [i32]`
