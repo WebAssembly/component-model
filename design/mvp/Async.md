@@ -211,17 +211,18 @@ attempts to exit.
 ### Streams and Futures
 
 Streams and Futures have two "ends": a *readable end* and *writable end*. When
-*consuming* a `stream` or `future` value as a parameter (of an export call
-with a `stream` or `future` somewhere in the parameter types) or result (of an
+*consuming* a `stream` or `future` value as a parameter (of an export call with
+a `stream` or `future` somewhere in the parameter types) or result (of an
 import call with a `stream` or `future` somewhere in the result type), the
 receiver always gets *unique ownership* of the *readable end* of the `stream`
 or `future`. When *producing* a `stream` or `future` value as a parameter (of
 an import call) or result (of an export call), the producer can either
-*transfer ownership* of a readable end it has already received or it can
-create a fresh writable end (via `stream.new` or `future.new`) and lift this
-writable end (maintaining ownership of the writable end, but creating a fresh
-readable end for the receiver). To maintain the invariant that readable ends
-are unique, a writable end can be lifted at most once, trapping otherwise.
+*transfer ownership* of a readable end it has already received or it can create
+a fresh writable end (via `stream.new` or `future.new`) and then lift this
+writable end to create a fresh readable end in the consumer while maintaining
+ownership of the writable end in the producer. To maintain the invariant that
+readable ends are unique, a writable end can be lifted at most once, trapping
+otherwise.
 
 Based on this, `stream<T>` and `future<T>` values can be passed between
 functions as if they were synchronous `list<T>` and `T` values, resp. For
