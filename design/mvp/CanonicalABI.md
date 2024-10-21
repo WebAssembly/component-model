@@ -581,7 +581,7 @@ retroactively removed (e.g., when a `stream.cancel-read` "steals" a pending
 Python code represents `events` as a list of closures, an optimizing
 implementation should be able to avoid dynamically allocating this list and
 instead represent `events` as a linked list embedded in the elements of the
-`waitables` table (noting that, by design, any given `watiables` element can be
+`waitables` table (noting that, by design, any given `waitables` element can be
 in the `events` list at most once).
 
 A task may also cooperatively yield (via `canon task.yield`), allowing the
