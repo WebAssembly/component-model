@@ -1373,13 +1373,13 @@ canon ::= ...
         | (canon task.poll (memory <core:memidx>) (core func <id>?)) 🔀
         | (canon task.yield (core func <id>?)) 🔀
         | (canon stream.new <typeidx> (core func <id>?)) 🔀
-        | (canon stream.read (core func <id>?)) 🔀
-        | (canon stream.write (core func <id>?)) 🔀
+        | (canon stream.read <typeidx> (core func <id>?)) 🔀
+        | (canon stream.write <typeidx> (core func <id>?)) 🔀
         | (canon stream.cancel-read async? (core func <id>?)) 🔀
         | (canon stream.cancel-write async? (core func <id>?)) 🔀
         | (canon future.new <typeidx> (core func <id>?)) 🔀
-        | (canon future.read (core func <id>?)) 🔀
-        | (canon future.write (core func <id>?)) 🔀
+        | (canon future.read <typeidx> (core func <id>?)) 🔀
+        | (canon future.write <typeidx> (core func <id>?)) 🔀
         | (canon future.cancel-read async? (core func <id>?)) 🔀
         | (canon future.cancel-write async? (core func <id>?)) 🔀
         | (canon waitable.drop (core func <id>?)) 🔀

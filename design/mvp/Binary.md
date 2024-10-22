@@ -294,13 +294,13 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x0c                                                => (canon task.yield (core func)) 🔀
            | 0x0d                                                => (canon waitable.drop (core func)) 🔀
            | 0x0e t:<typeidx>                                    => (canon stream.new t (core func)) 🔀
-           | 0x0f                                                => (canon stream.read (core func)) 🔀
-           | 0x10                                                => (canon stream.write (core func)) 🔀
+           | 0x0f t:<typeidx>                                    => (canon stream.read t (core func)) 🔀
+           | 0x10 t:<typeidx>                                    => (canon stream.write t (core func)) 🔀
            | 0x11 async?:<async?>                                => (canon stream.cancel-read async? (core func)) 🔀
            | 0x12 async?:<async?>                                => (canon stream.cancel-write async? (core func)) 🔀
            | 0x13 t:<typeidx>                                    => (canon future.new t (core func)) 🔀
-           | 0x14                                                => (canon future.read (core func)) 🔀
-           | 0x15                                                => (canon future.write (core func)) 🔀
+           | 0x14 t:<typeidx>                                    => (canon future.read t (core func)) 🔀
+           | 0x15 t:<typeidx>                                    => (canon future.write t (core func)) 🔀
            | 0x16 async?:<async?>                                => (canon future.cancel-read async? (core func)) 🔀
            | 0x17 async?:<async?>                                => (canon future.cancel-write async? (core func)) 🔀
 async?   ::= 0x00                                                =>
