@@ -2978,29 +2978,30 @@ likelihood of deadlock), there is no synchronous option for `read` or `write`.
 The actual copy happens via polymorphic dispatch to `copy`, which has been
 defined above by the 4 `{Readable,Writable}{Stream,Future}Handle` types:
 ```python
-async def canon_stream_read(task, i, ptr, n):
-  return await async_copy(ReadableStreamHandle, WritableBufferGuestImpl,
+async def canon_stream_read(t, task, i, ptr, n):
+  return await async_copy(ReadableStreamHandle, WritableBufferGuestImpl, t,
                           EventCode.STREAM_READ, task, i, ptr, n)
 
-async def canon_stream_write(task, i, ptr, n):
-  return await async_copy(WritableStreamHandle, ReadableBufferGuestImpl,
+async def canon_stream_write(t, task, i, ptr, n):
+  return await async_copy(WritableStreamHandle, ReadableBufferGuestImpl, t,
                           EventCode.STREAM_WRITE, task, i, ptr, n)
 
-async def canon_future_read(task, i, ptr):
-  return await async_copy(ReadableFutureHandle, WritableBufferGuestImpl,
+async def canon_future_read(t, task, i, ptr):
+  return await async_copy(ReadableFutureHandle, WritableBufferGuestImpl, t,
                           EventCode.FUTURE_READ, task, i, ptr, 1)
 
-async def canon_future_write(task, i, ptr):
-  return await async_copy(WritableFutureHandle, ReadableBufferGuestImpl,
+async def canon_future_write(t, task, i, ptr):
+  return await async_copy(WritableFutureHandle, ReadableBufferGuestImpl, t,
                           EventCode.FUTURE_WRITE, task, i, ptr, 1)
 
-async def async_copy(HandleT, BufferT, event_code, task, i, ptr, n):
+async def async_copy(HandleT, BufferT, t, event_code, task, i, ptr, n):
   trap_if(not task.inst.may_leave)
   h = task.inst.waitables.get(i)
   trap_if(not isinstance(h, HandleT))
+  trap_if(h.t != t)
   trap_if(not h.cx)
   trap_if(h.copying_buffer)
-  buffer = BufferT(h.cx, h.t, ptr, n)
+  buffer = BufferT(h.cx, t, ptr, n)
   if h.stream.closed():
     flat_results = [CLOSED]
   else:
