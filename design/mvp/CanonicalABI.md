@@ -11,6 +11,7 @@ being specified here.
   * [Call Context](#call-context)
   * [Canonical ABI Options](#canonical-abi-options)
   * [Runtime State](#runtime-state)
+    * [Component Instance State](#component-instance-state)
     * [Resource State](#resource-state)
     * [Task State](#task-state)
     * [Buffer, Stream and Future State](#buffer-stream-and-future-state)
@@ -135,6 +136,17 @@ reason that `async` is a keyword and most branches below want to start with the
 
 
 ### Runtime State
+
+The following Python classes define spec-internal state and utility methods
+that are used to define the externally-visible behavior of Canonical ABI's
+lifting, lowering and built-in definitions below. These fields are chosen for
+simplicity over performance and thus an optimizing implementation is expected
+to use a more optimized representations as long as it preserves the same
+externally-visible behavior. Some specific examples of expected optimizations
+are noted below.
+
+
+#### Component Instance State
 
 The `inst` field of `CallContext` points to the component instance which the
 `canon`-generated function is closed over. Component instances contain all the
