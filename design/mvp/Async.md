@@ -249,7 +249,7 @@ previously-mentioned invariant, the readable and writable ends of a stream are
 unique *and never in the same component*.
 
 Given the readable or writable end of a stream, core wasm code can call the
-imported `stream.read` or `stream.write` canonical built-ins, passing the
+imported `stream.read` or `stream.write` canonical built-ins, resp., passing the
 pointer and length of a linear-memory buffer to write-into or read-from, resp.
 These built-ins can either return immediately if >0 elements were able to be
 written or read immediately (without blocking) or return a sentinel "blocked"
