@@ -114,7 +114,7 @@ concurrency. Streams and futures are thus not defined to be free-standing
 resources with their own internal memory buffers (like a traditional channel or
 pipe) but, rather, more-primitive control-flow mechanisms that synchronize the
 incremental passing of parameters and results during cross-component calls.
-Higher-level resources like channels and pipes can then be defined in terms
+Higher-level resources like channels and pipes could then be defined in terms
 of these lower-level `stream` and `future` primitives, e.g.:
 ```wit
 resource pipe {
