@@ -1950,17 +1950,21 @@ async def cancel_async_copy(HandleT, sync, task, i):
   h = task.inst.waitables.get(i)
   trap_if(not isinstance(h, HandleT))
   trap_if(not h.copying_buffer)
-  if sync:
-    await task.call_sync(h.cancel_copy, h.copying_buffer)
-    flat_results = [h.copying_buffer.progress]
+  if h.stream.closed():
+    flat_results = [pack_async_copy_result(h.copying_buffer, h)]
     h.copying_buffer = None
   else:
-    match await call_and_handle_blocking(h.cancel_copy, h.copying_buffer):
-      case Blocked():
-        flat_results = [BLOCKED]
-      case Returned():
-        flat_results = [h.copying_buffer.progress]
-        h.copying_buffer = None
+    if sync:
+      await task.call_sync(h.cancel_copy, h.copying_buffer)
+      flat_results = [pack_async_copy_result(h.copying_buffer, h)]
+      h.copying_buffer = None
+    else:
+      match await call_and_handle_blocking(h.cancel_copy, h.copying_buffer):
+        case Blocked():
+          flat_results = [BLOCKED]
+        case Returned():
+          flat_results = [pack_async_copy_result(h.copying_buffer, h)]
+          h.copying_buffer = None
   return flat_results
 
 ### 🔀 `canon waitable.drop`
