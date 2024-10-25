@@ -1369,9 +1369,9 @@ canon ::= ...
         | (canon resource.rep <typeidx> (core func <id>?))
         | (canon task.backpressure (core func <id>?)) 🔀
         | (canon task.return <core:typeidx> (core func <id>?)) 🔀
-        | (canon task.wait (memory <core:memidx>) (core func <id>?)) 🔀
-        | (canon task.poll (memory <core:memidx>) (core func <id>?)) 🔀
-        | (canon task.yield (core func <id>?)) 🔀
+        | (canon task.wait async? (memory <core:memidx>) (core func <id>?)) 🔀
+        | (canon task.poll async? (memory <core:memidx>) (core func <id>?)) 🔀
+        | (canon task.yield async? (core func <id>?)) 🔀
         | (canon stream.new <typeidx> (core func <id>?)) 🔀
         | (canon stream.read <typeidx> <canonopt>* (core func <id>?)) 🔀
         | (canon stream.write <typeidx> <canonopt>* (core func <id>?)) 🔀

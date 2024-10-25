@@ -289,9 +289,9 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x06                                                => (canon thread.hw_concurrency (core func)) 🧵
            | 0x08                                                => (canon task.backpressure (core func)) 🔀
            | 0x09 ft:<core:typeidx>                              => (canon task.return ft (core func)) 🔀
-           | 0x0a m:<core:memdix>                                => (canon task.wait (memory m) (core func)) 🔀
-           | 0x0b m:<core:memidx>                                => (canon task.poll (memory m) (core func)) 🔀
-           | 0x0c                                                => (canon task.yield (core func)) 🔀
+           | 0x0a async?:<async>? m:<core:memdix>                => (canon task.wait async? (memory m) (core func)) 🔀
+           | 0x0b async?:<async>? m:<core:memidx>                => (canon task.poll async? (memory m) (core func)) 🔀
+           | 0x0c async?:<async>?                                => (canon task.yield async? (core func)) 🔀
            | 0x0d                                                => (canon waitable.drop (core func)) 🔀
            | 0x0e t:<typeidx>                                    => (canon stream.new t (core func)) 🔀
            | 0x0f t:<typeidx> opts:<opts>                        => (canon stream.read t opts (core func)) 🔀
