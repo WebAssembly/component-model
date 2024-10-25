@@ -8,7 +8,7 @@ walkthrough of the static structure of a component and the
 being specified here.
 
 * [Supporting definitions](#supporting-definitions)
-  * [Call Context](#call-context)
+  * [Lifting and Lowering Context](#lifting-and-lowering-context)
   * [Canonical ABI Options](#canonical-abi-options)
   * [Runtime State](#runtime-state)
     * [Component Instance State](#component-instance-state)
@@ -80,44 +80,37 @@ intentionally propagate OOM into the appropriate explicit return value of the
 function's declared return type.
 
 
-### Call Context
+### Lifting and Lowering Context
 
 Most Canonical ABI definitions depend on some ambient information which is
 established by the `canon lift`- or `canon lower`-defined function that is
 being called:
 * the ABI options supplied via [`canonopt`]
 * the containing component instance
-* the [current task]
+* the `Task` state created by `canon lift` or the `Subtask` state created by
+  `canon lower`
 
-These pieces of ambient information are stored in the first three fields of
-the `CallContext` that is threaded through all the Python functions below as
-the `cx` parameter/field.
+These three pieces of ambient information are stored in the `LiftLowerContext`
+class that is threaded through all the Python functions below as the `cx`
+parameter/field.
 ```python
-class CallContext:
+class LiftLowerContext:
   opts: CanonicalOptions
   inst: ComponentInstance
-  task: Task
-  todo: int
+  call: Task|Subtask
 
-  def __init__(self, opts, inst, task):
+  def __init__(self, opts, inst, call):
     self.opts = opts
     self.inst = inst
-    self.task = task
-    self.todo = 0
-
-  def end_call(self):
-    trap_if(self.todo)
+    self.call = call
 ```
-Additionally, import and export calls have a `todo` count that is incremented
-and decremented by various Canonical ABI rules below to track outstanding
-obligations to do something (e.g., drop a `borrow`ed handle) before the end of
-the call. The `Task` and `Subtask` classes derive `CallContext` and call
-`self.end_call()` when they complete.
+The `CanonicalOptions`, `ComponentInstance`, `Task` and `Subtask` classes
+are defined next.
 
 
 ### Canonical ABI Options
 
-The `opts` field of `CallContext` contains all the possible [`canonopt`]
+The `CanonicalOptions` class contains all the possible [`canonopt`]
 immediates that can be passed to the `canon` definition being implemented.
 ```python
 @dataclass
@@ -148,10 +141,8 @@ are noted below.
 
 #### Component Instance State
 
-The `inst` field of `CallContext` points to the component instance which the
-`canon`-generated function is closed over. Component instances contain all the
-core wasm instance as well as some extra state that is used exclusively by the
-Canonical ABI and introduced below as the fields are used.
+The `ComponentInstance` class contains all the relevant per-component-instance
+state that `canon`-generated functions use to maintain component invariants.
 ```python
 class ComponentInstance:
   resources: ResourceTables
@@ -286,13 +277,13 @@ The `ResourceHandle` class defines the elements of the per-resource-type
 class ResourceHandle:
   rep: int
   own: bool
-  scope: Optional[Task]
+  call: Optional[Task]
   lend_count: int
 
-  def __init__(self, rep, own, scope = None):
+  def __init__(self, rep, own, call = None):
     self.rep = rep
     self.own = own
-    self.scope = scope
+    self.call = call
     self.lend_count = 0
 ```
 The `rep` field of `ResourceHandle` stores the resource representation
@@ -301,11 +292,11 @@ The `rep` field of `ResourceHandle` stores the resource representation
 The `own` field indicates whether this element was created from an `own` type
 (or, if false, a `borrow` type).
 
-The `scope` field stores the `Task` that created the borrowed handle. When a
-component only uses sync-lifted exports, due to lack of reentrance, there is
-at most one `Task` alive in a component instance at any time and thus an
-optimizing implementation doesn't need to store the `Task` per
-`ResourceHandle`.
+The `call` field stores the `Task` that lowered the borrowed handle as a
+parameter. When a component only uses sync-lifted exports, due to lack of
+reentrance, there is at most one `Task` alive in a component instance at any
+time and thus an optimizing implementation doesn't need to store the `Task`
+per `ResourceHandle`.
 
 The `lend_count` field maintains a conservative approximation of the number of
 live handles that were lent from this `own` handle (by calls to `borrow`-taking
@@ -321,13 +312,7 @@ and guards thereof.
 
 #### Task State
 
-Additional runtime state is required to implement the canonical built-ins and
-check that callers and callees uphold their respective parts of the call
-contract. This additional call state derives from `CallContext`, adding extra
-mutable fields. There are two subclasses of `CallContext`: `Task`, which is
-created by `canon_lift` and `Subtask`, which is created by `canon_lower`.
-
-The `Task` class and its subclasses depend on the following type definitions:
+The `Task` class depends on the following type definitions:
 ```python
 class CallState(IntEnum):
   STARTING = 0
@@ -436,26 +421,36 @@ when there is a need to make an `async` call.
 
 A `Task` object is created for each call to `canon_lift` and is implicitly
 threaded through all core function calls. This implicit `Task` parameter
-represents the "[current task]". A `Task` is-a `CallContext`, with its `ft`
-and `opts` derived from the `canon lift` definition that created this `Task`.
+represents the "[current task]".
 ```python
-class Task(CallContext):
+class Task:
+  opts: CanonicalOptions
+  inst: ComponentInstance
   ft: FuncType
   caller: Optional[Task]
   on_return: Optional[Callable]
   on_block: OnBlockCallback
   events: list[EventCallback]
   has_events: asyncio.Event
+  todo: int
 
   def __init__(self, opts, inst, ft, caller, on_return, on_block):
-    super().__init__(opts, inst, self)
+    self.opts = opts
+    self.inst = inst
     self.ft = ft
     self.caller = caller
     self.on_return = on_return
     self.on_block = on_block
     self.events = []
     self.has_events = asyncio.Event()
+    self.todo = 0
+
+  def task(self):
+    return self
 ```
+The `task()` method can be called polymorphically on a `Task|Subtask` to
+get the `Subtask`'s `supertask` or, in the case of a `Task`, itself.
+
 The fields of `Task` are introduced in groups of related `Task` methods next.
 Using a conservative syntactic analysis of the component-level definitions of
 a linked component DAG, an optimizing implementation can statically eliminate
@@ -509,7 +504,8 @@ that OOM the component before it can re-enable backpressure.
       assert(self.inst.interruptible.is_set())
       self.inst.interruptible.clear()
     self.inst.num_tasks += 1
-    return lower_flat_values(self, MAX_FLAT_PARAMS, on_start(), self.ft.param_types())
+    cx = LiftLowerContext(self.opts, self.inst, self)
+    return lower_flat_values(cx, MAX_FLAT_PARAMS, on_start(), self.ft.param_types())
 
   def may_enter(self, pending_task):
     return self.inst.interruptible.is_set() and \
@@ -630,7 +626,8 @@ more than once which must be checked by `return_` and `exit`.
     else:
       maxflat = MAX_FLAT_PARAMS
     ts = self.ft.result_types()
-    vs = lift_flat_values(self, maxflat, CoreValueIter(flat_results), ts)
+    cx = LiftLowerContext(self.opts, self.inst, self)
+    vs = lift_flat_values(cx, maxflat, CoreValueIter(flat_results), ts)
     self.on_return(vs)
     self.on_return = None
 ```
@@ -640,12 +637,15 @@ async or sychronous-using-`always-task-return` call, in which return values
 are passed as parameters to `canon task.return`.
 
 Lastly, when a task exits, the runtime enforces the guard conditions mentioned
-above and allows a pending task to start.
+above and allows a pending task to start. The `todo` counter is used below to
+record the number of unmet obligations to drop borrowed handles, subtasks,
+streams and futures.
 ```python
   def exit(self):
     assert(current_task.locked())
     assert(not self.maybe_next_event())
     assert(self.inst.num_tasks >= 1)
+    trap_if(self.todo)
     trap_if(self.on_return)
     trap_if(self.inst.num_tasks == 1 and self.inst.backpressure)
     self.inst.num_tasks -= 1
@@ -653,17 +653,17 @@ above and allows a pending task to start.
       assert(not self.inst.interruptible.is_set())
       self.inst.interruptible.set()
     self.maybe_start_pending_task()
-    self.end_call()
 ```
 
 While `canon_lift` creates `Task`s, `canon_lower` creates `Subtask` objects.
-Like `Task`, `Subtask` is a subclass of `CallContext` and stores the `ft` and
-`opts` of its `canon lower`. Importantly, the `task` field of a `Subtask`
-refers to the [current task] which called `canon lower`, thereby linking all
-subtasks to their supertask, maintaining the (possibly asynchronous) call
-tree.
+Importantly, the `supertask` field of `Subtask` refers to the [current task]
+which called `canon lower`, thereby linking all subtasks to their supertasks,
+maintaining a (possibly asynchronous) call tree.
 ```python
-class Subtask(CallContext):
+class Subtask:
+  opts: CanonicalOptions
+  inst: ComponentInstance
+  supertask: Task
   ft: FuncType
   flat_args: CoreValueIter
   flat_results: Optional[list[Any]]
@@ -671,9 +671,12 @@ class Subtask(CallContext):
   lenders: list[ResourceHandle]
   notify_supertask: bool
   enqueued: bool
+  todo: int
 
   def __init__(self, opts, ft, task, flat_args):
-    super().__init__(opts, task.inst, task)
+    self.opts = opts
+    self.inst = task.inst
+    self.supertask = task
     self.ft = ft
     self.flat_args = CoreValueIter(flat_args)
     self.flat_results = None
@@ -681,7 +684,13 @@ class Subtask(CallContext):
     self.lenders = []
     self.notify_supertask = False
     self.enqueued = False
+    self.todo = 0
+
+  def task(self):
+    return self.supertask
 ```
+The `task()` method can be called polymorphically on a `Task|Subtask` to
+get the `Subtask`'s `supertask` or, in the case of a `Task`, itself.
 
 The `lenders` field of `Subtask` maintains a list of all the owned handles
 that have been lent to a subtask and must therefor not be dropped until the
@@ -722,7 +731,7 @@ the event loop when only the most recent state matters.
         if self.state == CallState.DONE:
           self.release_lenders()
         return (EventCode(self.state), i, 0)
-      self.task.notify(subtask_event)
+      self.supertask.notify(subtask_event)
 ```
 
 The `on_start` and `on_return` methods of `Subtask` are passed (by
@@ -738,7 +747,8 @@ called).
     self.maybe_notify_supertask()
     max_flat = MAX_FLAT_PARAMS if self.opts.sync else 1
     ts = self.ft.param_types()
-    return lift_flat_values(self, max_flat, self.flat_args, ts)
+    cx = LiftLowerContext(self.opts, self.inst, self)
+    return lift_flat_values(cx, max_flat, self.flat_args, ts)
 
   def on_return(self, vs):
     assert(self.state == CallState.STARTED)
@@ -746,7 +756,8 @@ called).
     self.maybe_notify_supertask()
     max_flat = MAX_FLAT_RESULTS if self.opts.sync else 0
     ts = self.ft.result_types()
-    self.flat_results = lower_flat_values(self, max_flat, vs, ts, self.flat_args)
+    cx = LiftLowerContext(self.opts, self.inst, self)
+    self.flat_results = lower_flat_values(cx, max_flat, vs, ts, self.flat_args)
 ```
 
 When a `Subtask` finishes, it calls `release_lenders` to allow owned handles
@@ -767,14 +778,15 @@ when the subtask finishes.
 
 Lastly, after a `Subtask` has finished and notified its supertask (thereby
 clearing `enqueued`), it may be dropped from the `waitables` table which
-effectively ends the call from the perspective of the caller and guards that
-the `Subtask`'s `todo` count is zero.
+effectively ends the call from the perspective of the caller. The `todo`
+counter is used below to record the number of unmet obligations to drop the
+streams and futures connected to this `Subtask`.
 ```python
   def drop(self):
+    trap_if(self.todo)
     trap_if(self.enqueued)
     trap_if(self.state != CallState.DONE)
-    self.task.todo -= 1
-    self.end_call()
+    self.supertask.todo -= 1
 ```
 
 
@@ -827,7 +839,7 @@ classes are defined below as part of normal `list` parameter lifting and
 lowering.
 ```python
 class BufferGuestImpl(Buffer):
-  cx: CallContext
+  cx: LiftLowerContext
   t: ValType
   ptr: int
   progress: int
@@ -994,20 +1006,20 @@ the shared `canon stream.*` built-in code below.
 class StreamHandle:
   stream: ReadableStream
   t: ValType
-  cx: Optional[CallContext]
+  call: Optional[Task|Subtask]
   copying_buffer: Optional[Buffer]
 
-  def __init__(self, stream, t, cx):
+  def __init__(self, stream, t, call):
     self.stream = stream
     self.t = t
-    self.cx = cx
+    self.call = call
     self.copying_buffer = None
 
   def drop(self):
     trap_if(self.copying_buffer)
     self.stream.close()
-    if self.cx:
-      self.cx.todo -= 1
+    if self.call:
+      self.call.todo -= 1
 
 class ReadableStreamHandle(StreamHandle):
   async def copy(self, dst, on_block):
@@ -1018,7 +1030,7 @@ class ReadableStreamHandle(StreamHandle):
 class WritableStreamHandle(ReadableStreamGuestImpl, StreamHandle):
   def __init__(self, t):
     ReadableStreamGuestImpl.__init__(self)
-    StreamHandle.__init__(self, self, t, cx = None)
+    StreamHandle.__init__(self, self, t, call = None)
   async def copy(self, src, on_block):
     await self.write(src, on_block)
   async def cancel_copy(self, src, on_block):
@@ -1057,7 +1069,7 @@ class ReadableFutureHandle(FutureHandle):
 class WritableFutureHandle(ReadableStreamGuestImpl, FutureHandle):
   def __init__(self, t):
     ReadableStreamGuestImpl.__init__(self)
-    FutureHandle.__init__(self, self, t, cx = None)
+    FutureHandle.__init__(self, self, t, call = None)
 
   async def copy(self, src, on_block):
     assert(src.remain() == 1)
@@ -1533,15 +1545,15 @@ from the source handle, leaving the source handle intact in the current
 component instance's handle table:
 ```python
 def lift_borrow(cx, i, t):
-  assert(isinstance(cx, Subtask))
+  assert(isinstance(cx.call, Subtask))
   h = cx.inst.resources.get(t.rt, i)
   if h.own:
-    cx.add_lender(h)
+    cx.call.add_lender(h)
   else:
-    trap_if(cx.task is not h.scope)
+    trap_if(cx.call.task() is not h.call.task())
   return h.rep
 ```
-The `add_lender` call to `CallContext` participates in the enforcement of the
+The `Subtask.add_lender` participates in the enforcement of the
 dynamic borrow rules, which keep the source `own` handle alive until the end of
 the call (as an intentionally-conservative upper bound on how long the `borrow`
 handle can be held). When `h` is a `borrow` handle, we just need to make sure
@@ -1555,9 +1567,9 @@ transfers ownership of it while lifting the writable end leaves the writable
 end in place, but traps if the writable end has already been lifted before.
 Together, this ensures that at most one component holds each of the readable
 and writable ends of a stream. The `todo` increments must be matched by
-decrements in `StreamHandle.drop` for `CallContext.end_call` to not trap; this
-ensures that the writable stream handles cannot outlive the `Task` to which
-their events are sent (via `h.cx.task.notify()`).
+decrements in `StreamHandle.drop` for `Task.exit`/`Subtask.drop` to not trap;
+this ensures that the writable stream handles cannot outlive the `Task` to
+which their events are sent (via `h.call.task().notify()`).
 ```python
 def lift_stream(cx, i, t):
   return lift_async_value(ReadableStreamHandle, WritableStreamHandle, cx, i, t)
@@ -1572,14 +1584,14 @@ def lift_async_value(ReadableHandleT, WritableHandleT, cx, i, t):
   match h:
     case ReadableHandleT():
       trap_if(h.copying_buffer)
-      trap_if(contains_borrow(t) and cx.task is not h.cx)
-      h.cx.todo -= 1
+      trap_if(contains_borrow(t) and cx.call.task() is not h.call.task())
+      h.call.todo -= 1
       cx.inst.waitables.remove(i)
     case WritableHandleT():
-      trap_if(h.cx is not None)
+      trap_if(h.call is not None)
       assert(not h.copying_buffer)
-      h.cx = cx
-      h.cx.todo += 1
+      h.call = cx.call
+      h.call.todo += 1
     case _:
       trap()
   trap_if(h.t != t)
@@ -2001,11 +2013,11 @@ def lower_own(cx, rep, t):
   return cx.inst.resources.add(t.rt, h)
 
 def lower_borrow(cx, rep, t):
-  assert(isinstance(cx, Task))
+  assert(isinstance(cx.call, Task))
   if cx.inst is t.rt.impl:
     return rep
-  h = ResourceHandle(rep, own=False, scope=cx)
-  cx.todo += 1
+  h = ResourceHandle(rep, own=False, call=cx.call)
+  cx.call.todo += 1
   return cx.inst.resources.add(t.rt, h)
 ```
 The special case in `lower_borrow` is an optimization, recognizing that, when
@@ -2027,22 +2039,22 @@ def lower_future(cx, v, t):
 
 def lower_async_value(ReadableHandleT, WritableHandleT, cx, v, t):
   assert(isinstance(v, ReadableStream))
-  if isinstance(v, WritableHandleT) and cx.inst is v.cx.inst:
+  if isinstance(v, WritableHandleT) and cx.inst is v.call.inst:
     i = cx.inst.waitables.array.index(v)
-    v.cx.todo -= 1
-    v.cx = None
+    v.call.todo -= 1
+    v.call = None
     assert(2**31 > Table.MAX_LENGTH >= i)
     return i | (2**31)
   else:
-    h = ReadableHandleT(v, t, cx)
-    h.cx.todo += 1
+    h = ReadableHandleT(v, t, cx.call)
+    h.call.todo += 1
     return cx.inst.waitables.add(h)
 ```
 In the ordinary case, the abstract `ReadableStream` (which may come from the
 host or the guest) is stored in a `ReadableHandle` in the `waitables` table,
 incrementing `todo` to ensure that `StreamHandle.drop` is called before
-`Task.exit` so that readable stream and future handles cannot outlive the
-`Task` to which their events are sent (via `h.cx.task.notify()`).
+`Task.exit`/`Subtask.drop` so that readable stream and future handles cannot
+outlive the `Task` to which their events are sent (via `h.call.task().notify()`).
 
 The interesting case is when a component receives back a `ReadableStream` that
 it itself holds the `WritableStreamHandle` for. Without specially handling
@@ -2758,7 +2770,7 @@ async def canon_resource_drop(rt, sync, task, i):
   h = inst.resources.remove(rt, i)
   flat_results = [] if sync else [0]
   if h.own:
-    assert(h.scope is None)
+    assert(h.call is None)
     trap_if(h.lend_count != 0)
     if inst is rt.impl:
       if rt.dtor:
@@ -2773,7 +2785,7 @@ async def canon_resource_drop(rt, sync, task, i):
       else:
         task.trap_if_on_the_stack(rt.impl)
   else:
-    h.scope.todo -= 1
+    h.call.todo -= 1
   return flat_results
 ```
 In general, the call to a resource's destructor is treated like a
@@ -2847,7 +2859,9 @@ and pass the results to the caller:
 async def canon_task_return(task, core_ft, flat_args):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync and not task.opts.always_task_return)
-  trap_if(core_ft != flatten_functype(CanonicalOptions(), FuncType(task.ft.results, []), 'lower'))
+  sync_opts = copy(task.opts)
+  sync_opts.sync = True
+  trap_if(core_ft != flatten_functype(sync_opts, FuncType(task.ft.results, []), 'lower'))
   task.return_(flat_args)
   return []
 ```
@@ -2874,7 +2888,7 @@ async def canon_task_wait(opts, task, ptr):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback is not None)
   event, p1, p2 = await task.wait()
-  cx = CallContext(opts, task.inst, task)
+  cx = LiftLowerContext(opts, None, None)
   store(cx, p1, U32Type(), ptr)
   store(cx, p2, U32Type(), ptr + 4)
   return [event]
@@ -2907,7 +2921,7 @@ async def canon_task_poll(opts, task, ptr):
   ret = await task.poll()
   if ret is None:
     return [0]
-  cx = CallContext(opts, task.inst, task)
+  cx = LiftLowerContext(opts, None, None)
   store(cx, ret, TupleType([U32Type(), U32Type(), U32Type()]), ptr)
   return [1]
 ```
@@ -2966,16 +2980,16 @@ call so that  can commence.
 
 For canonical definitions:
 ```wasm
-(canon stream.read (core func $f))
-(canon stream.write (core func $f))
+(canon stream.read $t $opts (core func $f))
+(canon stream.write $t $opts (core func $f))
 ```
 validation specifies:
 * `$f` is given type `(func (param i32 i32 i32) (result i32))`
 
 For canonical definitions:
 ```wasm
-(canon future.read (core func $f))
-(canon future.write (core func $f))
+(canon future.read $t $opts (core func $f))
+(canon future.write $t $opts (core func $f))
 ```
 validation specifies:
 * `$f` is given type `(func (param i32 i32) (result i32))`
@@ -2990,30 +3004,31 @@ likelihood of deadlock), there is no synchronous option for `read` or `write`.
 The actual copy happens via polymorphic dispatch to `copy`, which has been
 defined above by the 4 `{Readable,Writable}{Stream,Future}Handle` types:
 ```python
-async def canon_stream_read(t, task, i, ptr, n):
-  return await async_copy(ReadableStreamHandle, WritableBufferGuestImpl, t,
+async def canon_stream_read(t, opts, task, i, ptr, n):
+  return await async_copy(ReadableStreamHandle, WritableBufferGuestImpl, t, opts,
                           EventCode.STREAM_READ, task, i, ptr, n)
 
-async def canon_stream_write(t, task, i, ptr, n):
-  return await async_copy(WritableStreamHandle, ReadableBufferGuestImpl, t,
+async def canon_stream_write(t, opts, task, i, ptr, n):
+  return await async_copy(WritableStreamHandle, ReadableBufferGuestImpl, t, opts,
                           EventCode.STREAM_WRITE, task, i, ptr, n)
 
-async def canon_future_read(t, task, i, ptr):
-  return await async_copy(ReadableFutureHandle, WritableBufferGuestImpl, t,
+async def canon_future_read(t, opts, task, i, ptr):
+  return await async_copy(ReadableFutureHandle, WritableBufferGuestImpl, t, opts,
                           EventCode.FUTURE_READ, task, i, ptr, 1)
 
-async def canon_future_write(t, task, i, ptr):
-  return await async_copy(WritableFutureHandle, ReadableBufferGuestImpl, t,
+async def canon_future_write(t, opts, task, i, ptr):
+  return await async_copy(WritableFutureHandle, ReadableBufferGuestImpl, t, opts,
                           EventCode.FUTURE_WRITE, task, i, ptr, 1)
 
-async def async_copy(HandleT, BufferT, t, event_code, task, i, ptr, n):
+async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
   trap_if(not task.inst.may_leave)
   h = task.inst.waitables.get(i)
   trap_if(not isinstance(h, HandleT))
   trap_if(h.t != t)
-  trap_if(not h.cx)
+  trap_if(not h.call)
   trap_if(h.copying_buffer)
-  buffer = BufferT(h.cx, t, ptr, n)
+  cx = LiftLowerContext(opts, task.inst, h.call)
+  buffer = BufferT(cx, t, ptr, n)
   if h.stream.closed():
     flat_results = [CLOSED]
   else:
@@ -3025,7 +3040,7 @@ async def async_copy(HandleT, BufferT, t, event_code, task, i, ptr, n):
           return (event_code, i, pack_async_copy_result(buffer, h))
         else:
           return None
-      h.cx.task.notify(copy_event)
+      h.call.task().notify(copy_event)
     match await call_and_handle_blocking(do_copy):
       case Blocked():
         h.copying_buffer = buffer
@@ -3034,7 +3049,7 @@ async def async_copy(HandleT, BufferT, t, event_code, task, i, ptr, n):
         flat_results = [pack_async_copy_result(buffer, h)]
   return flat_results
 ```
-The trap if `not h.cx` prevents `write`s on the writable end of streams or
+The trap if `not h.call` prevents `write`s on the writable end of streams or
 futures that have not yet been lifted. The `copying_buffer` field serves as a
 boolean indication of whether an async `read` or `write` is already in
 progress, preventing multiple overlapping calls to `read` or `write`. (This
@@ -3042,7 +3057,7 @@ restriction could be relaxed [in the future](Async.md#TODO) to allow greater
 pipeline parallelism.)
 
 One subtle corner case handled by this code that is worth pointing out is that,
-between the `h.cx.task.notify(copy_event)` and the wasm guest code calling
+between the `h.call.task().notify(copy_event)` and the wasm guest code calling
 `task.wait` to receive this event, the wasm guest code can first call
 `{stream,future}.cancel-{read,write}` (defined next) which will return the copy
 progress to the wasm guest code and reset `copying_buffer` to `None` to allow
