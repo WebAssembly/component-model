@@ -430,12 +430,17 @@ class Task:
         self.inst.starting_pending_task = True
         pending_future.set_result(None)
 
-  async def wait_on(self, f):
+  async def wait_on(self, sync, f):
     self.maybe_start_pending_task()
     if self.inst.interruptible.is_set():
+      if sync:
+        self.inst.interruptible.clear()
       v = await self.on_block(f)
-      while not self.inst.interruptible.is_set():
-        await self.on_block(self.inst.interruptible.wait())
+      if sync:
+        self.inst.interruptible.set()
+      else:
+        while not self.inst.interruptible.is_set():
+          await self.on_block(self.inst.interruptible.wait())
     else:
       v = await self.on_block(f)
     return v
@@ -448,9 +453,9 @@ class Task:
     else:
       await callee(*args, self.on_block)
 
-  async def wait(self) -> EventTuple:
+  async def wait(self, sync) -> EventTuple:
     while True:
-      await self.wait_on(self.has_events.wait())
+      await self.wait_on(sync, self.has_events.wait())
       if (e := self.maybe_next_event()):
         return e
 
@@ -466,11 +471,11 @@ class Task:
     self.events.append(event)
     self.has_events.set()
 
-  async def yield_(self):
-    await self.wait_on(asyncio.sleep(0))
+  async def yield_(self, sync):
+    await self.wait_on(sync, asyncio.sleep(0))
 
-  async def poll(self) -> Optional[EventTuple]:
-    await self.yield_()
+  async def poll(self, sync) -> Optional[EventTuple]:
+    await self.yield_(sync)
     return self.maybe_next_event()
 
   def return_(self, flat_results):
@@ -1753,10 +1758,10 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_return, on_blo
         is_yield = bool(packed_ctx & 1)
         ctx = packed_ctx & ~1
         if is_yield:
-          await task.yield_()
+          await task.yield_(sync = False)
           event, p1, p2 = (EventCode.YIELDED, 0, 0)
         else:
-          event, p1, p2 = await task.wait()
+          event, p1, p2 = await task.wait(sync = False)
         [packed_ctx] = await call_and_trap_on_throw(opts.callback, task, [ctx, event, p1, p2])
   task.exit()
 
@@ -1854,32 +1859,30 @@ async def canon_task_return(task, core_ft, flat_args):
 
 ### 🔀 `canon task.wait`
 
-async def canon_task_wait(opts, task, ptr):
+async def canon_task_wait(sync, mem, task, ptr):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.callback is not None)
-  event, p1, p2 = await task.wait()
-  cx = LiftLowerContext(opts, None, None)
+  event, p1, p2 = await task.wait(sync)
+  cx = LiftLowerContext(CanonicalOptions(memory = mem), None, None)
   store(cx, p1, U32Type(), ptr)
   store(cx, p2, U32Type(), ptr + 4)
   return [event]
 
 ### 🔀 `canon task.poll`
 
-async def canon_task_poll(opts, task, ptr):
+async def canon_task_poll(sync, mem, task, ptr):
   trap_if(not task.inst.may_leave)
-  ret = await task.poll()
+  ret = await task.poll(sync)
   if ret is None:
     return [0]
-  cx = LiftLowerContext(opts, None, None)
+  cx = LiftLowerContext(CanonicalOptions(memory = mem), None, None)
   store(cx, ret, TupleType([U32Type(), U32Type(), U32Type()]), ptr)
   return [1]
 
 ### 🔀 `canon task.yield`
 
-async def canon_task_yield(task):
+async def canon_task_yield(sync, task):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.callback is not None)
-  await task.yield_()
+  await task.yield_(sync)
   return []
 
 ### 🔀 `canon {stream,future}.new`
@@ -1924,21 +1927,25 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
   if h.stream.closed():
     flat_results = [CLOSED]
   else:
-    async def do_copy(on_block):
-      await h.copy(buffer, on_block)
-      def copy_event():
-        if h.copying_buffer is buffer:
-          h.copying_buffer = None
-          return (event_code, i, pack_async_copy_result(buffer, h))
-        else:
-          return None
-      h.call.task().notify(copy_event)
-    match await call_and_handle_blocking(do_copy):
-      case Blocked():
-        h.copying_buffer = buffer
-        flat_results = [BLOCKED]
-      case Returned():
-        flat_results = [pack_async_copy_result(buffer, h)]
+    if opts.sync:
+      await task.call_sync(h.copy, buffer)
+      flat_results = [pack_async_copy_result(buffer, h)]
+    else:
+      async def do_copy(on_block):
+        await h.copy(buffer, on_block)
+        def copy_event():
+          if h.copying_buffer is buffer:
+            h.copying_buffer = None
+            return (event_code, i, pack_async_copy_result(buffer, h))
+          else:
+            return None
+        h.call.task().notify(copy_event)
+      match await call_and_handle_blocking(do_copy):
+        case Blocked():
+          h.copying_buffer = buffer
+          flat_results = [BLOCKED]
+        case Returned():
+          flat_results = [pack_async_copy_result(buffer, h)]
   return flat_results
 
 BLOCKED = 0xffff_ffff
