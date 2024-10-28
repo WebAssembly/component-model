@@ -87,25 +87,25 @@ established by the `canon lift`- or `canon lower`-defined function that is
 being called:
 * the ABI options supplied via [`canonopt`]
 * the containing component instance
-* the `Task` state created by `canon lift` or the `Subtask` state created by
-  `canon lower`
+* the `Task` or `Subtask` used to lower or lift, resp., `borrow` handles
 
-These three pieces of ambient information are stored in the `LiftLowerContext`
-class that is threaded through all the Python functions below as the `cx`
+These three pieces of ambient information are stored in an `LiftLowerContext`
+object that is threaded through all the Python functions below as the `cx`
 parameter/field.
 ```python
 class LiftLowerContext:
   opts: CanonicalOptions
   inst: ComponentInstance
-  call: Task|Subtask
+  borrow_scope: Optional[Task|Subtask]
 
-  def __init__(self, opts, inst, call):
+  def __init__(self, opts, inst, borrow_scope = None):
     self.opts = opts
     self.inst = inst
-    self.call = call
+    self.borrow_scope = borrow_scope
 ```
-The `CanonicalOptions`, `ComponentInstance`, `Task` and `Subtask` classes
-are defined next.
+The `borrow_scope` field may be `None` if the types being lifted/lowered are
+known to not contain `borrow`. The `CanonicalOptions`, `ComponentInstance`,
+`Task` and `Subtask` classes are defined next.
 
 
 ### Canonical ABI Options
@@ -277,13 +277,13 @@ The `ResourceHandle` class defines the elements of the per-resource-type
 class ResourceHandle:
   rep: int
   own: bool
-  call: Optional[Task]
+  borrow_scope: Optional[Task]
   lend_count: int
 
-  def __init__(self, rep, own, call = None):
+  def __init__(self, rep, own, borrow_scope = None):
     self.rep = rep
     self.own = own
-    self.call = call
+    self.borrow_scope = borrow_scope
     self.lend_count = 0
 ```
 The `rep` field of `ResourceHandle` stores the resource representation
@@ -292,7 +292,7 @@ The `rep` field of `ResourceHandle` stores the resource representation
 The `own` field indicates whether this element was created from an `own` type
 (or, if false, a `borrow` type).
 
-The `call` field stores the `Task` that lowered the borrowed handle as a
+The `borrow_scope` field stores the `Task` that lowered the borrowed handle as a
 parameter. When a component only uses sync-lifted exports, due to lack of
 reentrance, there is at most one `Task` alive in a component instance at any
 time and thus an optimizing implementation doesn't need to store the `Task`
@@ -306,7 +306,7 @@ functions). This count is maintained by the `ImportCall` bookkeeping functions
 An optimizing implementation can enumerate the canonical definitions present
 in a component to statically determine that a given resource type's handle
 table only contains `own` or `borrow` handles and then, based on this,
-statically eliminate the `own` and the `lend_count` xor `scope` fields,
+statically eliminate the `own` and the `lend_count` xor `borrow_scope` fields,
 and guards thereof.
 
 
@@ -681,7 +681,6 @@ class Subtask:
   lenders: list[ResourceHandle]
   notify_supertask: bool
   enqueued: bool
-  todo: int
 
   def __init__(self, opts, ft, task, flat_args):
     self.opts = opts
@@ -694,7 +693,6 @@ class Subtask:
     self.lenders = []
     self.notify_supertask = False
     self.enqueued = False
-    self.todo = 0
 
   def task(self):
     return self.supertask
@@ -793,7 +791,6 @@ counter is used below to record the number of unmet obligations to drop the
 streams and futures connected to this `Subtask`.
 ```python
   def drop(self):
-    trap_if(self.todo)
     trap_if(self.enqueued)
     trap_if(self.state != CallState.DONE)
     self.supertask.todo -= 1
@@ -900,11 +897,13 @@ that `dst.lower(src.lift(...))` is meant to be fused into a single copy from
 `src`'s memory into `dst`'s memory).
 ```python
 class ReadableStreamGuestImpl(ReadableStream):
+  impl: ComponentInstance
   is_closed: bool
   other_buffer: Optional[Buffer]
   other_future: Optional[asyncio.Future]
 
-  def __init__(self):
+  def __init__(self, inst):
+    self.impl = inst
     self.is_closed = False
     self.other_buffer = None
     self.other_future = None
@@ -1002,35 +1001,67 @@ shared by both the reader and writer ends.
       assert(not self.other_buffer and not self.other_future)
 ```
 
-With the above complex synchronization rules encapsulated by
-`ReadableStreamGuestImpl`, we can move on to the remaining rules and state that
-apply separately to the readable and writable handles that are stored in the
-`waitables` table. Both readable and writable handles store a reference to a
-`ReadableStream`. In the case of a `ReadableStreamHandle`, this
-`ReadableStream` can be host- or guet-implemented. However, in the case of
-`WritableStreamHandle`, the `ReadableStream` is definitely implemented by
-`ReadableStreamGuestImpl`. The point of these handles is to implement
-direction-agnostic `copy`, `cancel_copy` and `drop` methods that are called by
-the shared `canon stream.*` built-in code below.
+The [readable and writable ends] of a stream are stored as `StreamHandle`
+objects in the component instance's `waitables` table. Both ends of a stream
+have the same immutable `stream` and `t` fields but also maintain independent
+mutable state specific to the end. The `paired` state tracks whether a fresh
+writable end (created by `stream.new`) has been lifted and paired with a
+readable end. If a stream contains `borrow` handles, the `borrow_scope` field
+stores the `LiftLowerContext.borrow_scope` to use when lifting or lowering the
+`borrow` handles in the future. Lastly, the `copying_buffer` and
+`copying_task` states maintain whether there is an active asynchronous
+`stream.read` or `stream.write` in progress and if so, which `Task` to notify
+of progress and what `Buffer` to copy from/to.
 ```python
 class StreamHandle:
   stream: ReadableStream
   t: ValType
-  call: Optional[Task|Subtask]
+  paired: bool
+  borrow_scope: Optional[Task|Subtask]
+  copying_task: Optional[Task]
   copying_buffer: Optional[Buffer]
 
-  def __init__(self, stream, t, call):
+  def __init__(self, stream, t):
     self.stream = stream
     self.t = t
-    self.call = call
+    self.paired = False
+    self.borrow_scope = None
+    self.copying_task = None
+    self.copying_buffer = None
+
+  def start_copying(self, task, buffer):
+    assert(not self.copying_task and not self.copying_buffer)
+    task.todo += 1
+    self.copying_task = task
+    self.copying_buffer = buffer
+
+  def stop_copying(self):
+    assert(self.copying_task and self.copying_buffer)
+    self.copying_task.todo -= 1
+    self.copying_task = None
     self.copying_buffer = None
 
   def drop(self):
     trap_if(self.copying_buffer)
     self.stream.close()
-    if self.call:
-      self.call.todo -= 1
+    if isinstance(self.borrow_scope, Task):
+      self.borrow_scope.todo -= 1
+```
+The `trap_if(copying_buffer)` in `drop` and the increment/decrement of
+`copying_task.todo` keep the `StreamHandle` and `Task` alive while performing
+a copy operation (a `stream.read` or `stream.write`) so that the results of a
+copy are always reported back to the `Task` that issued the copy.
 
+The `borrow_scope.todo` decrement matches an increment when a stream
+containing `borrow` handles is lowered as a parameter of an exported function
+and ensures that streams-of-borrows are dropped before the end of the call,
+just like normal `borrow` handles.
+
+Given the above logic, the [readable and writable ends] of a stream can be
+concretely implemented by the following two classes. The `copy`, `cancel_copy`
+and `drop` methods are called polymorphically by the common `async_copy`
+routine shared by the `stream.read` and `stream.write` built-ins below.
+```python
 class ReadableStreamHandle(StreamHandle):
   async def copy(self, dst, on_block):
     await self.stream.read(dst, on_block)
@@ -1038,26 +1069,16 @@ class ReadableStreamHandle(StreamHandle):
     await self.stream.cancel_read(dst, on_block)
 
 class WritableStreamHandle(ReadableStreamGuestImpl, StreamHandle):
-  def __init__(self, t):
-    ReadableStreamGuestImpl.__init__(self)
-    StreamHandle.__init__(self, self, t, call = None)
+  def __init__(self, t, inst):
+    ReadableStreamGuestImpl.__init__(self, inst)
+    StreamHandle.__init__(self, self, t)
   async def copy(self, src, on_block):
     await self.write(src, on_block)
   async def cancel_copy(self, src, on_block):
     await self.cancel_write(src, on_block)
 ```
-Considering the logic in `drop` (which is called polymorphically by
-`canon waitable.drop` below):
-* The trap if `copying_buffer` is set ensures the above-stated precondition
-  that `close` can only be called when there is no pending `read`/`write`.
-  `copying_buffer` is set below when `stream.{read,write}` starts and cleared
-  once wasm is notified of completion.
-* The `todo` decrement matches an increment when the handle's `cx`
-  field was set and is used to ensure that `cx` never points to a dead
-  `Subtask` (whose own `todo` increment ensures that `cx.task` also never
-  points to a dead `Task`).
 
-Given the above definition of how `stream` works, a `future` can simply be
+Given the above definitions of how `stream` works, a `future` can simply be
 defined as a `stream` of exactly 1 value by having the `copy` and `cancel_copy`
 methods `close()` the stream as soon as they detect that the 1 `remain`ing
 value has been successfully copied:
@@ -1077,9 +1098,9 @@ class ReadableFutureHandle(FutureHandle):
       self.stream.close()
 
 class WritableFutureHandle(ReadableStreamGuestImpl, FutureHandle):
-  def __init__(self, t):
-    ReadableStreamGuestImpl.__init__(self)
-    FutureHandle.__init__(self, self, t, call = None)
+  def __init__(self, t, inst):
+    ReadableStreamGuestImpl.__init__(self, inst)
+    FutureHandle.__init__(self, self, t)
 
   async def copy(self, src, on_block):
     assert(src.remain() == 1)
@@ -1555,31 +1576,28 @@ from the source handle, leaving the source handle intact in the current
 component instance's handle table:
 ```python
 def lift_borrow(cx, i, t):
-  assert(isinstance(cx.call, Subtask))
+  assert(isinstance(cx.borrow_scope, Subtask))
   h = cx.inst.resources.get(t.rt, i)
   if h.own:
-    cx.call.add_lender(h)
+    cx.borrow_scope.add_lender(h)
   else:
-    trap_if(cx.call.task() is not h.call.task())
+    trap_if(cx.borrow_scope.task() is not h.borrow_scope)
   return h.rep
 ```
 The `Subtask.add_lender` participates in the enforcement of the
 dynamic borrow rules, which keep the source `own` handle alive until the end of
 the call (as an intentionally-conservative upper bound on how long the `borrow`
-handle can be held). When `h` is a `borrow` handle, we just need to make sure
-that the callee task has a shorter liftime than the current task, which is only
-guaranteed if the callee is a subtask of the current task.
+handle can be held). When `h` is a `borrow` handle, we need to make sure
+that the callee task has a shorter liftime than the current task by guarding
+that the callee is a subtask of the task that lowered the handle.
 
 Streams and futures are lifted in almost the same way, with the only difference
 being that it is a dynamic error to attempt to lift a `future` that has already
 been successfully read (`closed()`). In both cases, lifting the readable end
 transfers ownership of it while lifting the writable end leaves the writable
-end in place, but traps if the writable end has already been lifted before.
-Together, this ensures that at most one component holds each of the readable
-and writable ends of a stream. The `todo` increments must be matched by
-decrements in `StreamHandle.drop` for `Task.exit`/`Subtask.drop` to not trap;
-this ensures that the writable stream handles cannot outlive the `Task` to
-which their events are sent (via `h.call.task().notify()`).
+end in place, but traps if the writable end has already been lifted before
+(as indicated by `paired` already being set). Together, this ensures that at
+most one component holds each of the readable and writable ends of a stream.
 ```python
 def lift_stream(cx, i, t):
   return lift_async_value(ReadableStreamHandle, WritableStreamHandle, cx, i, t)
@@ -1594,33 +1612,27 @@ def lift_async_value(ReadableHandleT, WritableHandleT, cx, i, t):
   match h:
     case ReadableHandleT():
       trap_if(h.copying_buffer)
-      trap_if(contains_borrow(t) and cx.call.task() is not h.call.task())
-      h.call.todo -= 1
+      if contains_borrow(t):
+        trap_if(cx.borrow_scope.task() is not h.borrow_scope)
+        h.borrow_scope.todo -= 1
       cx.inst.waitables.remove(i)
     case WritableHandleT():
-      trap_if(h.call is not None)
+      trap_if(h.paired)
       assert(not h.copying_buffer)
-      h.call = cx.call
-      h.call.todo += 1
+      h.paired = True
+      if contains_borrow(t):
+        h.borrow_scope = cx.borrow_scope
     case _:
       trap()
   trap_if(h.t != t)
   return h.stream
 ```
-It's useful to observe that there are no lifetime issues with a `stream` or
-`future` of `borrow` handles due to the following:
-* Validation ensures that `stream<borrow<R>>` or `future<borrow<R>>` can only
-  be lifted as part of the parameters of an import call.
-* When lifting the writable end of a `stream` or `future` for an import call,
-  the code above stores the `Subtask` of the import call in the `cx` field of
-  the `WritableStreamHandle` so that when `ReadableBuffer.lift` transitively
-  calls `lift_borrow` (above), this same `Subtask` is passed as the `cx`
-  argument, thereby triggering the same bookkeeping as if the `borrow` was
-  passed as a normal synchronous parameter of the `Subtask`.
-* When lifting the readable end of a `stream` or `future` for an import call,
-  the `cx.task is not h.cx` condition ensures that `borrow`s are only copied
-  into subtasks with the same `Task` as scope (matching the analogous guard in
-  `lift_borrow`).
+Note that `cx.borrow_scope` is saved in the writable handle for later use when
+lifting stream elements so that lifting a `stream<borrow<R>>` does the same
+bookkeeping as when lifting a `list<borrow<R>>`. Because the readable end of a
+stream containing `borrow` handles is call-scoped (like `borrow` handles), the
+readable end will be closed before the `Subtask` finishes and thus the
+`Subtask` pointed to by `h.borrow_scope` can't be used after it is destroyed.
 
 
 ### Storing
@@ -2015,19 +2027,19 @@ def pack_flags_into_int(v, labels):
 
 Finally, `own` and `borrow` handles are lowered by initializing new handle
 elements in the current component instance's handle table. The increment of
-`todo` is complemented by a decrement in `canon_resource_drop` and ensures
-that all borrowed handles are dropped before the end of the task. 
+`borrow_scope.todo` is complemented by a decrement in `canon_resource_drop`
+and ensures that all borrowed handles are dropped before the end of the task.
 ```python
 def lower_own(cx, rep, t):
   h = ResourceHandle(rep, own=True)
   return cx.inst.resources.add(t.rt, h)
 
 def lower_borrow(cx, rep, t):
-  assert(isinstance(cx.call, Task))
+  assert(isinstance(cx.borrow_scope, Task))
   if cx.inst is t.rt.impl:
     return rep
-  h = ResourceHandle(rep, own=False, call=cx.call)
-  cx.call.todo += 1
+  h = ResourceHandle(rep, own = False, borrow_scope = cx.borrow_scope)
+  h.borrow_scope.todo += 1
   return cx.inst.resources.add(t.rt, h)
 ```
 The special case in `lower_borrow` is an optimization, recognizing that, when
@@ -2049,22 +2061,30 @@ def lower_future(cx, v, t):
 
 def lower_async_value(ReadableHandleT, WritableHandleT, cx, v, t):
   assert(isinstance(v, ReadableStream))
-  if isinstance(v, WritableHandleT) and cx.inst is v.call.inst:
+  if isinstance(v, WritableHandleT) and cx.inst is v.impl:
     i = cx.inst.waitables.array.index(v)
-    v.call.todo -= 1
-    v.call = None
+    assert(v.paired)
+    v.paired = False
+    if contains_borrow(t):
+      v.borrow_scope = None
     assert(2**31 > Table.MAX_LENGTH >= i)
     return i | (2**31)
   else:
-    h = ReadableHandleT(v, t, cx.call)
-    h.call.todo += 1
+    h = ReadableHandleT(v, t)
+    h.paired = True
+    if contains_borrow(t):
+      h.borrow_scope = cx.borrow_scope
+      h.borrow_scope.todo += 1
     return cx.inst.waitables.add(h)
 ```
 In the ordinary case, the abstract `ReadableStream` (which may come from the
-host or the guest) is stored in a `ReadableHandle` in the `waitables` table,
-incrementing `todo` to ensure that `StreamHandle.drop` is called before
-`Task.exit`/`Subtask.drop` so that readable stream and future handles cannot
-outlive the `Task` to which their events are sent (via `h.call.task().notify()`).
+host or the guest) is stored in a `ReadableHandle` in the `waitables` table.
+The `borrow_scope.todo` increment must be matched by a decrement in
+`StreamHandle.drop` (as guarded by `Task.exit`) and ensures that streams of
+`borrow` handles follow the usual `borrow` scoping rules. Symmetric to
+`lift_async_value`, the `cx.borrow_scope` is saved in the readable handle for
+later use when lowering stream elements so that lowering a `stream<borrow<R>>`
+does the same bookkeeping as when lowering a `list<borrow<R>>`.
 
 The interesting case is when a component receives back a `ReadableStream` that
 it itself holds the `WritableStreamHandle` for. Without specially handling
@@ -2077,17 +2097,6 @@ to guest code. Guest code must therefore handle this special case by
 collapsing the two ends of the stream to work fully without guest code (since
 the Canonical ABI is now wholly unnecessary to pass values from writer to
 reader).
-
-As with `lift_async_value`, it's useful to observe that there are no lifetime
-issues with a `stream` or `future` of `borrow` handles due to the following:
-* Validation ensures that `stream<borrow<R>>` or `future<borrow<R>>` can only
-  be lowered as part of the parameters of an export call.
-* When lowering a `stream` or `future`, the code above stores the `Task` of
-  the export call in the `cx` field of the `ReadableStreamHandle` so that when
-  `WritableBuffer.lower` transitively calls `lower_borrow` (above), this same
-  `Task` is passed as the `cx` argument, thereby triggering the same
-  bookkeeping as if the `borrow` was passed as a normal synchronous parameter
-  of the `Task`.
 
 
 ### Flattening
@@ -2780,7 +2789,7 @@ async def canon_resource_drop(rt, sync, task, i):
   h = inst.resources.remove(rt, i)
   flat_results = [] if sync else [0]
   if h.own:
-    assert(h.call is None)
+    assert(h.borrow_scope is None)
     trap_if(h.lend_count != 0)
     if inst is rt.impl:
       if rt.dtor:
@@ -2795,7 +2804,7 @@ async def canon_resource_drop(rt, sync, task, i):
       else:
         task.trap_if_on_the_stack(rt.impl)
   else:
-    h.call.todo -= 1
+    h.borrow_scope.todo -= 1
   return flat_results
 ```
 In general, the call to a resource's destructor is treated like a
@@ -2897,7 +2906,7 @@ writing the subtask index as an outparam:
 async def canon_task_wait(sync, mem, task, ptr):
   trap_if(not task.inst.may_leave)
   event, p1, p2 = await task.wait(sync)
-  cx = LiftLowerContext(CanonicalOptions(memory = mem), None, None)
+  cx = LiftLowerContext(CanonicalOptions(memory = mem), task.inst)
   store(cx, p1, U32Type(), ptr)
   store(cx, p2, U32Type(), ptr + 4)
   return [event]
@@ -2932,7 +2941,7 @@ async def canon_task_poll(sync, mem, task, ptr):
   ret = await task.poll(sync)
   if ret is None:
     return [0]
-  cx = LiftLowerContext(CanonicalOptions(memory = mem), None, None)
+  cx = LiftLowerContext(CanonicalOptions(memory = mem), task.inst)
   store(cx, ret, TupleType([U32Type(), U32Type(), U32Type()]), ptr)
   return [1]
 ```
@@ -2975,19 +2984,18 @@ the stream or future to the `waitables` table and return its index.
 ```python
 async def canon_stream_new(elem_type, task):
   trap_if(not task.inst.may_leave)
-  h = WritableStreamHandle(elem_type)
+  h = WritableStreamHandle(elem_type, task.inst)
   return [ task.inst.waitables.add(h) ]
 
 async def canon_future_new(t, task):
   trap_if(not task.inst.may_leave)
-  h = WritableFutureHandle(t)
+  h = WritableFutureHandle(t, task.inst)
   return [ task.inst.waitables.add(h) ]
 ```
-Note that the new writable end initially has its `StreamHandle.cx` field set
-to `None` which means it can't be used to `read` or `write` (defined next)
-until it has been lifted as an import parameter or export result. Lifting this
-readable handle sets `cx` and creates a readable end on the other side of the
-call so that  can commence.
+Note that new writable ends start with `StreamHandle.paired` unset. This
+means they can't be used in `{stream,future}.{read,write}` until after
+they have been lifted, which creates a corresponding readable end and sets
+`paired`.
 
 ### 🔀 `canon {stream,future}.{read,write}`
 
@@ -3038,9 +3046,9 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
   h = task.inst.waitables.get(i)
   trap_if(not isinstance(h, HandleT))
   trap_if(h.t != t)
-  trap_if(not h.call)
+  trap_if(not h.paired)
   trap_if(h.copying_buffer)
-  cx = LiftLowerContext(opts, task.inst, h.call)
+  cx = LiftLowerContext(opts, task.inst, h.borrow_scope)
   buffer = BufferT(cx, t, ptr, n)
   if h.stream.closed():
     flat_results = [CLOSED]
@@ -3051,22 +3059,23 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
     else:
       async def do_copy(on_block):
         await h.copy(buffer, on_block)
-        def copy_event():
-          if h.copying_buffer is buffer:
-            h.copying_buffer = None
-            return (event_code, i, pack_async_copy_result(buffer, h))
-          else:
-            return None
-        h.call.task().notify(copy_event)
+        if h.copying_buffer is buffer:
+          def copy_event():
+            if h.copying_buffer is buffer:
+              h.stop_copying()
+              return (event_code, i, pack_async_copy_result(buffer, h))
+            else:
+              return None
+          task.notify(copy_event)
       match await call_and_handle_blocking(do_copy):
         case Blocked():
-          h.copying_buffer = buffer
+          h.start_copying(task, buffer)
           flat_results = [BLOCKED]
         case Returned():
           flat_results = [pack_async_copy_result(buffer, h)]
   return flat_results
 ```
-The trap if `not h.call` prevents `write`s on the writable end of streams or
+The trap if `not h.paired` prevents `write`s on the writable end of streams or
 futures that have not yet been lifted. The `copying_buffer` field serves as a
 boolean indication of whether an async `read` or `write` is already in
 progress, preventing multiple overlapping calls to `read` or `write`. (This
@@ -3074,15 +3083,15 @@ restriction could be relaxed [in the future](Async.md#TODO) to allow greater
 pipeline parallelism.)
 
 One subtle corner case handled by this code that is worth pointing out is that,
-between the `h.call.task().notify(copy_event)` and the wasm guest code calling
-`task.wait` to receive this event, the wasm guest code can first call
-`{stream,future}.cancel-{read,write}` (defined next) which will return the copy
-progress to the wasm guest code and reset `copying_buffer` to `None` to allow
-future `read`s or `write`s. Then the wasm guest code can call
+between calling `h.copy()` and `h.copy()` returning, wasm guest code can call
+`{stream,future}.cancel-{read,write}` (defined next) which may return the copy
+progress to the wasm guest code and reset `copying_buffer` to `None` (to allow
+future `read`s or `write`s). Then the wasm guest code can call
 `{stream,future}.{read,write}` *again*, setting `copying_buffer` to a *new*
-buffer. Thus, `copy_event` must check `h.copying_buffer is buffer` at the last
-moment and remove the event otherwise (here: by returning `None`, which
-`task.wait` handles by discarding and waiting for the next event).
+buffer. Thus, it's necessary to test `h.copying_buffer is buffer` both before
+calling `task.notify(copy_event)` (since the `Task` may have `exit()`ed) and
+right before delivering the `copy_event`. (Note that returning `None` from
+`copy_event` causes the event to be discarded.)
 
 When the copy completes, the progress is reported to the caller. The order of
 tests here indicates that, if some progress was made and then the stream was
@@ -3146,28 +3155,27 @@ async def cancel_async_copy(HandleT, sync, task, i):
   trap_if(not h.copying_buffer)
   if h.stream.closed():
     flat_results = [pack_async_copy_result(h.copying_buffer, h)]
-    h.copying_buffer = None
+    h.stop_copying()
   else:
     if sync:
       await task.call_sync(h.cancel_copy, h.copying_buffer)
       flat_results = [pack_async_copy_result(h.copying_buffer, h)]
-      h.copying_buffer = None
+      h.stop_copying()
     else:
       match await call_and_handle_blocking(h.cancel_copy, h.copying_buffer):
         case Blocked():
           flat_results = [BLOCKED]
         case Returned():
           flat_results = [pack_async_copy_result(h.copying_buffer, h)]
-          h.copying_buffer = None
+          h.stop_copying()
   return flat_results
 ```
 As mentioned above for `async_copy`, if cancellation doesn't block, the
-buffer's progress is synchronously returned and the `copying_buffer` field of
-the `StreamHandle` is immediately reset to `None`, preventing any subsequent
-`{STREAM,FUTURE}_{READ,WRITE}` events from being delivered for the cancelled
-`read` or `write` in the future. In the `BLOCKED` case, there is no new
-`waitable` element allocated; the cancellation is simply reported as a normal
-`{STREAM,FUTURE}_{READ,WRITE}` event by the now-unblocked `read` or `write`.
+buffer's progress is synchronously returned and the "copying" status of
+the `StreamHandle` is immediately reset. In the `BLOCKED` case, there is no
+new `waitable` element allocated; the cancellation is simply reported as a
+normal `{STREAM,FUTURE}_{READ,WRITE}` event by the original, now-unblocked
+`read` or `write`.
 
 ### 🔀 `canon waitable.drop`
 
@@ -3268,6 +3276,7 @@ def canon_thread_hw_concurrency():
 [Shared-Everything Dynamic Linking]: examples/SharedEverythingDynamicLinking.md
 [Structured Concurrency]: Async.md#structured-concurrency
 [Current Task]: Async.md#current-task
+[Readable and Writable Ends]: Async.md#streams-and-futures
 
 [Administrative Instructions]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-instr-admin
 [Implementation Limits]: https://webassembly.github.io/spec/core/appendix/implementation.html
