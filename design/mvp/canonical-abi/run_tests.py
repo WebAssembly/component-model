@@ -47,7 +47,7 @@ def mk_opts(memory = bytearray(), encoding = 'utf8', realloc = None, post_return
 def mk_cx(memory = bytearray(), encoding = 'utf8', realloc = None, post_return = None):
   opts = mk_opts(memory, encoding, realloc, post_return)
   inst = ComponentInstance()
-  return LiftLowerContext(opts, inst, None)
+  return LiftLowerContext(opts, inst)
 
 def mk_str(s):
   return (s, 'utf8', len(s.encode('utf-8')))

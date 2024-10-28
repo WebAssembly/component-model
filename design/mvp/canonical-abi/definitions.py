@@ -196,12 +196,12 @@ class FutureType(ValType):
 class LiftLowerContext:
   opts: CanonicalOptions
   inst: ComponentInstance
-  call: Task|Subtask
+  borrow_scope: Optional[Task|Subtask]
 
-  def __init__(self, opts, inst, call):
+  def __init__(self, opts, inst, borrow_scope = None):
     self.opts = opts
     self.inst = inst
-    self.call = call
+    self.borrow_scope = borrow_scope
 
 
 ### Canonical ABI Options
@@ -307,13 +307,13 @@ class Table(Generic[ElemT]):
 class ResourceHandle:
   rep: int
   own: bool
-  call: Optional[Task]
+  borrow_scope: Optional[Task]
   lend_count: int
 
-  def __init__(self, rep, own, call = None):
+  def __init__(self, rep, own, borrow_scope = None):
     self.rep = rep
     self.own = own
-    self.call = call
+    self.borrow_scope = borrow_scope
     self.lend_count = 0
 
 #### Task State
@@ -514,7 +514,6 @@ class Subtask:
   lenders: list[ResourceHandle]
   notify_supertask: bool
   enqueued: bool
-  todo: int
 
   def __init__(self, opts, ft, task, flat_args):
     self.opts = opts
@@ -527,7 +526,6 @@ class Subtask:
     self.lenders = []
     self.notify_supertask = False
     self.enqueued = False
-    self.todo = 0
 
   def task(self):
     return self.supertask
@@ -580,7 +578,6 @@ class Subtask:
     return self.flat_results
 
   def drop(self):
-    trap_if(self.todo)
     trap_if(self.enqueued)
     trap_if(self.state != CallState.DONE)
     self.supertask.todo -= 1
@@ -636,11 +633,13 @@ class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
     self.progress += len(vs)
 
 class ReadableStreamGuestImpl(ReadableStream):
+  impl: ComponentInstance
   is_closed: bool
   other_buffer: Optional[Buffer]
   other_future: Optional[asyncio.Future]
 
-  def __init__(self):
+  def __init__(self, inst):
+    self.impl = inst
     self.is_closed = False
     self.other_buffer = None
     self.other_future = None
@@ -698,20 +697,36 @@ class ReadableStreamGuestImpl(ReadableStream):
 class StreamHandle:
   stream: ReadableStream
   t: ValType
-  call: Optional[Task|Subtask]
+  paired: bool
+  borrow_scope: Optional[Task|Subtask]
+  copying_task: Optional[Task]
   copying_buffer: Optional[Buffer]
 
-  def __init__(self, stream, t, call):
+  def __init__(self, stream, t):
     self.stream = stream
     self.t = t
-    self.call = call
+    self.paired = False
+    self.borrow_scope = None
+    self.copying_buffer = None
+    self.copying_task = None
+
+  def start_copying(self, task, buffer):
+    assert(not self.copying_task and not self.copying_buffer)
+    task.todo += 1
+    self.copying_task = task
+    self.copying_buffer = buffer
+
+  def stop_copying(self):
+    assert(self.copying_task and self.copying_buffer)
+    self.copying_task.todo -= 1
+    self.copying_task = None
     self.copying_buffer = None
 
   def drop(self):
     trap_if(self.copying_buffer)
     self.stream.close()
-    if self.call:
-      self.call.todo -= 1
+    if isinstance(self.borrow_scope, Task):
+      self.borrow_scope.todo -= 1
 
 class ReadableStreamHandle(StreamHandle):
   async def copy(self, dst, on_block):
@@ -720,9 +735,9 @@ class ReadableStreamHandle(StreamHandle):
     await self.stream.cancel_read(dst, on_block)
 
 class WritableStreamHandle(ReadableStreamGuestImpl, StreamHandle):
-  def __init__(self, t):
-    ReadableStreamGuestImpl.__init__(self)
-    StreamHandle.__init__(self, self, t, call = None)
+  def __init__(self, t, inst):
+    ReadableStreamGuestImpl.__init__(self, inst)
+    StreamHandle.__init__(self, self, t)
   async def copy(self, src, on_block):
     await self.write(src, on_block)
   async def cancel_copy(self, src, on_block):
@@ -743,9 +758,9 @@ class ReadableFutureHandle(FutureHandle):
       self.stream.close()
 
 class WritableFutureHandle(ReadableStreamGuestImpl, FutureHandle):
-  def __init__(self, t):
-    ReadableStreamGuestImpl.__init__(self)
-    FutureHandle.__init__(self, self, t, call = None)
+  def __init__(self, t, inst):
+    ReadableStreamGuestImpl.__init__(self, inst)
+    FutureHandle.__init__(self, self, t)
 
   async def copy(self, src, on_block):
     assert(src.remain() == 1)
@@ -1083,12 +1098,12 @@ def lift_own(cx, i, t):
   return h.rep
 
 def lift_borrow(cx, i, t):
-  assert(isinstance(cx.call, Subtask))
+  assert(isinstance(cx.borrow_scope, Subtask))
   h = cx.inst.resources.get(t.rt, i)
   if h.own:
-    cx.call.add_lender(h)
+    cx.borrow_scope.add_lender(h)
   else:
-    trap_if(cx.call.task() is not h.call.task())
+    trap_if(cx.borrow_scope.task() is not h.borrow_scope)
   return h.rep
 
 def lift_stream(cx, i, t):
@@ -1104,14 +1119,16 @@ def lift_async_value(ReadableHandleT, WritableHandleT, cx, i, t):
   match h:
     case ReadableHandleT():
       trap_if(h.copying_buffer)
-      trap_if(contains_borrow(t) and cx.call.task() is not h.call.task())
-      h.call.todo -= 1
+      if contains_borrow(t):
+        trap_if(cx.borrow_scope.task() is not h.borrow_scope)
+        h.borrow_scope.todo -= 1
       cx.inst.waitables.remove(i)
     case WritableHandleT():
-      trap_if(h.call is not None)
+      trap_if(h.paired)
       assert(not h.copying_buffer)
-      h.call = cx.call
-      h.call.todo += 1
+      h.paired = True
+      if contains_borrow(t):
+        h.borrow_scope = cx.borrow_scope
     case _:
       trap()
   trap_if(h.t != t)
@@ -1399,11 +1416,11 @@ def lower_own(cx, rep, t):
   return cx.inst.resources.add(t.rt, h)
 
 def lower_borrow(cx, rep, t):
-  assert(isinstance(cx.call, Task))
+  assert(isinstance(cx.borrow_scope, Task))
   if cx.inst is t.rt.impl:
     return rep
-  h = ResourceHandle(rep, own=False, call=cx.call)
-  cx.call.todo += 1
+  h = ResourceHandle(rep, own = False, borrow_scope = cx.borrow_scope)
+  h.borrow_scope.todo += 1
   return cx.inst.resources.add(t.rt, h)
 
 def lower_stream(cx, v, t):
@@ -1415,15 +1432,20 @@ def lower_future(cx, v, t):
 
 def lower_async_value(ReadableHandleT, WritableHandleT, cx, v, t):
   assert(isinstance(v, ReadableStream))
-  if isinstance(v, WritableHandleT) and cx.inst is v.call.inst:
+  if isinstance(v, WritableHandleT) and cx.inst is v.impl:
     i = cx.inst.waitables.array.index(v)
-    v.call.todo -= 1
-    v.call = None
+    assert(v.paired)
+    v.paired = False
+    if contains_borrow(t):
+      v.borrow_scope = None
     assert(2**31 > Table.MAX_LENGTH >= i)
     return i | (2**31)
   else:
-    h = ReadableHandleT(v, t, cx.call)
-    h.call.todo += 1
+    h = ReadableHandleT(v, t)
+    h.paired = True
+    if contains_borrow(t):
+      h.borrow_scope = cx.borrow_scope
+      h.borrow_scope.todo += 1
     return cx.inst.waitables.add(h)
 
 ### Flattening
@@ -1815,7 +1837,7 @@ async def canon_resource_drop(rt, sync, task, i):
   h = inst.resources.remove(rt, i)
   flat_results = [] if sync else [0]
   if h.own:
-    assert(h.call is None)
+    assert(h.borrow_scope is None)
     trap_if(h.lend_count != 0)
     if inst is rt.impl:
       if rt.dtor:
@@ -1830,7 +1852,7 @@ async def canon_resource_drop(rt, sync, task, i):
       else:
         task.trap_if_on_the_stack(rt.impl)
   else:
-    h.call.todo -= 1
+    h.borrow_scope.todo -= 1
   return flat_results
 
 ### `canon resource.rep`
@@ -1862,7 +1884,7 @@ async def canon_task_return(task, core_ft, flat_args):
 async def canon_task_wait(sync, mem, task, ptr):
   trap_if(not task.inst.may_leave)
   event, p1, p2 = await task.wait(sync)
-  cx = LiftLowerContext(CanonicalOptions(memory = mem), None, None)
+  cx = LiftLowerContext(CanonicalOptions(memory = mem), task.inst)
   store(cx, p1, U32Type(), ptr)
   store(cx, p2, U32Type(), ptr + 4)
   return [event]
@@ -1874,7 +1896,7 @@ async def canon_task_poll(sync, mem, task, ptr):
   ret = await task.poll(sync)
   if ret is None:
     return [0]
-  cx = LiftLowerContext(CanonicalOptions(memory = mem), None, None)
+  cx = LiftLowerContext(CanonicalOptions(memory = mem), task.inst)
   store(cx, ret, TupleType([U32Type(), U32Type(), U32Type()]), ptr)
   return [1]
 
@@ -1889,12 +1911,12 @@ async def canon_task_yield(sync, task):
 
 async def canon_stream_new(elem_type, task):
   trap_if(not task.inst.may_leave)
-  h = WritableStreamHandle(elem_type)
+  h = WritableStreamHandle(elem_type, task.inst)
   return [ task.inst.waitables.add(h) ]
 
 async def canon_future_new(t, task):
   trap_if(not task.inst.may_leave)
-  h = WritableFutureHandle(t)
+  h = WritableFutureHandle(t, task.inst)
   return [ task.inst.waitables.add(h) ]
 
 ### 🔀 `canon {stream,future}.{read,write}`
@@ -1920,9 +1942,9 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
   h = task.inst.waitables.get(i)
   trap_if(not isinstance(h, HandleT))
   trap_if(h.t != t)
-  trap_if(not h.call)
+  trap_if(not h.paired)
   trap_if(h.copying_buffer)
-  cx = LiftLowerContext(opts, task.inst, h.call)
+  cx = LiftLowerContext(opts, task.inst, h.borrow_scope)
   buffer = BufferT(cx, t, ptr, n)
   if h.stream.closed():
     flat_results = [CLOSED]
@@ -1933,16 +1955,17 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
     else:
       async def do_copy(on_block):
         await h.copy(buffer, on_block)
-        def copy_event():
-          if h.copying_buffer is buffer:
-            h.copying_buffer = None
-            return (event_code, i, pack_async_copy_result(buffer, h))
-          else:
-            return None
-        h.call.task().notify(copy_event)
+        if h.copying_buffer is buffer:
+          def copy_event():
+            if h.copying_buffer is buffer:
+              h.stop_copying()
+              return (event_code, i, pack_async_copy_result(buffer, h))
+            else:
+              return None
+          task.notify(copy_event)
       match await call_and_handle_blocking(do_copy):
         case Blocked():
-          h.copying_buffer = buffer
+          h.start_copying(task, buffer)
           flat_results = [BLOCKED]
         case Returned():
           flat_results = [pack_async_copy_result(buffer, h)]
@@ -1980,19 +2003,19 @@ async def cancel_async_copy(HandleT, sync, task, i):
   trap_if(not h.copying_buffer)
   if h.stream.closed():
     flat_results = [pack_async_copy_result(h.copying_buffer, h)]
-    h.copying_buffer = None
+    h.stop_copying()
   else:
     if sync:
       await task.call_sync(h.cancel_copy, h.copying_buffer)
       flat_results = [pack_async_copy_result(h.copying_buffer, h)]
-      h.copying_buffer = None
+      h.stop_copying()
     else:
       match await call_and_handle_blocking(h.cancel_copy, h.copying_buffer):
         case Blocked():
           flat_results = [BLOCKED]
         case Returned():
           flat_results = [pack_async_copy_result(h.copying_buffer, h)]
-          h.copying_buffer = None
+          h.stop_copying()
   return flat_results
 
 ### 🔀 `canon waitable.drop`
