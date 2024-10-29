@@ -129,6 +129,7 @@ class F32Type(PrimValType): pass
 class F64Type(PrimValType): pass
 class CharType(PrimValType): pass
 class StringType(PrimValType): pass
+class ErrorType(ValType): pass
 
 @dataclass
 class ListType(ValType):
@@ -221,6 +222,7 @@ class CanonicalOptions:
 class ComponentInstance:
   resources: ResourceTables
   waitables: Table[Subtask|StreamHandle|FutureHandle]
+  errors: Table[Error]
   num_tasks: int
   may_leave: bool
   backpressure: bool
@@ -231,6 +233,7 @@ class ComponentInstance:
   def __init__(self):
     self.resources = ResourceTables()
     self.waitables = Table[Subtask|StreamHandle|FutureHandle]()
+    self.errors = Table[Error]()
     self.num_tasks = 0
     self.may_leave = True
     self.backpressure = False
@@ -593,6 +596,7 @@ class WritableBuffer(Buffer):
 
 class ReadableStream:
   closed: Callable[[], bool]
+  closed_with_error: Callable[[], Optional[Error]]
   read: Callable[[WritableBuffer, OnBlockCallback], Awaitable]
   cancel_read: Callable[[WritableBuffer, OnBlockCallback], Awaitable]
   close: Callable[[]]
@@ -635,17 +639,22 @@ class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
 class ReadableStreamGuestImpl(ReadableStream):
   impl: ComponentInstance
   is_closed: bool
+  error: Optional[Error]
   other_buffer: Optional[Buffer]
   other_future: Optional[asyncio.Future]
 
   def __init__(self, inst):
     self.impl = inst
     self.is_closed = False
+    self.error = None
     self.other_buffer = None
     self.other_future = None
 
   def closed(self):
     return self.is_closed
+  def closed_with_error(self):
+    assert(self.is_closed)
+    return self.error
 
   async def read(self, dst, on_block):
     await self.rendezvous(dst, self.other_buffer, dst, on_block)
@@ -684,9 +693,11 @@ class ReadableStreamGuestImpl(ReadableStream):
         self.other_future.set_result(None)
         self.other_future = None
 
-  def close(self):
+  def close(self, error = None):
     if not self.is_closed:
+      assert(not self.error)
       self.is_closed = True
+      self.error = error
       self.other_buffer = None
       if self.other_future:
         self.other_future.set_result(None)
@@ -722,9 +733,9 @@ class StreamHandle:
     self.copying_task = None
     self.copying_buffer = None
 
-  def drop(self):
+  def drop(self, error):
     trap_if(self.copying_buffer)
-    self.stream.close()
+    self.stream.close(error)
     if isinstance(self.borrow_scope, Task):
       self.borrow_scope.todo -= 1
 
@@ -773,9 +784,9 @@ class WritableFutureHandle(FutureHandle):
     if src.remain() == 0:
       self.stream.close()
 
-  def drop(self):
-    trap_if(not self.stream.closed())
-    FutureHandle.drop(self)
+  def drop(self, error):
+    trap_if(not self.stream.closed() and not error)
+    FutureHandle.drop(self, error)
 
 ### Despecialization
 
@@ -827,6 +838,7 @@ def alignment(t):
     case F64Type()                   : return 8
     case CharType()                  : return 4
     case StringType()                : return 4
+    case ErrorType()                 : return 4
     case ListType(t, l)              : return alignment_list(t, l)
     case RecordType(fields)          : return alignment_record(fields)
     case VariantType(cases)          : return alignment_variant(cases)
@@ -884,6 +896,7 @@ def elem_size(t):
     case F64Type()                   : return 8
     case CharType()                  : return 4
     case StringType()                : return 8
+    case ErrorType()                 : return 4
     case ListType(t, l)              : return elem_size_list(t, l)
     case RecordType(fields)          : return elem_size_record(fields)
     case VariantType(cases)          : return elem_size_variant(cases)
@@ -943,6 +956,7 @@ def load(cx, ptr, t):
     case F64Type()          : return decode_i64_as_float(load_int(cx, ptr, 8))
     case CharType()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
     case StringType()       : return load_string(cx, ptr)
+    case ErrorType()        : return lift_error(cx, load_int(cx, ptr, 4))
     case ListType(t, l)     : return load_list(cx, ptr, t, l)
     case RecordType(fields) : return load_record(cx, ptr, fields)
     case VariantType(cases) : return load_variant(cx, ptr, cases)
@@ -993,14 +1007,16 @@ def convert_i32_to_char(cx, i):
   trap_if(0xD800 <= i <= 0xDFFF)
   return chr(i)
 
-def load_string(cx, ptr):
+String = tuple[str, str, int]
+
+def load_string(cx, ptr) -> String:
   begin = load_int(cx, ptr, 4)
   tagged_code_units = load_int(cx, ptr + 4, 4)
   return load_string_from_range(cx, begin, tagged_code_units)
 
 UTF16_TAG = 1 << 31
 
-def load_string_from_range(cx, ptr, tagged_code_units):
+def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   match cx.opts.string_encoding:
     case 'utf8':
       alignment = 1
@@ -1027,6 +1043,9 @@ def load_string_from_range(cx, ptr, tagged_code_units):
     trap()
 
   return (s, cx.opts.string_encoding, tagged_code_units)
+
+def lift_error(cx, i):
+  return cx.inst.errors.get(i)
 
 def load_list(cx, ptr, elem_type, maybe_length):
   if maybe_length is not None:
@@ -1153,6 +1172,7 @@ def store(cx, v, t, ptr):
     case F64Type()          : store_int(cx, encode_float_as_i64(v), ptr, 8)
     case CharType()         : store_int(cx, char_to_i32(v), ptr, 4)
     case StringType()       : store_string(cx, v, ptr)
+    case ErrorType()        : store_int(cx, lower_error(cx, v), ptr, 4)
     case ListType(t, l)     : store_list(cx, v, ptr, t, l)
     case RecordType(fields) : store_record(cx, v, ptr, fields)
     case VariantType(cases) : store_variant(cx, v, ptr, cases)
@@ -1207,12 +1227,12 @@ def char_to_i32(c):
   assert(0 <= i <= 0xD7FF or 0xD800 <= i <= 0x10FFFF)
   return i
 
-def store_string(cx, v, ptr):
+def store_string(cx, v: String, ptr):
   begin, tagged_code_units = store_string_into_range(cx, v)
   store_int(cx, begin, ptr, 4)
   store_int(cx, tagged_code_units, ptr + 4, 4)
 
-def store_string_into_range(cx, v):
+def store_string_into_range(cx, v: String):
   src, src_encoding, src_tagged_code_units = v
 
   if src_encoding == 'latin1+utf16':
@@ -1351,6 +1371,9 @@ def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   ptr = cx.opts.realloc(ptr, src_byte_length, 1, latin1_size)
   trap_if(ptr + latin1_size > len(cx.opts.memory))
   return (ptr, latin1_size)
+
+def lower_error(cx, v):
+  return cx.inst.errors.add(v)
 
 def store_list(cx, v, ptr, elem_type, maybe_length):
   if maybe_length is not None:
@@ -1496,6 +1519,7 @@ def flatten_type(t):
     case F64Type()                        : return ['f64']
     case CharType()                       : return ['i32']
     case StringType()                     : return ['i32', 'i32']
+    case ErrorType()                      : return ['i32']
     case ListType(t, l)                   : return flatten_list(t, l)
     case RecordType(fields)               : return flatten_record(fields)
     case VariantType(cases)               : return flatten_variant(cases)
@@ -1562,6 +1586,7 @@ def lift_flat(cx, vi, t):
     case F64Type()          : return canonicalize_nan64(vi.next('f64'))
     case CharType()         : return convert_i32_to_char(cx, vi.next('i32'))
     case StringType()       : return lift_flat_string(cx, vi)
+    case ErrorType()        : return lift_error(cx, vi.next('i32'))
     case ListType(t, l)     : return lift_flat_list(cx, vi, t, l)
     case RecordType(fields) : return lift_flat_record(cx, vi, fields)
     case VariantType(cases) : return lift_flat_variant(cx, vi, cases)
@@ -1655,6 +1680,7 @@ def lower_flat(cx, v, t):
     case F64Type()          : return [maybe_scramble_nan64(v)]
     case CharType()         : return [char_to_i32(v)]
     case StringType()       : return lower_flat_string(cx, v)
+    case ErrorType()        : return lower_error(cx, v)
     case ListType(t, l)     : return lower_flat_list(cx, v, t, l)
     case RecordType(fields) : return lower_flat_record(cx, v, fields)
     case VariantType(cases) : return lower_flat_variant(cx, v, cases)
@@ -1957,11 +1983,11 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
   cx = LiftLowerContext(opts, task.inst, h.borrow_scope)
   buffer = BufferT(cx, t, ptr, n)
   if h.stream.closed():
-    flat_results = [CLOSED]
+    flat_results = [pack_async_copy_result(task, buffer, h)]
   else:
     if opts.sync:
       await task.call_sync(h.copy, buffer)
-      flat_results = [pack_async_copy_result(buffer, h)]
+      flat_results = [pack_async_copy_result(task, buffer, h)]
     else:
       async def do_copy(on_block):
         await h.copy(buffer, on_block)
@@ -1969,7 +1995,7 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
           def copy_event():
             if h.copying_buffer is buffer:
               h.stop_copying()
-              return (event_code, i, pack_async_copy_result(buffer, h))
+              return (event_code, i, pack_async_copy_result(task, buffer, h))
             else:
               return None
           task.notify(copy_event)
@@ -1978,19 +2004,29 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
           h.start_copying(task, buffer)
           flat_results = [BLOCKED]
         case Returned():
-          flat_results = [pack_async_copy_result(buffer, h)]
+          flat_results = [pack_async_copy_result(task, buffer, h)]
   return flat_results
 
 BLOCKED = 0xffff_ffff
 CLOSED  = 0x8000_0000
 
-def pack_async_copy_result(buffer, h):
-  assert(buffer.progress <= Buffer.MAX_LENGTH < CLOSED < BLOCKED)
+def pack_async_copy_result(task, buffer, h):
   if buffer.progress:
+    assert(buffer.progress <= Buffer.MAX_LENGTH < BLOCKED)
+    assert(not (buffer.progress & CLOSED))
     return buffer.progress
-  if h.stream.closed():
-    return CLOSED
-  return 0
+  elif h.stream.closed():
+    if (error := h.stream.closed_with_error()):
+      assert(isinstance(h, ReadableStreamHandle|ReadableFutureHandle))
+      errori = task.inst.errors.add(error)
+      assert(errori != 0)
+    else:
+      errori = 0
+    assert(errori <= Table.MAX_LENGTH < BLOCKED)
+    assert(not (errori & CLOSED))
+    return errori | CLOSED
+  else:
+    return 0
 
 ### 🔀 `canon {stream,future}.cancel-{read,write}`
 
@@ -2012,40 +2048,77 @@ async def cancel_async_copy(HandleT, sync, task, i):
   trap_if(not isinstance(h, HandleT))
   trap_if(not h.copying_buffer)
   if h.stream.closed():
-    flat_results = [pack_async_copy_result(h.copying_buffer, h)]
+    flat_results = [pack_async_copy_result(task, h.copying_buffer, h)]
     h.stop_copying()
   else:
     if sync:
       await task.call_sync(h.cancel_copy, h.copying_buffer)
-      flat_results = [pack_async_copy_result(h.copying_buffer, h)]
+      flat_results = [pack_async_copy_result(task, h.copying_buffer, h)]
       h.stop_copying()
     else:
       match await call_and_handle_blocking(h.cancel_copy, h.copying_buffer):
         case Blocked():
           flat_results = [BLOCKED]
         case Returned():
-          flat_results = [pack_async_copy_result(h.copying_buffer, h)]
+          flat_results = [pack_async_copy_result(task, h.copying_buffer, h)]
           h.stop_copying()
   return flat_results
 
 ### 🔀 `canon {stream,future}.close-{readable,writable}`
 
 async def canon_stream_close_readable(t, task, i):
-  return await close_async_value(ReadableStreamHandle, t, task, i)
+  return await close_async_value(ReadableStreamHandle, t, task, i, 0)
 
-async def canon_stream_close_writable(t, task, i):
-  return await close_async_value(WritableStreamHandle, t, task, i)
+async def canon_stream_close_writable(t, task, hi, errori):
+  return await close_async_value(WritableStreamHandle, t, task, hi, errori)
 
 async def canon_future_close_readable(t, task, i):
-  return await close_async_value(ReadableFutureHandle, t, task, i)
+  return await close_async_value(ReadableFutureHandle, t, task, i, 0)
 
-async def canon_future_close_writable(t, task, i):
-  return await close_async_value(WritableFutureHandle, t, task, i)
+async def canon_future_close_writable(t, task, hi, errori):
+  return await close_async_value(WritableFutureHandle, t, task, hi, errori)
 
-async def close_async_value(HandleT, t, task, i):
+async def close_async_value(HandleT, t, task, hi, errori):
   trap_if(not task.inst.may_leave)
-  h = task.inst.waitables.remove(i)
+  h = task.inst.waitables.remove(hi)
+  if errori == 0:
+    error = None
+  else:
+    error = task.inst.errors.get(errori)
   trap_if(not isinstance(h, HandleT))
   trap_if(h.t != t)
-  h.drop()
+  h.drop(error)
+  return []
+
+### 🔀 `canon error.new`
+
+@dataclass
+class Error:
+  debug_message: String
+
+async def canon_error_new(opts, task, ptr, tagged_code_units):
+  trap_if(not task.inst.may_leave)
+  if DETERMINISTIC_PROFILE or random.randint(0,1):
+    s = String(('', 'utf8', 0))
+  else:
+    cx = LiftLowerContext(opts, task.inst)
+    s = load_string_from_range(cx, ptr, tagged_code_units)
+    s = host_defined_transformation(s)
+  i = task.inst.errors.add(Error(s))
+  return [i]
+
+### 🔀 `canon error.debug-message`
+
+async def canon_error_debug_message(opts, task, i, ptr):
+  trap_if(not task.inst.may_leave)
+  error = task.inst.errors.get(i)
+  cx = LiftLowerContext(opts, task.inst)
+  store_string(cx, error.debug_message, ptr)
+  return []
+
+### 🔀 `canon error.drop`
+
+async def canon_error_drop(task, i):
+  trap_if(not task.inst.may_leave)
+  task.inst.errors.remove(i)
   return []

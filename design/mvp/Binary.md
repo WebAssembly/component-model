@@ -190,6 +190,7 @@ primvaltype   ::= 0x7f                                    => bool
                 | 0x75                                    => f64
                 | 0x74                                    => char
                 | 0x73                                    => string
+                | 0x64                                    => error
 defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x72 lt*:vec(<labelvaltype>)            => (record (field lt)*)    (if |lt*| > 0)
                 | 0x71 case*:vec(<case>)                  => (variant case+) (if |case*| > 0)
@@ -307,6 +308,9 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x19 async?:<async?>                                => (canon future.cancel-write async? (core func)) 🔀
            | 0x1a t:<typeidx>                                    => (canon future.close-readable t (core func)) 🔀
            | 0x1b t:<typeidx>                                    => (canon future.close-writable t (core func)) 🔀
+           | 0x1c opts:<opts>                                    => (canon error.new opts (core func)) 🔀
+           | 0x1d opts:<opts>                                    => (canon error.debug-message opts (core func)) 🔀
+           | 0x1e                                                => (canon error.drop (core func)) 🔀
 async?   ::= 0x00                                                =>
            | 0x01                                                => async
 opts     ::= opt*:vec(<canonopt>)                                => opt*
@@ -478,6 +482,7 @@ named once.
 
 ## Binary Format Warts to Fix in a 1.0 Release
 
+* The opcodes (for types, canon built-ins, etc) should be re-sorted
 * The two `list` type codes should be merged into one with an optional immediate.
 * The `0x00` prefix byte of `importname'` and `exportname'` will be removed or repurposed.
 
