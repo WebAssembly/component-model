@@ -232,11 +232,10 @@ f: func(x: whatever) -> stream<T>;
 g: func(s: stream<T>) -> stuff;
 ```
 `g(f(x))` works as you might hope, concurrently streaming `x` into `f` which
-concurrently streams its results into `g`. (The addition of [`error`](#TODO)
-will provide a generic answer to the question of what happens if `f`
-experiences an error: `f` can close its returned writable stream end with an
-`error` that will be propagated into `g` which should then propagate the error
-somehow into `stuff`.)
+concurrently streams its results into `g`. If `f` has an error, it can close
+its returned `stream<T>` with an [`error`](Explainer.md#error-type) value
+which `g` will receive along with the notification that its readable stream
+was closed.
 
 If a component instance *would* receive the readable end of a stream for which
 it already owns the writable end, the readable end disappears and the existing
@@ -518,7 +517,6 @@ For now, this remains a [TODO](#todo) and validation will reject `async`-lifted
 Native async support is being proposed incrementally. The following features
 will be added in future chunks roughly in the order list to complete the full
 "async" story:
-* add `error` type that can be included when closing a stream/future
 * `nonblocking` function type attribute: allow a function to declare in its
   type that it will not transitively do anything blocking
 * define what `async` means for `start` functions (top-level await + background

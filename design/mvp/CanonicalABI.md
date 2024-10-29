@@ -41,6 +41,9 @@ being specified here.
   * [`canon {stream,future}.{read,write}`](#-canon-streamfuturereadwrite) 🔀
   * [`canon {stream,future}.cancel-{read,write}`](#-canon-streamfuturecancel-readwrite) 🔀
   * [`canon {stream,future}.close-{readable,writable}`](#-canon-streamfutureclose-readablewritable) 🔀
+  * [`canon error.new`](#-canon-errornew) 🔀
+  * [`canon error.debug-message`](#-canon-errordebug-message) 🔀
+  * [`canon error.drop`](#-canon-errordrop) 🔀
 
 
 ## Supporting definitions
@@ -148,6 +151,7 @@ state that `canon`-generated functions use to maintain component invariants.
 class ComponentInstance:
   resources: ResourceTables
   waitables: Table[Subtask|StreamHandle|FutureHandle]
+  errors: Table[Error]
   num_tasks: int
   may_leave: bool
   backpressure: bool
@@ -158,6 +162,7 @@ class ComponentInstance:
   def __init__(self):
     self.resources = ResourceTables()
     self.waitables = Table[Subtask|StreamHandle|FutureHandle]()
+    self.errors = Table[Error]()
     self.num_tasks = 0
     self.may_leave = True
     self.backpressure = False
@@ -819,6 +824,7 @@ class WritableBuffer(Buffer):
 
 class ReadableStream:
   closed: Callable[[], bool]
+  closed_with_error: Callable[[], Optional[Error]]
   read: Callable[[WritableBuffer, OnBlockCallback], Awaitable]
   cancel_read: Callable[[WritableBuffer, OnBlockCallback], Awaitable]
   close: Callable[[]]
@@ -838,6 +844,9 @@ Going through the methods in these interfaces:
   not to be used again by the `read` being cancelled.
 * `close` may only be called if there is no active `read` and leaves the stream
   `closed` without possibility of blocking.
+* `closed_with_error` may only be called if `closed` has returned `True` and
+  returns an optional `Error` (defined below) that the writable end was
+  closed with.
 
 The abstract `WritableBuffer` interface is implemented by the
 `WritableBufferGuestImpl` class below. The `ReadableBufferGuestImpl` class is
@@ -900,17 +909,22 @@ that `dst.lower(src.lift(...))` is meant to be fused into a single copy from
 class ReadableStreamGuestImpl(ReadableStream):
   impl: ComponentInstance
   is_closed: bool
+  error: Optional[Error]
   other_buffer: Optional[Buffer]
   other_future: Optional[asyncio.Future]
 
   def __init__(self, inst):
     self.impl = inst
     self.is_closed = False
+    self.error = None
     self.other_buffer = None
     self.other_future = None
 
   def closed(self):
     return self.is_closed
+  def closed_with_error(self):
+    assert(self.is_closed)
+    return self.error
 
   async def read(self, dst, on_block):
     await self.rendezvous(dst, self.other_buffer, dst, on_block)
@@ -986,14 +1000,16 @@ assume as a precondition that there is not an outstanding `read` and thus there
 is no need to block on a `cancel_read`. There may however be a pending write
 `await`ing `other_future`, but since we're on the reader end and we know that
 there are no concurrent `read`s, we can simple resolve `other_future` and move
-on without blocking on anything. `close` can also be called (below) from the
-writer direction, in which case all the above logic applies, in the opposite
-direction. Thus, there is only a single direction-agnostic `close` that is
-shared by both the reader and writer ends.
+on without blocking on anything. `close` can also be called by the writable end
+of a stream (below), in which case all the above logic applies, but in the
+opposite direction. Thus, there is only a single direction-agnostic `close`
+that is shared by both the reader and writer ends.
 ```python
-  def close(self):
+  def close(self, error = None):
     if not self.is_closed:
+      assert(not self.error)
       self.is_closed = True
+      self.error = error
       self.other_buffer = None
       if self.other_future:
         self.other_future.set_result(None)
@@ -1001,6 +1017,12 @@ shared by both the reader and writer ends.
     else:
       assert(not self.other_buffer and not self.other_future)
 ```
+Note that when called via the `ReadableStream` abstract interface, `error` is
+necessarily `None`, whereas if called from the writer end, `error` may or may
+not be an `Error`. In the special case that the writer end passes a non-`None`
+error and the stream has already been closed by the reader end, the `Error` is
+dropped, since the reader has already racily cancelled the stream and has no
+way to see the `Error`.
 
 The [readable and writable ends] of a stream are stored as `StreamHandle`
 objects in the component instance's `waitables` table. Both ends of a stream
@@ -1042,9 +1064,9 @@ class StreamHandle:
     self.copying_task = None
     self.copying_buffer = None
 
-  def drop(self):
+  def drop(self, error):
     trap_if(self.copying_buffer)
-    self.stream.close()
+    self.stream.close(error)
     if isinstance(self.borrow_scope, Task):
       self.borrow_scope.todo -= 1
 ```
@@ -1119,17 +1141,14 @@ class WritableFutureHandle(FutureHandle):
     if src.remain() == 0:
       self.stream.close()
 
-  def drop(self):
-    trap_if(not self.stream.closed())
-    FutureHandle.drop(self)
+  def drop(self, error):
+    trap_if(not self.stream.closed() and not error)
+    FutureHandle.drop(self, error)
 ```
-The overridden `WritableFutureHandle.drop` method traps if the internal stream
-has not been closed (and thus the future value has not been written). (*Note
-that there is a [TODO](Async.md#TODO) to add an `error` type and new built-ins
-for dropping a stream or future handle with an `error` which will **not** trap,
-thus allowing a `future` to be resolved without producing a value iff it
-produces an `error`.*)
-
+The overridden `WritableFutureHandle.drop` method traps if the future value has
+not already been written and the future is not being closed with an `error`.
+Thus, a future must either have a single value successfully copied from the
+writer to the reader xor be closed with an `error`.
 
 ### Despecialization
 
@@ -1200,6 +1219,7 @@ def alignment(t):
     case F64Type()                   : return 8
     case CharType()                  : return 4
     case StringType()                : return 4
+    case ErrorType()                 : return 4
     case ListType(t, l)              : return alignment_list(t, l)
     case RecordType(fields)          : return alignment_record(fields)
     case VariantType(cases)          : return alignment_variant(cases)
@@ -1289,6 +1309,7 @@ def elem_size(t):
     case F64Type()                   : return 8
     case CharType()                  : return 4
     case StringType()                : return 8
+    case ErrorType()                 : return 4
     case ListType(t, l)              : return elem_size_list(t, l)
     case RecordType(fields)          : return elem_size_record(fields)
     case VariantType(cases)          : return elem_size_variant(cases)
@@ -1354,6 +1375,7 @@ def load(cx, ptr, t):
     case F64Type()          : return decode_i64_as_float(load_int(cx, ptr, 8))
     case CharType()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
     case StringType()       : return load_string(cx, ptr)
+    case ErrorType()        : return lift_error(cx, load_int(cx, ptr, 4))
     case ListType(t, l)     : return load_list(cx, ptr, t, l)
     case RecordType(fields) : return load_record(cx, ptr, fields)
     case VariantType(cases) : return load_variant(cx, ptr, cases)
@@ -1438,14 +1460,16 @@ allocation size choices in many cases. Thus, the value produced by
 `load_string` isn't simply a Python `str`, but a *tuple* containing a `str`,
 the original encoding and the original byte length.
 ```python
-def load_string(cx, ptr):
+String = tuple[str, str, int]
+
+def load_string(cx, ptr) -> String:
   begin = load_int(cx, ptr, 4)
   tagged_code_units = load_int(cx, ptr + 4, 4)
   return load_string_from_range(cx, begin, tagged_code_units)
 
 UTF16_TAG = 1 << 31
 
-def load_string_from_range(cx, ptr, tagged_code_units):
+def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   match cx.opts.string_encoding:
     case 'utf8':
       alignment = 1
@@ -1472,6 +1496,13 @@ def load_string_from_range(cx, ptr, tagged_code_units):
     trap()
 
   return (s, cx.opts.string_encoding, tagged_code_units)
+```
+
+Error values are lifted directly from the per-component-instance `errors`
+table:
+```python
+def lift_error(cx, i):
+  return cx.inst.errors.get(i)
 ```
 
 Lists and records are loaded by recursively loading their elements/fields:
@@ -1664,6 +1695,7 @@ def store(cx, v, t, ptr):
     case F64Type()          : store_int(cx, encode_float_as_i64(v), ptr, 8)
     case CharType()         : store_int(cx, char_to_i32(v), ptr, 4)
     case StringType()       : store_string(cx, v, ptr)
+    case ErrorType()        : store_int(cx, lower_error(cx, v), ptr, 4)
     case ListType(t, l)     : store_list(cx, v, ptr, t, l)
     case RecordType(fields) : store_record(cx, v, ptr, fields)
     case VariantType(cases) : store_variant(cx, v, ptr, cases)
@@ -1763,12 +1795,12 @@ We start with a case analysis to enumerate all the meaningful encoding
 combinations, subdividing the `latin1+utf16` encoding into either `latin1` or
 `utf16` based on the `UTF16_BIT` flag set by `load_string`:
 ```python
-def store_string(cx, v, ptr):
+def store_string(cx, v: String, ptr):
   begin, tagged_code_units = store_string_into_range(cx, v)
   store_int(cx, begin, ptr, 4)
   store_int(cx, tagged_code_units, ptr + 4, 4)
 
-def store_string_into_range(cx, v):
+def store_string_into_range(cx, v: String):
   src, src_encoding, src_tagged_code_units = v
 
   if src_encoding == 'latin1+utf16':
@@ -1948,6 +1980,13 @@ def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   ptr = cx.opts.realloc(ptr, src_byte_length, 1, latin1_size)
   trap_if(ptr + latin1_size > len(cx.opts.memory))
   return (ptr, latin1_size)
+```
+
+Error values are lowered by storing them directly into the
+per-component-instance `errors` table and passing the `i32` index to wasm.
+```python
+def lower_error(cx, v):
+  return cx.inst.errors.add(v)
 ```
 
 Lists and records are stored by recursively storing their elements and
@@ -2188,6 +2227,7 @@ def flatten_type(t):
     case F64Type()                        : return ['f64']
     case CharType()                       : return ['i32']
     case StringType()                     : return ['i32', 'i32']
+    case ErrorType()                      : return ['i32']
     case ListType(t, l)                   : return flatten_list(t, l)
     case RecordType(fields)               : return flatten_record(fields)
     case VariantType(cases)               : return flatten_variant(cases)
@@ -2282,6 +2322,7 @@ def lift_flat(cx, vi, t):
     case F64Type()          : return canonicalize_nan64(vi.next('f64'))
     case CharType()         : return convert_i32_to_char(cx, vi.next('i32'))
     case StringType()       : return lift_flat_string(cx, vi)
+    case ErrorType()        : return lift_error(cx, vi.next('i32'))
     case ListType(t, l)     : return lift_flat_list(cx, vi, t, l)
     case RecordType(fields) : return lift_flat_record(cx, vi, fields)
     case VariantType(cases) : return lift_flat_variant(cx, vi, cases)
@@ -2410,6 +2451,7 @@ def lower_flat(cx, v, t):
     case F64Type()          : return [maybe_scramble_nan64(v)]
     case CharType()         : return [char_to_i32(v)]
     case StringType()       : return lower_flat_string(cx, v)
+    case ErrorType()        : return lower_error(cx, v)
     case ListType(t, l)     : return lower_flat_list(cx, v, t, l)
     case RecordType(fields) : return lower_flat_record(cx, v, fields)
     case VariantType(cases) : return lower_flat_variant(cx, v, cases)
@@ -3081,11 +3123,11 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
   cx = LiftLowerContext(opts, task.inst, h.borrow_scope)
   buffer = BufferT(cx, t, ptr, n)
   if h.stream.closed():
-    flat_results = [CLOSED]
+    flat_results = [pack_async_copy_result(task, buffer, h)]
   else:
     if opts.sync:
       await task.call_sync(h.copy, buffer)
-      flat_results = [pack_async_copy_result(buffer, h)]
+      flat_results = [pack_async_copy_result(task, buffer, h)]
     else:
       async def do_copy(on_block):
         await h.copy(buffer, on_block)
@@ -3093,7 +3135,7 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
           def copy_event():
             if h.copying_buffer is buffer:
               h.stop_copying()
-              return (event_code, i, pack_async_copy_result(buffer, h))
+              return (event_code, i, pack_async_copy_result(task, buffer, h))
             else:
               return None
           task.notify(copy_event)
@@ -3102,7 +3144,7 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
           h.start_copying(task, buffer)
           flat_results = [BLOCKED]
         case Returned():
-          flat_results = [pack_async_copy_result(buffer, h)]
+          flat_results = [pack_async_copy_result(task, buffer, h)]
   return flat_results
 ```
 The trap if `not h.paired` prevents `write`s on the writable end of streams or
@@ -3131,17 +3173,28 @@ discovered on the next `read` or `write` call.
 BLOCKED = 0xffff_ffff
 CLOSED  = 0x8000_0000
 
-def pack_async_copy_result(buffer, h):
-  assert(buffer.progress <= Buffer.MAX_LENGTH < CLOSED < BLOCKED)
+def pack_async_copy_result(task, buffer, h):
   if buffer.progress:
+    assert(buffer.progress <= Buffer.MAX_LENGTH < BLOCKED)
+    assert(not (buffer.progress & CLOSED))
     return buffer.progress
-  if h.stream.closed():
-    return CLOSED
-  return 0
+  elif h.stream.closed():
+    if (error := h.stream.closed_with_error()):
+      assert(isinstance(h, ReadableStreamHandle|ReadableFutureHandle))
+      errori = task.inst.errors.add(error)
+      assert(errori != 0)
+    else:
+      errori = 0
+    assert(errori <= Table.MAX_LENGTH < BLOCKED)
+    assert(not (errori & CLOSED))
+    return errori | CLOSED
+  else:
+    return 0
 ```
-(When [`error`](Async.md#TODO) is added in a future PR, when the `CLOSED` bit
-is set, the low 31 bits will optionally contain the non-zero index of an
-`error` value in some new `errors` table.)
+Note that `error`s are only possible on the *readable* end of a stream or
+future (since, as defined below, only the *writable* end can close the stream
+with an `error`). Thus, `error`s only flow in the same direction as values, as
+an optional last value of the stream or future.
 
 ### 🔀 `canon {stream,future}.cancel-{read,write}`
 
@@ -3184,19 +3237,19 @@ async def cancel_async_copy(HandleT, sync, task, i):
   trap_if(not isinstance(h, HandleT))
   trap_if(not h.copying_buffer)
   if h.stream.closed():
-    flat_results = [pack_async_copy_result(h.copying_buffer, h)]
+    flat_results = [pack_async_copy_result(task, h.copying_buffer, h)]
     h.stop_copying()
   else:
     if sync:
       await task.call_sync(h.cancel_copy, h.copying_buffer)
-      flat_results = [pack_async_copy_result(h.copying_buffer, h)]
+      flat_results = [pack_async_copy_result(task, h.copying_buffer, h)]
       h.stop_copying()
     else:
       match await call_and_handle_blocking(h.cancel_copy, h.copying_buffer):
         case Blocked():
           flat_results = [BLOCKED]
         case Returned():
-          flat_results = [pack_async_copy_result(h.copying_buffer, h)]
+          flat_results = [pack_async_copy_result(task, h.copying_buffer, h)]
           h.stop_copying()
   return flat_results
 ```
@@ -3225,23 +3278,110 @@ performing the guards and bookkeeping defined by
 `{Readable,Writable}{Stream,Future}Handle.drop()` above.
 ```python
 async def canon_stream_close_readable(t, task, i):
-  return await close_async_value(ReadableStreamHandle, t, task, i)
+  return await close_async_value(ReadableStreamHandle, t, task, i, 0)
 
-async def canon_stream_close_writable(t, task, i):
-  return await close_async_value(WritableStreamHandle, t, task, i)
+async def canon_stream_close_writable(t, task, hi, errori):
+  return await close_async_value(WritableStreamHandle, t, task, hi, errori)
 
 async def canon_future_close_readable(t, task, i):
-  return await close_async_value(ReadableFutureHandle, t, task, i)
+  return await close_async_value(ReadableFutureHandle, t, task, i, 0)
 
-async def canon_future_close_writable(t, task, i):
-  return await close_async_value(WritableFutureHandle, t, task, i)
+async def canon_future_close_writable(t, task, hi, errori):
+  return await close_async_value(WritableFutureHandle, t, task, hi, errori)
 
-async def close_async_value(HandleT, t, task, i):
+async def close_async_value(HandleT, t, task, hi, errori):
   trap_if(not task.inst.may_leave)
-  h = task.inst.waitables.remove(i)
+  h = task.inst.waitables.remove(hi)
+  if errori == 0:
+    error = None
+  else:
+    error = task.inst.errors.get(errori)
   trap_if(not isinstance(h, HandleT))
   trap_if(h.t != t)
-  h.drop()
+  h.drop(error)
+  return []
+```
+Note that only the writable ends of streams and futures can be closed with a
+final `error` value and thus `error`s only flow in the same direction as
+values as an optional last value of the stream or future.
+
+### 🔀 `canon error.new`
+
+For a canonical definition:
+```wasm
+(canon error.new $opts (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param i32 i32) (result i32))`
+
+Calling `$f` calls the following function which uses the `$opts` immediate to
+(non-deterministically) lift the debug message, create a new `Error` value,
+store it in the per-component-instance `errors` table and returns its index.
+```python
+@dataclass
+class Error:
+  debug_message: String
+
+async def canon_error_new(opts, task, ptr, tagged_code_units):
+  trap_if(not task.inst.may_leave)
+  if DETERMINISTIC_PROFILE or random.randint(0,1):
+    s = String(('', 'utf8', 0))
+  else:
+    cx = LiftLowerContext(opts, task.inst)
+    s = load_string_from_range(cx, ptr, tagged_code_units)
+    s = host_defined_transformation(s)
+  i = task.inst.errors.add(Error(s))
+  return [i]
+```
+Supporting the requirement (introduced in the [explainer](Explainer.md#error-type))
+that wasm code does not depend on the contents of `error` values for
+behavioral correctness, the debug message is completely discarded
+non-deterministically or, in the deterministic profile, always. Importantly
+(for performance), when the debug message is discarded, it is not even lifted
+and thus the O(N) well-formedness conditions are not checked. (Note that
+`host_defined_transformation` is not defined by the Canonical ABI and stands
+for an arbitrary host-defined function.)
+
+### 🔀 `canon error.debug-message`
+
+For a canonical definition:
+```wasm
+(canon error.debug-message $opts (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param i32 i32))`
+
+Calling `$f` calls the following function which uses the `$opts` immediate to
+lowers the `Error`'s contained debug message. While *producing* an `error`
+value may non-deterministically discard or transform the debug message, a
+single `error` value must return the same debug message from
+`error.debug-message` over time.
+```python
+async def canon_error_debug_message(opts, task, i, ptr):
+  trap_if(not task.inst.may_leave)
+  error = task.inst.errors.get(i)
+  cx = LiftLowerContext(opts, task.inst)
+  store_string(cx, error.debug_message, ptr)
+  return []
+```
+Note that `ptr` points to an 8-byte region of memory into which will be stored
+the pointer and length of the debug string (allocated via `opts.realloc`).
+
+### 🔀 `canon error.drop`
+
+For a canonical definition:
+```wasm
+(canon error.drop (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param i32))`
+
+Calling `$f` calls the following function, which drops the `error` value from
+the current component instance's `errors` table.
+```python
+async def canon_error_drop(task, i):
+  trap_if(not task.inst.may_leave)
+  task.inst.errors.remove(i)
   return []
 ```
 
