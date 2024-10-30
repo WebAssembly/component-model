@@ -791,8 +791,8 @@ counter is used below to record the number of unmet obligations to drop the
 streams and futures connected to this `Subtask`.
 ```python
   def drop(self):
-    trap_if(self.enqueued)
     trap_if(self.state != CallState.DONE)
+    assert(not self.enqueued)
     self.supertask.todo -= 1
 ```
 
@@ -1058,9 +1058,14 @@ and ensures that streams-of-borrows are dropped before the end of the call,
 just like normal `borrow` handles.
 
 Given the above logic, the [readable and writable ends] of a stream can be
-concretely implemented by the following two classes. The `copy`, `cancel_copy`
-and `drop` methods are called polymorphically by the common `async_copy`
-routine shared by the `stream.read` and `stream.write` built-ins below.
+concretely implemented by the following two classes. The readable end
+inherits `StreamHandle`'s constructor, which takes an already-created abstract
+`ReadableStream` passed into the component. In contrast, constructing a
+writable end constructs a fresh `ReadableStreamGuestImpl` that will later
+be given to the readable end paired with this writable end. The `copy`,
+`cancel_copy` and `drop` methods are called polymorphically by the common
+`async_copy` routine shared by the `stream.read` and `stream.write` built-ins
+below.
 ```python
 class ReadableStreamHandle(StreamHandle):
   async def copy(self, dst, on_block):
@@ -1068,14 +1073,14 @@ class ReadableStreamHandle(StreamHandle):
   async def cancel_copy(self, dst, on_block):
     await self.stream.cancel_read(dst, on_block)
 
-class WritableStreamHandle(ReadableStreamGuestImpl, StreamHandle):
+class WritableStreamHandle(StreamHandle):
   def __init__(self, t, inst):
-    ReadableStreamGuestImpl.__init__(self, inst)
-    StreamHandle.__init__(self, self, t)
+    stream = ReadableStreamGuestImpl(inst)
+    StreamHandle.__init__(self, stream, t)
   async def copy(self, src, on_block):
-    await self.write(src, on_block)
+    await self.stream.write(src, on_block)
   async def cancel_copy(self, src, on_block):
-    await self.cancel_write(src, on_block)
+    await self.stream.cancel_write(src, on_block)
 ```
 
 Given the above definitions of how `stream` works, a `future` can simply be
@@ -1097,24 +1102,24 @@ class ReadableFutureHandle(FutureHandle):
     if dst.remain() == 0:
       self.stream.close()
 
-class WritableFutureHandle(ReadableStreamGuestImpl, FutureHandle):
+class WritableFutureHandle(FutureHandle):
   def __init__(self, t, inst):
-    ReadableStreamGuestImpl.__init__(self, inst)
-    FutureHandle.__init__(self, self, t)
+    stream = ReadableStreamGuestImpl(inst)
+    FutureHandle.__init__(self, stream, t)
 
   async def copy(self, src, on_block):
     assert(src.remain() == 1)
-    await self.write(src, on_block)
+    await self.stream.write(src, on_block)
     if src.remain() == 0:
-      self.close()
+      self.stream.close()
 
   async def cancel_copy(self, src, on_block):
     await self.cancel_write(src, on_block)
     if src.remain() == 0:
-      self.close()
+      self.stream.close()
 
   def drop(self):
-    trap_if(not self.closed())
+    trap_if(not self.stream.closed())
     FutureHandle.drop(self)
 ```
 The overridden `WritableFutureHandle.drop` method traps if the internal stream
@@ -2061,12 +2066,13 @@ def lower_future(cx, v, t):
 
 def lower_async_value(ReadableHandleT, WritableHandleT, cx, v, t):
   assert(isinstance(v, ReadableStream))
-  if isinstance(v, WritableHandleT) and cx.inst is v.impl:
-    i = cx.inst.waitables.array.index(v)
-    assert(v.paired)
-    v.paired = False
+  if isinstance(v, ReadableStreamGuestImpl) and cx.inst is v.impl:
+    [h] = [h for h in cx.inst.waitables.array if h and h.stream is v]
+    assert(h.paired)
+    h.paired = False
     if contains_borrow(t):
-      v.borrow_scope = None
+      h.borrow_scope = None
+    i = cx.inst.waitables.array.index(h)
     assert(2**31 > Table.MAX_LENGTH >= i)
     return i | (2**31)
   else:
@@ -2091,12 +2097,14 @@ it itself holds the `WritableStreamHandle` for. Without specially handling
 this case, this would lead to copies from a single linear memory into itself
 which is both inefficient and raises subtle semantic interleaving questions
 that we would rather avoid. To avoid both, this case is detected and the
-`ReadableStream` is "unwrapped" to writable handle, returning the existing
+`ReadableStream` is "unwrapped" to the writable handle, returning the existing
 index of it in the `waitables` table, setting the high bit to signal this fact
 to guest code. Guest code must therefore handle this special case by
 collapsing the two ends of the stream to work fully without guest code (since
 the Canonical ABI is now wholly unnecessary to pass values from writer to
-reader).
+reader). The O(N) searches through the `waitables` table are expected to be
+optimized away by instead storing a pointer or index of the writable handle in
+the stream itself (alongside the `impl` field).
 
 
 ### Flattening
@@ -2969,6 +2977,27 @@ execute, however tasks in *other* component instances may execute. This allows
 a long-running task in one component to avoid starving other components
 without needing support full reentrancy.
 
+### 🔀 `canon subtask.drop`
+
+For a canonical definition:
+```wasm
+(canon subtask.drop (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param i32))`
+
+Calling `$f` removes the subtask at the given index from the current
+component instance's `watiable` table, performing the guards and bookkeeping
+defined by `Subtask.drop()`.
+```python
+async def canon_subtask_drop(task, i):
+  trap_if(not task.inst.may_leave)
+  h = task.inst.waitables.remove(i)
+  trap_if(not isinstance(h, Subtask))
+  h.drop()
+  return []
+```
+
 ### 🔀 `canon {stream,future}.new`
 
 For canonical definitions:
@@ -3177,22 +3206,41 @@ new `waitable` element allocated; the cancellation is simply reported as a
 normal `{STREAM,FUTURE}_{READ,WRITE}` event by the original, now-unblocked
 `read` or `write`.
 
-### 🔀 `canon waitable.drop`
+### 🔀 `canon {stream,future}.close-{readable,writable}`
 
-For a canonical definition:
+For canonical definitions:
 ```wasm
-(canon waitable.drop (core func $f))
+(canon stream.close-readable $t (core func $f))
+(canon stream.close-writable $t (core func $f))
+(canon future.close-readable $t (core func $f))
+(canon future.close-writable $t (core func $f))
 ```
 validation specifies:
 * `$f` is given type `(func (param i32))`
 
-Calling `$f` removes the indicated waitable (subtask, stream or future) from
-the instance's table, trapping if various conditions aren't met in the
-waitable's `drop()` method.
+Calling `$f` removes the readable or writable end of the stream or future at
+the given index from the current component instance's `waitable` table,
+performing the guards and bookkeeping defined by
+`{Readable,Writable}{Stream,Future}Handle.drop()` above.
 ```python
-async def canon_waitable_drop(task, i):
+async def canon_stream_close_readable(t, task, i):
+  return await close_async_value(ReadableStreamHandle, t, task, i)
+
+async def canon_stream_close_writable(t, task, i):
+  return await close_async_value(WritableStreamHandle, t, task, i)
+
+async def canon_future_close_readable(t, task, i):
+  return await close_async_value(ReadableFutureHandle, t, task, i)
+
+async def canon_future_close_writable(t, task, i):
+  return await close_async_value(WritableFutureHandle, t, task, i)
+
+async def close_async_value(HandleT, t, task, i):
   trap_if(not task.inst.may_leave)
-  task.inst.waitables.remove(i).drop()
+  h = task.inst.waitables.remove(i)
+  trap_if(not isinstance(h, HandleT))
+  trap_if(h.t != t)
+  h.drop()
   return []
 ```
 

@@ -292,17 +292,21 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x0a async?:<async>? m:<core:memdix>                => (canon task.wait async? (memory m) (core func)) 🔀
            | 0x0b async?:<async>? m:<core:memidx>                => (canon task.poll async? (memory m) (core func)) 🔀
            | 0x0c async?:<async>?                                => (canon task.yield async? (core func)) 🔀
-           | 0x0d                                                => (canon waitable.drop (core func)) 🔀
+           | 0x0d                                                => (canon subtask.drop (core func)) 🔀
            | 0x0e t:<typeidx>                                    => (canon stream.new t (core func)) 🔀
            | 0x0f t:<typeidx> opts:<opts>                        => (canon stream.read t opts (core func)) 🔀
            | 0x10 t:<typeidx> opts:<opts>                        => (canon stream.write t opts (core func)) 🔀
            | 0x11 async?:<async?>                                => (canon stream.cancel-read async? (core func)) 🔀
            | 0x12 async?:<async?>                                => (canon stream.cancel-write async? (core func)) 🔀
-           | 0x13 t:<typeidx>                                    => (canon future.new t (core func)) 🔀
-           | 0x14 t:<typeidx> opts:<opts>                        => (canon future.read t opts (core func)) 🔀
-           | 0x15 t:<typeidx> opts:<opts>                        => (canon future.write t opts (core func)) 🔀
-           | 0x16 async?:<async?>                                => (canon future.cancel-read async? (core func)) 🔀
-           | 0x17 async?:<async?>                                => (canon future.cancel-write async? (core func)) 🔀
+           | 0x13 t:<typeidx>                                    => (canon stream.close-readable t (core func)) 🔀
+           | 0x14 t:<typeidx>                                    => (canon stream.close-writable t (core func)) 🔀
+           | 0x15 t:<typeidx>                                    => (canon future.new t (core func)) 🔀
+           | 0x16 t:<typeidx> opts:<opts>                        => (canon future.read t opts (core func)) 🔀
+           | 0x17 t:<typeidx> opts:<opts>                        => (canon future.write t opts (core func)) 🔀
+           | 0x18 async?:<async?>                                => (canon future.cancel-read async? (core func)) 🔀
+           | 0x19 async?:<async?>                                => (canon future.cancel-write async? (core func)) 🔀
+           | 0x1a t:<typeidx>                                    => (canon future.close-readable t (core func)) 🔀
+           | 0x1b t:<typeidx>                                    => (canon future.close-writable t (core func)) 🔀
 async?   ::= 0x00                                                =>
            | 0x01                                                => async
 opts     ::= opt*:vec(<canonopt>)                                => opt*
