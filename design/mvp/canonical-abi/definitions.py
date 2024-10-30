@@ -578,8 +578,8 @@ class Subtask:
     return self.flat_results
 
   def drop(self):
-    trap_if(self.enqueued)
     trap_if(self.state != CallState.DONE)
+    assert(not self.enqueued)
     self.supertask.todo -= 1
 
 #### Buffer, Stream and Future State
@@ -707,8 +707,8 @@ class StreamHandle:
     self.t = t
     self.paired = False
     self.borrow_scope = None
-    self.copying_buffer = None
     self.copying_task = None
+    self.copying_buffer = None
 
   def start_copying(self, task, buffer):
     assert(not self.copying_task and not self.copying_buffer)
@@ -734,14 +734,14 @@ class ReadableStreamHandle(StreamHandle):
   async def cancel_copy(self, dst, on_block):
     await self.stream.cancel_read(dst, on_block)
 
-class WritableStreamHandle(ReadableStreamGuestImpl, StreamHandle):
+class WritableStreamHandle(StreamHandle):
   def __init__(self, t, inst):
-    ReadableStreamGuestImpl.__init__(self, inst)
-    StreamHandle.__init__(self, self, t)
+    stream = ReadableStreamGuestImpl(inst)
+    StreamHandle.__init__(self, stream, t)
   async def copy(self, src, on_block):
-    await self.write(src, on_block)
+    await self.stream.write(src, on_block)
   async def cancel_copy(self, src, on_block):
-    await self.cancel_write(src, on_block)
+    await self.stream.cancel_write(src, on_block)
 
 class FutureHandle(StreamHandle): pass
 
@@ -757,24 +757,24 @@ class ReadableFutureHandle(FutureHandle):
     if dst.remain() == 0:
       self.stream.close()
 
-class WritableFutureHandle(ReadableStreamGuestImpl, FutureHandle):
+class WritableFutureHandle(FutureHandle):
   def __init__(self, t, inst):
-    ReadableStreamGuestImpl.__init__(self, inst)
-    FutureHandle.__init__(self, self, t)
+    stream = ReadableStreamGuestImpl(inst)
+    FutureHandle.__init__(self, stream, t)
 
   async def copy(self, src, on_block):
     assert(src.remain() == 1)
-    await self.write(src, on_block)
+    await self.stream.write(src, on_block)
     if src.remain() == 0:
-      self.close()
+      self.stream.close()
 
   async def cancel_copy(self, src, on_block):
     await self.cancel_write(src, on_block)
     if src.remain() == 0:
-      self.close()
+      self.stream.close()
 
   def drop(self):
-    trap_if(not self.closed())
+    trap_if(not self.stream.closed())
     FutureHandle.drop(self)
 
 ### Despecialization
@@ -1432,12 +1432,13 @@ def lower_future(cx, v, t):
 
 def lower_async_value(ReadableHandleT, WritableHandleT, cx, v, t):
   assert(isinstance(v, ReadableStream))
-  if isinstance(v, WritableHandleT) and cx.inst is v.impl:
-    i = cx.inst.waitables.array.index(v)
-    assert(v.paired)
-    v.paired = False
+  if isinstance(v, ReadableStreamGuestImpl) and cx.inst is v.impl:
+    [h] = [h for h in cx.inst.waitables.array if h and h.stream is v]
+    assert(h.paired)
+    h.paired = False
     if contains_borrow(t):
-      v.borrow_scope = None
+      h.borrow_scope = None
+    i = cx.inst.waitables.array.index(h)
     assert(2**31 > Table.MAX_LENGTH >= i)
     return i | (2**31)
   else:
@@ -1907,6 +1908,15 @@ async def canon_task_yield(sync, task):
   await task.yield_(sync)
   return []
 
+### 🔀 `canon subtask.drop`
+
+async def canon_subtask_drop(task, i):
+  trap_if(not task.inst.may_leave)
+  h = task.inst.waitables.remove(i)
+  trap_if(not isinstance(h, Subtask))
+  h.drop()
+  return []
+
 ### 🔀 `canon {stream,future}.new`
 
 async def canon_stream_new(elem_type, task):
@@ -2018,9 +2028,24 @@ async def cancel_async_copy(HandleT, sync, task, i):
           h.stop_copying()
   return flat_results
 
-### 🔀 `canon waitable.drop`
+### 🔀 `canon {stream,future}.close-{readable,writable}`
 
-async def canon_waitable_drop(task, i):
+async def canon_stream_close_readable(t, task, i):
+  return await close_async_value(ReadableStreamHandle, t, task, i)
+
+async def canon_stream_close_writable(t, task, i):
+  return await close_async_value(WritableStreamHandle, t, task, i)
+
+async def canon_future_close_readable(t, task, i):
+  return await close_async_value(ReadableFutureHandle, t, task, i)
+
+async def canon_future_close_writable(t, task, i):
+  return await close_async_value(WritableFutureHandle, t, task, i)
+
+async def close_async_value(HandleT, t, task, i):
   trap_if(not task.inst.may_leave)
-  task.inst.waitables.remove(i).drop()
+  h = task.inst.waitables.remove(i)
+  trap_if(not isinstance(h, HandleT))
+  trap_if(h.t != t)
+  h.drop()
   return []

@@ -1372,16 +1372,21 @@ canon ::= ...
         | (canon task.wait async? (memory <core:memidx>) (core func <id>?)) 🔀
         | (canon task.poll async? (memory <core:memidx>) (core func <id>?)) 🔀
         | (canon task.yield async? (core func <id>?)) 🔀
+        | (canon subtask.drop (core func <id>?)) 🔀
         | (canon stream.new <typeidx> (core func <id>?)) 🔀
         | (canon stream.read <typeidx> <canonopt>* (core func <id>?)) 🔀
         | (canon stream.write <typeidx> <canonopt>* (core func <id>?)) 🔀
         | (canon stream.cancel-read async? (core func <id>?)) 🔀
         | (canon stream.cancel-write async? (core func <id>?)) 🔀
+        | (canon stream.close-readable <typeidx> (core func <id>?)) 🔀
+        | (canon stream.close-writable <typeidx> (core func <id>?)) 🔀
         | (canon future.new <typeidx> (core func <id>?)) 🔀
         | (canon future.read <typeidx> <canonopt>* (core func <id>?)) 🔀
         | (canon future.write <typeidx> <canonopt>* (core func <id>?)) 🔀
         | (canon future.cancel-read async? (core func <id>?)) 🔀
         | (canon future.cancel-write async? (core func <id>?)) 🔀
+        | (canon future.close-readable <typeidx> (core func <id>?)) 🔀
+        | (canon future.close-writable <typeidx> (core func <id>?)) 🔀
         | (canon waitable.drop (core func <id>?)) 🔀
         | (canon thread.spawn <typeidx> (core func <id>?)) 🧵
         | (canon thread.hw_concurrency (core func <id>?)) 🧵
@@ -1470,6 +1475,10 @@ switch to another task, allowing a long-running computation to cooperatively
 interleave with other tasks. (See also [`canon_task_yield`] in the Canonical
 ABI explainer.)
 
+The `subtask.drop` built-in has type `[i32] -> []` and removes the indicated
+[subtask](Async.md#subtask-and-supertask) from the current instance's subtask
+table, trapping if the subtask isn't done.
+
 The `{stream,future}.new` built-ins have type `[] -> [i32]` and return a new
 [writable end](Async.md#streams-and-futures) of a stream or future. (See
 [`canon_stream_new`] in the Canonical ABI explainer for details.)
@@ -1500,11 +1509,11 @@ blocks, the return value is the sentinel "`BLOCKED`" value and the caller must
 or `write`. (See [`canon_stream_cancel_read`] in the Canonical ABI explainer
 for details.)
 
-The `waitable.drop` built-in has type `[i32] -> []` and removes the indicated
-[subtask](Async.md#subtask-and-supertask) or [stream or future](Async.md#streams-and-futures)
-from the current instance's [waitables](Async.md#waiting) table, trapping if
-the subtask isn't done or the stream or future is in the middle of reading
-or writing.
+The `{stream,future}.close-{readable,writable}` built-ins have type
+`[i32] -> []` and removes the indicated [stream or future](Async.md#streams-and-futures)
+from the current component instance's [waitables](Async.md#waiting) table,
+trapping if the stream or future has a mismatched direction or type or are in
+the middle of a `read` or `write`.
 
 ##### 🧵 Threading built-ins
 
