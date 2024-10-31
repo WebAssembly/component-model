@@ -1387,7 +1387,6 @@ canon ::= ...
         | (canon future.cancel-write async? (core func <id>?)) 🔀
         | (canon future.close-readable <typeidx> (core func <id>?)) 🔀
         | (canon future.close-writable <typeidx> (core func <id>?)) 🔀
-        | (canon waitable.drop (core func <id>?)) 🔀
         | (canon thread.spawn <typeidx> (core func <id>?)) 🧵
         | (canon thread.hw_concurrency (core func <id>?)) 🧵
 ```
