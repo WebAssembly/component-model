@@ -36,10 +36,11 @@ being specified here.
   * [`canon task.wait`](#-canon-taskwait) 🔀
   * [`canon task.poll`](#-canon-taskpoll) 🔀
   * [`canon task.yield`](#-canon-taskyield) 🔀
+  * [`canon subtask.drop`](#-canon-subtaskdrop) 🔀
   * [`canon {stream,future}.new`](#-canon-streamfuturenew) 🔀
   * [`canon {stream,future}.{read,write}`](#-canon-streamfuturereadwrite) 🔀
   * [`canon {stream,future}.cancel-{read,write}`](#-canon-streamfuturecancel-readwrite) 🔀
-  * [`canon waitable.drop`](#-canon-waitabledrop) 🔀
+  * [`canon {stream,future}.close-{readable,writable}`](#-canon-streamfutureclose-readablewritable) 🔀
 
 
 ## Supporting definitions
@@ -2724,7 +2725,7 @@ In the `async` case, if `do_call` blocks before `Subtask.finish` (signalled by
 `callee` calling `on_block`), the `Subtask` is added to the current component
 instance's `waitables` table, giving it an `i32` index that will be returned
 by `task.wait` to signal progress on this subtask. The `todo` increment is
-matched by a decrement in `canon_waitable_drop` and ensures that all subtasks
+matched by a decrement in `canon_subtask_drop` and ensures that all subtasks
 of a supertask complete before the supertask completes. The `notify_supertask`
 flag is set to tell `Subtask` methods (below) to asynchronously notify the
 supertask of progress.
