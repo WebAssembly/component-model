@@ -654,8 +654,8 @@ the full range of flexibility to:
 A consequence of this, however, is that components *must not* depend on the
 contents of `error` values for behavioral correctness. In particular, case
 analysis of the contents of an `error` should not determine *error receovery*;
-for this, proper `result` or `variant` types must be used in the WIT function
-signature.
+explicit `result` or `variant` types must be used in the function return
+type instead (e.g., `(func (result (tuple (stream u8) (future $my-error)))`).
 
 ##### Container types
 
