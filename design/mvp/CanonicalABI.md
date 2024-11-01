@@ -3265,12 +3265,18 @@ normal `{STREAM,FUTURE}_{READ,WRITE}` event by the original, now-unblocked
 For canonical definitions:
 ```wasm
 (canon stream.close-readable $t (core func $f))
-(canon stream.close-writable $t (core func $f))
 (canon future.close-readable $t (core func $f))
-(canon future.close-writable $t (core func $f))
 ```
 validation specifies:
 * `$f` is given type `(func (param i32))`
+
+and for canonical definitions:
+```wasm
+(canon stream.close-writable $t (core func $f))
+(canon future.close-writable $t (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param i32 i32))`
 
 Calling `$f` removes the readable or writable end of the stream or future at
 the given index from the current component instance's `waitable` table,
