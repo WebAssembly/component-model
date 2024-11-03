@@ -1144,7 +1144,6 @@ def lift_async_value(ReadableHandleT, WritableHandleT, cx, i, t):
       cx.inst.waitables.remove(i)
     case WritableHandleT():
       trap_if(h.paired)
-      assert(not h.copying_buffer)
       h.paired = True
       if contains_borrow(t):
         h.borrow_scope = cx.borrow_scope
@@ -1978,7 +1977,6 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
   h = task.inst.waitables.get(i)
   trap_if(not isinstance(h, HandleT))
   trap_if(h.t != t)
-  trap_if(not h.paired)
   trap_if(h.copying_buffer)
   cx = LiftLowerContext(opts, task.inst, h.borrow_scope)
   buffer = BufferT(cx, t, ptr, n)
@@ -1986,6 +1984,7 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
     flat_results = [pack_async_copy_result(task, buffer, h)]
   else:
     if opts.sync:
+      trap_if(not h.paired)
       await task.call_sync(h.copy, buffer)
       flat_results = [pack_async_copy_result(task, buffer, h)]
     else:
