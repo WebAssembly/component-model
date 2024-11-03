@@ -1655,7 +1655,6 @@ def lift_async_value(ReadableHandleT, WritableHandleT, cx, i, t):
       cx.inst.waitables.remove(i)
     case WritableHandleT():
       trap_if(h.paired)
-      assert(not h.copying_buffer)
       h.paired = True
       if contains_borrow(t):
         h.borrow_scope = cx.borrow_scope
@@ -3118,7 +3117,6 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
   h = task.inst.waitables.get(i)
   trap_if(not isinstance(h, HandleT))
   trap_if(h.t != t)
-  trap_if(not h.paired)
   trap_if(h.copying_buffer)
   cx = LiftLowerContext(opts, task.inst, h.borrow_scope)
   buffer = BufferT(cx, t, ptr, n)
@@ -3126,6 +3124,7 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
     flat_results = [pack_async_copy_result(task, buffer, h)]
   else:
     if opts.sync:
+      trap_if(not h.paired)
       await task.call_sync(h.copy, buffer)
       flat_results = [pack_async_copy_result(task, buffer, h)]
     else:
@@ -3147,12 +3146,11 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
           flat_results = [pack_async_copy_result(task, buffer, h)]
   return flat_results
 ```
-The trap if `not h.paired` prevents `write`s on the writable end of streams or
-futures that have not yet been lifted. The `copying_buffer` field serves as a
-boolean indication of whether an async `read` or `write` is already in
-progress, preventing multiple overlapping calls to `read` or `write`. (This
-restriction could be relaxed [in the future](Async.md#TODO) to allow greater
-pipeline parallelism.)
+The `trap_if(h.copying_buffer)` trap prevents multiple overlapping calls to
+`read` or `write`. (This restriction could be relaxed [in the
+future](Async.md#TODO) to allow greater pipeline parallelism.) The
+`trap_if(not h.paired)` in the synchronous case prevents what would otherwise
+be a deadlock, performing a blocking write when there is no reader.
 
 One subtle corner case handled by this code that is worth pointing out is that,
 between calling `h.copy()` and `h.copy()` returning, wasm guest code can call

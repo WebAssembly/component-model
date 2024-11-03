@@ -1234,11 +1234,19 @@ async def test_receive_own_stream():
     assert(len(args) == 0)
     [wsi] = await canon_stream_new(U8Type(), task)
     assert(wsi == 1)
-    retp = 4
+    [ret] = await canon_stream_write(U8Type(), opts, task, wsi, 0, 4)
+    assert(ret == definitions.BLOCKED)
+    retp = 8
     [ret] = await canon_lower(opts, host_ft, host_import, task, [wsi, retp])
     assert(ret == 0)
     result = int.from_bytes(mem[retp : retp+4], 'little', signed=False)
     assert(result == (wsi | 2**31))
+    [ret] = await canon_lower(opts, host_ft, host_import, task, [wsi, retp])
+    assert(ret == 0)
+    result = int.from_bytes(mem[retp : retp+4], 'little', signed=False)
+    assert(result == (wsi | 2**31))
+    [ret] = await canon_stream_cancel_write(True, task, wsi)
+    assert(ret == 0)
     [] = await canon_stream_close_writable(U8Type(), task, wsi, 0)
     return []
 
