@@ -1403,15 +1403,15 @@ canon ::= ...
         | (canon stream.new <typeidx> (core func <id>?)) 🔀
         | (canon stream.read <typeidx> <canonopt>* (core func <id>?)) 🔀
         | (canon stream.write <typeidx> <canonopt>* (core func <id>?)) 🔀
-        | (canon stream.cancel-read async? (core func <id>?)) 🔀
-        | (canon stream.cancel-write async? (core func <id>?)) 🔀
+        | (canon stream.cancel-read <typeidx> async? (core func <id>?)) 🔀
+        | (canon stream.cancel-write <typeidx> async? (core func <id>?)) 🔀
         | (canon stream.close-readable <typeidx> (core func <id>?)) 🔀
         | (canon stream.close-writable <typeidx> (core func <id>?)) 🔀
         | (canon future.new <typeidx> (core func <id>?)) 🔀
         | (canon future.read <typeidx> <canonopt>* (core func <id>?)) 🔀
         | (canon future.write <typeidx> <canonopt>* (core func <id>?)) 🔀
-        | (canon future.cancel-read async? (core func <id>?)) 🔀
-        | (canon future.cancel-write async? (core func <id>?)) 🔀
+        | (canon future.cancel-read <typeidx> async? (core func <id>?)) 🔀
+        | (canon future.cancel-write <typeidx> async? (core func <id>?)) 🔀
         | (canon future.close-readable <typeidx> (core func <id>?)) 🔀
         | (canon future.close-writable <typeidx> (core func <id>?)) 🔀
         | (canon error.new <canonopt>* (core func <id>?))

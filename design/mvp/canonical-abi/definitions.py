@@ -2029,22 +2029,23 @@ def pack_async_copy_result(task, buffer, h):
 
 ### 🔀 `canon {stream,future}.cancel-{read,write}`
 
-async def canon_stream_cancel_read(sync, task, i):
-  return await cancel_async_copy(ReadableStreamHandle, sync, task, i)
+async def canon_stream_cancel_read(t, sync, task, i):
+  return await cancel_async_copy(ReadableStreamHandle, t, sync, task, i)
 
-async def canon_stream_cancel_write(sync, task, i):
-  return await cancel_async_copy(WritableStreamHandle, sync, task, i)
+async def canon_stream_cancel_write(t, sync, task, i):
+  return await cancel_async_copy(WritableStreamHandle, t, sync, task, i)
 
-async def canon_future_cancel_read(sync, task, i):
-  return await cancel_async_copy(ReadableFutureHandle, sync, task, i)
+async def canon_future_cancel_read(t, sync, task, i):
+  return await cancel_async_copy(ReadableFutureHandle, t, sync, task, i)
 
-async def canon_future_cancel_write(sync, task, i):
-  return await cancel_async_copy(WritableFutureHandle, sync, task, i)
+async def canon_future_cancel_write(t, sync, task, i):
+  return await cancel_async_copy(WritableFutureHandle, t, sync, task, i)
 
-async def cancel_async_copy(HandleT, sync, task, i):
+async def cancel_async_copy(HandleT, t, sync, task, i):
   trap_if(not task.inst.may_leave)
   h = task.inst.waitables.get(i)
   trap_if(not isinstance(h, HandleT))
+  trap_if(h.t != t)
   trap_if(not h.copying_buffer)
   if h.stream.closed():
     flat_results = [pack_async_copy_result(task, h.copying_buffer, h)]

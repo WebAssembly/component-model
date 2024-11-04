@@ -1245,7 +1245,7 @@ async def test_receive_own_stream():
     assert(ret == 0)
     result = int.from_bytes(mem[retp : retp+4], 'little', signed=False)
     assert(result == (wsi | 2**31))
-    [ret] = await canon_stream_cancel_write(True, task, wsi)
+    [ret] = await canon_stream_cancel_write(U8Type(), True, task, wsi)
     assert(ret == 0)
     [] = await canon_stream_close_writable(U8Type(), task, wsi, 0)
     return []
@@ -1523,7 +1523,7 @@ async def test_cancel_copy():
     host_sink.set_remain(2)
     got = await host_sink.consume(2)
     assert(got == [0xa, 0xb])
-    [ret] = await canon_stream_cancel_write(True, task, wsi)
+    [ret] = await canon_stream_cancel_write(U8Type(), True, task, wsi)
     assert(ret == 2)
     [] = await canon_stream_close_writable(U8Type(), task, wsi, 0)
     host_sink.set_remain(100)
@@ -1538,7 +1538,7 @@ async def test_cancel_copy():
     host_sink.set_remain(2)
     got = await host_sink.consume(2)
     assert(got == [1, 2])
-    [ret] = await canon_stream_cancel_write(False, task, wsi)
+    [ret] = await canon_stream_cancel_write(U8Type(), False, task, wsi)
     assert(ret == 2)
     [] = await canon_stream_close_writable(U8Type(), task, wsi, 0)
     host_sink.set_remain(100)
@@ -1550,7 +1550,7 @@ async def test_cancel_copy():
     rsi = mem[retp]
     [ret] = await canon_stream_read(U8Type(), lower_opts, task, rsi, 0, 4)
     assert(ret == definitions.BLOCKED)
-    [ret] = await canon_stream_cancel_read(True, task, rsi)
+    [ret] = await canon_stream_cancel_read(U8Type(), True, task, rsi)
     assert(ret == 0)
     [] = await canon_stream_close_readable(U8Type(), task, rsi)
 
@@ -1561,7 +1561,7 @@ async def test_cancel_copy():
     [ret] = await canon_stream_read(U8Type(), lower_opts, task, rsi, 0, 4)
     assert(ret == definitions.BLOCKED)
     host_source.eager_cancel.clear()
-    [ret] = await canon_stream_cancel_read(False, task, rsi)
+    [ret] = await canon_stream_cancel_read(U8Type(), False, task, rsi)
     assert(ret == definitions.BLOCKED)
     host_source.write([7,8])
     await asyncio.sleep(0)
@@ -1682,7 +1682,7 @@ async def test_futures():
     assert(p1 == subi)
 
     await task.yield_(sync = False)
-    [ret] = await canon_future_cancel_read(True, task, rfi)
+    [ret] = await canon_future_cancel_read(U8Type(), True, task, rfi)
     assert(ret == 1)
     assert(mem[readp] == 43)
 

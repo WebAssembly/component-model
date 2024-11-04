@@ -3198,10 +3198,10 @@ an optional last value of the stream or future.
 
 For canonical definitions:
 ```wasm
-(canon stream.cancel-read $async? (core func $f))
-(canon stream.cancel-write $async? (core func $f))
-(canon future.cancel-read $async? (core func $f))
-(canon future.cancel-write $async? (core func $f))
+(canon stream.cancel-read $t $async? (core func $f))
+(canon stream.cancel-write $t $async? (core func $f))
+(canon future.cancel-read $t $async? (core func $f))
+(canon future.cancel-write $t $async? (core func $f))
 ```
 validation specifies:
 * `$f` is given type `(func (param i32) (result i32))`
@@ -3217,22 +3217,23 @@ cancel a `read` or `write` (and regain ownership of the passed buffer) is
 crucial since some languages will need to cancel reading or writing from
 within the synchronous context of a destructor.
 ```python
-async def canon_stream_cancel_read(sync, task, i):
-  return await cancel_async_copy(ReadableStreamHandle, sync, task, i)
+async def canon_stream_cancel_read(t, sync, task, i):
+  return await cancel_async_copy(ReadableStreamHandle, t, sync, task, i)
 
-async def canon_stream_cancel_write(sync, task, i):
-  return await cancel_async_copy(WritableStreamHandle, sync, task, i)
+async def canon_stream_cancel_write(t, sync, task, i):
+  return await cancel_async_copy(WritableStreamHandle, t, sync, task, i)
 
-async def canon_future_cancel_read(sync, task, i):
-  return await cancel_async_copy(ReadableFutureHandle, sync, task, i)
+async def canon_future_cancel_read(t, sync, task, i):
+  return await cancel_async_copy(ReadableFutureHandle, t, sync, task, i)
 
-async def canon_future_cancel_write(sync, task, i):
-  return await cancel_async_copy(WritableFutureHandle, sync, task, i)
+async def canon_future_cancel_write(t, sync, task, i):
+  return await cancel_async_copy(WritableFutureHandle, t, sync, task, i)
 
-async def cancel_async_copy(HandleT, sync, task, i):
+async def cancel_async_copy(HandleT, t, sync, task, i):
   trap_if(not task.inst.may_leave)
   h = task.inst.waitables.get(i)
   trap_if(not isinstance(h, HandleT))
+  trap_if(h.t != t)
   trap_if(not h.copying_buffer)
   if h.stream.closed():
     flat_results = [pack_async_copy_result(task, h.copying_buffer, h)]
