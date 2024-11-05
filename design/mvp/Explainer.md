@@ -733,6 +733,10 @@ futures are useful in more advanced scenarios where a parameter or result
 value may not be ready at the same time as the other synchronous parameters or
 results.
 
+Currently, validation rejects `(stream T)` and `(future T)` when `T`
+transitively contains a `borrow`. This restriction could be relaxed in the
+future by extending the call-scoping rules of `borrow` to streams and futures.
+
 #### Specialized value types
 
 The sets of values allowed for the remaining *specialized value types* are
@@ -1566,7 +1570,6 @@ enum event-kind {
     call-starting,
     call-started,
     call-returned,
-    call-done,
     yielded,
     stream-read,
     stream-write,
@@ -1627,8 +1630,8 @@ tasks. (See also [`canon_task_yield`] in the Canonical ABI explainer.)
 
 The `subtask.drop` built-in removes the indicated
 [subtask](Async.md#subtask-and-supertask) from the current instance's subtask
-table, trapping if the subtask isn't done. (See [`canon_subtask_drop`] in the
-Canonical ABI explainer for details.)
+table, trapping if the subtask hasn't returned. (See [`canon_subtask_drop`] in
+the Canonical ABI explainer for details.)
 
 ###### 🔀 `stream.new` and `future.new`
 
@@ -2349,13 +2352,13 @@ three runtime invariants:
    implicitly checked at every execution step by component functions. Thus,
    after a trap, it's no longer possible to observe the internal state of a
    component instance.
-2. Components prevent unexpected reentrance by setting the "lockdown" state
-   (in the previous bullet) whenever calling out through an import, clearing
-   the lockdown state on return, thereby preventing reentrant export calls in
-   the interim. This establishes a clear contract between separate components
-   that both prevents obscure composition-time bugs and also enables
-   more-efficient non-reentrant runtime glue code (particularly in the middle
-   of the [Canonical ABI](CanonicalABI.md)).
+2. The Component Model disallows reentrance by trapping if a callee's
+   component-instance is already on the stack when the call starts.
+   (For details, see [`trap_if_on_stack`](CanonicalABI.md#task-state)
+   in the Canonical ABI explainer.) This default prevents obscure
+   composition-time bugs and also enables more-efficient non-reentrant
+   runtime glue code. This rule will be relaxed by an opt-in
+   function type attribute in the [future](Async.md#todo).
 
 
 ## JavaScript Embedding

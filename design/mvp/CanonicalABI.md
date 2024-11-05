@@ -298,26 +298,24 @@ class CallState(IntEnum):
   STARTING = 0
   STARTED = 1
   RETURNED = 2
-  DONE = 3
 
 class EventCode(IntEnum):
   CALL_STARTING = CallState.STARTING
   CALL_STARTED = CallState.STARTED
   CALL_RETURNED = CallState.RETURNED
-  CALL_DONE = CallState.DONE
-  YIELDED = 4
-  STREAM_READ = 5
-  STREAM_WRITE = 6
-  FUTURE_READ = 7
-  FUTURE_WRITE = 8
+  YIELDED = 3
+  STREAM_READ = 4
+  STREAM_WRITE = 5
+  FUTURE_READ = 6
+  FUTURE_WRITE = 7
 
 EventTuple = tuple[EventCode, int, int]
 EventCallback = Callable[[], Optional[EventTuple]]
 OnBlockCallback = Callable[[Awaitable], Awaitable]
 ```
 The `CallState` enum describes the linear sequence of states that an async call
-necessarily transitions through: [`STARTING`](Async.md#backpressure), `STARTED`,
-[`RETURNING`](Async.md#returning) and `DONE`. The `EventCode` enum shares
+necessarily transitions through: [`STARTING`](Async.md#backpressure), `STARTED`
+and [`RETURNED`](Async.md#returning). The `EventCode` enum shares
 common code values with `CallState` to define the set of integer event codes
 that are delivered to [waiting](Async.md#waiting) or polling tasks.
 
@@ -412,7 +410,8 @@ class Task:
   on_block: OnBlockCallback
   events: list[EventCallback]
   has_events: asyncio.Event
-  todo: int
+  num_subtasks: int
+  num_borrows: int
 
   def __init__(self, opts, inst, ft, caller, on_return, on_block):
     self.opts = opts
@@ -423,14 +422,9 @@ class Task:
     self.on_block = on_block
     self.events = []
     self.has_events = asyncio.Event()
-    self.todo = 0
-
-  def task(self):
-    return self
+    self.num_subtasks = 0
+    self.num_borrows = 0
 ```
-The `task()` method can be called polymorphically on a `Task|Subtask` to
-get the `Subtask`'s `supertask` or, in the case of a `Task`, itself.
-
 The fields of `Task` are introduced in groups of related `Task` methods next.
 Using a conservative syntactic analysis of the component-level definitions of
 a linked component DAG, an optimizing implementation can statically eliminate
@@ -609,10 +603,16 @@ The `return_` method is called by either `canon_task_return` or `canon_lift`
 callback instead of simply returning the values from `canon_lift` enables the
 callee to keep executing after returning its results. However, it does
 introduce a dynamic error condition if `canon task.return` is called less or
-more than once which must be checked by `return_` and `exit`.
+more than once which must be checked by `return_` and `exit`. Since ownership
+of borrowed handles is returned to the caller when the caller is notified that
+the `Subtask` is in the `RETURNED` state, `num_borrows` is guarded to be `0`.
+Since tasks can keep executing arbitrary code after calling `task.return`, this
+means that borrowed handles must be dropped potentially much earlier than the
+observable end of the task.
 ```python
   def return_(self, flat_results):
     trap_if(not self.on_return)
+    trap_if(self.num_borrows > 0)
     if self.opts.sync and not self.opts.always_task_return:
       maxflat = MAX_FLAT_RESULTS
     else:
@@ -629,15 +629,15 @@ async or sychronous-using-`always-task-return` call, in which return values
 are passed as parameters to `canon task.return`.
 
 Lastly, when a task exits, the runtime enforces the guard conditions mentioned
-above and allows a pending task to start. The `todo` counter is used below to
-record the number of unmet obligations to drop borrowed handles, subtasks,
-streams and futures.
+above and allows a pending task to start. The `num_subtasks` counter is used
+below to record the number of undropped subtasks of the current (super)task.
 ```python
   def exit(self):
     assert(current_task.locked())
-    trap_if(self.todo)
+    trap_if(self.num_subtasks > 0)
     assert(not self.maybe_next_event())
     trap_if(self.on_return)
+    assert(self.num_borrows == 0)
     trap_if(self.inst.num_tasks == 1 and self.inst.backpressure)
     self.inst.num_tasks -= 1
     assert(self.inst.num_tasks >= 0)
@@ -657,52 +657,47 @@ class Subtask:
   state: CallState
   lenders: list[ResourceHandle]
   enqueued: bool
+  finished: bool
 
   def __init__(self,  task):
     self.supertask = task
     self.state = CallState.STARTING
     self.lenders = []
     self.enqueued = False
-
-  def task(self):
-    return self.supertask
+    self.finished = False
 ```
-The `task()` method can be called polymorphically on a `Task|Subtask` to
-get the `Subtask`'s `supertask` or, in the case of a `Task`, itself.
-
-The `lenders` field of `Subtask` maintains a list of all the owned handles
+The `lenders` field of `Subtask` maintains a list of all resource handles
 that have been lent to a subtask and must therefor not be dropped until the
-subtask completes. The `add_lender` method is called (below) when lifting an
-owned handle and increments the `lend_count` of the owned handle, which is
-guarded to be zero by `canon_resource_drop` (below). The `finish` method
-releases all the `lend_count`s of all such handles lifted for the subtask and
-is called (below) when the subtask is finishes.
+subtask returns. The `add_lender` method is called (below) when lifting a
+resource handle and increments its `lend_count`, which is guarded to be zero by
+`canon_resource_drop` (below). The `finish` method releases all the
+`lend_count`s of all such handles lifted for the subtask and is called (below)
+when the subtask returns.
 ```python
   def add_lender(self, lending_handle):
-    assert(self.state != CallState.DONE)
-    assert(lending_handle.own)
+    assert(not self.finished and self.state != CallState.RETURNED)
     lending_handle.lend_count += 1
     self.lenders.append(lending_handle)
 
   def finish(self):
-    assert(self.state == CallState.RETURNED)
+    assert(not self.finished and self.state == CallState.RETURNED)
     for h in self.lenders:
       h.lend_count -= 1
-    self.state = CallState.DONE
+    self.finished = True
 ```
 Note, the `lenders` list usually has a fixed size (in all cases except when a
 function signature has `borrow`s in `list`s or `stream`s) and thus can be
 stored inline in the native stack frame.
 
-Lastly, after a `Subtask` has finished, it may be dropped from the `waitables`
-table which effectively ends the call from the perspective of the caller. The
-`todo` counter is used below to record the number of unmet obligations to drop
-the streams and futures connected to this `Subtask`.
+Lastly, after a `Subtask` has finished, it must be dropped from the `waitables`
+table before its supertask may exit successfully (as checked by the guard on
+`num_subtasks` in `Task.exit()`).
 ```python
   def drop(self):
-    trap_if(self.state != CallState.DONE)
+    trap_if(not self.finished)
+    assert(self.state == CallState.RETURNED)
     assert(not self.enqueued)
-    self.supertask.todo -= 1
+    self.supertask.num_subtasks -= 1
 ```
 
 
@@ -932,18 +927,15 @@ objects in the component instance's `waitables` table. Both ends of a stream
 have the same immutable `stream` and `t` fields but also maintain independent
 mutable state specific to the end. The `paired` state tracks whether a fresh
 writable end (created by `stream.new`) has been lifted and paired with a
-readable end. If a stream contains `borrow` handles, the `borrow_scope` field
-stores the `LiftLowerContext.borrow_scope` to use when lifting or lowering the
-`borrow` handles in the future. Lastly, the `copying_buffer` and
-`copying_task` states maintain whether there is an active asynchronous
-`stream.read` or `stream.write` in progress and if so, which `Task` to notify
-of progress and what `Buffer` to copy from/to.
+readable end. Lastly, the `copying_buffer` and `copying_task` states maintain
+whether there is an active asynchronous `stream.read` or `stream.write` in
+progress and, if so, which `Task` to notify of progress and what `Buffer` to
+copy from/to.
 ```python
 class StreamHandle:
   stream: ReadableStream
   t: ValType
   paired: bool
-  borrow_scope: Optional[Task|Subtask]
   copying_task: Optional[Task]
   copying_buffer: Optional[Buffer]
 
@@ -951,37 +943,29 @@ class StreamHandle:
     self.stream = stream
     self.t = t
     self.paired = False
-    self.borrow_scope = None
     self.copying_task = None
     self.copying_buffer = None
 
   def start_copying(self, task, buffer):
     assert(not self.copying_task and not self.copying_buffer)
-    task.todo += 1
+    task.num_subtasks += 1
     self.copying_task = task
     self.copying_buffer = buffer
 
   def stop_copying(self):
     assert(self.copying_task and self.copying_buffer)
-    self.copying_task.todo -= 1
+    self.copying_task.num_subtasks -= 1
     self.copying_task = None
     self.copying_buffer = None
 
   def drop(self, errctx):
     trap_if(self.copying_buffer)
     self.stream.close(errctx)
-    if isinstance(self.borrow_scope, Task):
-      self.borrow_scope.todo -= 1
 ```
 The `trap_if(copying_buffer)` in `drop` and the increment/decrement of
-`copying_task.todo` keep the `StreamHandle` and `Task` alive while performing
-a copy operation (a `stream.read` or `stream.write`) so that the results of a
-copy are always reported back to the `Task` that issued the copy.
-
-The `borrow_scope.todo` decrement matches an increment when a stream
-containing `borrow` handles is lowered as a parameter of an exported function
-and ensures that streams-of-borrows are dropped before the end of the call,
-just like normal `borrow` handles.
+`num_subtasks` keeps the `Task` alive while performing a copy operation (a
+`stream.read` or `stream.write`) so that the results of a copy are always
+reported back to the `Task` that issued the copy.
 
 Given the above logic, the [readable and writable ends] of a stream can be
 concretely implemented by the following two classes. The readable end
@@ -1502,18 +1486,16 @@ def lift_borrow(cx, i, t):
   assert(isinstance(cx.borrow_scope, Subtask))
   h = cx.inst.resources.get(i)
   trap_if(h.rt is not t.rt)
-  if h.own:
-    cx.borrow_scope.add_lender(h)
-  else:
-    trap_if(cx.borrow_scope.task() is not h.borrow_scope)
+  cx.borrow_scope.add_lender(h)
   return h.rep
 ```
-The `Subtask.add_lender` participates in the enforcement of the
-dynamic borrow rules, which keep the source `own` handle alive until the end of
-the call (as an intentionally-conservative upper bound on how long the `borrow`
-handle can be held). When `h` is a `borrow` handle, we need to make sure
-that the callee task has a shorter liftime than the current task by guarding
-that the callee is a subtask of the task that lowered the handle.
+The `Subtask.add_lender` participates in the enforcement of the dynamic borrow
+rules, which keep the source handle alive until the end of the call (as a
+conservative upper bound on how long the `borrow` handle can be held). Note
+that `add_lender` is called for borrowed source handles so that they must be
+kept alive until the subtask completes, which in turn prevents the current task
+from `task.return`ing while its non-returned subtask still holds a
+transitively-borrowed handle.
 
 Streams and futures are lifted in almost the same way, with the only difference
 being that it is a dynamic error to attempt to lift a `future` that has already
@@ -1532,30 +1514,20 @@ def lift_future(cx, i, t):
   return v
 
 def lift_async_value(ReadableHandleT, WritableHandleT, cx, i, t):
+  assert(not contains_borrow(t))
   h = cx.inst.waitables.get(i)
   match h:
     case ReadableHandleT():
       trap_if(h.copying_buffer)
-      if contains_borrow(t):
-        trap_if(cx.borrow_scope.task() is not h.borrow_scope)
-        h.borrow_scope.todo -= 1
       cx.inst.waitables.remove(i)
     case WritableHandleT():
       trap_if(h.paired)
       h.paired = True
-      if contains_borrow(t):
-        h.borrow_scope = cx.borrow_scope
     case _:
       trap()
   trap_if(h.t != t)
   return h.stream
 ```
-Note that `cx.borrow_scope` is saved in the writable handle for later use when
-lifting stream elements so that lifting a `stream<borrow<R>>` does the same
-bookkeeping as when lifting a `list<borrow<R>>`. Because the readable end of a
-stream containing `borrow` handles is call-scoped (like `borrow` handles), the
-readable end will be closed before the `Subtask` finishes and thus the
-`Subtask` pointed to by `h.borrow_scope` can't be used after it is destroyed.
 
 
 ### Storing
@@ -1957,8 +1929,8 @@ def pack_flags_into_int(v, labels):
 
 Finally, `own` and `borrow` handles are lowered by initializing new handle
 elements in the current component instance's `resources` table. The increment
-of `borrow_scope.todo` is complemented by a decrement in `canon_resource_drop`
-and ensures that all borrowed handles are dropped before the end of the task.
+of `num_borrows` is complemented by a decrement in `canon_resource_drop` and
+ensures that all borrowed handles are dropped before the end of the task.
 ```python
 def lower_own(cx, rep, t):
   h = ResourceHandle(t.rt, rep, own = True)
@@ -1969,7 +1941,7 @@ def lower_borrow(cx, rep, t):
   if cx.inst is t.rt.impl:
     return rep
   h = ResourceHandle(t.rt, rep, own = False, borrow_scope = cx.borrow_scope)
-  h.borrow_scope.todo += 1
+  h.borrow_scope.num_borrows += 1
   return cx.inst.resources.add(h)
 ```
 The special case in `lower_borrow` is an optimization, recognizing that, when
@@ -1991,31 +1963,21 @@ def lower_future(cx, v, t):
 
 def lower_async_value(ReadableHandleT, WritableHandleT, cx, v, t):
   assert(isinstance(v, ReadableStream))
+  assert(not contains_borrow(t))
   if isinstance(v, ReadableStreamGuestImpl) and cx.inst is v.impl:
     [h] = [h for h in cx.inst.waitables.array if h and h.stream is v]
     assert(h.paired)
     h.paired = False
-    if contains_borrow(t):
-      h.borrow_scope = None
     i = cx.inst.waitables.array.index(h)
     assert(2**31 > Table.MAX_LENGTH >= i)
     return i | (2**31)
   else:
     h = ReadableHandleT(v, t)
     h.paired = True
-    if contains_borrow(t):
-      h.borrow_scope = cx.borrow_scope
-      h.borrow_scope.todo += 1
     return cx.inst.waitables.add(h)
 ```
 In the ordinary case, the abstract `ReadableStream` (which may come from the
 host or the guest) is stored in a `ReadableHandle` in the `waitables` table.
-The `borrow_scope.todo` increment must be matched by a decrement in
-`StreamHandle.drop` (as guarded by `Task.exit`) and ensures that streams of
-`borrow` handles follow the usual `borrow` scoping rules. Symmetric to
-`lift_async_value`, the `cx.borrow_scope` is saved in the readable handle for
-later use when lowering stream elements so that lowering a `stream<borrow<R>>`
-does the same bookkeeping as when lowering a `list<borrow<R>>`.
 
 The interesting case is when a component receives back a `ReadableStream` that
 it itself holds the `WritableStreamHandle` for. Without specially handling
@@ -2685,21 +2647,21 @@ flow to the `async`-lowered caller.
   else:
     max_flat_params = 1
     max_flat_results = 0
-    async def do_call(on_block):
-      await callee(task, on_start, on_return, on_block)
-      subtask.finish()
-      on_progress()
-    match await call_and_handle_blocking(do_call):
-      case Returned():
+    _ = await call_and_handle_blocking(callee, task, on_start, on_return)
+    match subtask.state:
+      case CallState.RETURNED:
+        subtask.finish()
         flat_results = [0]
-      case Blocked():
-        task.todo += 1
+      case _:
+        task.num_subtasks += 1
         subtaski = task.inst.waitables.add(subtask)
         def on_progress():
           if not subtask.enqueued:
             subtask.enqueued = True
             def subtask_event():
               subtask.enqueued = False
+              if subtask.state == CallState.RETURNED:
+                subtask.finish()
               return (EventCode(subtask.state), subtaski, 0)
             task.notify(subtask_event)
         assert(0 < subtaski <= Table.MAX_LENGTH < 2**30)
@@ -2708,25 +2670,32 @@ flow to the `async`-lowered caller.
 
   return flat_results
 ```
-If `callee` finishes execution without blocking, the `Returned()` case
-returns `0`, signalling to the caller that the parameters have been
-read and the results have been written to the outparam buffer.
+If the `callee` reached the `RETURNED` state before blocking, the call returns
+`0`, signalling to the caller that the parameters have been read and the
+results have been written to the outparam buffer. Note that the callee may have
+blocked *after* calling `task.return` and thus the callee may still be
+executing concurrently. However, all the caller needs to know is that it has
+received its return value (and all borrowed handles have been returned) and
+thus the subtask is ready to be dropped (via `subtask.drop`).
 
-Otherwise, the `Subtask` is added to the current component instance's
-`waitables` table, eagerly returning the `i32` index of the `Subtask`
-packed with the `CallState` of the `Subtask`. If the returned `CallState` is
-`STARTING`, the caller must keep the memory pointed by `flat_args` valid until
-`task.wait` indicates that subtask `i` has advanced to `STARTED`, `RETURNED` or
-`DONE`. Similarly, if the returned state is `STARTED`, the caller must keep the
-memory pointed to by the final `i32` parameter of `flat_args` valid until
-`task.wait` indicates that the subtask has advanced to `RETURNED` or `DONE`.
+If `callee` did not reach the `RETURNED` state, it must have blocked and so
+the `Subtask` is added to the current component instance's `waitables` table,
+eagerly returning the `i32` index packed with the `CallState` of the `Subtask`.
+If the returned `CallState` is `STARTING`, the caller must keep the memory
+pointed to by the first `i32` parameter valid until `task.wait` indicates that
+subtask `i` has advanced to `STARTED` or `RETURNED`. Similarly, if the returned
+state is `STARTED`, the caller must keep the memory pointed to by the final
+`i32` parameter valid until `task.wait` indicates that the subtask has advanced
+to `RETURNED`.
 
 The `on_progress` callback is called by `on_start` and `on_return` above and
 takes care of `task.notify()`ing the async caller of progress. The `enqueued`
 flag is used to avoid sending repeated progress events when the caller only
 cares about the latest value of `subtask.state`, taking advantage of the fact
 that "events" are first-class functions that are called right before passing
-the event tuple to core wasm.
+the event tuple to core wasm. If the `RETURNED` event is about to be delivered,
+the `Subtask` is `finish()`ed, returning ownership of borrowed handles to the
+async caller.
 
 The above definitions of sync/async `canon_lift`/`canon_lower` ensure that a
 sync-or-async `canon_lift` may call a sync-or-async `canon_lower`, with all
@@ -2788,10 +2757,10 @@ async def canon_resource_drop(rt, sync, task, i):
   inst = task.inst
   h = inst.resources.remove(i)
   trap_if(h.rt is not rt)
+  trap_if(h.lend_count != 0)
   flat_results = [] if sync else [0]
   if h.own:
     assert(h.borrow_scope is None)
-    trap_if(h.lend_count != 0)
     if inst is rt.impl:
       if rt.dtor:
         await rt.dtor(h.rep)
@@ -2805,7 +2774,7 @@ async def canon_resource_drop(rt, sync, task, i):
       else:
         task.trap_if_on_the_stack(rt.impl)
   else:
-    h.borrow_scope.todo -= 1
+    h.borrow_scope.num_borrows -= 1
   return flat_results
 ```
 In general, the call to a resource's destructor is treated like a
@@ -3092,7 +3061,8 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
   trap_if(not isinstance(h, HandleT))
   trap_if(h.t != t)
   trap_if(h.copying_buffer)
-  cx = LiftLowerContext(opts, task.inst, h.borrow_scope)
+  assert(not contains_borrow(t))
+  cx = LiftLowerContext(opts, task.inst, borrow_scope = None)
   buffer = BufferT(cx, t, ptr, n)
   if h.stream.closed():
     flat_results = [pack_async_copy_result(task, buffer, h)]
