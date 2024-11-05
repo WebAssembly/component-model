@@ -249,6 +249,8 @@ Notes:
 * Validation of `functype` rejects any transitive use of `borrow` in a
   `result` type. Similarly, validation of components and component types
   rejects any transitive use of `borrow` in an exported value type.
+* Validation of `stream` and `future` rejects element types that transitively
+  contain a `borrow`.
 * Validation of `resourcetype` requires the destructor (if present) to have
   type `[i32] -> []`.
 * Validation of `instancedecl` (currently) only allows the `type` and

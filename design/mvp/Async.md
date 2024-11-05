@@ -197,16 +197,33 @@ state that enforces the caller side of the Canonical ABI rules.
 To realize the above goals of always having a well-defined cross-component
 async callstack, the Component Model's Canonical ABI enforces [Structured
 Concurrency] by dynamically requiring that a task waits for all its subtasks to
-finish before the task itself is allowed to finish. This means that a subtask
+return before the task itself is allowed to finish. This means that a subtask
 cannot be orphaned and there will always be an async callstack rooted at an
 invocation of an export by the host. Moreover, at any one point in time, the
 set of tasks active in a linked component graph form a forest of async call
 trees which e.g., can be visualized using a traditional flamegraph.
 
 The Canonical ABI's Python code enforces Structured Concurrency by incrementing
-a per-[`Task`] counter when a `Subtask` is created, decrementing when a
-`Subtask` is destroyed, and trapping if the counter is not zero when the `Task`
+a per-task "`num_subtasks`" counter when a subtask is created, decrementing
+when the subtask returns, and trapping if `num_subtasks > 0` when a task
 attempts to exit.
+
+There is a subtle nuance to these Structured Concurrency rules deriving from
+the fact that subtasks may continue execution after [returning](#returning)
+their value to their caller. The ability to execute after returning value is
+necessary for being able to do work off the caller's critical path. A concrete
+example is an HTTP service that does some logging or billing operations after
+finishing an HTTP response, where the HTTP response is the return value of the
+[`wasi:http/handler.handle`] function. Since the `num_subtasks` counter is
+decremented when a subtask *returns* (as opposed to *exits*), this means that
+subtasks may continue execution even once their supertask has exited. To
+maintain Structured Concurrency (for purposes of checking [reentrance],
+scheduler prioritization and debugging/observability), we can consider
+the supertask to still be alive but in the process of "asynchronously
+tail-calling" its still-executing subtasks. (For scenarios where one
+component wants to non-cooperatively bound the execution of another
+component, a separate "[blast zone]" feature is necessary in any
+case.)
 
 ### Streams and Futures
 
@@ -404,9 +421,9 @@ parameter and results (which are asynchronously read-from and written-to) and
 returns the index of a new subtask. `summarize` calls `task.wait` repeatedly
 until all `fetch` subtasks have finished, noting that `task.wait` can return
 intermediate progress (as subtasks transition from "starting" to "started" to
-"returned" to "done") which tell the surrounding core wasm code that it can
-reclaim the memory passed arguments or use the results that have now been
-written to the outparam memory.
+"returned") which tell the surrounding core wasm code that it can reclaim the
+memory passed arguments or use the results that have now been written to the
+outparam memory.
 
 Because the `summarize` function is `canon lift`ed with `async`, its core
 function type has no results, since results are passed out via `task.return`.
@@ -551,8 +568,9 @@ comes after:
   that the current wasm instance can be torn down eagerly while preserving
   structured concurrency
 * some way to say "no more elements are coming for a while"
-* `recursive` function type attribute: allow a function to be reentered
-  recursively (instead of trapping) and link inner and outer activations
+* `recursive` function type attribute: allow a function to opt in to
+  recursive [reentrance], extending the ABI to link the inner and
+  outer activations
 * add `stringstream` specialization of `stream<char>` (just like `string` is
   a specialization of `list<char>`)
 * allow pipelining multiple `stream.read`/`write` calls
@@ -594,9 +612,12 @@ comes after:
 [WIT]: WIT.md
 [Goals]: ../high-level/Goals.md
 [Use Cases]: ../high-level/UseCases.md
+[Blast Zone]: FutureFeatures.md#blast-zones
+[Reentrance]: Explainer.md#component-invariants
 
 [stack-switching]: https://github.com/WebAssembly/stack-switching/
 [JSPI]: https://github.com/WebAssembly/js-promise-integration/
 [shared-everything-threads]: https://github.com/webAssembly/shared-everything-threads
 
 [WASI Preview 3]: https://github.com/WebAssembly/WASI/tree/main/wasip2#looking-forward-to-preview-3
+[`wasi:http/handler.handle`]: https://github.com/WebAssembly/wasi-http/blob/main/wit-0.3.0-draft/handler.wit

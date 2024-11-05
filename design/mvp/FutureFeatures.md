@@ -8,6 +8,19 @@ also the high-level [post-MVP use cases](../high-level/UseCases.md#post-mvp)
 and [non-goals](../high-level/Goals.md#non-goals).
 
 
+## Blast zones
+
+While the Component Model MVP allows strong software isolation of capabilities
+(in the form of link-time imports and runtime handles) there is currently no
+way for a host component to execute a guest component robustly in the face of
+traps or runaway resource memory/CPU usage. A post-MVP "blast zone" feature
+would allow a parent component to dynamically instantiate a child component in
+a separate "blast zone" such that a trap in the blast zone could be safely and
+predictably handled by the parent outside the blast zone. Furthermore, the
+parent could use a non-deterministic timeout or resource quota trigger to
+preemptively inject a trap into the blast zone.
+
+
 ## Custom ABIs via "adapter functions"
 
 The original Interface Types proposal includes the goal of avoiding a fixed
@@ -36,24 +49,6 @@ optimization of calls between components (which both use the Canonical ABI) and
 between a component and the host (which often must use a fixed ABI for calling
 to and from the statically-compiled host implementation language). See
 [`list.lift_canon` and `list.lower_canon`] for more details.
-
-
-## Shared-some-things linking via "adapter modules"
-
-The original [Interface Types proposal] and the re-layered [Module Linking
-proposal] both included an "adapter module" definition that allowed import and
-export of both Core WebAssembly and Component Model Definitions and thus did
-not establish a shared-nothing boundary. Since [component invariants] and
-[GC-free runtime instantiation] both require a shared-nothing boundary, two
-distinct "component" and "adapter module" concepts would need to be defined,
-with all their own distinct types, index spaces, etc. Having both features in
-the MVP adds non-trivial implementation complexity over having just one.
-Additionally, having two similar-but-different, partially-overlapping concepts
-makes the whole proposal harder to explain. Thus, the MVP drops the concept of
-"adapter modules", including only shared-nothing "components". However, if
-concrete future use cases emerged for creating modules that partially used
-shared-nothing component values and partially shared linear memory, "adapter
-modules" could be added as a future feature.
 
 
 ## Shared-everything Module Linking in Core WebAssembly
