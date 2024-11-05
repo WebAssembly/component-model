@@ -930,7 +930,7 @@ class HostSource(ReadableStream):
       self.waiting.set_result(cancelled)
       self.waiting = None
 
-  def close(self, error = None):
+  def close(self, errctx = None):
     self.remaining = []
     self.destroy_if_empty = True
     self.wake_waiting()
@@ -1359,9 +1359,9 @@ async def test_wasm_to_wasm_stream():
 
     fut4.set_result(None)
 
-    [errori] = await canon_error_new(opts1, task, 0, 0)
-    [] = await canon_stream_close_writable(U8Type(), task, wsi, errori)
-    [] = await canon_error_drop(task, errori)
+    [errctxi] = await canon_error_context_new(opts1, task, 0, 0)
+    [] = await canon_stream_close_writable(U8Type(), task, wsi, errctxi)
+    [] = await canon_error_context_drop(task, errctxi)
     return []
 
   func1 = partial(canon_lift, opts1, inst1, ft1, core_func1)
@@ -1407,11 +1407,11 @@ async def test_wasm_to_wasm_stream():
     await task.on_block(fut4)
 
     [ret] = await canon_stream_read(U8Type(), opts2, task, rsi, 0, 2)
-    errori = 1
-    assert(ret == (definitions.CLOSED | errori))
+    errctxi = 1
+    assert(ret == (definitions.CLOSED | errctxi))
     [] = await canon_stream_close_readable(U8Type(), task, rsi)
-    [] = await canon_error_debug_message(opts2, task, errori, 0)
-    [] = await canon_error_drop(task, errori)
+    [] = await canon_error_context_debug_message(opts2, task, errctxi, 0)
+    [] = await canon_error_context_drop(task, errctxi)
 
     event, callidx, _ = await task.wait(sync = False)
     assert(event == EventCode.CALL_DONE)
@@ -1598,7 +1598,7 @@ class HostFutureSource(ReadableStream):
   def closed_with_error(self):
     assert(self.closed())
     return None
-  def close(self, error = None):
+  def close(self, errctx = None):
     assert(self.v is None)
   async def read(self, dst, on_block):
     assert(self.v is not None)
