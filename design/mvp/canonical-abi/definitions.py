@@ -310,18 +310,16 @@ class CallState(IntEnum):
   STARTING = 0
   STARTED = 1
   RETURNED = 2
-  DONE = 3
 
 class EventCode(IntEnum):
   CALL_STARTING = CallState.STARTING
   CALL_STARTED = CallState.STARTED
   CALL_RETURNED = CallState.RETURNED
-  CALL_DONE = CallState.DONE
-  YIELDED = 4
-  STREAM_READ = 5
-  STREAM_WRITE = 6
-  FUTURE_READ = 7
-  FUTURE_WRITE = 8
+  YIELDED = 3
+  STREAM_READ = 4
+  STREAM_WRITE = 5
+  FUTURE_READ = 6
+  FUTURE_WRITE = 7
 
 EventTuple = tuple[EventCode, int, int]
 EventCallback = Callable[[], Optional[EventTuple]]
@@ -367,7 +365,8 @@ class Task:
   on_block: OnBlockCallback
   events: list[EventCallback]
   has_events: asyncio.Event
-  todo: int
+  num_subtasks: int
+  num_borrows: int
 
   def __init__(self, opts, inst, ft, caller, on_return, on_block):
     self.opts = opts
@@ -378,7 +377,8 @@ class Task:
     self.on_block = on_block
     self.events = []
     self.has_events = asyncio.Event()
-    self.todo = 0
+    self.num_subtasks = 0
+    self.num_borrows = 0
 
   def task(self):
     return self
@@ -468,6 +468,7 @@ class Task:
 
   def return_(self, flat_results):
     trap_if(not self.on_return)
+    trap_if(self.num_borrows > 0)
     if self.opts.sync and not self.opts.always_task_return:
       maxflat = MAX_FLAT_RESULTS
     else:
@@ -480,9 +481,10 @@ class Task:
 
   def exit(self):
     assert(current_task.locked())
-    trap_if(self.todo)
+    trap_if(self.num_subtasks > 0)
     assert(not self.maybe_next_event())
     trap_if(self.on_return)
+    assert(self.num_borrows == 0)
     trap_if(self.inst.num_tasks == 1 and self.inst.backpressure)
     self.inst.num_tasks -= 1
     assert(self.inst.num_tasks >= 0)
@@ -496,32 +498,34 @@ class Subtask:
   state: CallState
   lenders: list[ResourceHandle]
   enqueued: bool
+  finished: bool
 
   def __init__(self,  task):
     self.supertask = task
     self.state = CallState.STARTING
     self.lenders = []
     self.enqueued = False
+    self.finished = False
 
   def task(self):
     return self.supertask
 
   def add_lender(self, lending_handle):
-    assert(self.state != CallState.DONE)
-    assert(lending_handle.own)
+    assert(not self.finished and self.state != CallState.RETURNED)
     lending_handle.lend_count += 1
     self.lenders.append(lending_handle)
 
   def finish(self):
-    assert(self.state == CallState.RETURNED)
+    assert(not self.finished and self.state == CallState.RETURNED)
     for h in self.lenders:
       h.lend_count -= 1
-    self.state = CallState.DONE
+    self.finished = True
 
   def drop(self):
-    trap_if(self.state != CallState.DONE)
+    trap_if(not self.finished)
+    assert(self.state == CallState.RETURNED)
     assert(not self.enqueued)
-    self.supertask.todo -= 1
+    self.supertask.num_subtasks -= 1
 
 #### Buffer, Stream and Future State
 
@@ -647,7 +651,6 @@ class StreamHandle:
   stream: ReadableStream
   t: ValType
   paired: bool
-  borrow_scope: Optional[Task|Subtask]
   copying_task: Optional[Task]
   copying_buffer: Optional[Buffer]
 
@@ -655,27 +658,24 @@ class StreamHandle:
     self.stream = stream
     self.t = t
     self.paired = False
-    self.borrow_scope = None
     self.copying_task = None
     self.copying_buffer = None
 
   def start_copying(self, task, buffer):
     assert(not self.copying_task and not self.copying_buffer)
-    task.todo += 1
+    task.num_subtasks += 1
     self.copying_task = task
     self.copying_buffer = buffer
 
   def stop_copying(self):
     assert(self.copying_task and self.copying_buffer)
-    self.copying_task.todo -= 1
+    self.copying_task.num_subtasks -= 1
     self.copying_task = None
     self.copying_buffer = None
 
   def drop(self, errctx):
     trap_if(self.copying_buffer)
     self.stream.close(errctx)
-    if isinstance(self.borrow_scope, Task):
-      self.borrow_scope.todo -= 1
 
 class ReadableStreamHandle(StreamHandle):
   async def copy(self, dst, on_block):
@@ -1042,10 +1042,7 @@ def lift_own(cx, i, t):
 def lift_borrow(cx, i, t):
   assert(isinstance(cx.borrow_scope, Subtask))
   h = cx.inst.resources.get(t.rt, i)
-  if h.own:
-    cx.borrow_scope.add_lender(h)
-  else:
-    trap_if(cx.borrow_scope.task() is not h.borrow_scope)
+  cx.borrow_scope.add_lender(h)
   return h.rep
 
 def lift_stream(cx, i, t):
@@ -1057,19 +1054,15 @@ def lift_future(cx, i, t):
   return v
 
 def lift_async_value(ReadableHandleT, WritableHandleT, cx, i, t):
+  assert(not contains_borrow(t))
   h = cx.inst.waitables.get(i)
   match h:
     case ReadableHandleT():
       trap_if(h.copying_buffer)
-      if contains_borrow(t):
-        trap_if(cx.borrow_scope.task() is not h.borrow_scope)
-        h.borrow_scope.todo -= 1
       cx.inst.waitables.remove(i)
     case WritableHandleT():
       trap_if(h.paired)
       h.paired = True
-      if contains_borrow(t):
-        h.borrow_scope = cx.borrow_scope
     case _:
       trap()
   trap_if(h.t != t)
@@ -1362,7 +1355,7 @@ def lower_borrow(cx, rep, t):
   if cx.inst is t.rt.impl:
     return rep
   h = ResourceHandle(rep, own = False, borrow_scope = cx.borrow_scope)
-  h.borrow_scope.todo += 1
+  h.borrow_scope.num_borrows += 1
   return cx.inst.resources.add(t.rt, h)
 
 def lower_stream(cx, v, t):
@@ -1374,21 +1367,17 @@ def lower_future(cx, v, t):
 
 def lower_async_value(ReadableHandleT, WritableHandleT, cx, v, t):
   assert(isinstance(v, ReadableStream))
+  assert(not contains_borrow(t))
   if isinstance(v, ReadableStreamGuestImpl) and cx.inst is v.impl:
     [h] = [h for h in cx.inst.waitables.array if h and h.stream is v]
     assert(h.paired)
     h.paired = False
-    if contains_borrow(t):
-      h.borrow_scope = None
     i = cx.inst.waitables.array.index(h)
     assert(2**31 > Table.MAX_LENGTH >= i)
     return i | (2**31)
   else:
     h = ReadableHandleT(v, t)
     h.paired = True
-    if contains_borrow(t):
-      h.borrow_scope = cx.borrow_scope
-      h.borrow_scope.todo += 1
     return cx.inst.waitables.add(h)
 
 ### Flattening
@@ -1780,21 +1769,21 @@ async def canon_lower(opts, ft, callee, task, flat_args):
   else:
     max_flat_params = 1
     max_flat_results = 0
-    async def do_call(on_block):
-      await callee(task, on_start, on_return, on_block)
-      subtask.finish()
-      on_progress()
-    match await call_and_handle_blocking(do_call):
-      case Returned():
+    _ = await call_and_handle_blocking(callee, task, on_start, on_return)
+    match subtask.state:
+      case CallState.RETURNED:
+        subtask.finish()
         flat_results = [0]
-      case Blocked():
-        task.todo += 1
+      case _:
+        task.num_subtasks += 1
         subtaski = task.inst.waitables.add(subtask)
         def on_progress():
           if not subtask.enqueued:
             subtask.enqueued = True
             def subtask_event():
               subtask.enqueued = False
+              if subtask.state == CallState.RETURNED:
+                subtask.finish()
               return (EventCode(subtask.state), subtaski, 0)
             task.notify(subtask_event)
         assert(0 < subtaski <= Table.MAX_LENGTH < 2**30)
@@ -1817,10 +1806,10 @@ async def canon_resource_drop(rt, sync, task, i):
   trap_if(not task.inst.may_leave)
   inst = task.inst
   h = inst.resources.remove(rt, i)
+  trap_if(h.lend_count != 0)
   flat_results = [] if sync else [0]
   if h.own:
     assert(h.borrow_scope is None)
-    trap_if(h.lend_count != 0)
     if inst is rt.impl:
       if rt.dtor:
         await rt.dtor(h.rep)
@@ -1834,7 +1823,7 @@ async def canon_resource_drop(rt, sync, task, i):
       else:
         task.trap_if_on_the_stack(rt.impl)
   else:
-    h.borrow_scope.todo -= 1
+    h.borrow_scope.num_borrows -= 1
   return flat_results
 
 ### `canon resource.rep`
@@ -1934,7 +1923,8 @@ async def async_copy(HandleT, BufferT, t, opts, event_code, task, i, ptr, n):
   trap_if(not isinstance(h, HandleT))
   trap_if(h.t != t)
   trap_if(h.copying_buffer)
-  cx = LiftLowerContext(opts, task.inst, h.borrow_scope)
+  assert(not contains_borrow(t))
+  cx = LiftLowerContext(opts, task.inst, borrow_scope = None)
   buffer = BufferT(cx, t, ptr, n)
   if h.stream.closed():
     flat_results = [pack_async_copy_result(task, buffer, h)]
