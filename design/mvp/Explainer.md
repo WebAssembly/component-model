@@ -14,7 +14,7 @@ more user-focused explanation, take a look at the
   * [Type definitions](#type-definitions)
     * [Fundamental value types](#fundamental-value-types)
       * [Numeric types](#numeric-types)
-      * [Error type](#error-type)
+      * [Error Context type](#error-context-type)
       * [Container types](#container-types)
       * [Handle types](#handle-types)
       * [Asynchronous value types](#asynchronous-value-types)
@@ -27,7 +27,7 @@ more user-focused explanation, take a look at the
     * [Canonical built-ins](#canonical-built-ins)
       * [Resource built-ins](#resource-built-ins)
       * [Async built-ins](#-async-built-ins)
-      * [Error built-ins](#-error-built-ins)
+      * [Error Context built-ins](#-error-context-built-ins)
       * [Threading built-ins](#-threading-built-ins)
   * [Value definitions](#-value-definitions)
   * [Start definitions](#-start-definitions)
@@ -543,7 +543,7 @@ defvaltype    ::= bool
                 | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64
                 | f32 | f64
                 | char | string
-                | error
+                | error-context
                 | (record (field "<label>" <valtype>)+)
                 | (variant (case "<label>" <valtype>?)+)
                 | (list <valtype>)
@@ -602,7 +602,7 @@ sets of abstract values:
 | `u8`, `u16`, `u32`, `u64` | integers in the range [0, 2<sup>N</sup>-1] |
 | `f32`, `f64`              | [IEEE754] floating-point numbers, with a single NaN value |
 | `char`                    | [Unicode Scalar Values] |
-| `error`                   | an immutable, non-deterministic, host-defined value meant to aid in debugging |
+| `error-context`           | an immutable, non-deterministic, host-defined value meant to aid in debugging |
 | `record`                  | heterogeneous [tuples] of named values |
 | `variant`                 | heterogeneous [tagged unions] of named values |
 | `list`                    | homogeneous, variable- or fixed-length [sequences] of values |
@@ -634,28 +634,32 @@ a single NaN value. And boolean values in core wasm are usually represented as
 `i32`s where operations interpret all-zeros as `false`, while at the
 component-level there is a `bool` type with `true` and `false` values.
 
-##### Error type
+##### Error Context type
 
-Values of `error` type are immutable, non-deterministic, host-defined and
-meant to be propagated from failure sources to callers in order to aid in
-debugging. Currently `error` values contain only a "debug message" string whose
-contents are determined by the host. Core wasm can create `error` values given
-a debug string, but the host is free to arbitrarily transform (discard,
-preserve, prefix or suffix) this wasm-provided string.
+Values of `error-context` type are immutable, non-deterministic, host-defined
+and meant to be propagated from failure sources to callers in order to aid in
+debugging. Currently `error-context` values contain only a "debug message"
+string whose contents are determined by the host. Core wasm can create
+`error-context` values given a debug string, but the host is free to
+arbitrarily transform (discard, preserve, prefix or suffix) this
+wasm-provided string. In the future, `error-context` could be enhanced with
+other additional or more-structured context (like a backtrace or a chain of
+originating error contexts).
 
 The intention of this highly-non-deterministic semantics is to provide hosts
 the full range of flexibility to:
 * append a basic callstack suitable for forensic debugging in production;
 * optimize for performance in high-volume production scenarios by slicing or
-  discarding error messages;
+  discarding debug messages;
 * optimize for developer experience in debugging scenarios when debug metadata
   is present by appending expensive-to-produce symbolicated callstacks.
 
 A consequence of this, however, is that components *must not* depend on the
-contents of `error` values for behavioral correctness. In particular, case
-analysis of the contents of an `error` should not determine *error receovery*;
-explicit `result` or `variant` types must be used in the function return
-type instead (e.g., `(func (result (tuple (stream u8) (future $my-error)))`).
+contents of `error-context` values for behavioral correctness. In particular,
+case analysis of the contents of an `error-context` should not determine
+*error receovery*; explicit `result` or `variant` types must be used in the
+function return type instead (e.g.,
+`(func (result (tuple (stream u8) (future $my-error)))`).
 
 ##### Container types
 
@@ -1414,9 +1418,9 @@ canon ::= ...
         | (canon future.cancel-write <typeidx> async? (core func <id>?)) 🔀
         | (canon future.close-readable <typeidx> (core func <id>?)) 🔀
         | (canon future.close-writable <typeidx> (core func <id>?)) 🔀
-        | (canon error.new <canonopt>* (core func <id>?))
-        | (canon error.debug-message <canonopt>* (core func <id>?))
-        | (canon error.drop (core func <id>?))
+        | (canon error-context.new <canonopt>* (core func <id>?))
+        | (canon error-context.debug-message <canonopt>* (core func <id>?))
+        | (canon error-context.drop (core func <id>?))
         | (canon thread.spawn <typeidx> (core func <id>?)) 🧵
         | (canon thread.hw_concurrency (core func <id>?)) 🧵
 ```
@@ -1544,20 +1548,22 @@ from the current component instance's [waitables](Async.md#waiting) table,
 trapping if the stream or future has a mismatched direction or type or are in
 the middle of a `read` or `write`.
 
-##### 🔀 Error built-ins
+##### 🔀 Error Context built-ins
 
-The `error.new` built-in has type `[ptr:i32 len:i32] -> [i32]` and returns
-the index of a new `error` value in a per-component-instance table of errors.
-The given (`ptr`, `length`) pair are non-deterministically lifted and
-transformed to produce the `error`'s internal [debug message](#error-type).
+The `error-context.new` built-in has type `[ptr:i32 len:i32] -> [i32]` and
+returns the index of a new `error-context` value in a per-component-instance
+table. The given (`ptr`, `length`) pair are non-deterministically lifted and
+transformed to produce the `error-context`'s internal
+[debug message](#error-context-type).
 
-The `error.debug-message` built-in has type `[error:i32 ptr:i32] -> []`
-and writes the [debug message](#error-type) of the given `error` into `ptr`
-as an 8-byte (`ptr`, `length`) pair, according to the Canonical ABI for
-`string` given the `<canonopt>*` immediates.
+The `error-context.debug-message` built-in has type
+`[errctxi:i32 ptr:i32] -> []` and writes the [debug message](#error-context-type)
+of the given `error-context` into `ptr` as an 8-byte (`ptr`, `length`) pair,
+according to the Canonical ABI for `string`, given the `<canonopt>*`
+immediates.
 
-The `error.drop` built-in has type `[error:i32] -> []` and drops the given
-`error` value from the component instance's table.
+The `error-context.drop` built-in has type `[errctxi:i32] -> []` and drops the
+given `error-context` value from the component instance's table.
 
 ##### 🧵 Threading built-ins
 

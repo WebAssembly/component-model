@@ -233,9 +233,9 @@ g: func(s: stream<T>) -> stuff;
 ```
 `g(f(x))` works as you might hope, concurrently streaming `x` into `f` which
 concurrently streams its results into `g`. If `f` has an error, it can close
-its returned `stream<T>` with an [`error`](Explainer.md#error-type) value
-which `g` will receive along with the notification that its readable stream
-was closed.
+its returned `stream<T>` with an [`error-context`](Explainer.md#error-context-type)
+value which `g` will receive along with the notification that its readable
+stream was closed.
 
 If a component instance *would* receive the readable end of a stream for which
 it already owns the writable end, the readable end disappears and the existing
@@ -516,7 +516,8 @@ For now, this remains a [TODO](#todo) and validation will reject `async`-lifted
 
 Native async support is being proposed incrementally. The following features
 will be added in future chunks roughly in the order list to complete the full
-"async" story:
+"async" story, with a TBD cutoff between what's in [WASI Preview 3] and what
+comes after:
 * `nonblocking` function type attribute: allow a function to declare in its
   type that it will not transitively do anything blocking
 * define what `async` means for `start` functions (top-level await + background
@@ -529,6 +530,8 @@ will be added in future chunks roughly in the order list to complete the full
 * some way to say "no more elements are coming for a while"
 * `recursive` function type attribute: allow a function to be reentered
   recursively (instead of trapping) and link inner and outer activations
+* add `stringstream` specialization of `stream<char>` (just like `string` is
+  a specialization of `list<char>`)
 * allow pipelining multiple `stream.read`/`write` calls
 * allow chaining multiple async calls together ("promise pipelining")
 * integrate with `shared`: define how to lift and lower functions `async` *and*
@@ -572,3 +575,5 @@ will be added in future chunks roughly in the order list to complete the full
 [stack-switching]: https://github.com/WebAssembly/stack-switching/
 [JSPI]: https://github.com/WebAssembly/js-promise-integration/
 [shared-everything-threads]: https://github.com/webAssembly/shared-everything-threads
+
+[WASI Preview 3]: https://github.com/WebAssembly/WASI/tree/main/wasip2#looking-forward-to-preview-3
