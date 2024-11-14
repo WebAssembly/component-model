@@ -1392,7 +1392,7 @@ In addition to the `lift` and `lower` canonical function definitions which
 adapt *existing* functions, there are also a set of canonical "built-ins" that
 define core functions out of nothing that can be imported by core modules to
 dynamically interact with Canonical ABI entities like resources (and, when
-async is added to the proposal, [tasks][Future and Stream Types]).
+async is added to the proposal, [tasks][Future and Stream Types] 🔀).
 ```ebnf
 canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
@@ -1427,21 +1427,54 @@ canon ::= ...
 
 ##### Resource built-ins
 
-The `resource.new` built-in has type `[i32] -> [i32]` and creates a new
-resource (with resource type `typeidx`) with the given `i32` value as its
+###### `resource.new`
+
+| Synopsis                   |                               |
+| -------------------------- | ----------------------------- |
+| Conceptual signature       | `func<T>(repr: repr<T>) -> T` |
+| Canonical ABI signature    | `[repr:i32] -> [i32]`         |
+
+The `resource.new` built-in creates a new
+resource (with resource type `T`) with `repr` as its
 representation and returning the `i32` index of a new handle pointing to this
 resource.
 
-The `resource.drop` drops a resource handle (with resource type `typeidx`) at
-a given `i32` index. If the dropped handle owns the resource, the resource's
-`dtor` is called, if present. If `async` is not specified, the core function
-type of `resource.drop` is `[i32] -> []`. Otherwise, the core function type
-of `async` `drop` is `[i32] -> [i32]`, where the returned `i32` is either `0`
-(if the drop completed eagerly) or the index of the in-progress drop.
+###### `resource.drop`
 
-The `resource.rep` built-in has type `[i32] -> [i32]` and returns the `i32`
-representation of the resource (with resource type `typeidx`) pointed to by the
-handle at the given `i32` index.
+When the `async` immediate is false:
+
+| Synopsis                   |                      |
+| -------------------------- | -------------------- |
+| Conceptual signature       | `func<T>(t: T)`      |
+| Canonical ABI signature    | `[t:i32] -> []`      |
+
+When `async` immediate is true:
+
+| Synopsis                   |                                 |
+| -------------------------- | ------------------------------- |
+| Conceptual signature       | `func<T>(t: T) -> option<task>` |
+| Canonical ABI signature    | `[t:i32] -> [i32]`              |
+
+The `resource.drop` drops a resource handle `t` (with resource type `T`).
+If the dropped handle owns the resource, the resource's
+`dtor` is called, if present.
+
+When the `async` immediate is true, the returned value indicates whether
+the drop completed eagerly, or if not, identifies the in-progress drop.
+
+In the Canonical ABI, the returned `i32` is either `0` (if the drop completed
+eagerly) or the index of the in-progress drop.
+
+###### `resource.rep`
+
+| Synopsis                   |                            |
+| -------------------------- | -------------------------- |
+| Conceptual signature       | `func<T>(t: T) -> repr<T>` |
+| Canonical ABI signature    | `[t:i32] -> [i32]`         |
+
+The `resource.rep` built-in returns the
+representation of the resource (with resource type `T`) pointed to by the
+handle `t`.
 
 As an example, the following component imports the `resource.new` built-in,
 allowing it to create and return new resources to its client:
@@ -1477,10 +1510,19 @@ transferring ownership of the newly-created resource to the export's caller.
 See the [async explainer](Async.md) for high-level context and terminology
 and the [Canonical ABI explainer] for detailed runtime semantics.
 
-The `task.backpressure` built-in has type `[i32] -> []` and allows the
+###### 🔀 `task.backpressure`
+
+| Synopsis                   |                       |
+| -------------------------- | --------------------- |
+| Conceptual signature       | `func(enable: bool)`  |
+| Canonical ABI signature    | `[enable:i32] -> []`  |
+
+The `task.backpressure` built-in allows the
 async-lifted callee to toggle a per-component-instance flag that, when set,
 prevents new incoming export calls to the component (until the flag is unset).
 This allows the component to exert [backpressure](Async.md#backpressure).
+
+###### 🔀 `task.return`
 
 The `task.return` built-in takes as parameters the result values of the
 currently-executing task. This built-in must be called exactly once per export
@@ -1491,79 +1533,272 @@ of a component-level function taking the result types of the current task. (See
 also [Returning](Async.md#returning) in the async explainer and
 [`canon_task_return`] in the Canonical ABI explainer.)
 
-The `task.wait` built-in has type `[i32] -> [i32]`, returning an event and
-storing the 4-byte payload of the event at the address passed as parameter.
+###### 🔀 `task.wait`
+
+| Synopsis                   |                                           |
+| -------------------------- | ----------------------------------------- |
+| Conceptual signature       | `func() -> [kind:event, payload:payload]` |
+| Canonical ABI signature    | `[payload_addr:i32] -> [kind:i32]`        |
+
+```wit
+enum event {
+  call-starting,
+  call-started,
+  call-returned,
+  call-done,
+  yielded,
+  stream-read,
+  stream-write,
+  future-read,
+  future-write,
+}
+```
+
+The `task.wait` built-in returns an event code and
+the payload of the event at the address passed as parameter.
+
+In the Canonical ABI, the returned payload is a 4-byte value and is stored
+at address `payload_addr`.
+
 `task.wait` can be called whether or not `async` was present, allowing any sort
 of code to synchronously wait for progress on any of the currently-executing
 subtasks. (See also [Waiting](Async.md#waiting) in the async explainer and
 [`canon_task_wait`] in the Canonical ABI explainer.)
 
-The `task.poll` built-in has type `[i32] -> [i32]`, returning whether or not
-an event was immediately available as a boolean and, if true, storing the
-event and its payload in the buffer pointed to by the `i32` parameter.
+###### 🔀 `task.poll`
+
+| Synopsis                   |                                                          |
+| -------------------------- | -------------------------------------------------------- |
+| Conceptual signature       | `func() -> [option<tuple<kind:event, payload:payload>>]` |
+| Canonical ABI signature    | `[tuple_addr:i32] -> [is_some:i32]`                      |
+
+The `task.poll` built-in returns either `none` if no event was immediately
+available, or `some` containing an event code and payload.
+
+In the Canonical ABI, the return value `is_some` holds a boolean value
+indicating whether an event was immediately available, and if so,
+the event code and payload are stored into the buffer pointed to by
+`tuple_addr`.
+
 (See also [`canon_task_poll`] in the Canonical ABI explainer.)
 
-The `task.yield` built-in has type `[] -> []` and simply allows the runtime to
+###### 🔀 `task.yield`
+
+| Synopsis                   |            |
+| -------------------------- | ---------- |
+| Conceptual signature       | `func()`   |
+| Canonical ABI signature    | `[] -> []` |
+
+The `task.yield` built-in simply allows the runtime to
 switch to another task, allowing a long-running computation to cooperatively
 interleave with other tasks. (See also [`canon_task_yield`] in the Canonical
 ABI explainer.)
 
-The `subtask.drop` built-in has type `[i32] -> []` and removes the indicated
+###### 🔀 `subtask.drop`
+
+| Synopsis                   |                       |
+| -------------------------- | --------------------- |
+| Conceptual signature       | `func(subtask: task)` |
+| Canonical ABI signature    | `[i32] -> []`         |
+
+The `subtask.drop` built-in removes the indicated
 [subtask](Async.md#subtask-and-supertask) from the current instance's subtask
 table, trapping if the subtask isn't done.
 
-The `{stream,future}.new` built-ins have type `[] -> [i32]` and return a new
-[writable end](Async.md#streams-and-futures) of a stream or future. (See
+###### 🔀 `stream.new` and `future.new`
+
+| Synopsis                              |                          |
+| ------------------------------------- | ------------------------ |
+| Conceptual signature for `stream.new` | `func<T>() -> stream<T>` |
+| Conceptual signature for `future.new` | `func<T>() -> future<T>` |
+| Canonical ABI signature               | `[] -> [i32]`            |
+
+The `stream.new` and `future.new` built-ins return the
+[writable end](Async.md#streams-and-futures) of a new `stream<T>` or
+`future<T>`. (See
 [`canon_stream_new`] in the Canonical ABI explainer for details.)
 
-The `stream.{read,write]` built-ins have type `[i32 i32 i32] -> [i32]` and
-take an index to the matching [readable or writable end](Async.md#streams-and-futures)
-of a stream as the first parameter, a pointer to linear memory buffer as the
-second parameter and the number of elements worth of available space in the
-buffer. The return value is either the non-zero number of elements that have
-been eagerly read or else a sentinel "`BLOCKED`" value. (See
+###### 🔀 `stream.read` and `stream.write`
+
+| Synopsis                   |                                                             |
+| -------------------------- | ----------------------------------------------------------- |
+| Conceptual signature       | `func<T>(stream: stream<T>, buffer: list-buffer<T>) -> stream-status`  |
+| Canonical ABI signature    | `[stream:i32 ptr:i32 num:i32] -> [i32]`                     |
+
+```wit
+enum stream-status {
+   // The operation completed and read or wrote this many elements.
+   // This value is always non-zero.
+   complete(u64),
+
+   // The operation did not complete immediately, so callers must wait for
+   // the operation to complete by using `task.wait` or by returning to the
+   // event loop.
+   blocked,
+
+   // The stream is closed. For reading, the end of the stream has been
+   // reached. For writing, the reader is no longer reading data.
+   closed,
+}
+```
+
+
+The `stream.{read,write]` built-ins
+take the matching [readable or writable end](Async.md#streams-and-futures)
+of a stream as the first parameter and a buffer for `T` values to read into
+or write from.
+The return value is either the non-zero number of elements that have
+been eagerly read or written, a sentinel indicating
+that the operation did not complete yet (`blocked`), or a sentinel
+indicating that the stream is closed (`closed`).
+
+In the Canonical ABI, the buffer is passed as a pointer to a buffer
+in linear memory and the size in elements of the buffer. (See
 [`canon_stream_read`] in the Canonical ABI explainer for details.)
 
-The `future.{read,write}` built-ins have type `[i32 i32] -> [i32]` and
-take an index to the matching [readable or writable end](Async.md#streams-and-futures)
-of a future as the first parameter and a pointer linear memory as the second
-parameter. The return value is either `1` if the future value was eagerly
-read from or written to the pointer or the sentinel "`BLOCKED`" value otherwise.
+###### 🔀 `future.read` and `future.write`
+
+| Synopsis                                |                                                         |
+| --------------------------------------- | ------------------------------------------------------- |
+| Conceptual signature for `future.read`  | `func<T>(in: future<T>, buffer: one-buffer<T>) -> future-status`  |
+| Conceptual signature for `future.write` | `func<T>(out: future<T>, buffer: one-buffer<T>) -> future-status` |
+| Canonical ABI signature                 | `[future:i32 ptr:i32] -> [i32]`                         |
+
+```wit
+enum future-status {
+   // The operation completed and read or wrote the value.
+   complete,
+
+   // The operation did not complete immediately, so callers must wait for
+   // the operation to complete by using `task.wait` or by returning to the
+   // event loop.
+   blocked,
+
+   // The stream is closed. For reading, the end of the stream has been
+   // reached. For writing, the reader is no longer reading data.
+   closed,
+}
+```
+
+The `future.{read,write}` built-ins
+take the matching [readable or writable end](Async.md#streams-and-futures)
+of a future as the first parameter, and a buffer for a single `T` value to
+read into or write from. The return value is either `complete` if the future
+value was eagerly read or written, a sentinel indicating that the
+operation did not complete yet (`blocked`), or a sentinel indicating
+that the future is closed (`closed`).
+
+In the Canonical ABI, the buffer is passed as a pointer to a buffer
+in linear memory. (See
 (See [`canon_future_read`] in the Canonical ABI explainer for details.)
 
-The `{stream,future}.cancel-{read,write}` built-ins have type `[i32] -> [i32]`
-and take an index to the matching [readable or writable end](Async.md#streams-and-futures)
-of a stream or future that has an outstanding "`BLOCKED`" read or write. If
-cancellation finished eagerly, the return value is the number of elements read
+###### 🔀 `stream.cancel-read`, `stream.cancel-write`, `future.cancel-read`, and `future.cancel-write`
+
+| Synopsis                                       |                                            |
+| ---------------------------------------------- | ------------------------------------------ |
+| Conceptual signature for `stream.cancel-read`  | `func<T>(in: stream<T>) -> cancel-status`  |
+| Conceptual signature for `stream.cancel-write` | `func<T>(out: stream<T>) -> cancel-status` |
+| Conceptual signature for `future.cancel-read`  | `func<T>(in: future<T>) -> cancel-status`  |
+| Conceptual signature for `future.cancel-write` | `func<T>(out: future<T>) -> cancel-status` |
+| Canonical ABI signature                        | `[i32] -> [i32]`                           |
+
+```wit
+enum cancel-status {
+   // The operation completed and read or wrote this many elements.
+   complete(u64),
+
+   // The operation did not complete immediately, so callers must wait for
+   // the operation to complete by using `task.wait` or by returning to the
+   // event loop.
+   blocked,
+
+   // The stream is closed. For reading, the end of the stream has been
+   // reached. For writing, the reader is no longer reading data.
+   closed,
+}
+```
+
+The `stream.cancel-read`, `stream.cancel-write`, `future.cancel-read`, and `future.cancel-write`
+builtins
+take the matching [readable or writable end](Async.md#streams-and-futures)
+of a stream or future that has an outstanding `blocked` read or write. If
+cancellation finished eagerly, the return value is `complete`, and provides
+the number of elements read
 or written into the given buffer (`0` or `1` for a `future`). If cancellation
-blocks, the return value is the sentinel "`BLOCKED`" value and the caller must
-`task.wait` (or, if using `callback`, return to the event loop) to receive a
-`{STREAM,FUTURE}_{READ,WRITE}` event to indicate the completion of the `read`
+blocks, the return value is `blocked` and the caller
+must `task.wait`. If the stream or future is closed, the return value is
+`closed`.
+
+In the Canonical ABI with the `callback` option, returning to the event
+loop is equivalent to a `task.wait`, and a
+`{STREAM,FUTURE}_{READ,WRITE}` event will be delivered to indicate the
+completion of the `read`
 or `write`. (See [`canon_stream_cancel_read`] in the Canonical ABI explainer
 for details.)
 
-The `{stream,future}.close-{readable,writable}` built-ins have type
-`[i32] -> []` and removes the indicated [stream or future](Async.md#streams-and-futures)
+###### 🔀 `stream.close-readable`, `stream.close-writeable`, `future.close-readable`, and `future.close-writeable`
+
+| Synopsis                                       |                           |
+| ---------------------------------------------- | ------------------------- |
+| Conceptual signature for `stream.cancel-read`  | `func<T>(in: stream<T>)`  |
+| Conceptual signature for `stream.cancel-write` | `func<T>(out: stream<T>)` |
+| Conceptual signature for `future.cancel-read`  | `func<T>(in: future<T>)`  |
+| Conceptual signature for `future.cancel-write` | `func<T>(out: future<T>)` |
+| Canonical ABI signature                        | `[i32] -> []`             |
+``
+
+The `{stream,future}.close-{readable,writable}` built-ins
+remove the indicated [stream or future](Async.md#streams-and-futures)
 from the current component instance's [waitables](Async.md#waiting) table,
 trapping if the stream or future has a mismatched direction or type or are in
 the middle of a `read` or `write`.
 
 ##### 🔀 Error Context built-ins
 
-The `error-context.new` built-in has type `[ptr:i32 len:i32] -> [i32]` and
-returns the index of a new `error-context` value in a per-component-instance
-table. The given (`ptr`, `length`) pair are non-deterministically lifted and
+###### `error-context.new`
+
+| Synopsis                                       |                               |
+| ---------------------------------------------- | ----------------------------- |
+| Conceptual signature                           | `func(message: string) -> error-context` |
+| Canonical ABI signature                        | `[ptr:i32 len:i32] -> [i32]`  |
+
+The `error-context.new` built-in
+returns a new `error-context` value.
+The given string is non-deterministically
 transformed to produce the `error-context`'s internal
 [debug message](#error-context-type).
 
-The `error-context.debug-message` built-in has type
-`[errctxi:i32 ptr:i32] -> []` and writes the [debug message](#error-context-type)
-of the given `error-context` into `ptr` as an 8-byte (`ptr`, `length`) pair,
+In the Canonical ABI, the returned value is an index into a per-component-instance
+table.
+
+###### `error-context.debug-message`
+
+| Synopsis                                       |                                |
+| ---------------------------------------------- | ------------------------------ |
+| Conceptual signature                           | `func(errctx: error-context) -> string` |
+| Canonical ABI signature                        | `[errctxi:i32 ptr:i32] -> []`  |
+
+The `error-context.debug-message` built-in
+returns the [debug message](#error-context-type)
+of the given `error-context`.
+
+In the Canonical ABI, it writes the debug message into `ptr` as an 8-byte
+(`ptr`, `length`) pair,
 according to the Canonical ABI for `string`, given the `<canonopt>*`
 immediates.
 
-The `error-context.drop` built-in has type `[errctxi:i32] -> []` and drops the
-given `error-context` value from the component instance's table.
+###### `error-context.drop`
+
+| Synopsis                                       |                               |
+| ---------------------------------------------- | ----------------------------- |
+| Conceptual signature                           | `func(errctx: error-context)` |
+| Canonical ABI signature                        | `[errctxi:i32] -> []`         |
+
+The `error-context.drop` built-in d drops the
+given `error-context` value from the component instance.
+
+In the Canonical ABI, `errctxi` is an index into a per-component-instance
+table.
 
 ##### 🧵 Threading built-ins
 
@@ -1572,11 +1807,25 @@ thread management. These are specified as built-ins and not core WebAssembly
 instructions because browsers expect this functionality to come from existing
 Web/JS APIs.
 
-The `thread.spawn` built-in has type `[f:(ref null $f) c:i32] -> [i32]` and
+###### 🧵 `thread.spawn`
+
+| Synopsis                   |                                                    |
+| -------------------------- | -------------------------------------------------- |
+| Conceptual signature       | `func<FuncTy, ArgTy>(f: FuncTy, c: ArgTy) -> bool` |
+| Canonical ABI signature    | `[f:(ref null $f) c:i32] -> [i32]`                 |
+
+The `thread.spawn` built-in
 spawns a new thread by invoking the shared function `f` while passing `c` to it,
 returning whether a thread was successfully spawned.
 
-The `resource.hw_concurrency` built-in has type `[] -> [i32]` and returns the
+###### 🧵 `resource.hw_concurrency`
+
+| Synopsis                   |                 |
+| -------------------------- | --------------- |
+| Conceptual signature       | `func() -> u32` |
+| Canonical ABI signature    | `[] -> [i32]`   |
+
+The `resource.hw_concurrency` built-in returns the
 number of threads that can be expected to execute concurrently.
 
 See the [CanonicalABI.md](CanonicalABI.md#canonical-definitions) for detailed
