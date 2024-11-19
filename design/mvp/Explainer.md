@@ -1833,6 +1833,8 @@ trapping if the stream or future has a mismatched direction or type or are in
 the middle of a `read` or `write`.
 (See also [the `close` built-ins] in the Canonical ABI explainer.)
 
+TODO: Describe how the `option<error-context>` is represented as i32 in the Canonical ABI.
+
 ##### 🔀 Error Context built-ins
 
 ###### `error-context.new`
