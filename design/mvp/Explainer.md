@@ -1819,10 +1819,10 @@ TODO: Should `closed` have an `error-context` for the `future.cancel-read` and `
 
 | Synopsis                                            |                                    |
 | --------------------------------------------------- | ---------------------------------- |
-| Approximate WIT signature for `stream.cancel-read`  | `func<T>(in: readable-stream<T>)`  |
-| Approximate WIT signature for `stream.cancel-write` | `func<T>(out: writable-stream<T>)` |
-| Approximate WIT signature for `future.cancel-read`  | `func<T>(in: readable-future<T>)`  |
-| Approximate WIT signature for `future.cancel-write` | `func<T>(out: writable-future<T>)` |
+| Approximate WIT signature for `stream.close-read`  | `func<T>(in: readable-stream<T>)`  |
+| Approximate WIT signature for `stream.close-write` | `func<T>(out: writable-stream<T>, err: option<error-context>)` |
+| Approximate WIT signature for `future.close-read`  | `func<T>(in: readable-future<T>)`  |
+| Approximate WIT signature for `future.close-write` | `func<T>(out: writable-future<T>, err: option<error-context>)` |
 | Canonical ABI signature                             | `[i32] -> []`                      |
 
 The `{stream,future}.close-{readable,writable}` built-ins
