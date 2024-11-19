@@ -1481,7 +1481,7 @@ handle `t`. Validation only allows `resource.rep T` to be used within the compon
 that defined `T`.
 
 In the Canonical ABI, `repr<T>` is a `u32`, and the handle argument is passed
-tshe `i32` index of the handle.
+as the `i32` index of the handle.
 
 As an example, the following component imports the `resource.new` built-in,
 allowing it to create and return new resources to its client:
@@ -1667,7 +1667,6 @@ enum read-status {
 }
 ```
 
-
 The `stream.read` built-in
 takes the matching [readable end](Async.md#streams-and-futures)
 of a stream as the first parameter and a buffer for `T` values to read into.
@@ -1705,7 +1704,6 @@ enum write-status {
 }
 ```
 
-
 The `stream.write` built-in
 takes the matching [writable end](Async.md#streams-and-futures)
 of a stream as the first parameter and a buffer for `T` values to
@@ -1727,6 +1725,7 @@ in linear memory and the size in elements of the buffer. (See
 | Approximate WIT signature for `future.write` | `func<T>(out: future<T>, buffer: one-buffer<T>) -> future-status` |
 | Canonical ABI signature                      | `[future:i32 ptr:i32] -> [i32]`                                   |
 
+where `future-status` is defined in WIT as:
 ```wit
 enum future-status {
    // The operation completed and read or wrote the value.
@@ -1765,6 +1764,7 @@ in linear memory. (See
 | Approximate WIT signature for `future.cancel-write` | `func<T>(out: writable-future<T>) -> cancel-status` |
 | Canonical ABI signature                             | `[i32] -> [i32]`                           |
 
+where `cancel-status` is defined in WIT as:
 ```wit
 enum cancel-status {
    // The operation completed and read or wrote this many elements.
@@ -1808,7 +1808,6 @@ for details.)
 | Approximate WIT signature for `future.cancel-read`  | `func<T>(in: readable-future<T>)`  |
 | Approximate WIT signature for `future.cancel-write` | `func<T>(out: writable-future<T>)` |
 | Canonical ABI signature                             | `[i32] -> []`             |
-``
 
 The `{stream,future}.close-{readable,writable}` built-ins
 remove the indicated [stream or future](Async.md#streams-and-futures)
