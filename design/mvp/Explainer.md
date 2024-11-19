@@ -1536,14 +1536,14 @@ also [Returning](Async.md#returning) in the async explainer and
 
 ###### 🔀 `task.wait`
 
-| Synopsis                   |                                           |
-| -------------------------- | ----------------------------------------- |
-| Conceptual signature       | `func() -> record { kind: event, payload1: u32, payload2: u32 }` |
-| Canonical ABI signature    | `[payloads_addr:i32] -> [kind:i32]`        |
+| Synopsis                   |                                          |
+| -------------------------- | ---------------------------------------- |
+| Conceptual signature       | `func() -> event`                        |
+| Canonical ABI signature    | `[payload_addr:i32] -> [event-kind:i32]` |
 
-where `event` is defined in WIT as:
+where `event-kind` is defined in WIT as:
 ```wit
-enum event {
+enum event-kind {
   call-starting,
   call-started,
   call-returned,
@@ -1556,11 +1556,27 @@ enum event {
 }
 ```
 
-The `task.wait` built-in returns an event code and
-the payload of the event at the address passed as parameter.
+`payload` is defined in WIT as:
+```wit
+record payload {
+    payload1: u32
+    payload2: u32
+}
+```
 
-In the Canonical ABI, the returned payload is a 4-byte value and is stored
-at address `payload_addr`.
+and `event` is defined in WIT as:
+```wit
+record event {
+    kind: event-kind,
+    payload: payload,
+}
+```
+
+The `task.wait` built-in waits for one of the pending events to occur, and then
+returns an `event` describing it.
+
+In the Canonical ABI, the return value provides the `event-kind`, and the
+`payload` value is stored at the address passed as the `payload_addr` parameter.
 
 `task.wait` can be called whether or not `async` was present, allowing any sort
 of code to synchronously wait for progress on any of the currently-executing
@@ -1569,18 +1585,20 @@ subtasks. (See also [Waiting](Async.md#waiting) in the async explainer and
 
 ###### 🔀 `task.poll`
 
-| Synopsis                   |                                                          |
-| -------------------------- | -------------------------------------------------------- |
-| Conceptual signature       | `func() -> option<record { kind: event, payload1: u32, payload2:u32 }> ` |
-| Canonical ABI signature    | `[tuple_addr:i32] -> [is_some:i32]`                      |
+| Synopsis                   |                                     |
+| -------------------------- | ----------------------------------- |
+| Conceptual signature       | `func() -> option<event> `          |
+| Canonical ABI signature    | `[event_addr:i32] -> [is_some:i32]` |
+
+where `event`, `event-kind`, and `payload` are defined as in [`task.wait`].
 
 The `task.poll` built-in returns either `none` if no event was immediately
 available, or `some` containing an event code and payload.
 
 In the Canonical ABI, the return value `is_some` holds a boolean value
 indicating whether an event was immediately available, and if so,
-the event code and payload are stored into the buffer pointed to by
-`tuple_addr`.
+the `event` value, containing the code and payloads are stored into the buffer pointed to by
+`event_addr`.
 
 (See also [`canon_task_poll`] in the Canonical ABI explainer.)
 
