@@ -1648,7 +1648,7 @@ The `stream.new` and `future.new` built-ins return the
 
 | Synopsis                   |                                                             |
 | -------------------------- | ----------------------------------------------------------- |
-| Approximate WIT signature  | `func<T>(stream: stream<T>, buffer: readable-buffer<T>) -> read-status`  |
+| Approximate WIT signature  | `func<T>(stream: readable-stream<T>, buffer: readable-buffer<T>) -> read-status`  |
 | Canonical ABI signature    | `[stream:i32 ptr:i32 num:i32] -> [i32]`                     |
 
 where `read-status` is defined in WIT as:
@@ -1686,7 +1686,7 @@ in linear memory and the size in elements of the buffer. (See
 
 | Synopsis                   |                                                             |
 | -------------------------- | ----------------------------------------------------------- |
-| Approximate WIT signature  | `func<T>(stream: stream<T>, buffer: writable-buffer<T>) -> write-status`  |
+| Approximate WIT signature  | `func<T>(stream: writable-stream<T>, buffer: writable-buffer<T>) -> write-status`  |
 | Canonical ABI signature    | `[stream:i32 ptr:i32 num:i32] -> [i32]`                     |
 
 where `write-status` is defined in WIT as:
@@ -1759,10 +1759,10 @@ in linear memory. (See
 
 | Synopsis                                            |                                            |
 | --------------------------------------------------- | ------------------------------------------ |
-| Approximate WIT signature for `stream.cancel-read`  | `func<T>(in: stream<T>) -> cancel-status`  |
-| Approximate WIT signature for `stream.cancel-write` | `func<T>(out: stream<T>) -> cancel-status` |
-| Approximate WIT signature for `future.cancel-read`  | `func<T>(in: future<T>) -> cancel-status`  |
-| Approximate WIT signature for `future.cancel-write` | `func<T>(out: future<T>) -> cancel-status` |
+| Approximate WIT signature for `stream.cancel-read`  | `func<T>(in: readable-stream<T>) -> cancel-status`  |
+| Approximate WIT signature for `stream.cancel-write` | `func<T>(out: writable-stream<T>) -> cancel-status` |
+| Approximate WIT signature for `future.cancel-read`  | `func<T>(in: readable-future<T>) -> cancel-status`  |
+| Approximate WIT signature for `future.cancel-write` | `func<T>(out: writable-future<T>) -> cancel-status` |
 | Canonical ABI signature                             | `[i32] -> [i32]`                           |
 
 ```wit
@@ -1803,10 +1803,10 @@ for details.)
 
 | Synopsis                                            |                           |
 | --------------------------------------------------- | ------------------------- |
-| Approximate WIT signature for `stream.cancel-read`  | `func<T>(in: stream<T>)`  |
-| Approximate WIT signature for `stream.cancel-write` | `func<T>(out: stream<T>)` |
-| Approximate WIT signature for `future.cancel-read`  | `func<T>(in: future<T>)`  |
-| Approximate WIT signature for `future.cancel-write` | `func<T>(out: future<T>)` |
+| Approximate WIT signature for `stream.cancel-read`  | `func<T>(in: readable-stream<T>)`  |
+| Approximate WIT signature for `stream.cancel-write` | `func<T>(out: writable-stream<T>)` |
+| Approximate WIT signature for `future.cancel-read`  | `func<T>(in: readable-future<T>)`  |
+| Approximate WIT signature for `future.cancel-write` | `func<T>(out: writable-future<T>)` |
 | Canonical ABI signature                             | `[i32] -> []`             |
 ``
 
