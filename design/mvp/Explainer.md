@@ -1631,7 +1631,6 @@ where `stream-status` is defined in WIT as:
 ```wit
 enum stream-status {
    // The operation completed and read or wrote this many elements.
-   // This value is always non-zero.
    complete(u64),
 
    // The operation did not complete immediately, so callers must wait for
