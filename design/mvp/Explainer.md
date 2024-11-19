@@ -1431,7 +1431,7 @@ canon ::= ...
 
 | Synopsis                   |                               |
 | -------------------------- | ----------------------------- |
-| Conceptual signature       | `func<T>(repr: repr<T>) -> T` |
+| Approximate WIT signature  | `func<T>(repr: repr<T>) -> T` |
 | Canonical ABI signature    | `[repr:i32] -> [i32]`         |
 
 The `resource.new` built-in creates a new
@@ -1445,14 +1445,14 @@ When the `async` immediate is false:
 
 | Synopsis                   |                      |
 | -------------------------- | -------------------- |
-| Conceptual signature       | `func<T>(t: T)`      |
+| Approximate WIT signature  | `func<T>(t: T)`      |
 | Canonical ABI signature    | `[t:i32] -> []`      |
 
 When `async` immediate is true:
 
 | Synopsis                   |                                 |
 | -------------------------- | ------------------------------- |
-| Conceptual signature       | `func<T>(t: T) -> option<task>` |
+| Approximate WIT signature  | `func<T>(t: T) -> option<task>` |
 | Canonical ABI signature    | `[t:i32] -> [i32]`              |
 
 The `resource.drop` drops a resource handle `t` (with resource type `T`).
@@ -1469,7 +1469,7 @@ eagerly) or the index of the in-progress drop.
 
 | Synopsis                   |                            |
 | -------------------------- | -------------------------- |
-| Conceptual signature       | `func<T>(t: T) -> repr<T>` |
+| Approximate WIT signature  | `func<T>(t: T) -> repr<T>` |
 | Canonical ABI signature    | `[t:i32] -> [i32]`         |
 
 The `resource.rep` built-in returns the
@@ -1515,7 +1515,7 @@ and the [Canonical ABI explainer] for detailed runtime semantics.
 
 | Synopsis                   |                       |
 | -------------------------- | --------------------- |
-| Conceptual signature       | `func(enable: bool)`  |
+| Approximate WIT signature  | `func(enable: bool)`  |
 | Canonical ABI signature    | `[enable:i32] -> []`  |
 
 The `task.backpressure` built-in allows the
@@ -1538,7 +1538,7 @@ also [Returning](Async.md#returning) in the async explainer and
 
 | Synopsis                   |                                          |
 | -------------------------- | ---------------------------------------- |
-| Conceptual signature       | `func() -> event`                        |
+| Approximate WIT signature  | `func() -> event`                        |
 | Canonical ABI signature    | `[payload_addr:i32] -> [event-kind:i32]` |
 
 where `event-kind` is defined in WIT as:
@@ -1587,7 +1587,7 @@ subtasks. (See also [Waiting](Async.md#waiting) in the async explainer and
 
 | Synopsis                   |                                     |
 | -------------------------- | ----------------------------------- |
-| Conceptual signature       | `func() -> option<event> `          |
+| Approximate WIT signature  | `func() -> option<event> `          |
 | Canonical ABI signature    | `[event_addr:i32] -> [is_some:i32]` |
 
 where `event`, `event-kind`, and `payload` are defined as in [`task.wait`].
@@ -1606,7 +1606,7 @@ the `event` value, containing the code and payloads are stored into the buffer p
 
 | Synopsis                   |            |
 | -------------------------- | ---------- |
-| Conceptual signature       | `func()`   |
+| Approximate WIT signature  | `func()`   |
 | Canonical ABI signature    | `[] -> []` |
 
 The `task.yield` built-in simply allows the runtime to
@@ -1618,7 +1618,7 @@ ABI explainer.)
 
 | Synopsis                   |                       |
 | -------------------------- | --------------------- |
-| Conceptual signature       | `func(subtask: task)` |
+| Approximate WIT signature  | `func(subtask: task)` |
 | Canonical ABI signature    | `[i32] -> []`         |
 
 The `subtask.drop` built-in removes the indicated
@@ -1627,11 +1627,11 @@ table, trapping if the subtask isn't done.
 
 ###### 🔀 `stream.new` and `future.new`
 
-| Synopsis                              |                          |
-| ------------------------------------- | ------------------------ |
-| Conceptual signature for `stream.new` | `func<T>() -> stream<T>` |
-| Conceptual signature for `future.new` | `func<T>() -> future<T>` |
-| Canonical ABI signature               | `[] -> [i32]`            |
+| Synopsis                                   |                          |
+| ------------------------------------------ | ------------------------ |
+| Approximate WIT signature for `stream.new` | `func<T>() -> stream<T>` |
+| Approximate WIT signature for `future.new` | `func<T>() -> future<T>` |
+| Canonical ABI signature                    | `[] -> [i32]`            |
 
 The `stream.new` and `future.new` built-ins return the
 [writable end](Async.md#streams-and-futures) of a new `stream<T>` or
@@ -1642,7 +1642,7 @@ The `stream.new` and `future.new` built-ins return the
 
 | Synopsis                   |                                                             |
 | -------------------------- | ----------------------------------------------------------- |
-| Conceptual signature       | `func<T>(stream: stream<T>, buffer: list-buffer<T>) -> stream-status`  |
+| Approximate WIT signature  | `func<T>(stream: stream<T>, buffer: list-buffer<T>) -> stream-status`  |
 | Canonical ABI signature    | `[stream:i32 ptr:i32 num:i32] -> [i32]`                     |
 
 where `stream-status` is defined in WIT as:
@@ -1678,11 +1678,11 @@ in linear memory and the size in elements of the buffer. (See
 
 ###### 🔀 `future.read` and `future.write`
 
-| Synopsis                                |                                                         |
-| --------------------------------------- | ------------------------------------------------------- |
-| Conceptual signature for `future.read`  | `func<T>(in: future<T>, buffer: one-buffer<T>) -> future-status`  |
-| Conceptual signature for `future.write` | `func<T>(out: future<T>, buffer: one-buffer<T>) -> future-status` |
-| Canonical ABI signature                 | `[future:i32 ptr:i32] -> [i32]`                         |
+| Synopsis                                     |                                                                   |
+| -------------------------------------------- | ----------------------------------------------------------------- |
+| Approximate WIT signature for `future.read`  | `func<T>(in: future<T>, buffer: one-buffer<T>) -> future-status`  |
+| Approximate WIT signature for `future.write` | `func<T>(out: future<T>, buffer: one-buffer<T>) -> future-status` |
+| Canonical ABI signature                      | `[future:i32 ptr:i32] -> [i32]`                                   |
 
 ```wit
 enum future-status {
@@ -1714,13 +1714,13 @@ in linear memory. (See
 
 ###### 🔀 `stream.cancel-read`, `stream.cancel-write`, `future.cancel-read`, and `future.cancel-write`
 
-| Synopsis                                       |                                            |
-| ---------------------------------------------- | ------------------------------------------ |
-| Conceptual signature for `stream.cancel-read`  | `func<T>(in: stream<T>) -> cancel-status`  |
-| Conceptual signature for `stream.cancel-write` | `func<T>(out: stream<T>) -> cancel-status` |
-| Conceptual signature for `future.cancel-read`  | `func<T>(in: future<T>) -> cancel-status`  |
-| Conceptual signature for `future.cancel-write` | `func<T>(out: future<T>) -> cancel-status` |
-| Canonical ABI signature                        | `[i32] -> [i32]`                           |
+| Synopsis                                            |                                            |
+| --------------------------------------------------- | ------------------------------------------ |
+| Approximate WIT signature for `stream.cancel-read`  | `func<T>(in: stream<T>) -> cancel-status`  |
+| Approximate WIT signature for `stream.cancel-write` | `func<T>(out: stream<T>) -> cancel-status` |
+| Approximate WIT signature for `future.cancel-read`  | `func<T>(in: future<T>) -> cancel-status`  |
+| Approximate WIT signature for `future.cancel-write` | `func<T>(out: future<T>) -> cancel-status` |
+| Canonical ABI signature                             | `[i32] -> [i32]`                           |
 
 ```wit
 enum cancel-status {
@@ -1758,13 +1758,13 @@ for details.)
 
 ###### 🔀 `stream.close-readable`, `stream.close-writeable`, `future.close-readable`, and `future.close-writeable`
 
-| Synopsis                                       |                           |
-| ---------------------------------------------- | ------------------------- |
-| Conceptual signature for `stream.cancel-read`  | `func<T>(in: stream<T>)`  |
-| Conceptual signature for `stream.cancel-write` | `func<T>(out: stream<T>)` |
-| Conceptual signature for `future.cancel-read`  | `func<T>(in: future<T>)`  |
-| Conceptual signature for `future.cancel-write` | `func<T>(out: future<T>)` |
-| Canonical ABI signature                        | `[i32] -> []`             |
+| Synopsis                                            |                           |
+| --------------------------------------------------- | ------------------------- |
+| Approximate WIT signature for `stream.cancel-read`  | `func<T>(in: stream<T>)`  |
+| Approximate WIT signature for `stream.cancel-write` | `func<T>(out: stream<T>)` |
+| Approximate WIT signature for `future.cancel-read`  | `func<T>(in: future<T>)`  |
+| Approximate WIT signature for `future.cancel-write` | `func<T>(out: future<T>)` |
+| Canonical ABI signature                             | `[i32] -> []`             |
 ``
 
 The `{stream,future}.close-{readable,writable}` built-ins
@@ -1779,7 +1779,7 @@ the middle of a `read` or `write`.
 
 | Synopsis                                       |                               |
 | ---------------------------------------------- | ----------------------------- |
-| Conceptual signature                           | `func(message: string) -> error-context` |
+| Approximate WIT signature                      | `func(message: string) -> error-context` |
 | Canonical ABI signature                        | `[ptr:i32 len:i32] -> [i32]`  |
 
 The `error-context.new` built-in
@@ -1795,7 +1795,7 @@ table.
 
 | Synopsis                                       |                                |
 | ---------------------------------------------- | ------------------------------ |
-| Conceptual signature                           | `func(errctx: error-context) -> string` |
+| Approximate WIT signature                      | `func(errctx: error-context) -> string` |
 | Canonical ABI signature                        | `[errctxi:i32 ptr:i32] -> []`  |
 
 The `error-context.debug-message` built-in
@@ -1811,7 +1811,7 @@ immediates.
 
 | Synopsis                                       |                               |
 | ---------------------------------------------- | ----------------------------- |
-| Conceptual signature                           | `func(errctx: error-context)` |
+| Approximate WIT signature                      | `func(errctx: error-context)` |
 | Canonical ABI signature                        | `[errctxi:i32] -> []`         |
 
 The `error-context.drop` built-in d drops the
@@ -1831,7 +1831,7 @@ Web/JS APIs.
 
 | Synopsis                   |                                                    |
 | -------------------------- | -------------------------------------------------- |
-| Conceptual signature       | `func<FuncTy, ArgTy>(f: FuncTy, c: ArgTy) -> bool` |
+| Approximate WIT signature  | `func<FuncTy, ArgTy>(f: FuncTy, c: ArgTy) -> bool` |
 | Canonical ABI signature    | `[f:(ref null $f) c:i32] -> [i32]`                 |
 
 The `thread.spawn` built-in
@@ -1842,7 +1842,7 @@ returning whether a thread was successfully spawned.
 
 | Synopsis                   |                 |
 | -------------------------- | --------------- |
-| Conceptual signature       | `func() -> u32` |
+| Approximate WIT signature  | `func() -> u32` |
 | Canonical ABI signature    | `[] -> [i32]`   |
 
 The `resource.hw_concurrency` built-in returns the
