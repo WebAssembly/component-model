@@ -1644,17 +1644,17 @@ The `stream.new` and `future.new` built-ins return the
 `future<T>`. (See
 [`canon_stream_new`] in the Canonical ABI explainer for details.)
 
-###### 🔀 `stream.read` and `stream.write`
+###### 🔀 `stream.read`
 
 | Synopsis                   |                                                             |
 | -------------------------- | ----------------------------------------------------------- |
-| Approximate WIT signature  | `func<T>(stream: stream<T>, buffer: list-buffer<T>) -> stream-status`  |
+| Approximate WIT signature  | `func<T>(stream: stream<T>, buffer: readable-buffer<T>) -> read-status`  |
 | Canonical ABI signature    | `[stream:i32 ptr:i32 num:i32] -> [i32]`                     |
 
-where `stream-status` is defined in WIT as:
+where `read-status` is defined in WIT as:
 ```wit
-enum stream-status {
-   // The operation completed and read or wrote this many elements.
+enum read-status {
+   // The operation completed and read this many elements.
    complete(u64),
 
    // The operation did not complete immediately, so callers must wait for
@@ -1662,25 +1662,62 @@ enum stream-status {
    // event loop.
    blocked(task),
 
-   // The stream is closed. For reading, the end of the stream has been
-   // reached. For writing, the reader is no longer reading data.
+   // The end of the stream has been reached.
+   closed(option<error-context>)
+}
+```
+
+
+The `stream.read` built-in
+takes the matching [readable end](Async.md#streams-and-futures)
+of a stream as the first parameter and a buffer for `T` values to read into.
+The return value is either the number of elements (possibly zero) that have
+been eagerly read, a sentinel indicating
+that the operation did not complete yet (`blocked`), or a sentinel
+indicating that the stream is closed (`closed`) along with an
+optional error context describing the error that caused to the
+stream to close.
+
+In the Canonical ABI, the buffer is passed as a pointer to a buffer
+in linear memory and the size in elements of the buffer. (See
+[`canon_stream_read`] in the Canonical ABI explainer for details.)
+
+###### 🔀 `stream.write`
+
+| Synopsis                   |                                                             |
+| -------------------------- | ----------------------------------------------------------- |
+| Approximate WIT signature  | `func<T>(stream: stream<T>, buffer: writable-buffer<T>) -> write-status`  |
+| Canonical ABI signature    | `[stream:i32 ptr:i32 num:i32] -> [i32]`                     |
+
+where `write-status` is defined in WIT as:
+```wit
+enum write-status {
+   // The operation completed and wrote this many elements.
+   complete(u64),
+
+   // The operation did not complete immediately, so callers must wait for
+   // the operation to complete by using `task.wait` or by returning to the
+   // event loop.
+   blocked(task),
+
+   // The reader is no longer reading data.
    closed,
 }
 ```
 
 
-The `stream.{read,write]` built-ins
-take the matching [readable or writable end](Async.md#streams-and-futures)
-of a stream as the first parameter and a buffer for `T` values to read into
-or write from.
-The return value is either the non-zero number of elements that have
-been eagerly read or written, a sentinel indicating
+The `stream.write` built-in
+takes the matching [writable end](Async.md#streams-and-futures)
+of a stream as the first parameter and a buffer for `T` values to
+write from.
+The return value is either the number of elements (possibly zero) that have
+been eagerly written, a sentinel indicating
 that the operation did not complete yet (`blocked`), or a sentinel
 indicating that the stream is closed (`closed`).
 
 In the Canonical ABI, the buffer is passed as a pointer to a buffer
 in linear memory and the size in elements of the buffer. (See
-[`canon_stream_read`] in the Canonical ABI explainer for details.)
+[`canon_stream_write`] in the Canonical ABI explainer for details.)
 
 ###### 🔀 `future.read` and `future.write`
 
@@ -2671,6 +2708,7 @@ For some use-case-focused, worked examples, see:
 [`canon_task_yield`]: CanonicalABI.md#-canon-taskyield
 [`canon_stream_new`]: CanonicalABI.md#-canon-streamfuturenew
 [`canon_stream_read`]: CanonicalABI.md#-canon-streamfuturereadwrite
+[`canon_stream_write`]: CanonicalABI.md#-canon-streamfuturereadwrite
 [`canon_future_read`]: CanonicalABI.md#-canon-streamfuturereadwrite
 [`canon_stream_cancel_read`]: CanonicalABI.md#-canon-streamfuturecancel-readwrite
 [Shared-Nothing]: ../high-level/Choices.md
