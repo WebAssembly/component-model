@@ -1540,6 +1540,7 @@ also [Returning](Async.md#returning) in the async explainer and
 | Conceptual signature       | `func() -> record { kind: event, payload1: u32, payload2: u32 }` |
 | Canonical ABI signature    | `[payloads_addr:i32] -> [kind:i32]`        |
 
+where `event` is defined in WIT as:
 ```wit
 enum event {
   call-starting,
@@ -1625,6 +1626,7 @@ The `stream.new` and `future.new` built-ins return the
 | Conceptual signature       | `func<T>(stream: stream<T>, buffer: list-buffer<T>) -> stream-status`  |
 | Canonical ABI signature    | `[stream:i32 ptr:i32 num:i32] -> [i32]`                     |
 
+where `stream-status` is defined in WIT as:
 ```wit
 enum stream-status {
    // The operation completed and read or wrote this many elements.
