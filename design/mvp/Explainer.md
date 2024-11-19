@@ -1437,6 +1437,8 @@ canon ::= ...
 The `resource.new` built-in creates a new
 resource (with resource type `T`) with `rep` as its
 representation, and returns a new handle pointing to the new resource.
+Validation only allows `resource.rep T` to be used within the component
+that defined `T`.
 
 In the Canonical ABI, `T.rep` is defined to be the `$rep` in the
 `(type $T (resource (rep $rep) ...))` type definition that defined `T`. While
@@ -1464,6 +1466,8 @@ When the `async` immediate is true:
 The `resource.drop` built-in drops a resource handle `t` (with resource type `T`).
 If the dropped handle owns the resource, the resource's
 `dtor` is called, if present.
+Validation only allows `resource.rep T` to be used within the component
+that defined `T`.
 
 When the `async` immediate is true, the returned value indicates whether
 the drop completed eagerly, or if not, identifies the in-progress drop.
