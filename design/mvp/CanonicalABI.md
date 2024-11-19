@@ -1538,10 +1538,7 @@ guaranteed to be a no-op on the first iteration because the record as
 a whole starts out aligned (as asserted at the top of `load`).
 
 Variants are loaded using the order of the cases in the type to determine the
-case index, assigning `0` to the first case, `1` to the next case, etc. To
-support the subtyping allowed by `refines`, a lifted variant value semantically
-includes a full ordered list of its `refines` case labels so that the lowering
-code (defined below) can search this list to find a case label it knows about.
+case index, assigning `0` to the first case, `1` to the next case, etc.
 While the code below appears to perform case-label lookup at runtime, a normal
 implementation can build the appropriate index tables at compile-time so that
 variant-passing is always O(1) and not involving string operations.
@@ -1553,24 +1550,9 @@ def load_variant(cx, ptr, cases):
   trap_if(case_index >= len(cases))
   c = cases[case_index]
   ptr = align_to(ptr, max_case_alignment(cases))
-  case_label = case_label_with_refinements(c, cases)
   if c.t is None:
-    return { case_label: None }
-  return { case_label: load(cx, ptr, c.t) }
-
-def case_label_with_refinements(c, cases):
-  label = c.label
-  while c.refines is not None:
-    c = cases[find_case(c.refines, cases)]
-    label += '|' + c.label
-  return label
-
-def find_case(label, cases):
-  matches = [i for i,c in enumerate(cases) if c.label == label]
-  assert(len(matches) <= 1)
-  if len(matches) == 1:
-    return matches[0]
-  return -1
+    return { c.label: None }
+  return { c.label: load(cx, ptr, c.t) }
 ```
 
 Flags are converted from a bit-vector to a dictionary whose keys are
@@ -2023,12 +2005,13 @@ def store_record(cx, v, ptr, fields):
     ptr += elem_size(f.t)
 ```
 
-Variants are stored using the `|`-separated list of `refines` cases built
-by `case_label_with_refinements` (above) to iteratively find a matching case (which
-validation guarantees will succeed). While this code appears to do O(n) string
-matching, a normal implementation can statically fuse `store_variant` with its
-matching `load_variant` to ultimately build a dense array that maps producer's
-case indices to the consumer's case indices.
+Variant values are represented as Python dictionaries containing exactly one
+entry whose key is the label of the lifted case and whose value is the
+(optional) case payload. While this code appears to do an O(n) search of the
+`variant` type for a matching case label, a normal implementation can
+statically fuse `store_variant` with its matching `load_variant` to ultimately
+build a dense array that maps producer's case indices to the consumer's case
+indices.
 ```python
 def store_variant(cx, v, ptr, cases):
   case_index, case_value = match_case(v, cases)
@@ -2041,13 +2024,10 @@ def store_variant(cx, v, ptr, cases):
     store(cx, case_value, c.t, ptr)
 
 def match_case(v, cases):
-  assert(len(v.keys()) == 1)
-  key = list(v.keys())[0]
-  value = list(v.values())[0]
-  for label in key.split('|'):
-    case_index = find_case(label, cases)
-    if case_index != -1:
-      return (case_index, value)
+  [label] = v.keys()
+  [index] = [i for i,c in enumerate(cases) if c.label == label]
+  [value] = v.values()
+  return (index, value)
 ```
 
 Flags are converted from a dictionary to a bit-vector by iterating
@@ -2414,7 +2394,7 @@ def lift_flat_variant(cx, vi, cases):
     v = lift_flat(cx, CoerceValueIter(), c.t)
   for have in flat_types:
     _ = vi.next(have)
-  return { case_label_with_refinements(c, cases): v }
+  return { c.label: v }
 
 def wrap_i64_to_i32(i):
   assert(0 <= i < (1 << 64))

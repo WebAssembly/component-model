@@ -134,17 +134,11 @@ t = ResultType(U8Type(),U32Type())
 test(t, [0, 42], {'ok':42})
 test(t, [1, 1000], {'error':1000})
 t = VariantType([CaseType('w',U8Type()),
-                 CaseType('x',U8Type(),'w'),
-                 CaseType('y',U8Type()),
-                 CaseType('z',U8Type(),'x')])
+                 CaseType('y',U8Type())])
 test(t, [0, 42], {'w':42})
-test(t, [1, 42], {'x|w':42})
-test(t, [2, 42], {'y':42})
-test(t, [3, 42], {'z|x|w':42})
+test(t, [1, 42], {'y':42})
 t2 = VariantType([CaseType('w',U8Type())])
 test(t, [0, 42], {'w':42}, lower_t=t2, lower_v={'w':42})
-test(t, [1, 42], {'x|w':42}, lower_t=t2, lower_v={'w':42})
-test(t, [3, 42], {'z|x|w':42}, lower_t=t2, lower_v={'w':42})
 
 def test_pairs(t, pairs):
   for arg,expect in pairs:
