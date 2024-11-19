@@ -1799,7 +1799,7 @@ completion of the `read`
 or `write`. (See [`canon_stream_cancel_read`] in the Canonical ABI explainer
 for details.)
 
-###### 🔀 `stream.close-readable`, `stream.close-writeable`, `future.close-readable`, and `future.close-writeable`
+###### 🔀 `stream.close-readable`, `stream.close-writable`, `future.close-readable`, and `future.close-writable`
 
 | Synopsis                                            |                           |
 | --------------------------------------------------- | ------------------------- |
