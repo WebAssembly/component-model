@@ -1429,18 +1429,20 @@ canon ::= ...
 
 ###### `resource.new`
 
-| Synopsis                   |                               |
-| -------------------------- | ----------------------------- |
-| Approximate WIT signature  | `func<T>(repr: repr<T>) -> T` |
-| Canonical ABI signature    | `[repr:i32] -> [i32]`         |
+| Synopsis                   |                            |
+| -------------------------- | -------------------------- |
+| Approximate WIT signature  | `func<T>(rep: T.rep) -> T` |
+| Canonical ABI signature    | `[rep:i32] -> [i32]`       |
 
 The `resource.new` built-in creates a new
-resource (with resource type `T`) with `repr` as its
+resource (with resource type `T`) with `rep` as its
 representation, and returns a new handle pointing to the new resource.
 
-In the Canonical ABI, `repr<T>` is a `u32`, and the new handle is returned
-returning the `i32` index of a new handle pointing to this
-resource.
+In the Canonical ABI, `T.rep` is defined to be the `$rep` in the
+`(type $T (resource (rep $rep) ...))` type definition that defined `T`. While
+it's designed to allow different types in the future, it is currently hard-coded
+to always be `i32`.
+
 (See also [`canon_resource_new`] in the Canonical ABI explainer.)
 
 ###### `resource.drop`
@@ -1472,18 +1474,20 @@ eagerly) or the index of the in-progress drop task.
 
 ###### `resource.rep`
 
-| Synopsis                   |                            |
-| -------------------------- | -------------------------- |
-| Approximate WIT signature  | `func<T>(t: T) -> repr<T>` |
-| Canonical ABI signature    | `[t:i32] -> [i32]`         |
+| Synopsis                   |                          |
+| -------------------------- | ------------------------ |
+| Approximate WIT signature  | `func<T>(t: T) -> T.rep` |
+| Canonical ABI signature    | `[t:i32] -> [i32]`       |
 
 The `resource.rep` built-in returns the
 representation of the resource (with resource type `T`) pointed to by the
 handle `t`. Validation only allows `resource.rep T` to be used within the component
 that defined `T`.
 
-In the Canonical ABI, `repr<T>` is a `u32`, and the handle argument is passed
-as the `i32` index of the handle.
+In the Canonical ABI, `T.rep` is defined to be the `$rep` in the
+`(type $T (resource (rep $rep) ...))` type definition that defined `T`. While
+it's designed to allow different types in the future, it is currently hard-coded
+to always be `i32`.
 
 As an example, the following component imports the `resource.new` built-in,
 allowing it to create and return new resources to its client:
