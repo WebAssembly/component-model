@@ -2387,6 +2387,7 @@ For some use-case-focused, worked examples, see:
 [`rectype`]: https://webassembly.github.io/gc/core/text/types.html#text-rectype
 [shared-everything-threads]: https://github.com/WebAssembly/shared-everything-threads
 [WASI Preview 2]: https://github.com/WebAssembly/WASI/tree/main/wasip2#readme
+[reference types]: https://github.com/WebAssembly/reference-types/blob/master/proposals/reference-types/Overview.md
 
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Canonical ABI explainer]: CanonicalABI.md
