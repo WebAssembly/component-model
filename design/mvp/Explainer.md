@@ -1600,7 +1600,7 @@ subtasks. (See also [Waiting](Async.md#waiting) in the async explainer and
 | Approximate WIT signature  | `func() -> option<event> `          |
 | Canonical ABI signature    | `[event_addr:i32] -> [is_some:i32]` |
 
-where `event`, `event-kind`, and `payload` are defined as in [🔀 `task.wait`].
+where `event`, `event-kind`, and `payload` are defined as in [`task.wait`](#-taskwait).
 
 The `task.poll` built-in returns either `none` if no event was immediately
 available, or `some` containing an event code and payload.
