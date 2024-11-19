@@ -657,7 +657,7 @@ the full range of flexibility to:
 A consequence of this, however, is that components *must not* depend on the
 contents of `error-context` values for behavioral correctness. In particular,
 case analysis of the contents of an `error-context` should not determine
-*error receovery*; explicit `result` or `variant` types must be used in the
+*error recovery*; explicit `result` or `variant` types must be used in the
 function return type instead (e.g.,
 `(func (result (tuple (stream u8) (future $my-error)))`).
 
@@ -937,7 +937,7 @@ Next, the type equality relation on ASTs is relaxed to a more flexible
 `component` types, but may be relaxed for more type constructors in the future
 to better support API Evolution (being careful to understand how subtyping
 manifests itself in the wide variety of source languages so that
-subtype-compatible updates don't inadvertantly break source-level clients).
+subtype-compatible updates don't inadvertently break source-level clients).
 
 Component and instance subtyping allows a subtype to export more and import
 less than is declared by the supertype, ignoring the exact order of imports and
@@ -1839,7 +1839,7 @@ Components provide six options for naming imports:
 * a **URL name** that the component is requesting be resolved to a *particular*
   wasm implementation by [fetching] the URL.
 * a **hash name** containing a content-hash of the bytes of a *particular*
-  wasm implemenentation but not specifying location of the bytes.
+  wasm implementation but not specifying location of the bytes.
 * a **locked dependency name** that the component is requesting be resolved via
   some contextually-supplied registry to a *particular* wasm implementation
   using the given hierarchical name and version; and
@@ -1937,7 +1937,7 @@ language/convention. The highly-restricted character set ensures that
 capitalization is trivial and does not require consulting Unicode tables.
 
 Because some casing schemes (such as all-lowercase) would lead to clashes if
-two `label`s differed only in case, in all cases where "uniquness" is required
+two `label`s differed only in case, in all cases where "uniqueness" is required
 between a set of names (viz., import/export names, record field labels, variant
 case labels, and function parameter/result names), two `label`s that differ
 only in case are considered equal and thus rejected.
