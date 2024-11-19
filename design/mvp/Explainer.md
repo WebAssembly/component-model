@@ -1637,7 +1637,7 @@ enum stream-status {
    // The operation did not complete immediately, so callers must wait for
    // the operation to complete by using `task.wait` or by returning to the
    // event loop.
-   blocked,
+   blocked(task),
 
    // The stream is closed. For reading, the end of the stream has been
    // reached. For writing, the reader is no longer reading data.
