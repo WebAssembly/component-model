@@ -1474,7 +1474,8 @@ eagerly) or the index of the in-progress drop.
 
 The `resource.rep` built-in returns the
 representation of the resource (with resource type `T`) pointed to by the
-handle `t`.
+handle `t`. Validation only allows `resource.rep T` to be used within the component
+that defined `T`.
 
 As an example, the following component imports the `resource.new` built-in,
 allowing it to create and return new resources to its client:
