@@ -1537,8 +1537,8 @@ also [Returning](Async.md#returning) in the async explainer and
 
 | Synopsis                   |                                           |
 | -------------------------- | ----------------------------------------- |
-| Conceptual signature       | `func() -> [kind:event, payload:payload]` |
-| Canonical ABI signature    | `[payload_addr:i32] -> [kind:i32]`        |
+| Conceptual signature       | `func() -> record { kind: event, payload1: u32, payload2: u32 }` |
+| Canonical ABI signature    | `[payloads_addr:i32] -> [kind:i32]`        |
 
 ```wit
 enum event {
@@ -1569,7 +1569,7 @@ subtasks. (See also [Waiting](Async.md#waiting) in the async explainer and
 
 | Synopsis                   |                                                          |
 | -------------------------- | -------------------------------------------------------- |
-| Conceptual signature       | `func() -> [option<tuple<kind:event, payload:payload>>]` |
+| Conceptual signature       | `func() -> option<record { kind: event, payload1: u32, payload2:u32 }> ` |
 | Canonical ABI signature    | `[tuple_addr:i32] -> [is_some:i32]`                      |
 
 The `task.poll` built-in returns either `none` if no event was immediately
