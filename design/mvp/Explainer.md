@@ -1391,8 +1391,8 @@ broken using an auxiliary module performing `call_indirect`.
 In addition to the `lift` and `lower` canonical function definitions which
 adapt *existing* functions, there are also a set of canonical "built-ins" that
 define core functions out of nothing that can be imported by core modules to
-dynamically interact with Canonical ABI entities like resources (and, when
-async is added to the proposal, [tasks][Future and Stream Types] 🔀).
+dynamically interact with Canonical ABI entities like resources and
+[tasks][Future and Stream Types] 🔀.
 ```ebnf
 canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
