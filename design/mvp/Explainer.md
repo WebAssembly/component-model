@@ -1681,6 +1681,8 @@ In the Canonical ABI, the buffer is passed as a pointer to a buffer
 in linear memory and the size in elements of the buffer. (See
 [`canon_stream_read`] in the Canonical ABI explainer for details.)
 
+TODO: Describe how `read-status` is mapped to the `i32` return.
+
 ###### 🔀 `stream.write`
 
 | Synopsis                   |                                                             |
@@ -1716,6 +1718,8 @@ indicating that the stream is closed (`closed`).
 In the Canonical ABI, the buffer is passed as a pointer to a buffer
 in linear memory and the size in elements of the buffer. (See
 [`canon_stream_write`] in the Canonical ABI explainer for details.)
+
+TODO: Describe how `write-status` is mapped to the `i32` return.
 
 ###### 🔀 `future.read` and `future.write`
 
@@ -1753,6 +1757,11 @@ that the future is closed (`closed`).
 In the Canonical ABI, the buffer is passed as a pointer to a buffer
 in linear memory. (See
 (See [`canon_future_read`] in the Canonical ABI explainer for details.)
+
+TODO: Describe how `future-status` is mapped to the `i32` return.
+TODO: Should `blocked` have a `task`?
+TODO: Should `closed` have an `error-context` for the `future.read` case?
+TODO: Should there be separate readable-one-buffer and writable-one-buffer types?
 
 ###### 🔀 `stream.cancel-read`, `stream.cancel-write`, `future.cancel-read`, and `future.cancel-write`
 
@@ -1798,6 +1807,10 @@ loop is equivalent to a `task.wait`, and a
 completion of the `read`
 or `write`. (See [`canon_stream_cancel_read`] in the Canonical ABI explainer
 for details.)
+
+TODO: Describe how `cancel-status` is mapped to the `i32` return.
+TODO: Should `blocked` have a `task`?
+TODO: Should `closed` have an `error-context` for the `future.cancel-read` and `stream.cancel-read` cases?
 
 ###### 🔀 `stream.close-readable`, `stream.close-writable`, `future.close-readable`, and `future.close-writable`
 
