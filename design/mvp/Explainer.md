@@ -1817,14 +1817,14 @@ TODO: Should `closed` have an `error-context` for the `future.cancel-read` and `
 
 ###### 🔀 `stream.close-readable`, `stream.close-writable`, `future.close-readable`, and `future.close-writable`
 
-| Synopsis                                            |                                    |
-| --------------------------------------------------- | ---------------------------------- |
-| Approximate WIT signature for `stream.close-read`  | `func<T>(in: readable-stream<T>)`  |
+| Synopsis                                           |                                   |
+| -------------------------------------------------- | --------------------------------- |
+| Approximate WIT signature for `stream.close-read`  | `func<T>(in: readable-stream<T>)` |
 | Approximate WIT signature for `stream.close-write` | `func<T>(out: writable-stream<T>, err: option<error-context>)` |
-| Approximate WIT signature for `future.close-read`  | `func<T>(in: readable-future<T>)`  |
+| Approximate WIT signature for `future.close-read`  | `func<T>(in: readable-future<T>)` |
 | Approximate WIT signature for `future.close-write` | `func<T>(out: writable-future<T>, err: option<error-context>)` |
-| Canonical ABI signature for `*.close-read`          | `[i32] -> []`                     |
-| Canonical ABI signature for `*.close-write`         | `[i32, i32] -> []`                |
+| Canonical ABI signature for `*.close-read`         | `[i32] -> []`                     |
+| Canonical ABI signature for `*.close-write`        | `[i32, i32] -> []`                |
 
 The `{stream,future}.close-{readable,writable}` built-ins
 remove the indicated [stream or future](Async.md#streams-and-futures)
