@@ -1436,7 +1436,10 @@ canon ::= ...
 
 The `resource.new` built-in creates a new
 resource (with resource type `T`) with `repr` as its
-representation and returning the `i32` index of a new handle pointing to this
+representation, and returns a new handle pointing to the new resource.
+
+In the Canonical ABI, `repr<T>` is a `u32`, and the new handle is returned
+returning the `i32` index of a new handle pointing to this
 resource.
 
 ###### `resource.drop`
@@ -1476,6 +1479,9 @@ The `resource.rep` built-in returns the
 representation of the resource (with resource type `T`) pointed to by the
 handle `t`. Validation only allows `resource.rep T` to be used within the component
 that defined `T`.
+
+In the Canonical ABI, `repr<T>` is a `u32`, and the handle argument is passed
+tshe `i32` index of the handle.
 
 As an example, the following component imports the `resource.new` built-in,
 allowing it to create and return new resources to its client:
