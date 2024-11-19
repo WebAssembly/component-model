@@ -582,7 +582,7 @@ made by async subtasks, streams or futures which are reported to this task by
       if (e := self.maybe_next_event()):
         return e
 
-  def maybe_next_event(self) -> EventTuple:
+  def maybe_next_event(self) -> Optional[EventTuple]:
     while self.events:
       event = self.events.pop(0)
       if (e := event()):
