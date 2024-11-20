@@ -1671,7 +1671,7 @@ enum read-status {
    // The operation did not complete immediately, so callers must wait for
    // the operation to complete by using `task.wait` or by returning to the
    // event loop.
-   blocked(task),
+   blocked,
 
    // The end of the stream has been reached.
    closed(option<error-context>),
