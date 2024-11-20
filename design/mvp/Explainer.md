@@ -1435,7 +1435,7 @@ canon ::= ...
 | Canonical ABI signature    | `[rep:i32] -> [i32]`       |
 
 The `resource.new` built-in creates a new
-resource (with resource type `T`) with `rep` as its
+resource (of resource type `T`) with `rep` as its
 representation, and returns a new handle pointing to the new resource.
 Validation only allows `resource.rep T` to be used within the component
 that defined `T`.
