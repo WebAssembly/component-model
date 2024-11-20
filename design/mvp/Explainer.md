@@ -1739,7 +1739,7 @@ in linear memory and the size in elements of the buffer. (See
 | Canonical ABI signature                      | `[future:i32 ptr:i32] -> [i32]`                                                     |
 
 where `read-status` is defined as in [`stream.read`](#-streamread)
-and `write-status` is defined as in [`stream.write`].
+and `write-status` is defined as in [`stream.write`](#-streamwrite).
 
 The `future.{read,write}` built-ins
 take the matching [readable or writable end](Async.md#streams-and-futures)
@@ -1769,7 +1769,7 @@ in linear memory.
 | Canonical ABI signature                             | `[i32] -> [i32]`                                    |
 
 where `read-status` is defined as in [`stream.read`](#-streamread)
-and `write-status` is defined as in [`stream.write`]. For `futures.*`, the
+and `write-status` is defined as in [`stream.write`](#-streamwrite). For `futures.*`, the
 number of elements returned when the value is `complete` is always `1`.
 
 The `stream.cancel-read`, `stream.cancel-write`, `future.cancel-read`, and `future.cancel-write`
