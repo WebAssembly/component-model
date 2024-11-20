@@ -1739,8 +1739,7 @@ in linear memory and the size in elements of the buffer. (See
 | Canonical ABI signature                      | `[future:i32 ptr:i32] -> [i32]`                                                     |
 
 where `read-status` is defined as in [`stream.read`](#-streamread)
-and `write-status` is defined as in [`stream.write`]. The number of elements
-returned when the value is `complete` is always `1`.
+and `write-status` is defined as in [`stream.write`].
 
 The `future.{read,write}` built-ins
 take the matching [readable or writable end](Async.md#streams-and-futures)
@@ -1749,6 +1748,11 @@ read into or write from. The return value is either `complete` if the future
 value was eagerly read or written, a sentinel indicating that the
 operation did not complete yet (`blocked`), or a sentinel indicating
 that the future is closed (`closed`).
+
+The number of elements returned when the value is `complete` is at most `1`.
+
+The `..1` in the buffer types indicates that these buffers may hold at most
+one element.
 
 In the Canonical ABI, the buffer is passed as a pointer to a buffer
 in linear memory.
