@@ -1559,34 +1559,34 @@ also [Returning](Async.md#returning) in the async explainer and
 | Approximate WIT signature  | `func() -> event`                        |
 | Canonical ABI signature    | `[payload_addr:i32] -> [event-kind:i32]` |
 
-where `event-kind` is defined in WIT as:
-```wit
-enum event-kind {
-  call-starting,
-  call-started,
-  call-returned,
-  call-done,
-  yielded,
-  stream-read,
-  stream-write,
-  future-read,
-  future-write,
-}
-```
-
-`payload` is defined in WIT as:
-```wit
-record payload {
-    payload1: u32,
-    payload2: u32,
-}
-```
-
-and `event` is defined in WIT as:
+where `event` is defined in WIT as:
 ```wit
 record event {
     kind: event-kind,
     payload: payload,
+}
+```
+
+`event-kind` is defined in WIT as:
+```wit
+enum event-kind {
+    call-starting,
+    call-started,
+    call-returned,
+    call-done,
+    yielded,
+    stream-read,
+    stream-write,
+    future-read,
+    future-write,
+}
+```
+
+and `payload` is defined in WIT as:
+```wit
+record payload {
+    payload1: u32,
+    payload2: u32,
 }
 ```
 
@@ -1676,32 +1676,33 @@ and the WIT `future<T>`.
 where `read-status` is defined in WIT as:
 ```wit
 enum read-status {
-   // The operation completed and read this many elements.
-   complete(u32),
+    // The operation completed and read this many elements.
+    complete(u32),
 
-   // The operation did not complete immediately, so callers must wait for
-   // the operation to complete by using `task.wait` or by returning to the
-   // event loop.
-   blocked,
+    // The operation did not complete immediately, so callers must wait for
+    // the operation to complete by using `task.wait` or by returning to the
+    // event loop.
+    blocked,
 
-   // The end of the stream has been reached.
-   closed(option<error-context>),
+    // The end of the stream has been reached.
+    closed(option<error-context>),
 }
 ```
 
-and `write-status` is defined in WIT as:
+and `write-status` is the same as `read-status` except without the optional
+error on `closed`, so it is defined in WIT as:
 ```wit
 enum write-status {
-   // The operation completed and wrote this many elements.
-   complete(u32),
+    // The operation completed and wrote this many elements.
+    complete(u32),
 
-   // The operation did not complete immediately, so callers must wait for
-   // the operation to complete by using `task.wait` or by returning to the
-   // event loop.
-   blocked,
+    // The operation did not complete immediately, so callers must wait for
+    // the operation to complete by using `task.wait` or by returning to the
+    // event loop.
+    blocked,
 
-   // The reader is no longer reading data.
-   closed,
+    // The reader is no longer reading data.
+    closed,
 }
 ```
 
@@ -1730,7 +1731,7 @@ in linear memory and the size in elements of the buffer. (See
 
 (See [`pack_async_copy_result`] in the Canonical ABI explainer for details.)
 
-###### 🔀 `future.read`
+###### 🔀 `future.read` and `future.write`
 
 | Synopsis                                     |                                                                                     |
 | -------------------------------------------- | ----------------------------------------------------------------------------------- |
@@ -1769,8 +1770,7 @@ in linear memory.
 | Canonical ABI signature                             | `[i32] -> [i32]`                                    |
 
 where `read-status` is defined as in [`stream.read`](#-streamread)
-and `write-status` is defined as in [`stream.write`](#-streamwrite). For `futures.*`, the
-number of elements returned when the value is `complete` is always `1`.
+and `write-status` is defined as in [`stream.write`](#-streamwrite).
 
 The `stream.cancel-read`, `stream.cancel-write`, `future.cancel-read`, and `future.cancel-write`
 built-ins
@@ -1782,6 +1782,9 @@ or written into the given buffer (`0` or `1` for a `future`). If cancellation
 blocks, the return value is `blocked` and the caller
 must `task.wait`. If the stream or future is closed, the return value is
 `closed`.
+
+For `futures.*`, the
+number of elements returned when the value is `complete` is always `1`.
 
 In the Canonical ABI with the `callback` option, returning to the event
 loop is equivalent to a `task.wait`, and a
