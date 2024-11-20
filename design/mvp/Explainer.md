@@ -1666,7 +1666,7 @@ where `read-status` is defined in WIT as:
 ```wit
 enum read-status {
    // The operation completed and read this many elements.
-   complete(u64),
+   complete(u32),
 
    // The operation did not complete immediately, so callers must wait for
    // the operation to complete by using `task.wait` or by returning to the
@@ -1706,7 +1706,7 @@ where `write-status` is defined in WIT as:
 ```wit
 enum write-status {
    // The operation completed and wrote this many elements.
-   complete(u64),
+   complete(u32),
 
    // The operation did not complete immediately, so callers must wait for
    // the operation to complete by using `task.wait` or by returning to the
@@ -1789,7 +1789,7 @@ where `cancel-status` is defined in WIT as:
 ```wit
 enum cancel-status {
    // The operation completed and read or wrote this many elements.
-   complete(u64),
+   complete(u32),
 
    // The operation did not complete immediately, so callers must wait for
    // the operation to complete by using `task.wait` or by returning to the
