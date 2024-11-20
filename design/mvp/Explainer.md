@@ -1634,7 +1634,7 @@ ABI explainer.)
 
 | Synopsis                   |                       |
 | -------------------------- | --------------------- |
-| Approximate WIT signature  | `func(subtask: task)` |
+| Approximate WIT signature  | `func(subtask: subtask)` |
 | Canonical ABI signature    | `[i32] -> []`         |
 
 The `subtask.drop` built-in removes the indicated
