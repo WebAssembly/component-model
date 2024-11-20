@@ -1798,17 +1798,19 @@ for details.)
 | Approximate WIT signature for `stream.close-writable` | `func<T>(out: writable-stream<T>, err: option<error-context>)` |
 | Approximate WIT signature for `future.close-readable` | `func<T>(in: readable-future<T>)` |
 | Approximate WIT signature for `future.close-writable` | `func<T>(out: writable-future<T>, err: option<error-context>)` |
-| Canonical ABI signature for `*.close-readable`        | `[i32] -> []`                     |
-| Canonical ABI signature for `*.close-writable`        | `[i32, i32] -> []`                |
+| Canonical ABI signature for `*.close-readable`        | `[in:i32] -> []`                  |
+| Canonical ABI signature for `*.close-writable`        | `[out:i32, err:i32] -> []`        |
 
 The `{stream,future}.close-{readable,writable}` built-ins
 remove the indicated [stream or future](Async.md#streams-and-futures)
 from the current component instance's [waitables](Async.md#waiting) table,
 trapping if the stream or future has a mismatched direction or type or are in
 the middle of a `read` or `write`.
-(See also [the `close` built-ins] in the Canonical ABI explainer.)
 
-TODO: Describe how the `option<error-context>` is represented as i32 in the Canonical ABI.
+In the Canonical ABI, an `err` value of `0` represents `none`, and a non-zero
+value represents `some` of the index of an `error-context` in the instance's
+table.
+(See also [the `close` built-ins] in the Canonical ABI explainer.)
 
 ##### 🔀 Error Context built-ins
 
