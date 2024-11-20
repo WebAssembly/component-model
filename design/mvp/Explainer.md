@@ -1720,8 +1720,8 @@ enum write-status {
 
 The `stream.write` built-in
 takes the matching [writable end](Async.md#streams-and-futures)
-of a stream as the first parameter and a buffer for `T` values to
-write from.
+of a stream as the first parameter and a buffer from which the `T` values are
+to be read by the readable end of the stream.
 The return value is either the number of elements (possibly zero) that have
 been eagerly written, a sentinel indicating
 that the operation did not complete yet (`blocked`), or a sentinel
