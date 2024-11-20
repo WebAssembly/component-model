@@ -1667,10 +1667,11 @@ and the WIT `future<T>`.
 
 ###### 🔀 `stream.read`
 
-| Synopsis                   |                                                             |
-| -------------------------- | ----------------------------------------------------------- |
-| Approximate WIT signature  | `func<T>(stream: readable-stream<T>, buffer: readable-buffer<T>) -> read-status`  |
-| Canonical ABI signature    | `[stream:i32 ptr:i32 num:i32] -> [i32]`                     |
+| Synopsis                   |                                                                                   |
+| -------------------------- | --------------------------------------------------------------------------------- |
+| Approximate WIT signature  | `func<T>(stream: readable-stream<T>, buffer: writable-buffer<T>) -> read-status`  |
+| Approximate WIT signature  | `func<T>(stream: writable-stream<T>, buffer: readable-buffer<T>) -> write-status` |
+| Canonical ABI signature    | `[stream:i32 ptr:i32 num:i32] -> [i32]`                                           |
 
 where `read-status` is defined in WIT as:
 ```wit
@@ -1688,39 +1689,7 @@ enum read-status {
 }
 ```
 
-The `stream.read` built-in
-takes the matching [readable end](Async.md#streams-and-futures)
-of a stream as the first parameter and a buffer for the `T` values read from
-the stream to be written into.
-The return value is either the number of elements (possibly zero) that have
-been eagerly read, a sentinel indicating
-that the operation did not complete yet (`blocked`), or a sentinel
-indicating that the stream is closed (`closed`) along with an
-optional error context describing the error that caused to the
-stream to close.
-
-In the Canonical ABI, the buffer is passed as a pointer to a buffer
-in linear memory and the size in elements of the buffer. (See
-[`canon_stream_read`] in the Canonical ABI explainer for details.)
-
-`read-status` is lowered in the Canonical ABI as:
- - The value `0xffff_ffff` represents `blocked`.
- - Otherwise, if the bit `0x8000_0000` is set, the value represents `closed`,
-   with the bits `0x7fff_ffff` representing the index of the `error-context`
-   in the instance's `error-context` table.
- - Otherwise, the value represents `complete` and contains the number of
-   element read.
-
-(See [`pack_async_copy_result`] in the Canonical ABI explainer for details.)
-
-###### 🔀 `stream.write`
-
-| Synopsis                   |                                                             |
-| -------------------------- | ----------------------------------------------------------- |
-| Approximate WIT signature  | `func<T>(stream: writable-stream<T>, buffer: writable-buffer<T>) -> write-status`  |
-| Canonical ABI signature    | `[stream:i32 ptr:i32 num:i32] -> [i32]`                     |
-
-where `write-status` is defined in WIT as:
+and `write-status` is defined in WIT as:
 ```wit
 enum write-status {
    // The operation completed and wrote this many elements.
@@ -1729,61 +1698,49 @@ enum write-status {
    // The operation did not complete immediately, so callers must wait for
    // the operation to complete by using `task.wait` or by returning to the
    // event loop.
-   blocked(task),
+   blocked,
 
    // The reader is no longer reading data.
    closed,
 }
 ```
 
-The `stream.write` built-in
-takes the matching [writable end](Async.md#streams-and-futures)
-of a stream as the first parameter and a buffer from which the `T` values are
-to be read by the readable end of the stream.
+The `stream.read` and `stream.write` built-ins
+take the matching [readable or writable end](Async.md#streams-and-futures)
+of a stream as the first parameter and a buffer for the `T` values to be read
+from or written to.
 The return value is either the number of elements (possibly zero) that have
-been eagerly written, a sentinel indicating
+been eagerly read or written, a sentinel indicating
 that the operation did not complete yet (`blocked`), or a sentinel
-indicating that the stream is closed (`closed`).
+indicating that the stream is closed (`closed`). For reads, `closed` has an
+optional error context describing the error that caused to the
+stream to close.
 
 In the Canonical ABI, the buffer is passed as a pointer to a buffer
 in linear memory and the size in elements of the buffer. (See
-[`canon_stream_write`] in the Canonical ABI explainer for details.)
+[`canon_stream_read`] in the Canonical ABI explainer for details.)
 
-`write-status` is lowered in the Canonical ABI as:
+`read-status` and `write-status` are lowered in the Canonical ABI as:
  - The value `0xffff_ffff` represents `blocked`.
-   TODO: How is `task` encoded?
- - Otherwise, if the bit `0x8000_0000` is set, the value represents `closed`,
-   with the bits `0x7fff_ffff` representing the index of the `error-context`
-   in the instance's `error-context` table.
+ - Otherwise, if the bit `0x8000_0000` is set, the value represents `closed`.
+   For `read-status`, the bits `0x7fff_ffff` contain the index of an
+   `error-context` in the instance's `error-context` table.
  - Otherwise, the value represents `complete` and contains the number of
-   element written.
+   element read or written.
 
 (See [`pack_async_copy_result`] in the Canonical ABI explainer for details.)
 
-###### 🔀 `future.read` and `future.write`
+###### 🔀 `future.read`
 
-| Synopsis                                     |                                                                   |
-| -------------------------------------------- | ----------------------------------------------------------------- |
-| Approximate WIT signature for `future.read`  | `func<T>(in: future<T>, buffer: one-buffer<T>) -> future-status`  |
-| Approximate WIT signature for `future.write` | `func<T>(out: future<T>, buffer: one-buffer<T>) -> future-status` |
-| Canonical ABI signature                      | `[future:i32 ptr:i32] -> [i32]`                                   |
+| Synopsis                                     |                                                                                     |
+| -------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Approximate WIT signature for `future.read`  | `func<T>(in: readable-future<T>, buffer: writable-buffer<T; ..1>) -> read-status`   |
+| Approximate WIT signature for `future.write` | `func<T>(out: writable-future<T>, buffer: readable-buffer<T; ..1>) -> write-status` |
+| Canonical ABI signature                      | `[future:i32 ptr:i32] -> [i32]`                                                     |
 
-where `future-status` is defined in WIT as:
-```wit
-enum future-status {
-   // The operation completed and read or wrote the value.
-   complete,
-
-   // The operation did not complete immediately, so callers must wait for
-   // the operation to complete by using `task.wait` or by returning to the
-   // event loop.
-   blocked,
-
-   // The stream is closed. For reading, the end of the stream has been
-   // reached. For writing, the reader is no longer reading data.
-   closed,
-}
-```
+where `read-status` is defined as in [`stream.read`](#-streamread)
+and `write-status` is defined as in [`stream.write`]. The number of elements
+returned when the value is `complete` is always `1`.
 
 The `future.{read,write}` built-ins
 take the matching [readable or writable end](Async.md#streams-and-futures)
@@ -1797,45 +1754,19 @@ In the Canonical ABI, the buffer is passed as a pointer to a buffer
 in linear memory.
 (See [`canon_future_read`] in the Canonical ABI explainer for details.)
 
-`future-status` is lowered in the Canonical ABI as:
- - The value `0xffff_ffff` represents `blocked`.
- - Otherwise, if the bit `0x8000_0000` is set, the value represents `closed`,
-   with the bits `0x7fff_ffff` representing the index of the `error-context`
-   in the instance's `error-context` table.
- - Otherwise, the value represents `complete` and contains the value `1`.
-
-(See [`pack_async_copy_result`] in the Canonical ABI explainer for details.)
-
-TODO: Should `blocked` have a `task`?
-TODO: Should `closed` have an `error-context` for the `future.read` case?
-TODO: Should there be separate readable-one-buffer and writable-one-buffer types?
-
 ###### 🔀 `stream.cancel-read`, `stream.cancel-write`, `future.cancel-read`, and `future.cancel-write`
 
 | Synopsis                                            |                                                     |
 | --------------------------------------------------- | --------------------------------------------------- |
-| Approximate WIT signature for `stream.cancel-read`  | `func<T>(in: readable-stream<T>) -> cancel-status`  |
-| Approximate WIT signature for `stream.cancel-write` | `func<T>(out: writable-stream<T>) -> cancel-status` |
-| Approximate WIT signature for `future.cancel-read`  | `func<T>(in: readable-future<T>) -> cancel-status`  |
-| Approximate WIT signature for `future.cancel-write` | `func<T>(out: writable-future<T>) -> cancel-status` |
+| Approximate WIT signature for `stream.cancel-read`  | `func<T>(in: readable-stream<T>) -> read-status`    |
+| Approximate WIT signature for `stream.cancel-write` | `func<T>(out: writable-stream<T>) -> write-status`  |
+| Approximate WIT signature for `future.cancel-read`  | `func<T>(in: readable-future<T>) -> read-status`    |
+| Approximate WIT signature for `future.cancel-write` | `func<T>(out: writable-future<T>) -> write-status`  |
 | Canonical ABI signature                             | `[i32] -> [i32]`                                    |
 
-where `cancel-status` is defined in WIT as:
-```wit
-enum cancel-status {
-   // The operation completed and read or wrote this many elements.
-   complete(u32),
-
-   // The operation did not complete immediately, so callers must wait for
-   // the operation to complete by using `task.wait` or by returning to the
-   // event loop.
-   blocked,
-
-   // The stream is closed. For reading, the end of the stream has been
-   // reached. For writing, the reader is no longer reading data.
-   closed,
-}
-```
+where `read-status` is defined as in [`stream.read`](#-streamread)
+and `write-status` is defined as in [`stream.write`]. For `futures.*`, the
+number of elements returned when the value is `complete` is always `1`.
 
 The `stream.cancel-read`, `stream.cancel-write`, `future.cancel-read`, and `future.cancel-write`
 built-ins
@@ -1855,20 +1786,16 @@ completion of the `read`
 or `write`. (See [`canon_stream_cancel_read`] in the Canonical ABI explainer
 for details.)
 
-TODO: Describe how `cancel-status` is mapped to the `i32` return.
-TODO: Should `blocked` have a `task`?
-TODO: Should `closed` have an `error-context` for the `future.cancel-read` and `stream.cancel-read` cases?
-
 ###### 🔀 `stream.close-readable`, `stream.close-writable`, `future.close-readable`, and `future.close-writable`
 
-| Synopsis                                           |                                   |
-| -------------------------------------------------- | --------------------------------- |
-| Approximate WIT signature for `stream.close-read`  | `func<T>(in: readable-stream<T>)` |
-| Approximate WIT signature for `stream.close-write` | `func<T>(out: writable-stream<T>, err: option<error-context>)` |
-| Approximate WIT signature for `future.close-read`  | `func<T>(in: readable-future<T>)` |
-| Approximate WIT signature for `future.close-write` | `func<T>(out: writable-future<T>, err: option<error-context>)` |
-| Canonical ABI signature for `*.close-read`         | `[i32] -> []`                     |
-| Canonical ABI signature for `*.close-write`        | `[i32, i32] -> []`                |
+| Synopsis                                              |                                   |
+| ----------------------------------------------------- | --------------------------------- |
+| Approximate WIT signature for `stream.close-readable` | `func<T>(in: readable-stream<T>)` |
+| Approximate WIT signature for `stream.close-writable` | `func<T>(out: writable-stream<T>, err: option<error-context>)` |
+| Approximate WIT signature for `future.close-readable` | `func<T>(in: readable-future<T>)` |
+| Approximate WIT signature for `future.close-writable` | `func<T>(out: writable-future<T>, err: option<error-context>)` |
+| Canonical ABI signature for `*.close-readable`        | `[i32] -> []`                     |
+| Canonical ABI signature for `*.close-writable`        | `[i32, i32] -> []`                |
 
 The `{stream,future}.close-{readable,writable}` built-ins
 remove the indicated [stream or future](Async.md#streams-and-futures)
@@ -2776,7 +2703,6 @@ For some use-case-focused, worked examples, see:
 [`canon_task_backpressure`]: CanonicalABI.md#-canon-taskbackpressure
 [`canon_stream_new`]: CanonicalABI.md#-canon-streamfuturenew
 [`canon_stream_read`]: CanonicalABI.md#-canon-streamfuturereadwrite
-[`canon_stream_write`]: CanonicalABI.md#-canon-streamfuturereadwrite
 [`canon_future_read`]: CanonicalABI.md#-canon-streamfuturereadwrite
 [`canon_stream_cancel_read`]: CanonicalABI.md#-canon-streamfuturecancel-readwrite
 [`canon_subtask_drop`]: CanonicalABI.md#-canon-subtaskdrop
