@@ -1644,16 +1644,26 @@ table, trapping if the subtask isn't done.
 
 ###### 🔀 `stream.new` and `future.new`
 
-| Synopsis                                   |                          |
-| ------------------------------------------ | ------------------------ |
-| Approximate WIT signature for `stream.new` | `func<T>() -> stream<T>` |
-| Approximate WIT signature for `future.new` | `func<T>() -> future<T>` |
-| Canonical ABI signature                    | `[] -> [i32]`            |
+| Synopsis                                   |                                   |
+| ------------------------------------------ | --------------------------------- |
+| Approximate WIT signature for `stream.new` | `func<T>() -> writable-stream<T>` |
+| Approximate WIT signature for `future.new` | `func<T>() -> writable-future<T>` |
+| Canonical ABI signature                    | `[] -> [i32]`                     |
 
 The `stream.new` and `future.new` built-ins return the
 [writable end](Async.md#streams-and-futures) of a new `stream<T>` or
 `future<T>`. (See
 [`canon_stream_new`] in the Canonical ABI explainer for details.)
+
+The types `readable-stream<T>` and `writable-stream<T>` are not WIT types; they
+are the conceptual lower-level types that describe how the canonical built-ins use
+the readable and writable ends of a `stream<T>`. `writable-stream<T>`s are obtained
+from `stream.new` and from lowering a `stream<T>` in a function return type, and
+`readable-stream<T>`s are obtained from lowering a `stream<T>` in a function
+parameter type.
+
+The same relationship exists among `readable-future<T>`, `writable-future<T>`,
+and the WIT `future<T>`.
 
 ###### 🔀 `stream.read`
 
