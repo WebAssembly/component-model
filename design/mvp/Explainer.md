@@ -1680,7 +1680,8 @@ enum read-status {
 
 The `stream.read` built-in
 takes the matching [readable end](Async.md#streams-and-futures)
-of a stream as the first parameter and a buffer for `T` values to read into.
+of a stream as the first parameter and a buffer for the `T` values read from
+the stream to be written into.
 The return value is either the number of elements (possibly zero) that have
 been eagerly read, a sentinel indicating
 that the operation did not complete yet (`blocked`), or a sentinel
