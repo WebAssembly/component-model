@@ -1632,10 +1632,10 @@ ABI explainer.)
 
 ###### 🔀 `subtask.drop`
 
-| Synopsis                   |                       |
-| -------------------------- | --------------------- |
+| Synopsis                   |                          |
+| -------------------------- | ------------------------ |
 | Approximate WIT signature  | `func(subtask: subtask)` |
-| Canonical ABI signature    | `[i32] -> []`         |
+| Canonical ABI signature    | `[subtask:i32] -> []`    |
 
 The `subtask.drop` built-in removes the indicated
 [subtask](Async.md#subtask-and-supertask) from the current instance's subtask
@@ -1662,7 +1662,7 @@ from `stream.new` and from lowering a `stream<T>` in a function return type, and
 `readable-stream<T>`s are obtained from lowering a `stream<T>` in a function
 parameter type.
 
-The same relationship exists among `readable-future<T>`, `writable-future<T>`,
+An analogous relationship exists among `readable-future<T>`, `writable-future<T>`,
 and the WIT `future<T>`.
 
 ###### 🔀 `stream.read`
@@ -1724,7 +1724,7 @@ in linear memory and the size in elements of the buffer. (See
 `read-status` and `write-status` are lowered in the Canonical ABI as:
  - The value `0xffff_ffff` represents `blocked`.
  - Otherwise, if the bit `0x8000_0000` is set, the value represents `closed`.
-   For `read-status`, the bits `0x7fff_ffff` contain the index of an
+   For `read-status`, the remaining bits `0x7fff_ffff` contain the index of an
    `error-context` in the instance's `error-context` table.
  - Otherwise, the value represents `complete` and contains the number of
    element read or written.
@@ -1802,7 +1802,7 @@ for details.)
 | Approximate WIT signature for `future.close-readable` | `func<T>(in: readable-future<T>)` |
 | Approximate WIT signature for `future.close-writable` | `func<T>(out: writable-future<T>, err: option<error-context>)` |
 | Canonical ABI signature for `*.close-readable`        | `[in:i32] -> []`                  |
-| Canonical ABI signature for `*.close-writable`        | `[out:i32, err:i32] -> []`        |
+| Canonical ABI signature for `*.close-writable`        | `[out:i32 err:i32] -> []`         |
 
 The `{stream,future}.close-{readable,writable}` built-ins
 remove the indicated [stream or future](Async.md#streams-and-futures)
