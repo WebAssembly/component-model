@@ -1703,7 +1703,15 @@ In the Canonical ABI, the buffer is passed as a pointer to a buffer
 in linear memory and the size in elements of the buffer. (See
 [`canon_stream_read`] in the Canonical ABI explainer for details.)
 
-TODO: Describe how `read-status` is mapped to the `i32` return.
+`read-status` is lowered in the Canonical ABI as:
+ - The value `0xffff_ffff` represents `blocked`.
+ - Otherwise, if the bit `0x8000_0000` is set, the value represents `closed`,
+   with the bits `0x7fff_ffff` representing the index of the `error-context`
+   in the instance's `error-context` table.
+ - Otherwise, the value represents `complete` and contains the number of
+   element read.
+
+(See [`pack_async_copy_result`] in the Canonical ABI explainer for details.)
 
 ###### 🔀 `stream.write`
 
@@ -1741,7 +1749,16 @@ In the Canonical ABI, the buffer is passed as a pointer to a buffer
 in linear memory and the size in elements of the buffer. (See
 [`canon_stream_write`] in the Canonical ABI explainer for details.)
 
-TODO: Describe how `write-status` is mapped to the `i32` return.
+`write-status` is lowered in the Canonical ABI as:
+ - The value `0xffff_ffff` represents `blocked`.
+   TODO: How is `task` encoded?
+ - Otherwise, if the bit `0x8000_0000` is set, the value represents `closed`,
+   with the bits `0x7fff_ffff` representing the index of the `error-context`
+   in the instance's `error-context` table.
+ - Otherwise, the value represents `complete` and contains the number of
+   element written.
+
+(See [`pack_async_copy_result`] in the Canonical ABI explainer for details.)
 
 ###### 🔀 `future.read` and `future.write`
 
@@ -1780,7 +1797,15 @@ In the Canonical ABI, the buffer is passed as a pointer to a buffer
 in linear memory.
 (See [`canon_future_read`] in the Canonical ABI explainer for details.)
 
-TODO: Describe how `future-status` is mapped to the `i32` return.
+`future-status` is lowered in the Canonical ABI as:
+ - The value `0xffff_ffff` represents `blocked`.
+ - Otherwise, if the bit `0x8000_0000` is set, the value represents `closed`,
+   with the bits `0x7fff_ffff` representing the index of the `error-context`
+   in the instance's `error-context` table.
+ - Otherwise, the value represents `complete` and contains the value `1`.
+
+(See [`pack_async_copy_result`] in the Canonical ABI explainer for details.)
+
 TODO: Should `blocked` have a `task`?
 TODO: Should `closed` have an `error-context` for the `future.read` case?
 TODO: Should there be separate readable-one-buffer and writable-one-buffer types?
@@ -2763,6 +2788,7 @@ For some use-case-focused, worked examples, see:
 [`canon_error_context_drop`]: CanonicalABI.md#-canon-error-contextdrop
 [`canon_thread_spawn`]: CanonicalABI.md#-canon-theadspawn
 [`canon_thread_hw_concurrency`]: CanonicalABI.md#-canon-threadhw_concurrency
+[`pack_async_copy_result`]: CanonicalABI.md#-canon-streamfuturereadwrite
 [the `close` built-ins]: CanonicalABI.md#-canon-streamfutureclose-readablewritable
 [Shared-Nothing]: ../high-level/Choices.md
 [Use Cases]: ../high-level/UseCases.md
