@@ -550,9 +550,9 @@ comes after:
 [Lift and Lower Definitions]: Explainer.md#canonical-definitions
 [Lifted]: Explainer.md#canonical-definitions
 [Canonical Built-in]: Explainer.md#canonical-built-ins
-[`task.return`]: Explainer.md#-async-built-ins
-[`task.wait`]: Explainer.md#-async-built-ins
-[`thread.spawn`]: Explainer.md#-threading-built-ins
+[`task.return`]: Explainer.md#-taskreturn
+[`task.wait`]: Explainer.md#-taskwait
+[`thread.spawn`]: Explainer.md#-threadspawn
 [ESM-integration]: Explainer.md#ESM-integration
 
 [Canonical ABI Explainer]: CanonicalABI.md
