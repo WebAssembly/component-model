@@ -1559,7 +1559,7 @@ also [Returning](Async.md#returning) in the async explainer and
 | Approximate WIT signature  | `func() -> event`                        |
 | Canonical ABI signature    | `[payload_addr:i32] -> [event-kind:i32]` |
 
-where `event`, `event-kind` and `payload` are defined in WIT as:
+where `event`, `event-kind`, and `payload` are defined in WIT as:
 ```wit
 record event {
     kind: event-kind,
@@ -1657,7 +1657,7 @@ receiving component into a `readable-stream<T>` that is "paired" with the origin
 An analogous relationship exists among `readable-future<T>`, `writable-future<T>`,
 and the WIT `future<T>`.
 
-###### 🔀 `stream.read`
+###### 🔀 `stream.read` and `stream.write`
 
 | Synopsis                   |                                                                                   |
 | -------------------------- | --------------------------------------------------------------------------------- |
@@ -1731,8 +1731,8 @@ in linear memory and the size in elements of the buffer. (See
 | Approximate WIT signature for `future.write` | `func<T>(out: writable-future<T>, buffer: readable-buffer<T; 1>) -> write-status` |
 | Canonical ABI signature                      | `[future:i32 ptr:i32] -> [i32]`                                                     |
 
-where `read-status` is defined as in [`stream.read`](#-streamread)
-and `write-status` is defined as in [`stream.write`](#-streamwrite).
+where `read-status` and `write-status` are defined as in
+[`stream.read` and `stream.write`](#-streamread-and-streamwrite).
 
 The `future.{read,write}` built-ins
 take the matching [readable or writable end](Async.md#streams-and-futures)
@@ -1761,8 +1761,8 @@ in linear memory.
 | Approximate WIT signature for `future.cancel-write` | `func<T>(out: writable-future<T>) -> write-status`  |
 | Canonical ABI signature                             | `[i32] -> [i32]`                                    |
 
-where `read-status` is defined as in [`stream.read`](#-streamread)
-and `write-status` is defined as in [`stream.write`](#-streamwrite).
+where `read-status` and `write-status` are defined as in
+[`stream.read` and `stream.write`](#-streamread-and-streamwrite).
 
 The `stream.cancel-read`, `stream.cancel-write`, `future.cancel-read`, and `future.cancel-write`
 built-ins
