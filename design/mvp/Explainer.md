@@ -1460,7 +1460,7 @@ When the `async` immediate is true:
 
 | Synopsis                   |                                 |
 | -------------------------- | ------------------------------- |
-| Approximate WIT signature  | `func<T>(t: T) -> option<task>` |
+| Approximate WIT signature  | `func<T>(t: T) -> option<subtask>` |
 | Canonical ABI signature    | `[t:i32] -> [i32]`              |
 
 The `resource.drop` built-in drops a resource handle `t` (with resource type `T`).
@@ -1473,7 +1473,7 @@ When the `async` immediate is true, the returned value indicates whether
 the drop completed eagerly, or if not, identifies the in-progress drop.
 
 In the Canonical ABI, the returned `i32` is either `0` (if the drop completed
-eagerly) or the index of the in-progress drop task.
+eagerly) or the index of the in-progress drop subtask (representing the in-progress `dtor` call).
 (See also [`canon_resource_drop`] in the Canonical ABI explainer.)
 
 ###### `resource.rep`
@@ -1559,16 +1559,12 @@ also [Returning](Async.md#returning) in the async explainer and
 | Approximate WIT signature  | `func() -> event`                        |
 | Canonical ABI signature    | `[payload_addr:i32] -> [event-kind:i32]` |
 
-where `event` is defined in WIT as:
+where `event`, `event-kind` and `payload` are defined in WIT as:
 ```wit
 record event {
     kind: event-kind,
     payload: payload,
 }
-```
-
-`event-kind` is defined in WIT as:
-```wit
 enum event-kind {
     call-starting,
     call-started,
@@ -1580,10 +1576,6 @@ enum event-kind {
     future-read,
     future-write,
 }
-```
-
-and `payload` is defined in WIT as:
-```wit
 record payload {
     payload1: u32,
     payload2: u32,
@@ -1735,8 +1727,8 @@ in linear memory and the size in elements of the buffer. (See
 
 | Synopsis                                     |                                                                                     |
 | -------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Approximate WIT signature for `future.read`  | `func<T>(in: readable-future<T>, buffer: writable-buffer<T; ..1>) -> read-status`   |
-| Approximate WIT signature for `future.write` | `func<T>(out: writable-future<T>, buffer: readable-buffer<T; ..1>) -> write-status` |
+| Approximate WIT signature for `future.read`  | `func<T>(in: readable-future<T>, buffer: writable-buffer<T; 1>) -> read-status`   |
+| Approximate WIT signature for `future.write` | `func<T>(out: writable-future<T>, buffer: readable-buffer<T; 1>) -> write-status` |
 | Canonical ABI signature                      | `[future:i32 ptr:i32] -> [i32]`                                                     |
 
 where `read-status` is defined as in [`stream.read`](#-streamread)
@@ -1876,12 +1868,13 @@ Web/JS APIs.
 
 | Synopsis                   |                                                    |
 | -------------------------- | -------------------------------------------------- |
-| Approximate WIT signature  | `func<FuncTy, ArgTy>(f: FuncTy, c: ArgTy) -> bool` |
-| Canonical ABI signature    | `[f:(ref null $f) c:i32] -> [i32]`                 |
+| Approximate WIT signature  | `func<FuncT>(f: FuncT, c: FuncT.params[0]) -> bool`       |
+| Canonical ABI signature    | `[f:(ref null (func shared (param i32))) c:i32] -> [i32]` |
 
 The `thread.spawn` built-in
 spawns a new thread by invoking the shared function `f` while passing `c` to it,
-returning whether a thread was successfully spawned.
+returning whether a thread was successfully spawned.  While it's designed to allow
+different types in the future, the type of `c` is currently hard-coded to always be `i32`.
 
 (See also [`canon_thread_spawn`] in the Canonical ABI explainer.)
 
