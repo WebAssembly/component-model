@@ -1776,7 +1776,7 @@ must `task.wait`. If the stream or future is closed, the return value is
 `closed`.
 
 For `futures.*`, the
-number of elements returned when the value is `complete` is always `1`.
+number of elements returned when the value is `complete` is at most `1`.
 
 In the Canonical ABI with the `callback` option, returning to the event
 loop is equivalent to a `task.wait`, and a
