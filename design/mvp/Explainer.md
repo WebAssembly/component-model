@@ -1744,8 +1744,8 @@ that the future is closed (`closed`).
 
 The number of elements returned when the value is `complete` is at most `1`.
 
-The `..1` in the buffer types indicates that these buffers may hold at most
-one element.
+The `<T; 1>` in the buffer types indicates that these buffers may hold at most
+one `T` element.
 
 In the Canonical ABI, the buffer is passed as a pointer to a buffer
 in linear memory.
