@@ -1650,9 +1650,9 @@ The `stream.new` and `future.new` built-ins return the
 The types `readable-stream<T>` and `writable-stream<T>` are not WIT types; they
 are the conceptual lower-level types that describe how the canonical built-ins use
 the readable and writable ends of a `stream<T>`. `writable-stream<T>`s are obtained
-from `stream.new` and from lowering a `stream<T>` in a function return type, and
-`readable-stream<T>`s are obtained from lowering a `stream<T>` in a function
-parameter type.
+from `stream.new`.  A `readable-stream<T>` is created by calling `stream.new` to create a fresh "unpaired" `writable-stream<T>` and then lifting it as the `stream<T>` parameter of an import call
+or the `stream<T>` result of an export call.  This lifted `stream<T>` value is then lowered by the
+receiving component into a `readable-stream<T>` that is "paired" with the original `writable-stream<T>`.
 
 An analogous relationship exists among `readable-future<T>`, `writable-future<T>`,
 and the WIT `future<T>`.
