@@ -808,8 +808,6 @@ def contains_async_value(t):
 def contains(t, p):
   t = despecialize(t)
   match t:
-    case None:
-      return False
     case PrimValType() | OwnType() | BorrowType():
       return p(t)
     case ListType(u) | StreamType(u) | FutureType(u):
