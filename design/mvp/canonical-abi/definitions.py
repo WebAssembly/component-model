@@ -99,20 +99,6 @@ class FuncType(ExternType):
     return [t for name,t in vec]
 
 @dataclass
-class ValueType(ExternType):
-  t: ValType
-
-class Bounds: pass
-
-@dataclass
-class Eq(Bounds):
-  t: Type
-
-@dataclass
-class TypeType(ExternType):
-  bounds: Bounds
-
-@dataclass
 class PrimValType(ValType):
   pass
 
