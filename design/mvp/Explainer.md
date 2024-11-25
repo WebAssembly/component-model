@@ -1769,7 +1769,7 @@ read or written into the given buffer (`0` or `1` for a `future`). If
 cancellation blocks, the return value is `blocked` and the caller must
 `task.wait`. If the stream or future is closed, the return value is `closed`.
 
-For `futures.*`, the number of elements returned when the value is `complete`
+For `future.*`, the number of elements returned when the value is `complete`
 is at most `1`.
 
 In the Canonical ABI with the `callback` option, returning to the event loop is
