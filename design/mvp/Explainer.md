@@ -1422,7 +1422,7 @@ canon ::= ...
         | (canon error-context.debug-message <canonopt>* (core func <id>?))
         | (canon error-context.drop (core func <id>?))
         | (canon thread.spawn <typeidx> (core func <id>?)) 🧵
-        | (canon thread.hw_concurrency (core func <id>?)) 🧵
+        | (canon thread.available_parallelism (core func <id>?)) 🧵
 ```
 
 ##### Resource built-ins
@@ -1864,17 +1864,21 @@ of `c` is currently hard-coded to always be `i32`.
 
 (See also [`canon_thread_spawn`] in the Canonical ABI explainer.)
 
-###### 🧵 `thread.hw_concurrency`
+###### 🧵 `thread.available_parallelism`
 
 | Synopsis                   |                 |
 | -------------------------- | --------------- |
 | Approximate WIT signature  | `func() -> u32` |
 | Canonical ABI signature    | `[] -> [i32]`   |
 
-The `thread.hw_concurrency` built-in returns the number of threads that can be
-expected to execute concurrently.
+The `thread.available_parallelism` built-in returns the number of threads that can be
+expected to execute in parallel.
 
-(See also [`canon_thread_hw_concurrency`] in the Canonical ABI explainer.)
+The concept of "available parallelism" corresponds is sometimes referred to
+as "hardware concurrency", such as in [`navigator.hardwareConcurrency`] in
+JavaScript.
+
+(See also [`canon_thread_available_parallelism`] in the Canonical ABI explainer.)
 
 ### 🪙 Value Definitions
 
@@ -2702,7 +2706,7 @@ For some use-case-focused, worked examples, see:
 [`canon_error_context_debug_message`]: CanonicalABI.md#-canon-error-contextdebug-message
 [`canon_error_context_drop`]: CanonicalABI.md#-canon-error-contextdrop
 [`canon_thread_spawn`]: CanonicalABI.md#-canon-theadspawn
-[`canon_thread_hw_concurrency`]: CanonicalABI.md#-canon-threadhw_concurrency
+[`canon_thread_available_parallelism`]: CanonicalABI.md#-canon-threadavailable_parallelism
 [`pack_async_copy_result`]: CanonicalABI.md#-canon-streamfuturereadwrite
 [the `close` built-ins]: CanonicalABI.md#-canon-streamfutureclose-readablewritable
 [Shared-Nothing]: ../high-level/Choices.md
@@ -2717,3 +2721,5 @@ For some use-case-focused, worked examples, see:
 
 [Scoping and Layering]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8
 [Future and Stream Types]: https://docs.google.com/presentation/d/1MNVOZ8hdofO3tI0szg_i-Yoy0N2QPU2C--LzVuoGSlE
+
+[`navigator.hardwareConcurrency`]: https://developer.mozilla.org/en-US/docs/Web/API/Navigator/hardwareConcurrency

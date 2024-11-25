@@ -3418,22 +3418,22 @@ def canon_thread_spawn(f, c):
     return [-1]
 ```
 
-### 🧵 `canon thread.hw_concurrency`
+### 🧵 `canon thread.available_parallelism`
 
 For a canonical definition:
 ```wasm
-(canon thread.hw_concurrency (core func $f))
+(canon thread.available_parallelism (core func $f))
 ```
 validation specifies:
 * `$f` is given type `(func shared (result i32))`.
 
 Calling `$f` returns the number of threads the underlying hardware can be
-expected to execute concurrently. This value can be artificially limited by
+expected to execute in parallel. This value can be artificially limited by
 engine configuration and is not allowed to change over the lifetime of a
 component instance.
 
 ```python
-def canon_thread_hw_concurrency():
+def canon_thread_available_parallelism():
   if DETERMINISTIC_PROFILE:
     return [1]
   else:
