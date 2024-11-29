@@ -468,90 +468,43 @@ class Task:
 
   def exit(self):
     assert(current_task.locked())
-    assert(not self.maybe_next_event())
-    assert(self.inst.num_tasks >= 1)
     trap_if(self.todo)
+    assert(not self.maybe_next_event())
     trap_if(self.on_return)
     trap_if(self.inst.num_tasks == 1 and self.inst.backpressure)
     self.inst.num_tasks -= 1
+    assert(self.inst.num_tasks >= 0)
     if self.opts.sync:
       assert(not self.inst.interruptible.is_set())
       self.inst.interruptible.set()
     self.maybe_start_pending_task()
 
 class Subtask:
-  opts: CanonicalOptions
-  inst: ComponentInstance
   supertask: Task
-  ft: FuncType
-  flat_args: CoreValueIter
-  flat_results: Optional[list[Any]]
   state: CallState
   lenders: list[ResourceHandle]
-  notify_supertask: bool
   enqueued: bool
 
-  def __init__(self, opts, ft, task, flat_args):
-    self.opts = opts
-    self.inst = task.inst
+  def __init__(self,  task):
     self.supertask = task
-    self.ft = ft
-    self.flat_args = CoreValueIter(flat_args)
-    self.flat_results = None
     self.state = CallState.STARTING
     self.lenders = []
-    self.notify_supertask = False
     self.enqueued = False
 
   def task(self):
     return self.supertask
 
   def add_lender(self, lending_handle):
+    assert(self.state != CallState.DONE)
     assert(lending_handle.own)
     lending_handle.lend_count += 1
     self.lenders.append(lending_handle)
 
-  def release_lenders(self):
-    for h in self.lenders:
-      h.lend_count -= 1
-
-  def maybe_notify_supertask(self):
-    if self.notify_supertask and not self.enqueued:
-      self.enqueued = True
-      def subtask_event():
-        self.enqueued = False
-        i = self.inst.waitables.array.index(self)
-        if self.state == CallState.DONE:
-          self.release_lenders()
-        return (EventCode(self.state), i, 0)
-      self.supertask.notify(subtask_event)
-
-  def on_start(self):
-    assert(self.state == CallState.STARTING)
-    self.state = CallState.STARTED
-    self.maybe_notify_supertask()
-    max_flat = MAX_FLAT_PARAMS if self.opts.sync else 1
-    ts = self.ft.param_types()
-    cx = LiftLowerContext(self.opts, self.inst, self)
-    return lift_flat_values(cx, max_flat, self.flat_args, ts)
-
-  def on_return(self, vs):
-    assert(self.state == CallState.STARTED)
-    self.state = CallState.RETURNED
-    self.maybe_notify_supertask()
-    max_flat = MAX_FLAT_RESULTS if self.opts.sync else 0
-    ts = self.ft.result_types()
-    cx = LiftLowerContext(self.opts, self.inst, self)
-    self.flat_results = lower_flat_values(cx, max_flat, vs, ts, self.flat_args)
-
   def finish(self):
     assert(self.state == CallState.RETURNED)
+    for h in self.lenders:
+      h.lend_count -= 1
     self.state = CallState.DONE
-    if self.notify_supertask:
-      self.maybe_notify_supertask()
-    else:
-      self.release_lenders()
-    return self.flat_results
 
   def drop(self):
     trap_if(self.state != CallState.DONE)
@@ -1512,10 +1465,14 @@ def join(a, b):
 
 ### Flat Lifting
 
-@dataclass
 class CoreValueIter:
   values: list[int|float]
-  i = 0
+  i: int
+
+  def __init__(self, vs):
+    self.values = vs
+    self.i = 0
+
   def next(self, t):
     v = self.values[self.i]
     self.i += 1
@@ -1526,6 +1483,9 @@ class CoreValueIter:
       case 'f64': assert(isinstance(v, (int,float)))
       case _    : assert(False)
     return v
+
+  def done(self):
+    return self.i == len(self.values)
 
 def lift_flat(cx, vi, t):
   match despecialize(t):
@@ -1780,28 +1740,57 @@ async def call_and_trap_on_throw(callee, task, args):
 
 async def canon_lower(opts, ft, callee, task, flat_args):
   trap_if(not task.inst.may_leave)
+  subtask = Subtask(task)
+  cx = LiftLowerContext(opts, task.inst, subtask)
+
   flat_ft = flatten_functype(opts, ft, 'lower')
   assert(types_match_values(flat_ft.params, flat_args))
-  subtask = Subtask(opts, ft, task, flat_args)
+  flat_args = CoreValueIter(flat_args)
+  flat_results = None
+  on_progress = lambda: None
+  def on_start():
+    subtask.state = CallState.STARTED
+    on_progress()
+    return lift_flat_values(cx, max_flat_params, flat_args, ft.param_types())
+  def on_return(vs):
+    subtask.state = CallState.RETURNED
+    on_progress()
+    nonlocal flat_results
+    flat_results = lower_flat_values(cx, max_flat_results, vs, ft.result_types(), flat_args)
+    assert(flat_args.done())
+
   if opts.sync:
     assert(not contains_async_value(ft))
-    await task.call_sync(callee, task, subtask.on_start, subtask.on_return)
-    flat_results = subtask.finish()
+    max_flat_params = MAX_FLAT_PARAMS
+    max_flat_results = MAX_FLAT_RESULTS
+    await task.call_sync(callee, task, on_start, on_return)
+    assert(subtask.state == CallState.RETURNED)
+    subtask.finish()
+    assert(types_match_values(flat_ft.results, flat_results))
   else:
+    max_flat_params = 1
+    max_flat_results = 0
     async def do_call(on_block):
-      await callee(task, subtask.on_start, subtask.on_return, on_block)
-      [] = subtask.finish()
+      await callee(task, on_start, on_return, on_block)
+      subtask.finish()
+      on_progress()
     match await call_and_handle_blocking(do_call):
-      case Blocked():
-        subtask.notify_supertask = True
-        task.todo += 1
-        i = task.inst.waitables.add(subtask)
-        assert(0 < i <= Table.MAX_LENGTH < 2**30)
-        assert(0 <= int(subtask.state) < 2**2)
-        flat_results = [i | (int(subtask.state) << 30)]
       case Returned():
         flat_results = [0]
-  assert(types_match_values(flat_ft.results, flat_results))
+      case Blocked():
+        task.todo += 1
+        subtaski = task.inst.waitables.add(subtask)
+        def on_progress():
+          if not subtask.enqueued:
+            subtask.enqueued = True
+            def subtask_event():
+              subtask.enqueued = False
+              return (EventCode(subtask.state), subtaski, 0)
+            task.notify(subtask_event)
+        assert(0 < subtaski <= Table.MAX_LENGTH < 2**30)
+        assert(0 <= int(subtask.state) < 2**2)
+        flat_results = [subtaski | (int(subtask.state) << 30)]
+
   return flat_results
 
 ### `canon resource.new`

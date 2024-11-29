@@ -635,12 +635,12 @@ streams and futures.
 ```python
   def exit(self):
     assert(current_task.locked())
-    assert(not self.maybe_next_event())
-    assert(self.inst.num_tasks >= 1)
     trap_if(self.todo)
+    assert(not self.maybe_next_event())
     trap_if(self.on_return)
     trap_if(self.inst.num_tasks == 1 and self.inst.backpressure)
     self.inst.num_tasks -= 1
+    assert(self.inst.num_tasks >= 0)
     if self.opts.sync:
       assert(not self.inst.interruptible.is_set())
       self.inst.interruptible.set()
@@ -653,27 +653,15 @@ which called `canon lower`, thereby linking all subtasks to their supertasks,
 maintaining a (possibly asynchronous) call tree.
 ```python
 class Subtask:
-  opts: CanonicalOptions
-  inst: ComponentInstance
   supertask: Task
-  ft: FuncType
-  flat_args: CoreValueIter
-  flat_results: Optional[list[Any]]
   state: CallState
   lenders: list[ResourceHandle]
-  notify_supertask: bool
   enqueued: bool
 
-  def __init__(self, opts, ft, task, flat_args):
-    self.opts = opts
-    self.inst = task.inst
+  def __init__(self,  task):
     self.supertask = task
-    self.ft = ft
-    self.flat_args = CoreValueIter(flat_args)
-    self.flat_results = None
     self.state = CallState.STARTING
     self.lenders = []
-    self.notify_supertask = False
     self.enqueued = False
 
   def task(self):
@@ -686,91 +674,30 @@ The `lenders` field of `Subtask` maintains a list of all the owned handles
 that have been lent to a subtask and must therefor not be dropped until the
 subtask completes. The `add_lender` method is called (below) when lifting an
 owned handle and increments the `lend_count` of the owned handle, which is
-guarded to be zero by `canon_resource_drop` (below). The `release_lenders`
-method releases all the `lend_count`s of all such handles lifted for the
-subtask and is called (below) when the subtask finishes.
+guarded to be zero by `canon_resource_drop` (below). The `finish` method
+releases all the `lend_count`s of all such handles lifted for the subtask and
+is called (below) when the subtask is finishes.
 ```python
   def add_lender(self, lending_handle):
+    assert(self.state != CallState.DONE)
     assert(lending_handle.own)
     lending_handle.lend_count += 1
     self.lenders.append(lending_handle)
 
-  def release_lenders(self):
+  def finish(self):
+    assert(self.state == CallState.RETURNED)
     for h in self.lenders:
       h.lend_count -= 1
+    self.state = CallState.DONE
 ```
 Note, the `lenders` list usually has a fixed size (in all cases except when a
 function signature has `borrow`s in `list`s or `stream`s) and thus can be
 stored inline in the native stack frame.
 
-The `maybe_notify_supertask` method called by `on_start`, `on_return` and
-`finish` (next) only sends events to the supertask if this `Subtask` actually
-blocked and got added to the `waitables` table (as indicated by
-`notify_supertask` being set). Additionally, `maybe_notify_supertask` uses the
-`enqueued` flag and the fact that "events" are first-class functions to
-collapse N events down to 1 if a subtask advances state multiple times before
-the supertask receives the event which, in turn, avoids unnecessarily spamming
-the event loop when only the most recent state matters.
-```python
-  def maybe_notify_supertask(self):
-    if self.notify_supertask and not self.enqueued:
-      self.enqueued = True
-      def subtask_event():
-        self.enqueued = False
-        i = self.inst.waitables.array.index(self)
-        if self.state == CallState.DONE:
-          self.release_lenders()
-        return (EventCode(self.state), i, 0)
-      self.supertask.notify(subtask_event)
-```
-
-The `on_start` and `on_return` methods of `Subtask` are passed (by
-`canon_lower` below) to the callee to be called to lift its arguments and
-lower its results. Using callbacks provides the callee the flexibility to
-control when arguments are lowered (which can vary due to backpressure) and
-when results are lifted (which can also vary due to when `task.return` is
-called).
-```python
-  def on_start(self):
-    assert(self.state == CallState.STARTING)
-    self.state = CallState.STARTED
-    self.maybe_notify_supertask()
-    max_flat = MAX_FLAT_PARAMS if self.opts.sync else 1
-    ts = self.ft.param_types()
-    cx = LiftLowerContext(self.opts, self.inst, self)
-    return lift_flat_values(cx, max_flat, self.flat_args, ts)
-
-  def on_return(self, vs):
-    assert(self.state == CallState.STARTED)
-    self.state = CallState.RETURNED
-    self.maybe_notify_supertask()
-    max_flat = MAX_FLAT_RESULTS if self.opts.sync else 0
-    ts = self.ft.result_types()
-    cx = LiftLowerContext(self.opts, self.inst, self)
-    self.flat_results = lower_flat_values(cx, max_flat, vs, ts, self.flat_args)
-```
-
-When a `Subtask` finishes, it calls `release_lenders` to allow owned handles
-passed to this subtask to be dropped. In the asynchronous blocking case, this
-happens right before the `CallState.DONE` event is delivered to the guest
-program in `subtask_event()` (above). Otherwise, it happens synchronously
-when the subtask finishes.
-```python
-  def finish(self):
-    assert(self.state == CallState.RETURNED)
-    self.state = CallState.DONE
-    if self.notify_supertask:
-      self.maybe_notify_supertask()
-    else:
-      self.release_lenders()
-    return self.flat_results
-```
-
-Lastly, after a `Subtask` has finished and notified its supertask (thereby
-clearing `enqueued`), it may be dropped from the `waitables` table which
-effectively ends the call from the perspective of the caller. The `todo`
-counter is used below to record the number of unmet obligations to drop the
-streams and futures connected to this `Subtask`.
+Lastly, after a `Subtask` has finished, it may be dropped from the `waitables`
+table which effectively ends the call from the perspective of the caller. The
+`todo` counter is used below to record the number of unmet obligations to drop
+the streams and futures connected to this `Subtask`.
 ```python
   def drop(self):
     trap_if(self.state != CallState.DONE)
@@ -2243,10 +2170,14 @@ def join(a, b):
 Values are lifted by iterating over a list of parameter or result Core
 WebAssembly values:
 ```python
-@dataclass
 class CoreValueIter:
   values: list[int|float]
-  i = 0
+  i: int
+
+  def __init__(self, vs):
+    self.values = vs
+    self.i = 0
+
   def next(self, t):
     v = self.values[self.i]
     self.i += 1
@@ -2257,6 +2188,9 @@ class CoreValueIter:
       case 'f64': assert(isinstance(v, (int,float)))
       case _    : assert(False)
     return v
+
+  def done(self):
+    return self.i == len(self.values)
 ```
 The `match` is only used for spec-level assertions; no runtime typecase is
 required.
@@ -2685,57 +2619,114 @@ The resulting function `$f` takes 2 runtime arguments:
   component instance
 * `flat_args`: the list of core values passed by the core function calller
 
-Given this, `canon_lower` is defined:
+Given this, `canon_lower` is defined in chunks as follows:
 ```python
 async def canon_lower(opts, ft, callee, task, flat_args):
   trap_if(not task.inst.may_leave)
+  subtask = Subtask(task)
+  cx = LiftLowerContext(opts, task.inst, subtask)
+```
+Each call to `canon lower` creates a new `Subtask`. However, this `Subtask` is
+only added to the `waitables` table if `async` is specified and the callee
+blocks. In any case, this `Subtask` is used as the `borrow_scope` for `borrow`
+lifted during the call, ensuring that owned handles are not dropped before
+`Subtask.finish()` is called.
+
+The `on_start` and `on_return` callbacks are called by the `callee`
+(which is `canon_lift`, when wasm calls wasm) to produce and consume
+lifted arguments and results, resp. These callbacks are also used
+by `canon_lift` to update the `CallState` of the `Subtask` and notify
+the async caller of progress via the `on_progress` local callback,
+which is assigned to do something useful in the `async`-blocked case
+below.
+```python
   flat_ft = flatten_functype(opts, ft, 'lower')
   assert(types_match_values(flat_ft.params, flat_args))
-  subtask = Subtask(opts, ft, task, flat_args)
+  flat_args = CoreValueIter(flat_args)
+  flat_results = None
+  on_progress = lambda: None
+  def on_start():
+    subtask.state = CallState.STARTED
+    on_progress()
+    return lift_flat_values(cx, max_flat_params, flat_args, ft.param_types())
+  def on_return(vs):
+    subtask.state = CallState.RETURNED
+    on_progress()
+    nonlocal flat_results
+    flat_results = lower_flat_values(cx, max_flat_results, vs, ft.result_types(), flat_args)
+    assert(flat_args.done())
+```
+The `max_flat_{params,results}` variables used above are defined in
+the synchronous and asynchronous branches next:
+```python
   if opts.sync:
     assert(not contains_async_value(ft))
-    await task.call_sync(callee, task, subtask.on_start, subtask.on_return)
-    flat_results = subtask.finish()
+    max_flat_params = MAX_FLAT_PARAMS
+    max_flat_results = MAX_FLAT_RESULTS
+    await task.call_sync(callee, task, on_start, on_return)
+    assert(subtask.state == CallState.RETURNED)
+    subtask.finish()
+    assert(types_match_values(flat_ft.results, flat_results))
+```
+In the synchronous case, `Task.call_sync` ensures a fully-synchronous
+call to `callee` (that prevents any interleaved execution until
+`callee` returns). The `not contains_async_value(ft)` assertion is
+ensured by validation and reflects the fact that a function that takes
+or returns a `future` or `stream` is extremely likely to deadlock if
+called in this manner (since the whole point of these types is to
+allow control flow to switch back and forth between caller and
+callee).
+
+The asynchronous case uses the `call_and_handle_blocking` utility
+(defined above) to execute `callee` in a Python coroutine that
+suspends (via `await`) when blocked, immediately returning control
+flow to the `async`-lowered caller.
+```python
   else:
+    max_flat_params = 1
+    max_flat_results = 0
     async def do_call(on_block):
-      await callee(task, subtask.on_start, subtask.on_return, on_block)
-      [] = subtask.finish()
+      await callee(task, on_start, on_return, on_block)
+      subtask.finish()
+      on_progress()
     match await call_and_handle_blocking(do_call):
-      case Blocked():
-        subtask.notify_supertask = True
-        task.todo += 1
-        i = task.inst.waitables.add(subtask)
-        assert(0 < i <= Table.MAX_LENGTH < 2**30)
-        assert(0 <= int(subtask.state) < 2**2)
-        flat_results = [i | (int(subtask.state) << 30)]
       case Returned():
         flat_results = [0]
-  assert(types_match_values(flat_ft.results, flat_results))
+      case Blocked():
+        task.todo += 1
+        subtaski = task.inst.waitables.add(subtask)
+        def on_progress():
+          if not subtask.enqueued:
+            subtask.enqueued = True
+            def subtask_event():
+              subtask.enqueued = False
+              return (EventCode(subtask.state), subtaski, 0)
+            task.notify(subtask_event)
+        assert(0 < subtaski <= Table.MAX_LENGTH < 2**30)
+        assert(0 <= int(subtask.state) < 2**2)
+        flat_results = [subtaski | (int(subtask.state) << 30)]
+
   return flat_results
 ```
-In the `sync` case, `Task.call_sync` ensures a fully-synchronous call to
-`callee` (that prevents any interleaved execution until `callee` returns). The
-`not contains_async_value(ft)` assertion is ensured by validation and reflects
-the fact that a function that takes or returns a `future` or `stream` is
-extremely likely to deadlock if called in this manner (since the whole point
-of these types is to allow control flow to switch back and forth between
-caller and callee).
+If `callee` finishes execution without blocking, the `Returned()` case
+returns `0`, signalling to the caller that the parameters have been
+read and the results have been written to the outparam buffer.
 
-In the `async` case, if `do_call` blocks before `Subtask.finish` (signalled by
-`callee` calling `on_block`), the `Subtask` is added to the current component
-instance's `waitables` table, giving it an `i32` index that will be returned
-by `task.wait` to signal progress on this subtask. The `todo` increment is
-matched by a decrement in `canon_subtask_drop` and ensures that all subtasks
-of a supertask complete before the supertask completes. The `notify_supertask`
-flag is set to tell `Subtask` methods (below) to asynchronously notify the
-supertask of progress.
+Otherwise, the `Subtask` is added to the current component instance's
+`waitables` table, eagerly returning the `i32` index of the `Subtask`
+packed with the `CallState` of the `Subtask`. If the returned `CallState` is
+`STARTING`, the caller must keep the memory pointed by `flat_args` valid until
+`task.wait` indicates that subtask `i` has advanced to `STARTED`, `RETURNED` or
+`DONE`. Similarly, if the returned state is `STARTED`, the caller must keep the
+memory pointed to by the final `i32` parameter of `flat_args` valid until
+`task.wait` indicates that the subtask has advanced to `RETURNED` or `DONE`.
 
-Based on this, if the returned `subtask.state` is `STARTING`, the caller must
-keep the memory pointed by `flat_args` valid until `task.wait` indicates that
-subtask `i` has advanced to `STARTED`, `RETURNED` or `DONE`. Similarly, if
-the returned state is `STARTED`, the caller must keep the memory pointed to
-by the final `i32` parameter of `flat_args` valid until `task.wait` indicates
-that the subtask has advanced to `RETURNED` or `DONE`.
+The `on_progress` callback is called by `on_start` and `on_return` above and
+takes care of `task.notify()`ing the async caller of progress. The `enqueued`
+flag is used to avoid sending repeated progress events when the caller only
+cares about the latest value of `subtask.state`, taking advantage of the fact
+that "events" are first-class functions that are called right before passing
+the event tuple to core wasm.
 
 The above definitions of sync/async `canon_lift`/`canon_lower` ensure that a
 sync-or-async `canon_lift` may call a sync-or-async `canon_lower`, with all
