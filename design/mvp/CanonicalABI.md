@@ -1367,10 +1367,10 @@ def load(cx, ptr, t):
     case U16Type()          : return load_int(cx, ptr, 2)
     case U32Type()          : return load_int(cx, ptr, 4)
     case U64Type()          : return load_int(cx, ptr, 8)
-    case S8Type()           : return load_int(cx, ptr, 1, signed=True)
-    case S16Type()          : return load_int(cx, ptr, 2, signed=True)
-    case S32Type()          : return load_int(cx, ptr, 4, signed=True)
-    case S64Type()          : return load_int(cx, ptr, 8, signed=True)
+    case S8Type()           : return load_int(cx, ptr, 1, signed = True)
+    case S16Type()          : return load_int(cx, ptr, 2, signed = True)
+    case S32Type()          : return load_int(cx, ptr, 4, signed = True)
+    case S64Type()          : return load_int(cx, ptr, 8, signed = True)
     case F32Type()          : return decode_i32_as_float(load_int(cx, ptr, 4))
     case F64Type()          : return decode_i64_as_float(load_int(cx, ptr, 8))
     case CharType()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
@@ -1390,7 +1390,7 @@ Integers are loaded directly from memory, with their high-order bit interpreted
 according to the signedness of the type.
 ```python
 def load_int(cx, ptr, nbytes, signed = False):
-  return int.from_bytes(cx.opts.memory[ptr : ptr+nbytes], 'little', signed=signed)
+  return int.from_bytes(cx.opts.memory[ptr : ptr+nbytes], 'little', signed = signed)
 ```
 
 Integer-to-boolean conversions treats `0` as `false` and all other bit-patterns
@@ -1668,10 +1668,10 @@ def store(cx, v, t, ptr):
     case U16Type()          : store_int(cx, v, ptr, 2)
     case U32Type()          : store_int(cx, v, ptr, 4)
     case U64Type()          : store_int(cx, v, ptr, 8)
-    case S8Type()           : store_int(cx, v, ptr, 1, signed=True)
-    case S16Type()          : store_int(cx, v, ptr, 2, signed=True)
-    case S32Type()          : store_int(cx, v, ptr, 4, signed=True)
-    case S64Type()          : store_int(cx, v, ptr, 8, signed=True)
+    case S8Type()           : store_int(cx, v, ptr, 1, signed = True)
+    case S16Type()          : store_int(cx, v, ptr, 2, signed = True)
+    case S32Type()          : store_int(cx, v, ptr, 4, signed = True)
+    case S64Type()          : store_int(cx, v, ptr, 8, signed = True)
     case F32Type()          : store_int(cx, encode_float_as_i32(v), ptr, 4)
     case F64Type()          : store_int(cx, encode_float_as_i64(v), ptr, 8)
     case CharType()         : store_int(cx, char_to_i32(v), ptr, 4)
@@ -1693,7 +1693,7 @@ the `signed` parameter is only present to ensure that the internal range checks
 of `int.to_bytes` are satisfied.
 ```python
 def store_int(cx, v, ptr, nbytes, signed = False):
-  cx.opts.memory[ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed=signed)
+  cx.opts.memory[ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed = signed)
 ```
 
 Floats are stored directly into memory, with the sign and payload bits of NaN
@@ -2056,7 +2056,7 @@ elements in the current component instance's handle table. The increment of
 and ensures that all borrowed handles are dropped before the end of the task.
 ```python
 def lower_own(cx, rep, t):
-  h = ResourceHandle(rep, own=True)
+  h = ResourceHandle(rep, own = True)
   return cx.inst.resources.add(t.rt, h)
 
 def lower_borrow(cx, rep, t):
@@ -2795,7 +2795,7 @@ instance's handle table:
 ```python
 async def canon_resource_new(rt, task, rep):
   trap_if(not task.inst.may_leave)
-  h = ResourceHandle(rep, own=True)
+  h = ResourceHandle(rep, own = True)
   i = task.inst.resources.add(rt, h)
   return [i]
 ```

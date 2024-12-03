@@ -933,10 +933,10 @@ def load(cx, ptr, t):
     case U16Type()          : return load_int(cx, ptr, 2)
     case U32Type()          : return load_int(cx, ptr, 4)
     case U64Type()          : return load_int(cx, ptr, 8)
-    case S8Type()           : return load_int(cx, ptr, 1, signed=True)
-    case S16Type()          : return load_int(cx, ptr, 2, signed=True)
-    case S32Type()          : return load_int(cx, ptr, 4, signed=True)
-    case S64Type()          : return load_int(cx, ptr, 8, signed=True)
+    case S8Type()           : return load_int(cx, ptr, 1, signed = True)
+    case S16Type()          : return load_int(cx, ptr, 2, signed = True)
+    case S32Type()          : return load_int(cx, ptr, 4, signed = True)
+    case S64Type()          : return load_int(cx, ptr, 8, signed = True)
     case F32Type()          : return decode_i32_as_float(load_int(cx, ptr, 4))
     case F64Type()          : return decode_i64_as_float(load_int(cx, ptr, 8))
     case CharType()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
@@ -952,7 +952,7 @@ def load(cx, ptr, t):
     case FutureType(t)      : return lift_future(cx, load_int(cx, ptr, 4), t)
 
 def load_int(cx, ptr, nbytes, signed = False):
-  return int.from_bytes(cx.opts.memory[ptr : ptr+nbytes], 'little', signed=signed)
+  return int.from_bytes(cx.opts.memory[ptr : ptr+nbytes], 'little', signed = signed)
 
 def convert_int_to_bool(i):
   assert(i >= 0)
@@ -1133,10 +1133,10 @@ def store(cx, v, t, ptr):
     case U16Type()          : store_int(cx, v, ptr, 2)
     case U32Type()          : store_int(cx, v, ptr, 4)
     case U64Type()          : store_int(cx, v, ptr, 8)
-    case S8Type()           : store_int(cx, v, ptr, 1, signed=True)
-    case S16Type()          : store_int(cx, v, ptr, 2, signed=True)
-    case S32Type()          : store_int(cx, v, ptr, 4, signed=True)
-    case S64Type()          : store_int(cx, v, ptr, 8, signed=True)
+    case S8Type()           : store_int(cx, v, ptr, 1, signed = True)
+    case S16Type()          : store_int(cx, v, ptr, 2, signed = True)
+    case S32Type()          : store_int(cx, v, ptr, 4, signed = True)
+    case S64Type()          : store_int(cx, v, ptr, 8, signed = True)
     case F32Type()          : store_int(cx, encode_float_as_i32(v), ptr, 4)
     case F64Type()          : store_int(cx, encode_float_as_i64(v), ptr, 8)
     case CharType()         : store_int(cx, char_to_i32(v), ptr, 4)
@@ -1152,7 +1152,7 @@ def store(cx, v, t, ptr):
     case FutureType(t)      : store_int(cx, lower_future(cx, v, t), ptr, 4)
 
 def store_int(cx, v, ptr, nbytes, signed = False):
-  cx.opts.memory[ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed=signed)
+  cx.opts.memory[ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed = signed)
 
 def maybe_scramble_nan32(f):
   if math.isnan(f):
@@ -1401,7 +1401,7 @@ def pack_flags_into_int(v, labels):
   return i
 
 def lower_own(cx, rep, t):
-  h = ResourceHandle(rep, own=True)
+  h = ResourceHandle(rep, own = True)
   return cx.inst.resources.add(t.rt, h)
 
 def lower_borrow(cx, rep, t):
@@ -1818,7 +1818,7 @@ async def canon_lower(opts, ft, callee, task, flat_args):
 
 async def canon_resource_new(rt, task, rep):
   trap_if(not task.inst.may_leave)
-  h = ResourceHandle(rep, own=True)
+  h = ResourceHandle(rep, own = True)
   i = task.inst.resources.add(rt, h)
   return [i]
 
