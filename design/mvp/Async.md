@@ -58,12 +58,15 @@ additional goals and requirements for native async support:
 
 Based on the above goals, the Component Model's approach to native async starts
 by allowing components to import and export "async" functions which abstract
-over and can literally be implemented in terms of:
+over, and bindings can be generated in the idiomatic style for each programming
+language:
 * `async` functions in languages like C#, JS, Python, Rust and Swift
+  (using [`callback` functions](#waiting))
 * stackful coroutines in languages like Kotlin, Perl, PHP and (recently) C++
 * green threads as-if running on a single OS thread in languages like Go and
   (initially and recently again) Java
-* callbacks, synchronous functions that are called in response to events
+* callbacks, in languages with no explicit async support
+  (also using [`callback` functions](#waiting))
 
 The Component Model supports this wide variety of language features by
 specifying a common low-level "async" ABI which the different languages'
