@@ -61,12 +61,12 @@ by allowing components to import and export "async" functions which abstract
 over, and bindings can be generated in the idiomatic style for each programming
 language:
 * `async` functions in languages like C#, JS, Python, Rust and Swift
-  (using [`callback` functions](#waiting))
+  (implemented using [`callback` functions](#waiting))
 * stackful coroutines in languages like Kotlin, Perl, PHP and (recently) C++
 * green threads as-if running on a single OS thread in languages like Go and
   (initially and recently again) Java
 * callbacks, in languages with no explicit async support
-  (also using [`callback` functions](#waiting))
+  (also implemented using [`callback` functions](#waiting))
 
 The Component Model supports this wide variety of language features by
 specifying a common low-level "async" ABI which the different languages'
