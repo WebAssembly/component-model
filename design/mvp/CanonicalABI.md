@@ -12,6 +12,7 @@ being specified here.
   * [Canonical ABI Options](#canonical-abi-options)
   * [Runtime State](#runtime-state)
     * [Component Instance State](#component-instance-state)
+    * [Table State](#table-state)
     * [Resource State](#resource-state)
     * [Task State](#task-state)
     * [Buffer, Stream and Future State](#buffer-stream-and-future-state)
@@ -172,60 +173,12 @@ class ComponentInstance:
     self.starting_pending_task = False
 ```
 
+#### Table State
 
-#### Resource State
-
-The `ResourceTables` stored in the `resources` field maps `ResourceType`s to
-`Table`s of `ResourceHandle`s (defined next), establishing a separate
-`i32`-indexed array per resource type:
-```python
-class ResourceTables:
-  rt_to_table: MutableMapping[ResourceType, Table[ResourceHandle]]
-
-  def __init__(self):
-    self.rt_to_table = dict()
-
-  def table(self, rt):
-    if rt not in self.rt_to_table:
-      self.rt_to_table[rt] = Table[ResourceHandle]()
-    return self.rt_to_table[rt]
-
-  def get(self, rt, i):
-    return self.table(rt).get(i)
-  def add(self, rt, h):
-    return self.table(rt).add(h)
-  def remove(self, rt, i):
-    return self.table(rt).remove(i)
-```
-While this Python code performs a dynamic hash-table lookup on each handle
-table access, as we'll see below, the `rt` parameter is always statically known
-such that a normal implementation can statically enumerate all `Table` objects
-at compile time and then route the calls to `get`, `add` and `remove` to the
-correct `Table` at the callsite. The net result is that each component instance
-will contain one handle table per resource type used by the component, with
-each compiled adapter function accessing the correct handle table as-if it were
-a global variable.
-
-The `ResourceType` class represents a concrete resource type that has been
-created by the component instance `impl`. `ResourceType` objects are used as
-keys by `ResourceTables` above and thus we assume that Python object identity
-corresponds to resource type equality, as defined by [type checking] rules.
-```python
-class ResourceType(Type):
-  impl: ComponentInstance
-  dtor: Optional[Callable]
-  dtor_sync: bool
-  dtor_callback: Optional[Callable]
-
-  def __init__(self, impl, dtor = None, dtor_sync = True, dtor_callback = None):
-    self.impl = impl
-    self.dtor = dtor
-    self.dtor_sync = dtor_sync
-    self.dtor_callback = dtor_callback
-```
-The `Table` class, used by `ResourceTables` above, encapsulates a single
-mutable, growable array of generic elements, indexed by Core WebAssembly
-`i32`s.
+The generic `Table` class, used by the `resources`, `waitables` and
+`error_contexts` fields of `ComponentInstance` above, encapsulates a single
+mutable, growable array of elements that are represented in Core WebAssembly as
+`i32` indices into the array.
 ```python
 ElemT = TypeVar('ElemT')
 class Table(Generic[ElemT]):
@@ -277,6 +230,40 @@ The limit of `2**30` ensures that the high 2 bits of table indices are unset
 and available for other use in guest code (e.g., for tagging, packed words or
 sentinel values).
 
+
+#### Resource State
+
+The `ResourceTables` stored in the `resources` field maps `ResourceType`s to
+`Table`s of `ResourceHandle`s (defined next), establishing a separate
+`i32`-indexed array per resource type:
+```python
+class ResourceTables:
+  rt_to_table: MutableMapping[ResourceType, Table[ResourceHandle]]
+
+  def __init__(self):
+    self.rt_to_table = dict()
+
+  def table(self, rt):
+    if rt not in self.rt_to_table:
+      self.rt_to_table[rt] = Table[ResourceHandle]()
+    return self.rt_to_table[rt]
+
+  def get(self, rt, i):
+    return self.table(rt).get(i)
+  def add(self, rt, h):
+    return self.table(rt).add(h)
+  def remove(self, rt, i):
+    return self.table(rt).remove(i)
+```
+While this Python code performs a dynamic hash-table lookup on each handle
+table access, as we'll see below, the `rt` parameter is always statically known
+such that a normal implementation can statically enumerate all `Table` objects
+at compile time and then route the calls to `get`, `add` and `remove` to the
+correct `Table` at the callsite. The net result is that each component instance
+will contain one handle table per resource type used by the component, with
+each compiled adapter function accessing the correct handle table as-if it were
+a global variable.
+
 The `ResourceHandle` class defines the elements of the per-resource-type
 `Table`s stored in `ResourceTables`:
 ```python
@@ -314,6 +301,24 @@ in a component to statically determine that a given resource type's handle
 table only contains `own` or `borrow` handles and then, based on this,
 statically eliminate the `own` and the `lend_count` xor `borrow_scope` fields,
 and guards thereof.
+
+The `ResourceType` class represents a concrete resource type that has been
+created by the component instance `impl`. `ResourceType` objects are used as
+keys by `ResourceTables` above and thus we assume that Python object identity
+corresponds to resource type equality, as defined by [type checking] rules.
+```python
+class ResourceType(Type):
+  impl: ComponentInstance
+  dtor: Optional[Callable]
+  dtor_sync: bool
+  dtor_callback: Optional[Callable]
+
+  def __init__(self, impl, dtor = None, dtor_sync = True, dtor_callback = None):
+    self.impl = impl
+    self.dtor = dtor
+    self.dtor_sync = dtor_sync
+    self.dtor_callback = dtor_callback
+```
 
 
 #### Task State

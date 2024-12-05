@@ -227,37 +227,7 @@ class ComponentInstance:
     self.pending_tasks = []
     self.starting_pending_task = False
 
-#### Resource State
-
-class ResourceTables:
-  rt_to_table: MutableMapping[ResourceType, Table[ResourceHandle]]
-
-  def __init__(self):
-    self.rt_to_table = dict()
-
-  def table(self, rt):
-    if rt not in self.rt_to_table:
-      self.rt_to_table[rt] = Table[ResourceHandle]()
-    return self.rt_to_table[rt]
-
-  def get(self, rt, i):
-    return self.table(rt).get(i)
-  def add(self, rt, h):
-    return self.table(rt).add(h)
-  def remove(self, rt, i):
-    return self.table(rt).remove(i)
-
-class ResourceType(Type):
-  impl: ComponentInstance
-  dtor: Optional[Callable]
-  dtor_sync: bool
-  dtor_callback: Optional[Callable]
-
-  def __init__(self, impl, dtor = None, dtor_sync = True, dtor_callback = None):
-    self.impl = impl
-    self.dtor = dtor
-    self.dtor_sync = dtor_sync
-    self.dtor_callback = dtor_callback
+#### Table State
 
 ElemT = TypeVar('ElemT')
 class Table(Generic[ElemT]):
@@ -292,6 +262,26 @@ class Table(Generic[ElemT]):
     self.free.append(i)
     return e
 
+#### Resource State
+
+class ResourceTables:
+  rt_to_table: MutableMapping[ResourceType, Table[ResourceHandle]]
+
+  def __init__(self):
+    self.rt_to_table = dict()
+
+  def table(self, rt):
+    if rt not in self.rt_to_table:
+      self.rt_to_table[rt] = Table[ResourceHandle]()
+    return self.rt_to_table[rt]
+
+  def get(self, rt, i):
+    return self.table(rt).get(i)
+  def add(self, rt, h):
+    return self.table(rt).add(h)
+  def remove(self, rt, i):
+    return self.table(rt).remove(i)
+
 class ResourceHandle:
   rep: int
   own: bool
@@ -303,6 +293,18 @@ class ResourceHandle:
     self.own = own
     self.borrow_scope = borrow_scope
     self.lend_count = 0
+
+class ResourceType(Type):
+  impl: ComponentInstance
+  dtor: Optional[Callable]
+  dtor_sync: bool
+  dtor_callback: Optional[Callable]
+
+  def __init__(self, impl, dtor = None, dtor_sync = True, dtor_callback = None):
+    self.impl = impl
+    self.dtor = dtor
+    self.dtor_sync = dtor_sync
+    self.dtor_callback = dtor_callback
 
 #### Task State
 
