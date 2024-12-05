@@ -7,7 +7,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Optional, Callable, Awaitable, Literal, MutableMapping, TypeVar, Generic
+from typing import Any, Optional, Callable, Awaitable, TypeVar, Generic
 from enum import IntEnum
 from copy import copy
 import math
@@ -205,7 +205,7 @@ class CanonicalOptions:
 ### Runtime State
 
 class ComponentInstance:
-  resources: ResourceTables
+  resources: Table[ResourceHandle]
   waitables: Table[Subtask|StreamHandle|FutureHandle]
   error_contexts: Table[ErrorContext]
   num_tasks: int
@@ -216,7 +216,7 @@ class ComponentInstance:
   starting_pending_task: bool
 
   def __init__(self):
-    self.resources = ResourceTables()
+    self.resources = Table[ResourceHandle]()
     self.waitables = Table[Subtask|StreamHandle|FutureHandle]()
     self.error_contexts = Table[ErrorContext]()
     self.num_tasks = 0
@@ -264,31 +264,15 @@ class Table(Generic[ElemT]):
 
 #### Resource State
 
-class ResourceTables:
-  rt_to_table: MutableMapping[ResourceType, Table[ResourceHandle]]
-
-  def __init__(self):
-    self.rt_to_table = dict()
-
-  def table(self, rt):
-    if rt not in self.rt_to_table:
-      self.rt_to_table[rt] = Table[ResourceHandle]()
-    return self.rt_to_table[rt]
-
-  def get(self, rt, i):
-    return self.table(rt).get(i)
-  def add(self, rt, h):
-    return self.table(rt).add(h)
-  def remove(self, rt, i):
-    return self.table(rt).remove(i)
-
 class ResourceHandle:
+  rt: ResourceType
   rep: int
   own: bool
   borrow_scope: Optional[Task]
   lend_count: int
 
-  def __init__(self, rep, own, borrow_scope = None):
+  def __init__(self, rt, rep, own, borrow_scope = None):
+    self.rt = rt
     self.rep = rep
     self.own = own
     self.borrow_scope = borrow_scope
@@ -1083,14 +1067,16 @@ def unpack_flags_from_int(i, labels):
   return record
 
 def lift_own(cx, i, t):
-  h = cx.inst.resources.remove(t.rt, i)
+  h = cx.inst.resources.remove(i)
+  trap_if(h.rt is not t.rt)
   trap_if(h.lend_count != 0)
   trap_if(not h.own)
   return h.rep
 
 def lift_borrow(cx, i, t):
   assert(isinstance(cx.borrow_scope, Subtask))
-  h = cx.inst.resources.get(t.rt, i)
+  h = cx.inst.resources.get(i)
+  trap_if(h.rt is not t.rt)
   if h.own:
     cx.borrow_scope.add_lender(h)
   else:
@@ -1403,16 +1389,16 @@ def pack_flags_into_int(v, labels):
   return i
 
 def lower_own(cx, rep, t):
-  h = ResourceHandle(rep, own = True)
-  return cx.inst.resources.add(t.rt, h)
+  h = ResourceHandle(t.rt, rep, own = True)
+  return cx.inst.resources.add(h)
 
 def lower_borrow(cx, rep, t):
   assert(isinstance(cx.borrow_scope, Task))
   if cx.inst is t.rt.impl:
     return rep
-  h = ResourceHandle(rep, own = False, borrow_scope = cx.borrow_scope)
+  h = ResourceHandle(t.rt, rep, own = False, borrow_scope = cx.borrow_scope)
   h.borrow_scope.todo += 1
-  return cx.inst.resources.add(t.rt, h)
+  return cx.inst.resources.add(h)
 
 def lower_stream(cx, v, t):
   return lower_async_value(ReadableStreamHandle, WritableStreamHandle, cx, v, t)
@@ -1820,8 +1806,8 @@ async def canon_lower(opts, ft, callee, task, flat_args):
 
 async def canon_resource_new(rt, task, rep):
   trap_if(not task.inst.may_leave)
-  h = ResourceHandle(rep, own = True)
-  i = task.inst.resources.add(rt, h)
+  h = ResourceHandle(rt, rep, own = True)
+  i = task.inst.resources.add(h)
   return [i]
 
 ### `canon resource.drop`
@@ -1829,7 +1815,8 @@ async def canon_resource_new(rt, task, rep):
 async def canon_resource_drop(rt, sync, task, i):
   trap_if(not task.inst.may_leave)
   inst = task.inst
-  h = inst.resources.remove(rt, i)
+  h = inst.resources.remove(i)
+  trap_if(h.rt is not rt)
   flat_results = [] if sync else [0]
   if h.own:
     assert(h.borrow_scope is None)
@@ -1853,7 +1840,8 @@ async def canon_resource_drop(rt, sync, task, i):
 ### `canon resource.rep`
 
 async def canon_resource_rep(rt, task, i):
-  h = task.inst.resources.get(rt, i)
+  h = task.inst.resources.get(i)
+  trap_if(h.rt is not rt)
   return [h.rep]
 
 ### 🔀 `canon task.backpressure`
