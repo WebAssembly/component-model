@@ -150,7 +150,7 @@ The `ComponentInstance` class contains all the relevant per-component-instance
 state that `canon`-generated functions use to maintain component invariants.
 ```python
 class ComponentInstance:
-  resources: ResourceTables
+  resources: Table[ResourceHandle]
   waitables: Table[Subtask|StreamHandle|FutureHandle]
   error_contexts: Table[ErrorContext]
   num_tasks: int
@@ -161,7 +161,7 @@ class ComponentInstance:
   starting_pending_task: bool
 
   def __init__(self):
-    self.resources = ResourceTables()
+    self.resources = Table[ResourceHandle]()
     self.waitables = Table[Subtask|StreamHandle|FutureHandle]()
     self.error_contexts = Table[ErrorContext]()
     self.num_tasks = 0
@@ -233,54 +233,27 @@ sentinel values).
 
 #### Resource State
 
-The `ResourceTables` stored in the `resources` field maps `ResourceType`s to
-`Table`s of `ResourceHandle`s (defined next), establishing a separate
-`i32`-indexed array per resource type:
-```python
-class ResourceTables:
-  rt_to_table: MutableMapping[ResourceType, Table[ResourceHandle]]
-
-  def __init__(self):
-    self.rt_to_table = dict()
-
-  def table(self, rt):
-    if rt not in self.rt_to_table:
-      self.rt_to_table[rt] = Table[ResourceHandle]()
-    return self.rt_to_table[rt]
-
-  def get(self, rt, i):
-    return self.table(rt).get(i)
-  def add(self, rt, h):
-    return self.table(rt).add(h)
-  def remove(self, rt, i):
-    return self.table(rt).remove(i)
-```
-While this Python code performs a dynamic hash-table lookup on each handle
-table access, as we'll see below, the `rt` parameter is always statically known
-such that a normal implementation can statically enumerate all `Table` objects
-at compile time and then route the calls to `get`, `add` and `remove` to the
-correct `Table` at the callsite. The net result is that each component instance
-will contain one handle table per resource type used by the component, with
-each compiled adapter function accessing the correct handle table as-if it were
-a global variable.
-
-The `ResourceHandle` class defines the elements of the per-resource-type
-`Table`s stored in `ResourceTables`:
+The `ResourceHandle` class defines the elements of the `resources` field of
+`ComponentInstance`:
 ```python
 class ResourceHandle:
+  rt: ResourceType
   rep: int
   own: bool
   borrow_scope: Optional[Task]
   lend_count: int
 
-  def __init__(self, rep, own, borrow_scope = None):
+  def __init__(self, rt, rep, own, borrow_scope = None):
+    self.rt = rt
     self.rep = rep
     self.own = own
     self.borrow_scope = borrow_scope
     self.lend_count = 0
 ```
-The `rep` field of `ResourceHandle` stores the resource representation
-(currently fixed to be an `i32`) passed to `resource.new`.
+The `rt` and `rep` fields of `ResourceHandle` store the `rt` and `rep`
+parameters passed to the `resource.new` call that created this handle. The
+`rep` field is currently fixed to be an `i32`, but will be generalized in the
+future to other types.
 
 The `own` field indicates whether this element was created from an `own` type
 (or, if false, a `borrow` type).
@@ -296,16 +269,12 @@ live handles that were lent from this `own` handle (by calls to `borrow`-taking
 functions). This count is maintained by the `ImportCall` bookkeeping functions
 (above) and is ensured to be zero when an `own` handle is dropped.
 
-An optimizing implementation can enumerate the canonical definitions present
-in a component to statically determine that a given resource type's handle
-table only contains `own` or `borrow` handles and then, based on this,
-statically eliminate the `own` and the `lend_count` xor `borrow_scope` fields,
-and guards thereof.
-
-The `ResourceType` class represents a concrete resource type that has been
-created by the component instance `impl`. `ResourceType` objects are used as
-keys by `ResourceTables` above and thus we assume that Python object identity
-corresponds to resource type equality, as defined by [type checking] rules.
+The `ResourceType` class represents a runtime instance of a resource type that
+has been created either by the host or a component instance (where multiple
+component instances of the same static component create multiple `ResourceType`
+instances). `ResourceType` Python object identity is used by trapping guards on
+the `rt` field of `ResourceHandle` (above) and thus resource type equality is
+*not* defined structurally (on the contents of `ResourceType`).
 ```python
 class ResourceType(Type):
   impl: ComponentInstance
@@ -1585,7 +1554,8 @@ possible, for example if the index was actually a `borrow` or if the `own`
 handle is currently being lent out as borrows.
 ```python
 def lift_own(cx, i, t):
-  h = cx.inst.resources.remove(t.rt, i)
+  h = cx.inst.resources.remove(i)
+  trap_if(h.rt is not t.rt)
   trap_if(h.lend_count != 0)
   trap_if(not h.own)
   return h.rep
@@ -1603,7 +1573,8 @@ component instance's handle table:
 ```python
 def lift_borrow(cx, i, t):
   assert(isinstance(cx.borrow_scope, Subtask))
-  h = cx.inst.resources.get(t.rt, i)
+  h = cx.inst.resources.get(i)
+  trap_if(h.rt is not t.rt)
   if h.own:
     cx.borrow_scope.add_lender(h)
   else:
@@ -2058,21 +2029,21 @@ def pack_flags_into_int(v, labels):
 ```
 
 Finally, `own` and `borrow` handles are lowered by initializing new handle
-elements in the current component instance's handle table. The increment of
-`borrow_scope.todo` is complemented by a decrement in `canon_resource_drop`
+elements in the current component instance's `resources` table. The increment
+of `borrow_scope.todo` is complemented by a decrement in `canon_resource_drop`
 and ensures that all borrowed handles are dropped before the end of the task.
 ```python
 def lower_own(cx, rep, t):
-  h = ResourceHandle(rep, own = True)
-  return cx.inst.resources.add(t.rt, h)
+  h = ResourceHandle(t.rt, rep, own = True)
+  return cx.inst.resources.add(h)
 
 def lower_borrow(cx, rep, t):
   assert(isinstance(cx.borrow_scope, Task))
   if cx.inst is t.rt.impl:
     return rep
-  h = ResourceHandle(rep, own = False, borrow_scope = cx.borrow_scope)
+  h = ResourceHandle(t.rt, rep, own = False, borrow_scope = cx.borrow_scope)
   h.borrow_scope.todo += 1
-  return cx.inst.resources.add(t.rt, h)
+  return cx.inst.resources.add(h)
 ```
 The special case in `lower_borrow` is an optimization, recognizing that, when
 a borrowed handle is passed to the component that implemented the resource
@@ -2798,12 +2769,12 @@ validation specifies:
 
 Calling `$f` invokes the following function, which adds an owning handle
 containing the given resource representation in the current component
-instance's handle table:
+instance's `resources` table:
 ```python
 async def canon_resource_new(rt, task, rep):
   trap_if(not task.inst.may_leave)
-  h = ResourceHandle(rep, own = True)
-  i = task.inst.resources.add(rt, h)
+  h = ResourceHandle(rt, rep, own = True)
+  i = task.inst.resources.add(h)
   return [i]
 ```
 
@@ -2818,13 +2789,14 @@ validation specifies:
 * `$f` is given type `(func (param i32))`
 
 Calling `$f` invokes the following function, which removes the handle from the
-current component instance's handle table and, if the handle was owning, calls
-the resource's destructor.
+current component instance's `resources` table and, if the handle was owning,
+calls the resource's destructor.
 ```python
 async def canon_resource_drop(rt, sync, task, i):
   trap_if(not task.inst.may_leave)
   inst = task.inst
-  h = inst.resources.remove(rt, i)
+  h = inst.resources.remove(i)
+  trap_if(h.rt is not rt)
   flat_results = [] if sync else [0]
   if h.own:
     assert(h.borrow_scope is None)
@@ -2874,7 +2846,8 @@ Calling `$f` invokes the following function, which extracts the resource
 representation from the handle.
 ```python
 async def canon_resource_rep(rt, task, i):
-  h = task.inst.resources.get(rt, i)
+  h = task.inst.resources.get(i)
+  trap_if(h.rt is not rt)
   return [h.rep]
 ```
 Note that the "locally-defined" requirement above ensures that only the
