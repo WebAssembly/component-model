@@ -290,11 +290,11 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x04 rt:<typeidx>                                   => (canon resource.rep rt (core func))
            | 0x05 ft:<typeidx>                                   => (canon thread.spawn ft (core func)) 🧵
            | 0x06                                                => (canon thread.available_parallelism (core func)) 🧵
-           | 0x08                                                => (canon task.backpressure (core func)) 🔀
+           | 0x08                                                => (canon backpressure.set (core func)) 🔀
            | 0x09 rs:<resultlist> opts:<opts>                    => (canon task.return rs opts (core func)) 🔀
-           | 0x0a async?:<async>? m:<core:memdix>                => (canon task.wait async? (memory m) (core func)) 🔀
-           | 0x0b async?:<async>? m:<core:memidx>                => (canon task.poll async? (memory m) (core func)) 🔀
-           | 0x0c async?:<async>?                                => (canon task.yield async? (core func)) 🔀
+           | 0x0a 0x7f i:<u32>                                   => (canon context.get i32 i (core func)) 🔀
+           | 0x0b 0x7f i:<u32>                                   => (canon context.set i32 i (core func)) 🔀
+           | 0x0c async?:<async>?                                => (canon yield async? (core func)) 🔀
            | 0x0d                                                => (canon subtask.drop (core func)) 🔀
            | 0x0e t:<typeidx>                                    => (canon stream.new t (core func)) 🔀
            | 0x0f t:<typeidx> opts:<opts>                        => (canon stream.read t opts (core func)) 🔀
@@ -313,6 +313,11 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x1c opts:<opts>                                    => (canon error-context.new opts (core func)) 🔀
            | 0x1d opts:<opts>                                    => (canon error-context.debug-message opts (core func)) 🔀
            | 0x1e                                                => (canon error-context.drop (core func)) 🔀
+           | 0x1f                                                => (canon waitable-set.new (core func)) 🔀
+           | 0x20 async?:<async>? m:<core:memidx>                => (canon waitable-set.wait async? (memory m) (core func)) 🔀
+           | 0x21 async?:<async>? m:<core:memidx>                => (canon waitable-set.poll async? (memory m) (core func)) 🔀
+           | 0x22                                                => (canon waitable-set.drop (core func)) 🔀
+           | 0x23                                                => (canon waitable.join (core func)) 🔀
 async?   ::= 0x00                                                =>
            | 0x01                                                => async
 opts     ::= opt*:vec(<canonopt>)                                => opt*
