@@ -36,11 +36,16 @@ being specified here.
   * [`canon resource.new`](#canon-resourcenew)
   * [`canon resource.drop`](#canon-resourcedrop)
   * [`canon resource.rep`](#canon-resourcerep)
-  * [`canon task.backpressure`](#-canon-taskbackpressure) 🔀
+  * [`canon context.get`](#-canon-contextget) 🔀
+  * [`canon context.set`](#-canon-contextset) 🔀
+  * [`canon backpressure.set`](#-canon-backpressureset) 🔀
   * [`canon task.return`](#-canon-taskreturn) 🔀
-  * [`canon task.wait`](#-canon-taskwait) 🔀
-  * [`canon task.poll`](#-canon-taskpoll) 🔀
-  * [`canon task.yield`](#-canon-taskyield) 🔀
+  * [`canon yield`](#-canon-yield) 🔀
+  * [`canon waitable-set.new`](#-canon-waitable-setnew) 🔀
+  * [`canon waitable-set.wait`](#-canon-waitable-setwait) 🔀
+  * [`canon waitable-set.poll`](#-canon-waitable-setpoll) 🔀
+  * [`canon waitable-set.drop`](#-canon-waitable-setdrop) 🔀
+  * [`canon waitable.join`](#-canon-waitablejoin) 🔀
   * [`canon subtask.drop`](#-canon-subtaskdrop) 🔀
   * [`canon {stream,future}.new`](#-canon-streamfuturenew) 🔀
   * [`canon {stream,future}.{read,write}`](#-canon-streamfuturereadwrite) 🔀
@@ -159,6 +164,7 @@ behavior and enforce invariants.
 class ComponentInstance:
   resources: Table[ResourceHandle]
   waitables: Table[Waitable]
+  waitable_sets: Table[WaitableSet]
   error_contexts: Table[ErrorContext]
   may_leave: bool
   backpressure: bool
@@ -170,6 +176,7 @@ class ComponentInstance:
   def __init__(self):
     self.resources = Table[ResourceHandle]()
     self.waitables = Table[Waitable]()
+    self.waitable_sets = Table[WaitableSet]()
     self.error_contexts = Table[ErrorContext]()
     self.may_leave = True
     self.backpressure = False
@@ -193,7 +200,7 @@ class Table(Generic[ElemT]):
   array: list[Optional[ElemT]]
   free: list[int]
 
-  MAX_LENGTH = 2**30 - 1
+  MAX_LENGTH = 2**28 - 1
 
   def __init__(self):
     self.array = [None]
@@ -401,6 +408,30 @@ that do all the heavy lifting are shared with function parameter/result lifting
 and lowering and defined below.
 
 
+#### Context-Local Storage
+
+The `ContextLocalStorage` class implements [context-local storage], with each
+new `Task` getting a fresh, zero-initialized `ContextLocalStorage` that can be
+accessed by core wasm code using `canon context.{get,set}`. (In the future,
+when threads are integrated, each `thread.spawn`ed thread would also get a
+fresh, zero-initialized `ContextLocalStorage`.)
+```python
+class ContextLocalStorage:
+  LENGTH = 2
+  array: list[int]
+
+  def __init__(self):
+    self.array = [0] * ContextLocalStorage.LENGTH
+
+  def set(self, i, v):
+    assert(types_match_values(['i32'], [v]))
+    self.array[i] = v
+
+  def get(self, i):
+    return self.array[i]
+```
+
+
 #### Task State
 
 A `Task` object is created for each call to `canon_lift` and is implicitly
@@ -415,9 +446,9 @@ class Task:
   caller: Optional[Task]
   on_return: Optional[Callable]
   on_block: Callable[[Awaitable], Awaitable]
-  waitable_set: WaitableSet
   num_subtasks: int
   num_borrows: int
+  context: ContextLocalStorage
 
   def __init__(self, opts, inst, ft, caller, on_return, on_block):
     self.opts = opts
@@ -426,9 +457,9 @@ class Task:
     self.caller = caller
     self.on_return = on_return
     self.on_block = on_block
-    self.waitable_set = WaitableSet()
     self.num_subtasks = 0
     self.num_borrows = 0
+    self.context = ContextLocalStorage()
 ```
 Using a conservative syntactic analysis of a complete component, an optimizing
 implementation can statically eliminate fields when a particular feature (such
@@ -580,7 +611,7 @@ Notably, the loop in `maybe_start_pending_task` allows pending async tasks to
 start even when there is a blocked pending sync task ahead of them in the
 `pending_tasks` queue.
 
-The `Task.yield_` method is called by `canon task.yield` or, when a `callback`
+The `Task.yield_` method is called by `canon yield` or, when a `callback`
 is used, when core wasm returns the "yield" code to the event loop. Yielding
 allows the runtime to switch execution to another task without having to wait
 for any external I/O as emulated in the Python definition by waiting on
@@ -588,17 +619,6 @@ for any external I/O as emulated in the Python definition by waiting on
 ```python
   async def yield_(self, sync):
     await self.wait_on(asyncio.sleep(0), sync)
-```
-
-The `Task.wait` and `Task.poll` methods delegate to `WaitableSet`, defined in
-the next section.
-```python
-  async def wait(self, sync) -> EventTuple:
-    return await self.wait_on(self.waitable_set.wait(), sync)
-
-  async def poll(self, sync) -> Optional[EventTuple]:
-    await self.yield_(sync)
-    return self.waitable_set.poll()
 ```
 
 The `Task.wait_on` method defines how to block the current task until a given
@@ -746,7 +766,6 @@ may be a synchronous task unblocked by the clearing of `calling_sync_export`.
   def exit(self):
     assert(Task.current.locked())
     trap_if(self.num_subtasks > 0)
-    self.waitable_set.drop()
     trap_if(self.on_return)
     assert(self.num_borrows == 0)
     if self.opts.sync:
@@ -771,19 +790,19 @@ code that produces the events (specifically, in `subtask_event` and
 `copy_event`).
 ```python
 class CallState(IntEnum):
-  STARTING = 0
-  STARTED = 1
-  RETURNED = 2
+  STARTING = 1
+  STARTED = 2
+  RETURNED = 3
 
 class EventCode(IntEnum):
+  NONE = 0
   CALL_STARTING = CallState.STARTING
   CALL_STARTED = CallState.STARTED
   CALL_RETURNED = CallState.RETURNED
-  YIELDED = 3
-  STREAM_READ = 4
-  STREAM_WRITE = 5
-  FUTURE_READ = 6
-  FUTURE_WRITE = 7
+  STREAM_READ = 5
+  STREAM_WRITE = 6
+  FUTURE_READ = 7
+  FUTURE_WRITE = 8
 
 EventTuple = tuple[EventCode, int, int]
 ```
@@ -876,15 +895,19 @@ polling.
 class WaitableSet:
   elems: list[Waitable]
   maybe_has_pending_event: asyncio.Event
+  num_waiting: int
 
   def __init__(self):
     self.elems = []
     self.maybe_has_pending_event = asyncio.Event()
+    self.num_waiting = 0
 
   async def wait(self) -> EventTuple:
+    self.num_waiting += 1
     while True:
       await self.maybe_has_pending_event.wait()
       if (e := self.poll()):
+        self.num_waiting -= 1
         return e
 
   def poll(self) -> Optional[EventTuple]:
@@ -899,11 +922,11 @@ class WaitableSet:
 
   def drop(self):
     trap_if(len(self.elems) > 0)
+    trap_if(self.num_waiting > 0)
 ```
-The `WaitableSet.drop` method traps if dropped (by the owning `Task`) while it
-still contains elements (whose `Waitable.waitable_set` field would become
-dangling). This can happen if a task tries to exit in the middle of a stream or
-future copy operation.
+The `WaitableSet.drop` method traps if dropped while it still contains elements
+(whose `Waitable.waitable_set` field would become dangling) or if it is being
+waited-upon by another `Task`.
 
 Note: the `random.shuffle` in `poll` is meant to give runtimes the semantic
 freedom to schedule delivery of events non-deterministically (e.g., taking into
@@ -955,7 +978,6 @@ turn only happens if the call is `async` *and* blocks. In this case, the
     self.supertask = task
     self.supertask.num_subtasks += 1
     Waitable.__init__(self)
-    Waitable.join(self, task.waitable_set)
     return task.inst.waitables.add(self)
 ```
 The `num_subtasks` increment ensures that the parent `Task` cannot `exit`
@@ -2708,13 +2730,29 @@ declared types of the export. In any case, `canon lift` specifies how these
 variously-produced values are consumed as parameters (and produced as results)
 by a *single host-agnostic component*.
 
-Based on this, `canon_lift` is defined:
+Based on this, `canon_lift` is defined in chunks as follows:
 ```python
 async def canon_lift(opts, inst, ft, callee, caller, on_start, on_return, on_block):
   task = Task(opts, inst, ft, caller, on_return, on_block)
   flat_args = await task.enter(on_start)
   flat_ft = flatten_functype(opts, ft, 'lift')
   assert(types_match_values(flat_ft.params, flat_args))
+```
+Each call to `canon lift` creates a new `Task` and waits to enter the task,
+allowing the task to express backpressure (for several independent reasons
+listed in `Task.may_enter` above) before lowering the arguments into the
+callee's memory.
+
+In the synchronous case, if `always-task-return` ABI option is set, the lifted
+core wasm code must call `canon task.return` to return a value before returning
+to `canon lift` (or else there will be a trap in `task.exit()`), which allows
+the core wasm to do cleanup and finalization before returning. Otherwise,
+if `always-task-return` is *not* set, `canon lift` calls `task.return` when
+core wasm returns (which lifts the values return by core wasm) and then calls
+the `post-return` function to let core wasm do cleanup and finalization. In
+the future, `post-return` and the option to not set `always-task-return` may
+be deprecated and removed.
+```python
   if opts.sync:
     flat_results = await call_and_trap_on_throw(callee, task, flat_args)
     if not opts.always_task_return:
@@ -2722,37 +2760,80 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_return, on_blo
       task.return_(flat_results)
       if opts.post_return is not None:
         [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
+    task.exit()
+    return
+```
+Next, the asynchronous non-`callback` case is simple and requires `task.return`
+to be called, effectively implying `always-task-return`. Asynchronous waiting
+happens by core wasm calling `waitable-set.wait`.
+```python
   else:
     if not opts.callback:
       [] = await call_and_trap_on_throw(callee, task, flat_args)
       assert(types_match_values(flat_ft.results, []))
-    else:
-      [packed_ctx] = await call_and_trap_on_throw(callee, task, flat_args)
-      assert(types_match_values(flat_ft.results, [packed_ctx]))
-      while packed_ctx != 0:
-        is_yield = bool(packed_ctx & 1)
-        ctx = packed_ctx & ~1
-        if is_yield:
-          await task.yield_(sync = False)
-          event, p1, p2 = (EventCode.YIELDED, 0, 0)
-        else:
-          event, p1, p2 = await task.wait(sync = False)
-        [packed_ctx] = await call_and_trap_on_throw(opts.callback, task, [ctx, event, p1, p2])
-  task.exit()
+      task.exit()
+      return
 ```
-In the `sync` case, if the `always-task-return` ABI option is *not* set, then
-`task.return_` will be called by `callee` to return values; otherwise,
-`task.return_` must be called by `canon_lift`.
+In contrast, the aynchronous `callback` case does asynchronous waiting in
+the event loop, with core wasm (repeatedly) returning instructions for what
+to do next:
+```python
+    else:
+      [packed] = await call_and_trap_on_throw(callee, task, flat_args)
+      s = None
+      while True:
+        code,si = unpack_callback_result(packed)
+        if si != 0:
+          s = task.inst.waitable_sets.get(si)
+        match code:
+          case CallbackCode.EXIT:
+            task.exit()
+            return
+          case CallbackCode.YIELD:
+            await task.yield_(opts.sync)
+            e = None
+          case CallbackCode.WAIT:
+            trap_if(not s)
+            e = await task.wait_on(s.wait(), sync = False)
+          case CallbackCode.POLL:
+            trap_if(not s)
+            await task.yield_(opts.sync)
+            e = s.poll()
+        if e:
+          event, p1, p2 = e
+        else:
+          event, p1, p2 = (EventCode.NONE, 0, 0)
+        [packed] = await call_and_trap_on_throw(opts.callback, task, [event, p1, p2])
+```
+One detail worth noting here is that the index of the waitable set does not
+need to be returned every time; as an optimization to avoid a `waitable_sets`
+table access on every turn of the event loop, if the returned waitable set
+index is `0` (which is an invalid table index anyways), the previous waitable
+set will be used.
 
-In the `async` case, there are two sub-cases depending on whether the
-`callback` `canonopt` was set. When `callback` is present, waiting happens in
-an "event loop" inside `canon_lift` which also allows yielding (i.e., allowing
-other tasks to run without blocking) by setting the LSB of the returned `i32`.
-Otherwise, waiting must happen by calling `task.wait` (defined below), which
-potentially requires the runtime implementation to use a fiber (aka. stackful
-coroutine) to switch to another task. Thus, `callback` is an optimization for
-avoiding fiber creation for async languages that don't need it (e.g., JS,
-Python, C# and Rust).
+The bit-packing scheme used for the `i32` `packed` return value is defined as
+follows:
+```python
+class CallbackCode(IntEnum):
+  EXIT = 0
+  YIELD = 1
+  WAIT = 2
+  POLL = 3
+  MAX = 3
+
+def unpack_callback_result(packed):
+  code = packed & 0xf
+  trap_if(code > CallbackCode.MAX)
+  assert(packed < 2**32)
+  assert(Table.MAX_LENGTH < 2**28)
+  waitable_set_index = packed >> 4
+  return (CallbackCode(code), waitable_set_index)
+```
+The ability to asynchronously wait, poll, yield and exit is thus available to
+both the `callback` and non-`callback` cases, making `callback` just an
+optimization to avoid allocating stacks for async languages that have avoided
+the need for [stack-switching] by design (e.g., `async`/`await` in JS, Python,
+C# and Rust).
 
 Uncaught Core WebAssembly [exceptions] result in a trap at component
 boundaries. Thus, if a component wishes to signal an error, it must use some
@@ -2865,9 +2946,9 @@ immediately return control flow back to the `async` caller if `callee` blocks:
               subtask.finish()
             return (EventCode(subtask.state), subtaski, 0)
           subtask.set_event(subtask_event)
-        assert(0 < subtaski <= Table.MAX_LENGTH < 2**30)
-        assert(0 <= int(subtask.state) < 2**2)
-        flat_results = [subtaski | (int(subtask.state) << 30)]
+        assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
+        assert(0 <= int(subtask.state) < 2**4)
+        flat_results = [int(subtask.state) | (subtaski << 4)]
 
   return flat_results
 ```
@@ -3017,19 +3098,62 @@ Note that the "locally-defined" requirement above ensures that only the
 component instance defining a resource can access its representation.
 
 
-### 🔀 `canon task.backpressure`
+### 🔀 `canon context.get`
 
 For a canonical definition:
 ```wasm
-(canon task.backpressure (core func $f))
+(canon context.get $t $i (core func $f))
 ```
 validation specifies:
-* `$f` is given type `[i32] -> []`
+* `$t` must be `i32` (for now; see [here][context-local storage])
+* `$i` must be less than `2`
+* `$f` is given type `(func (result i32))`
+
+Calling `$f` invokes the following function, which reads the [context-local
+storage] of the [current task]:
+```python
+async def canon_context_get(t, i, task):
+  assert(t == 'i32')
+  assert(i < ContextLocalStorage.LENGTH)
+  return [task.context.get(i)]
+```
+
+
+### 🔀 `canon context.set`
+
+For a canonical definition:
+```wasm
+(canon context.set $t $i (core func $f))
+```
+validation specifies:
+* `$t` must be `i32` (for now; see [here][context-local storage])
+* `$i` must be less than `2`
+* `$f` is given type `(func (param $v i32))`
+
+Calling `$f` invokes the following function, which writes to the [context-local
+storage] of the [current task]:
+```python
+async def canon_context_set(t, i, task, v):
+  assert(t == 'i32')
+  assert(i < ContextLocalStorage.LENGTH)
+  task.context.set(i, v)
+  return []
+```
+
+
+### 🔀 `canon backpressure.set`
+
+For a canonical definition:
+```wasm
+(canon backpressure.set (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param $enabled i32))`
 
 Calling `$f` invokes the following function, which sets the `backpressure`
 flag on the current `ComponentInstance`:
 ```python
-async def canon_task_backpressure(task, flat_args):
+async def canon_backpressure_set(task, flat_args):
   trap_if(task.opts.sync)
   task.inst.backpressure = bool(flat_args[0])
   return []
@@ -3070,68 +3194,117 @@ This ensures that AOT fusion of `canon lift` and `canon lower` can generate
 a thunk that is indirectly called by `task.return` after these guards.
 
 
-### 🔀 `canon task.wait`
+### 🔀 `canon yield`
 
 For a canonical definition:
 ```wasm
-(canon task.wait $async? (memory $mem) (core func $f))
+(canon yield $async? (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param i32) (result i32))`
+* `$f` is given type `(func)`
 
-Calling `$f` waits for progress to be made in a subtask of the current task,
-returning the event (which is currently simply a `CallState` value) and
-writing the subtask index as an outparam:
+Calling `$f` calls `Task.yield_` to allow other tasks to execute:
 ```python
-async def canon_task_wait(sync, mem, task, ptr):
+async def canon_yield(sync, task):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback and not sync)
-  event, p1, p2 = await task.wait(sync)
-  cx = LiftLowerContext(CanonicalOptions(memory = mem), task.inst)
-  store(cx, p1, U32Type(), ptr)
-  store(cx, p2, U32Type(), ptr + 4)
-  return [event]
+  await task.yield_(sync)
+  return []
 ```
-If `async` is not set, no other tasks may execute during `task.wait`, which
-can be useful for producer toolchains in situations where interleaving is not
-supported. However, this is generally worse for concurrency and thus producer
-toolchains should set `async` when possible. When `$async` is set, `task.wait`
-will only block the current `Task`, allowing other tasks to start or resume.
+If `async` is not set, no other tasks *in the same component instance* can
+execute, however tasks in *other* component instances may execute. This allows
+a long-running task in one component to avoid starving other components without
+needing support full reentrancy.
 
-`task.wait` can be called from a synchronously-lifted export so that even
-synchronous code can make concurrent import calls. In these synchronous cases,
-though, the automatic backpressure (applied by `Task.enter`) will ensure there
-is only ever at most once synchronously-lifted task executing in a component
-instance at a time.
-
-The guard preventing `async` use of `task.wait` when a `callback` has
+The guard preventing `async` use of `task.poll` when a `callback` has
 been used preserves the invariant that producer toolchains using
 `callback` never need to handle multiple overlapping callback
 activations.
 
 
-### 🔀 `canon task.poll`
+### 🔀 `canon waitable-set.new`
 
 For a canonical definition:
 ```wasm
-(canon task.poll $async? (memory $mem) (core func $f))
+(canon waitable-set.new (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param i32) (result i32))`
+* `$f` is given type `(func (result i32))`
 
-Calling `$f` does a non-blocking check for whether an event is already
-available, returning whether or not there was such an event as a boolean and,
-if there was an event, storing the `i32` event and payloads as outparams.
+Calling `$f` invokes the following function, which adds an empty waitable set
+to the component instance's `waitable_sets` table:
 ```python
-async def canon_task_poll(sync, mem, task, ptr):
+async def canon_waitable_set_new(task):
+  trap_if(not task.inst.may_leave)
+  return [ task.inst.waitable_sets.add(WaitableSet()) ]
+```
+
+
+### 🔀 `canon waitable-set.wait`
+
+For a canonical definition:
+```wasm
+(canon waitable-set.wait $async? (memory $mem) (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param $si) (param $ptr i32) (result i32))`
+
+Calling `$f` invokes the following function which waits for progress to be made
+on a waitable in the given waitable set (indicated by index `$si`) and then
+returning its `EventCode` and writing the payload values into linear memory:
+```python
+async def canon_waitable_set_wait(sync, mem, task, si, ptr):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback and not sync)
-  ret = await task.poll(sync)
-  if ret is None:
-    return [0]
+  s = task.inst.waitable_sets.get(si)
+  e = await task.wait_on(s.wait(), sync)
+  return unpack_event(mem, task, ptr, e)
+
+def unpack_event(mem, task, ptr, e: EventTuple):
+  event, p1, p2 = e
   cx = LiftLowerContext(CanonicalOptions(memory = mem), task.inst)
-  store(cx, ret, TupleType([U32Type(), U32Type(), U32Type()]), ptr)
-  return [1]
+  store(cx, p1, U32Type(), ptr)
+  store(cx, p2, U32Type(), ptr + 4)
+  return [event]
+```
+If `async` is not set, `wait_on` will prevent other tasks from executing in
+the same component instance, which can be useful for producer toolchains in
+situations where interleaving is not supported. However, this is generally
+worse for concurrency and thus producer toolchains should set `async` when
+possible.
+
+`wait` can be called from a synchronously-lifted export so that even
+synchronous code can make concurrent import calls. In these synchronous cases,
+though, the automatic backpressure (applied by `Task.enter`) will ensure there
+is only ever at most once synchronously-lifted task executing in a component
+instance at a time.
+
+The guard preventing `async` use of `wait` when a `callback` has been used
+preserves the invariant that producer toolchains using `callback` never need to
+handle multiple overlapping callback activations.
+
+
+### 🔀 `canon waitable-set.poll`
+
+For a canonical definition:
+```wasm
+(canon waitable-set.poll $async? (memory $mem) (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param $si i32) (param $ptr i32) (result i32))`
+
+Calling `$f` invokes the following function, which returns `NONE` (`0`) instead
+of blocking if there is no event available, and otherwise returns the event the
+same way as `wait`.
+```python
+async def canon_waitable_set_poll(sync, mem, task, si, ptr):
+  trap_if(not task.inst.may_leave)
+  trap_if(task.opts.callback and not sync)
+  s = task.inst.waitable_sets.get(si)
+  await task.yield_(sync)
+  if (e := s.poll()):
+    return unpack_event(mem, task, ptr, e)
+  return [EventCode.NONE]
 ```
 When `async` is set, `task.poll` can yield to other tasks (in this or other
 components) as part of polling for an event.
@@ -3142,32 +3315,51 @@ been used preserves the invariant that producer toolchains using
 activations.
 
 
-### 🔀 `canon task.yield`
+### 🔀 `canon waitable-set.drop`
 
 For a canonical definition:
 ```wasm
-(canon task.yield $async? (core func $f))
+(canon waitable-set.drop (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func)`
+* `$f` is given type `(func (param i32))`
 
-Calling `$f` calls `Task.yield_` to allow other tasks to execute:
+Calling `$f` invokes the following function, which removes the given
+waitable set from the component instance table, performing the guards defined
+by `WaitableSet.drop` above:
 ```python
-async def canon_task_yield(sync, task):
+async def canon_waitable_set_drop(task, i):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.callback and not sync)
-  await task.yield_(sync)
+  s = task.inst.waitable_sets.remove(i)
+  s.drop()
   return []
 ```
-If `sync` is set, no other tasks *in the same component instance* can
-execute, however tasks in *other* component instances may execute. This allows
-a long-running task in one component to avoid starving other components
-without needing support full reentrancy.
 
-The guard preventing `async` use of `task.poll` when a `callback` has
-been used preserves the invariant that producer toolchains using
-`callback` never need to handle multiple overlapping callback
-activations.
+
+### 🔀 `canon waitable.join`
+
+For a canonical definition:
+```wasm
+(canon waitable.join (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param $wi i32) (param $si i32))`
+
+Calling `$f` invokes the following function:
+```python
+async def canon_waitable_join(task, wi, si):
+  trap_if(not task.inst.may_leave)
+  w = task.inst.waitables.get(wi)
+  if si == 0:
+    w.join(None)
+  else:
+    w.join(task.inst.waitable_sets.get(si))
+  return []
+```
+Note that tables do not allow elements at index `0`, so `0` is a valid sentinel
+that tells `join` to remove the given waitable from any set that it is
+currently a part of. Waitables can be a member of at most one set, so if the
+given waitable is already in one set, it will be transferred.
 
 
 ### 🔀 `canon subtask.drop`
@@ -3311,7 +3503,6 @@ context-switching overhead.
     def copy_event(revoke_buffer):
       revoke_buffer()
       e.copying = False
-      e.join(None)
       return (event_code, i, pack_copy_result(task, buffer, e))
     def on_partial_copy(revoke_buffer):
       e.set_event(partial(copy_event, revoke_buffer))
@@ -3319,7 +3510,6 @@ context-switching overhead.
       e.set_event(partial(copy_event, revoke_buffer = lambda:()))
     if e.copy(buffer, on_partial_copy, on_copy_done) != 'done':
       e.copying = True
-      e.join(task.waitable_set)
       return [BLOCKED]
   return [pack_copy_result(task, buffer, e)]
 ```
@@ -3641,6 +3831,7 @@ def canon_thread_available_parallelism():
 [Structured Concurrency]: Async.md#structured-concurrency
 [Current Task]: Async.md#current-task
 [Readable and Writable Ends]: Async.md#streams-and-futures
+[Context-Local Storage]: Async.md#context-local-storage
 
 [Administrative Instructions]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-instr-admin
 [Implementation Limits]: https://webassembly.github.io/spec/core/appendix/implementation.html
