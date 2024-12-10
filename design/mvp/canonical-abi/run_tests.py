@@ -438,8 +438,8 @@ async def test_handles():
     nonlocal dtor_value
 
     assert(len(args) == 4)
-    assert(len(inst.resources.table(rt).array) == 4)
-    assert(inst.resources.table(rt).array[0] is None)
+    assert(len(inst.resources.array) == 4)
+    assert(inst.resources.array[0] is None)
     assert(args[0] == 1)
     assert(args[1] == 2)
     assert(args[2] == 3)
@@ -466,22 +466,22 @@ async def test_handles():
     dtor_value = None
     await canon_resource_drop(rt, True, task, 1)
     assert(dtor_value == 42)
-    assert(len(inst.resources.table(rt).array) == 5)
-    assert(inst.resources.table(rt).array[1] is None)
-    assert(len(inst.resources.table(rt).free) == 1)
+    assert(len(inst.resources.array) == 5)
+    assert(inst.resources.array[1] is None)
+    assert(len(inst.resources.free) == 1)
 
     h = (await canon_resource_new(rt, task, 46))[0]
     assert(h == 1)
-    assert(len(inst.resources.table(rt).array) == 5)
-    assert(inst.resources.table(rt).array[1] is not None)
-    assert(len(inst.resources.table(rt).free) == 0)
+    assert(len(inst.resources.array) == 5)
+    assert(inst.resources.array[1] is not None)
+    assert(len(inst.resources.free) == 0)
 
     dtor_value = None
     await canon_resource_drop(rt, True, task, 3)
     assert(dtor_value is None)
-    assert(len(inst.resources.table(rt).array) == 5)
-    assert(inst.resources.table(rt).array[3] is None)
-    assert(len(inst.resources.table(rt).free) == 1)
+    assert(len(inst.resources.array) == 5)
+    assert(inst.resources.array[3] is None)
+    assert(len(inst.resources.free) == 1)
 
     return [1, 2, 4]
 
@@ -510,9 +510,9 @@ async def test_handles():
   assert(got[0] == 46)
   assert(got[1] == 43)
   assert(got[2] == 45)
-  assert(len(inst.resources.table(rt).array) == 5)
-  assert(all(inst.resources.table(rt).array[i] is None for i in range(4)))
-  assert(len(inst.resources.table(rt).free) == 4)
+  assert(len(inst.resources.array) == 5)
+  assert(all(inst.resources.array[i] is None for i in range(4)))
+  assert(len(inst.resources.free) == 4)
   definitions.MAX_FLAT_RESULTS = before
 
 
