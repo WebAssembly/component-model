@@ -579,7 +579,7 @@ flag to block new tasks from starting or resuming.
 While a task is running, it may call `wait` (via `canon task.wait` or when
 using a `callback`, by returning to the event loop) to learn about progress
 made by async subtasks, streams or futures which are reported to this task by
-`notify`.Queue`. (The definition of `wait_on`, used by `wait` here, is next.)
+`notify`. (The definition of `wait_on`, used by `wait` here, is next.)
 ```python
   async def wait(self, sync) -> EventTuple:
     while True:
@@ -589,10 +589,12 @@ made by async subtasks, streams or futures which are reported to this task by
 
   def maybe_next_event(self) -> Optional[EventTuple]:
     while self.events:
+      assert(self.has_events.is_set())
       event = self.events.pop(0)
+      if not self.events:
+        self.has_events.clear()
       if (e := event()):
         return e
-    self.has_events.clear()
     return None
 
   def notify(self, event: EventCallback):

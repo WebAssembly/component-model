@@ -451,10 +451,12 @@ class Task:
 
   def maybe_next_event(self) -> Optional[EventTuple]:
     while self.events:
+      assert(self.has_events.is_set())
       event = self.events.pop(0)
+      if not self.events:
+        self.has_events.clear()
       if (e := event()):
         return e
-    self.has_events.clear()
     return None
 
   def notify(self, event: EventCallback):
