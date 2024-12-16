@@ -351,9 +351,16 @@ replaced with `...` to focus on the overall flow of function calls.
 ```wat
 (component
   (import "fetch" (func $fetch (param "url" string) (result (list u8))))
+  (core module $Libc
+    (memory (export "mem") 1)
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32) ...)
+    ...
+  )
   (core module $Main
+    (import "libc" "mem" (memory 1))
+    (import "libc" "realloc" (func (param i32 i32 i32 i32) (result i32)))
     (import "" "fetch" (func $fetch (param i32 i32) (result i32)))
-    (import "" "task.return" (func $task_return (param i32)))
+    (import "" "task.return" (func $task_return (param i32 i32)))
     (import "" "task.wait" (func $wait (param i32) (result i32)))
     (func (export "summarize") (param i32 i32)
       ...
@@ -368,19 +375,25 @@ replaced with `...` to focus on the overall flow of function calls.
         ...
       end
       ...
-      call $task_return  ;; return the string result
+      call $task_return  ;; return the string result (pointer,length)
       ...
     )
   )
-  (canon lower $fetch async (core func $fetch'))
-  (canon task.return (core func $task_return))
-  (canon task.wait (core func $task_wait))
+  (core instance $libc (instantiate $Libc))
+  (alias $libc "mem" (core memory $mem))
+  (alias $libc "realloc" (core func $realloc))
+  (canon lower $fetch async (memory $mem) (realloc $realloc) (core func $fetch'))
+  (canon task.return (result string) async (memory $mem) (realloc $realloc) (core func $task_return))
+  (canon task.wait async (memory $mem) (core func $task_wait))
   (core instance $main (instantiate $Main (with "" (instance
+    (export "mem" (memory $mem))
+    (export "realloc" (func $realloc))
     (export "fetch" (func $fetch'))
     (export "task.return" (func $task_return))
     (export "task.wait" (func $task_wait))
   ))))
-  (canon lift (core func $main "summarize") async
+  (canon lift (core func $main "summarize")
+    async (memory $mem) (realloc $realloc)
     (func $summarize (param "urls" (list string)) (result string)))
   (export "summarize" (func $summarize))
 )
@@ -418,10 +431,16 @@ not externally-visible behavior.
 ```wat
 (component
   (import "fetch" (func $fetch (param "url" string) (result (list u8))))
+  (core module $Libc
+    (memory (export "mem") 1)
+    (func (export "realloc") (param i32 i32 i32 i32) (result i32) ...)
+    ...
+  )
   (core module $Main
+    (import "libc" "mem" (memory 1))
+    (import "libc" "realloc" (func (param i32 i32 i32 i32) (result i32)))
     (import "" "fetch" (func $fetch (param i32 i32) (result i32)))
-    (import "" "task.return" (func $task_return (param i32)))
-    (import "" "task.wait" (func $wait (param i32) (result i32)))
+    (import "" "task.return" (func $task_return (param i32 i32)))
     (func (export "summarize") (param i32 i32) (result i32)
       ...
       loop
@@ -438,20 +457,24 @@ not externally-visible behavior.
         return                ;; wait for another subtask to make progress
       end
       ...
-      call $task_return       ;; return the string result
+      call $task_return       ;; return the string result (pointer,length)
       ...
       i32.const 0             ;; return zero to signal that this task is done
     )
   )
-  (canon lower $fetch async (core func $fetch'))
-  (canon task.return (core func $task_return))
-  (canon task.wait (core func $task_wait))
+  (core instance $libc (instantiate $Libc))
+  (alias $libc "mem" (core memory $mem))
+  (alias $libc "realloc" (core func $realloc))
+  (canon lower $fetch async (memory $mem) (realloc $realloc) (core func $fetch'))
+  (canon task.return (result string) async (memory $mem) (realloc $realloc) (core func $task_return))
   (core instance $main (instantiate $Main (with "" (instance
+    (export "mem" (memory $mem))
+    (export "realloc" (func $realloc))
     (export "fetch" (func $fetch'))
     (export "task.return" (func $task_return))
-    (export "task.wait" (func $task_wait))
   ))))
-  (canon lift (core func $main "summarize") async (callback (core func $main "cb"))
+  (canon lift (core func $main "summarize")
+    async (callback (core func $main "cb")) (memory $mem) (realloc $realloc)
     (func $summarize (param "urls" (list string)) (result string)))
   (export "summarize" (func $summarize))
 )

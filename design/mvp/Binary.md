@@ -289,7 +289,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x05 ft:<typeidx>                                   => (canon thread.spawn ft (core func)) 🧵
            | 0x06                                                => (canon thread.available_parallelism (core func)) 🧵
            | 0x08                                                => (canon task.backpressure (core func)) 🔀
-           | 0x09 ft:<core:typeidx>                              => (canon task.return ft (core func)) 🔀
+           | 0x09 rs:<resultlist> opts:<opts>                    => (canon task.return rs opts (core func)) 🔀
            | 0x0a async?:<async>? m:<core:memdix>                => (canon task.wait async? (memory m) (core func)) 🔀
            | 0x0b async?:<async>? m:<core:memidx>                => (canon task.poll async? (memory m) (core func)) 🔀
            | 0x0c async?:<async>?                                => (canon task.yield async? (core func)) 🔀
