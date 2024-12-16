@@ -1855,12 +1855,11 @@ async def canon_task_backpressure(task, flat_args):
 
 ### 🔀 `canon task.return`
 
-async def canon_task_return(task, core_ft, flat_args):
+async def canon_task_return(task, result_type, opts, flat_args):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync and not task.opts.always_task_return)
-  sync_opts = copy(task.opts)
-  sync_opts.sync = True
-  trap_if(core_ft != flatten_functype(sync_opts, FuncType(task.ft.results, []), 'lower'))
+  trap_if(result_type != task.ft.results)
+  trap_if(opts != task.opts)
   task.return_(flat_args)
   return []
 
