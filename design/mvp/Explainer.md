@@ -1399,7 +1399,7 @@ canon ::= ...
         | (canon resource.drop <typeidx> async? (core func <id>?))
         | (canon resource.rep <typeidx> (core func <id>?))
         | (canon task.backpressure (core func <id>?)) 🔀
-        | (canon task.return <core:typeidx> (core func <id>?)) 🔀
+        | (canon task.return (result <valtype>)? <canonopt>* (core func <id>?)) 🔀
         | (canon task.wait async? (memory <core:memidx>) (core func <id>?)) 🔀
         | (canon task.poll async? (memory <core:memidx>) (core func <id>?)) 🔀
         | (canon task.yield async? (core func <id>?)) 🔀
@@ -1543,12 +1543,11 @@ the Canonical ABI explainer.)
 
 The `task.return` built-in takes as parameters the result values of the
 currently-executing task. This built-in must be called exactly once per export
-activation. The `canon task.return` definition takes the type index of a core
-function type and produces a core function with exactly that type. When called,
-the declared core function type is checked to match the lowered function type
-of a component-level function taking the result types of the current task. (See
-also [Returning](Async.md#returning) in the async explainer and
-[`canon_task_return`] in the Canonical ABI explainer.)
+activation. The `canon task.return` definition takes component-level return
+type and the list of `canonopt` to be used to lift the return value. When
+called, the declared return type and `canonopt`s are checked to exactly match
+those of the current task. (See also [Returning](Async.md#returning) in the
+async explainer and [`canon_task_return`] in the Canonical ABI explainer.)
 
 ###### 🔀 `task.wait`
 

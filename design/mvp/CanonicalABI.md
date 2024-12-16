@@ -2878,28 +2878,31 @@ consume resources.
 
 For a canonical definition:
 ```wasm
-(canon task.return $ft (core func $f))
+(canon task.return (result $t)? $opts (core func $f))
 ```
 validation specifies:
-* `$f` is given type `$ft`, which validation requires to be a (core) function type
+* `$f` is given type `flatten_functype($opts, (func (param $t)?), 'lower')`
 
 Calling `$f` invokes the following function which uses `Task.return_` to lift
 and pass the results to the caller:
 ```python
-async def canon_task_return(task, core_ft, flat_args):
+async def canon_task_return(task, result_type, opts, flat_args):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync and not task.opts.always_task_return)
-  sync_opts = copy(task.opts)
-  sync_opts.sync = True
-  trap_if(core_ft != flatten_functype(sync_opts, FuncType(task.ft.results, []), 'lower'))
+  trap_if(result_type != task.ft.results)
+  trap_if(opts != task.opts)
   task.return_(flat_args)
   return []
 ```
-An expected implementation of `task.return` would generate a core wasm function
-for each lowering of an `async`-lifted export that performs the fused copy of
-the results into the caller, storing the index of this function in the `Task`
-structure and using `call_indirect` to perform the function-type-equality check
-required here.
+The `trap_if(result_type != task.ft.results)` guard ensures that, in a
+component with multiple exported functions of different types, `task.return` is
+not called with a mismatched result type (which, due to indirect control flow,
+can in general only be caught dynamically).
+
+The `trap_if(opts != task.opts)` guard ensures that the return value is lifted
+the same way as the `canon lift` from which this `task.return` is returning.
+This ensures that AOT fusion of `canon lift` and `canon lower` can generate
+a thunk that is indirectly called by `task.return` after these guards.
 
 ### 🔀 `canon task.wait`
 

@@ -526,7 +526,7 @@ async def test_async_to_async():
   eager_ft = FuncType([], [U8Type()])
   async def core_eager_producer(task, args):
     assert(len(args) == 0)
-    [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [43])
+    [] = await canon_task_return(task, [U8Type()], producer_opts, [43])
     return []
   eager_callee = partial(canon_lift, producer_opts, producer_inst, eager_ft, core_eager_producer)
 
@@ -537,7 +537,7 @@ async def test_async_to_async():
     [] = await canon_task_backpressure(task, [1])
     await task.on_block(fut1)
     [] = await canon_task_backpressure(task, [0])
-    [] = await canon_task_return(task, CoreFuncType([],[]), [])
+    [] = await canon_task_return(task, [], producer_opts, [])
     return []
   toggle_callee = partial(canon_lift, producer_opts, producer_inst, toggle_ft, core_toggle)
 
@@ -547,7 +547,7 @@ async def test_async_to_async():
     [x] = args
     assert(x == 83)
     await task.on_block(fut2)
-    [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [44])
+    [] = await canon_task_return(task, [U8Type()], producer_opts, [44])
     await task.on_block(fut3)
     return []
   blocking_callee = partial(canon_lift, producer_opts, producer_inst, blocking_ft, core_blocking_producer)
@@ -613,7 +613,7 @@ async def test_async_to_async():
     assert(callidx == 2)
     [] = await canon_subtask_drop(task, callidx)
 
-    [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [42])
+    [] = await canon_task_return(task, [U8Type()], consumer_opts, [42])
     return []
 
   ft = FuncType([BoolType()],[U8Type()])
@@ -641,7 +641,7 @@ async def test_async_callback():
   async def core_producer_pre(fut, task, args):
     assert(len(args) == 0)
     await task.on_block(fut)
-    await canon_task_return(task, CoreFuncType([],[]), [])
+    await canon_task_return(task, [], producer_opts, [])
     return []
   fut1 = asyncio.Future()
   core_producer1 = partial(core_producer_pre, fut1)
@@ -683,7 +683,7 @@ async def test_async_callback():
       assert(args[2] == 2)
       assert(args[3] == 0)
       await canon_subtask_drop(task, 2)
-      [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [83])
+      [] = await canon_task_return(task, [U32Type()], opts, [83])
       return [0]
 
   consumer_inst = ComponentInstance()
@@ -761,7 +761,7 @@ async def test_async_to_sync():
 
     assert(await task.poll(sync = True) is None)
 
-    await canon_task_return(task, CoreFuncType(['i32'],[]), [83])
+    await canon_task_return(task, [U8Type()], consumer_opts, [83])
     return []
 
   consumer_inst = ComponentInstance()
@@ -786,7 +786,7 @@ async def test_async_backpressure():
   producer1_done = False
   async def producer1_core(task, args):
     nonlocal producer1_done
-    await canon_task_return(task, CoreFuncType([],[]), [])
+    await canon_task_return(task, [], producer_opts, [])
     await canon_task_backpressure(task, [1])
     await task.on_block(fut)
     await canon_task_backpressure(task, [0])
@@ -797,7 +797,7 @@ async def test_async_backpressure():
   async def producer2_core(task, args):
     nonlocal producer2_done
     assert(producer1_done == True)
-    await canon_task_return(task, CoreFuncType([],[]), [])
+    await canon_task_return(task, [], producer_opts, [])
     producer2_done = True
     return []
 
@@ -837,7 +837,7 @@ async def test_async_backpressure():
 
     assert(await task.poll(sync = False) is None)
 
-    await canon_task_return(task, CoreFuncType(['i32'],[]), [84])
+    await canon_task_return(task, [U8Type()], consumer_opts, [84])
     return []
 
   consumer_inst = ComponentInstance()
@@ -860,7 +860,7 @@ async def test_sync_using_wait():
 
   async def core_hostcall_pre(fut, task, args):
     await task.on_block(fut)
-    [] = await canon_task_return(task, CoreFuncType([],[]), [])
+    [] = await canon_task_return(task, [], hostcall_opts, [])
     return []
   fut1 = asyncio.Future()
   core_hostcall1 = partial(core_hostcall_pre, fut1)
@@ -1048,7 +1048,7 @@ async def test_eager_stream_completion():
     rsi1 = args[0]
     assert(rsi1 == 1)
     [wsi1] = await canon_stream_new(U8Type(), task)
-    [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [wsi1])
+    [] = await canon_task_return(task, [StreamType(U8Type())], opts, [wsi1])
     [ret] = await canon_stream_read(U8Type(), opts, task, rsi1, 0, 4)
     assert(ret == 4)
     assert(mem[0:4] == b'\x01\x02\x03\x04')
@@ -1122,7 +1122,7 @@ async def test_async_stream_ops():
     [rsi1] = args
     assert(rsi1 == 1)
     [wsi1] = await canon_stream_new(U8Type(), task)
-    [] = await canon_task_return(task, CoreFuncType(['i32'],[]), [wsi1])
+    [] = await canon_task_return(task, [StreamType(U8Type())], opts, [wsi1])
     [ret] = await canon_stream_read(U8Type(), opts, task, rsi1, 0, 4)
     assert(ret == definitions.BLOCKED)
     src_stream.write([1,2,3,4])
@@ -1328,7 +1328,7 @@ async def test_wasm_to_wasm_stream():
   async def core_func1(task, args):
     assert(not args)
     [wsi] = await canon_stream_new(U8Type(), task)
-    [] = await canon_task_return(task, CoreFuncType(['i32'], []), [wsi])
+    [] = await canon_task_return(task, [StreamType(U8Type())], opts1, [wsi])
 
     await task.on_block(fut1)
 
@@ -1367,7 +1367,7 @@ async def test_wasm_to_wasm_stream():
   ft2 = FuncType([], [])
   async def core_func2(task, args):
     assert(not args)
-    [] = await canon_task_return(task, CoreFuncType([], []), [])
+    [] = await canon_task_return(task, [], opts2, [])
 
     retp = 0
     [ret] = await canon_lower(opts2, ft1, func1, task, [retp])
