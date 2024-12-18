@@ -2916,6 +2916,7 @@ writing the subtask index as an outparam:
 ```python
 async def canon_task_wait(sync, mem, task, ptr):
   trap_if(not task.inst.may_leave)
+  trap_if(task.opts.callback and not sync)
   event, p1, p2 = await task.wait(sync)
   cx = LiftLowerContext(CanonicalOptions(memory = mem), task.inst)
   store(cx, p1, U32Type(), ptr)
@@ -2934,6 +2935,12 @@ though, the automatic backpressure (applied by `Task.enter`) will ensure there
 is only ever at most once synchronously-lifted task executing in a component
 instance at a time.
 
+The guard preventing `async` use of `task.wait` when a `callback` has
+been used preserves the invariant that producer toolchains using
+`callback` never need to handle multiple overlapping callback
+activations.
+
+
 ### 🔀 `canon task.poll`
 
 For a canonical definition:
@@ -2949,6 +2956,7 @@ if there was an event, storing the `i32` event and payloads as outparams.
 ```python
 async def canon_task_poll(sync, mem, task, ptr):
   trap_if(not task.inst.may_leave)
+  trap_if(task.opts.callback and not sync)
   ret = await task.poll(sync)
   if ret is None:
     return [0]
@@ -2958,6 +2966,11 @@ async def canon_task_poll(sync, mem, task, ptr):
 ```
 When `async` is set, `task.poll` can yield to other tasks (in this or other
 components) as part of polling for an event.
+
+The guard preventing `async` use of `task.poll` when a `callback` has
+been used preserves the invariant that producer toolchains using
+`callback` never need to handle multiple overlapping callback
+activations.
 
 ### 🔀 `canon task.yield`
 
@@ -2972,6 +2985,7 @@ Calling `$f` calls `Task.yield_` to allow other tasks to execute:
 ```python
 async def canon_task_yield(sync, task):
   trap_if(not task.inst.may_leave)
+  trap_if(task.opts.callback and not sync)
   await task.yield_(sync)
   return []
 ```
@@ -2979,6 +2993,11 @@ If `async` is set, no other tasks *in the same component instance* can
 execute, however tasks in *other* component instances may execute. This allows
 a long-running task in one component to avoid starving other components
 without needing support full reentrancy.
+
+The guard preventing `async` use of `task.poll` when a `callback` has
+been used preserves the invariant that producer toolchains using
+`callback` never need to handle multiple overlapping callback
+activations.
 
 ### 🔀 `canon subtask.drop`
 

@@ -1868,6 +1868,7 @@ async def canon_task_return(task, core_ft, flat_args):
 
 async def canon_task_wait(sync, mem, task, ptr):
   trap_if(not task.inst.may_leave)
+  trap_if(task.opts.callback and not sync)
   event, p1, p2 = await task.wait(sync)
   cx = LiftLowerContext(CanonicalOptions(memory = mem), task.inst)
   store(cx, p1, U32Type(), ptr)
@@ -1878,6 +1879,7 @@ async def canon_task_wait(sync, mem, task, ptr):
 
 async def canon_task_poll(sync, mem, task, ptr):
   trap_if(not task.inst.may_leave)
+  trap_if(task.opts.callback and not sync)
   ret = await task.poll(sync)
   if ret is None:
     return [0]
@@ -1889,6 +1891,7 @@ async def canon_task_poll(sync, mem, task, ptr):
 
 async def canon_task_yield(sync, task):
   trap_if(not task.inst.may_leave)
+  trap_if(task.opts.callback and not sync)
   await task.yield_(sync)
   return []
 
