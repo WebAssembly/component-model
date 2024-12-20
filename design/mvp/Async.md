@@ -197,16 +197,16 @@ state that enforces the caller side of the Canonical ABI rules.
 To realize the above goals of always having a well-defined cross-component
 async callstack, the Component Model's Canonical ABI enforces [Structured
 Concurrency] by dynamically requiring that a task waits for all its subtasks to
-return before the task itself is allowed to finish. This means that a subtask
-cannot be orphaned and there will always be an async callstack rooted at an
-invocation of an export by the host. Moreover, at any one point in time, the
-set of tasks active in a linked component graph form a forest of async call
-trees which e.g., can be visualized using a traditional flamegraph.
+[return](#returning) before the task itself is allowed to finish. This means
+that a subtask cannot be orphaned and there will always be an async callstack
+rooted at an invocation of an export by the host. Moreover, at any one point in
+time, the set of tasks active in a linked component graph form a forest of
+async call trees which e.g., can be visualized using a traditional flamegraph.
 
 The Canonical ABI's Python code enforces Structured Concurrency by incrementing
 a per-task "`num_subtasks`" counter when a subtask is created, decrementing
-when the subtask returns, and trapping if `num_subtasks > 0` when a task
-attempts to exit.
+when the subtask [returns](#returning), and trapping if `num_subtasks > 0` when
+a task attempts to exit.
 
 There is a subtle nuance to these Structured Concurrency rules deriving from
 the fact that subtasks may continue execution after [returning](#returning)
@@ -224,6 +224,24 @@ tail-calling" its still-executing subtasks. (For scenarios where one
 component wants to non-cooperatively bound the execution of another
 component, a separate "[blast zone]" feature is necessary in any
 case.)
+
+This async call tree provided by Structured Concurrency interacts naturally
+with the `borrow` handle type and its associated dynamic rules for preventing
+use-after-free. When a caller initially lends an `own`ed or `borrow`ed handle
+to a callee, a "`num_lends`" counter on the lent handle is incremented when the
+subtask starts and decremented when the caller is notified that the subtask has
+[returned](#returning). If the caller tries to drop a handle while the handle's
+`num_lends` is greater than zero, it traps. Symmetrically, each `borrow` handle
+passed to a callee task increments a "`num_borrows`" counter on the task that
+is decremented when the `borrow` handle is dropped. With async calls, there can
+of course be multiple overlapping async tasks and thus `borrow` handles must
+remember which particular task's `num_borrows` counter to drop. If a task
+attempts to return (which, for `async` tasks, means calling `task.return`) when
+its `num_borrows` is greater than zero, it traps. These interlocking rules for
+the `num_lends` and `num_borrows` fields inductively ensure that nested async
+call trees that transitively propagate `borrow`ed handles maintain the
+essential invariant that dropping an `own`ed handle never destroys a resource
+while there is any `borrow` handle anywhere pointing to that resource.
 
 ### Streams and Futures
 
