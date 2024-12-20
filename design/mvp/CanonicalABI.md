@@ -601,14 +601,12 @@ The `return_` method is called by either `canon_task_return` or `canon_lift`
 (both defined below) to lift and return results to the caller using the
 `on_return` callback that was supplied by the caller to `canon_lift`. Using a
 callback instead of simply returning the values from `canon_lift` enables the
-callee to keep executing after returning its results. However, it does
-introduce a dynamic error condition if `canon task.return` is called less or
-more than once which must be checked by `return_` and `exit`. Since ownership
-of borrowed handles is returned to the caller when the caller is notified that
-the `Subtask` is in the `RETURNED` state, `num_borrows` is guarded to be `0`.
-Since tasks can keep executing arbitrary code after calling `task.return`, this
-means that borrowed handles must be dropped potentially much earlier than the
-observable end of the task.
+callee to keep executing after returning its results. There is a dynamic error
+if `task.return` is not called exactly once and if the callee has not dropped
+all borrowed handles by the time `task.return` is called. This means that the
+caller can assume that ownership all its lent borrowed handles has been
+returned to it when it is notified that the `Subtask` has reached the
+`RETURNED` state.
 ```python
   def return_(self, flat_results):
     trap_if(not self.on_return)
