@@ -269,14 +269,14 @@ class ResourceHandle:
   rep: int
   own: bool
   borrow_scope: Optional[Task]
-  lend_count: int
+  num_lends: int
 
   def __init__(self, rt, rep, own, borrow_scope = None):
     self.rt = rt
     self.rep = rep
     self.own = own
     self.borrow_scope = borrow_scope
-    self.lend_count = 0
+    self.num_lends = 0
 
 class ResourceType(Type):
   impl: ComponentInstance
@@ -494,13 +494,13 @@ class Subtask:
 
   def add_lender(self, lending_handle):
     assert(not self.finished and self.state != CallState.RETURNED)
-    lending_handle.lend_count += 1
+    lending_handle.num_lends += 1
     self.lenders.append(lending_handle)
 
   def finish(self):
     assert(not self.finished and self.state == CallState.RETURNED)
     for h in self.lenders:
-      h.lend_count -= 1
+      h.num_lends -= 1
     self.finished = True
 
   def drop(self):
@@ -1018,7 +1018,7 @@ def unpack_flags_from_int(i, labels):
 def lift_own(cx, i, t):
   h = cx.inst.resources.remove(i)
   trap_if(h.rt is not t.rt)
-  trap_if(h.lend_count != 0)
+  trap_if(h.num_lends != 0)
   trap_if(not h.own)
   return h.rep
 
@@ -1791,7 +1791,7 @@ async def canon_resource_drop(rt, sync, task, i):
   inst = task.inst
   h = inst.resources.remove(i)
   trap_if(h.rt is not rt)
-  trap_if(h.lend_count != 0)
+  trap_if(h.num_lends != 0)
   flat_results = [] if sync else [0]
   if h.own:
     assert(h.borrow_scope is None)

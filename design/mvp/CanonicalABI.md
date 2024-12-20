@@ -241,14 +241,14 @@ class ResourceHandle:
   rep: int
   own: bool
   borrow_scope: Optional[Task]
-  lend_count: int
+  num_lends: int
 
   def __init__(self, rt, rep, own, borrow_scope = None):
     self.rt = rt
     self.rep = rep
     self.own = own
     self.borrow_scope = borrow_scope
-    self.lend_count = 0
+    self.num_lends = 0
 ```
 The `rt` and `rep` fields of `ResourceHandle` store the `rt` and `rep`
 parameters passed to the `resource.new` call that created this handle. The
@@ -264,7 +264,7 @@ reentrance, there is at most one `Task` alive in a component instance at any
 time and thus an optimizing implementation doesn't need to store the `Task`
 per `ResourceHandle`.
 
-The `lend_count` field maintains a conservative approximation of the number of
+The `num_lends` field maintains a conservative approximation of the number of
 live handles that were lent from this `own` handle (by calls to `borrow`-taking
 functions). This count is maintained by the `ImportCall` bookkeeping functions
 (above) and is ensured to be zero when an `own` handle is dropped.
@@ -667,20 +667,20 @@ class Subtask:
 The `lenders` field of `Subtask` maintains a list of all resource handles
 that have been lent to a subtask and must therefor not be dropped until the
 subtask returns. The `add_lender` method is called (below) when lifting a
-resource handle and increments its `lend_count`, which is guarded to be zero by
+resource handle and increments its `num_lends`, which is guarded to be zero by
 `canon_resource_drop` (below). The `finish` method releases all the
-`lend_count`s of all such handles lifted for the subtask and is called (below)
+`num_lends`s of all such handles lifted for the subtask and is called (below)
 when the subtask returns.
 ```python
   def add_lender(self, lending_handle):
     assert(not self.finished and self.state != CallState.RETURNED)
-    lending_handle.lend_count += 1
+    lending_handle.num_lends += 1
     self.lenders.append(lending_handle)
 
   def finish(self):
     assert(not self.finished and self.state == CallState.RETURNED)
     for h in self.lenders:
-      h.lend_count -= 1
+      h.num_lends -= 1
     self.finished = True
 ```
 Note, the `lenders` list usually has a fixed size (in all cases except when a
@@ -1465,7 +1465,7 @@ handle is currently being lent out as borrows.
 def lift_own(cx, i, t):
   h = cx.inst.resources.remove(i)
   trap_if(h.rt is not t.rt)
-  trap_if(h.lend_count != 0)
+  trap_if(h.num_lends != 0)
   trap_if(not h.own)
   return h.rep
 ```
@@ -2755,7 +2755,7 @@ async def canon_resource_drop(rt, sync, task, i):
   inst = task.inst
   h = inst.resources.remove(i)
   trap_if(h.rt is not rt)
-  trap_if(h.lend_count != 0)
+  trap_if(h.num_lends != 0)
   flat_results = [] if sync else [0]
   if h.own:
     assert(h.borrow_scope is None)
