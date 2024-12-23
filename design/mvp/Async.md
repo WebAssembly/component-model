@@ -164,16 +164,15 @@ when a component exports asynchronously-lifted functions, there can be multiple
 tasks alive at once.
 
 In the Canonical ABI explainer, a "task" is represented with the Python
-[`Task`] class, which is created by each call to [`canon_lift`] and has
-`SyncTask` and `AsyncTask` subclasses to factor out state and behavior only
-needed for sync- or async-lifted functions, resp.
+[`Task`] class. A new `Task` object is created (by [`canon_lift`]) each time
+a component export is called.
 
 ### Current Task
 
 At any point in time when executing in Core WebAssembly code, there is a
-single, unambiguous **current task**. Thus, whenever a [canonical built-in] is
-called by Core WebAssembly code, it is meaningful for the built-in to work in
-terms "the current task".
+well-defined **current task**. Thus, whenever a [canonical built-in] is called
+by Core WebAssembly code, it is meaningful for the built-in to work in terms
+"the current task".
 
 The "current task" is modelled in the Canonical ABI's Python code
 by implicitly threading the `Task` object created by [`canon_lift`] through all
@@ -192,7 +191,7 @@ is destroyed).
 
 The Canonical ABI's Python code represents the subtask relationship between a
 caller `Task` and a callee `Task` via the Python [`Subtask`] class. Whereas a
-`Task` object is created by each call to `canon_lift`, a `Subtask` object is
+`Task` object is created by each call to [`canon_lift`], a `Subtask` object is
 created by each call to [`canon_lower`]. This allows `Subtask`s to store the
 state that enforces the caller side of the Canonical ABI rules.
 
@@ -315,6 +314,9 @@ above). However, there is always *some* parent `Task` and this parent `Task`
 is prevented from orphaning its children using the same reference-counting
 guard mentioned above for subtasks.
 
+The [Stream State] and [Future State] sections describe the runtime state
+maintained for streams and futures by the Canonical ABI.
+
 ### Waiting
 
 When a component asynchronously lowers an import, it is explicitly requesting
@@ -343,6 +345,9 @@ requires storing a small `i32` "context" in the task), semantically they do the
 same thing which, in the Canonical ABI Python code, is factored out into
 [`Task`]'s `wait` method. Thus, the difference between `callback` and
 non-`callback` is mostly one of optimization, not expressivity.
+
+The Canonical ABI Python represents waitables with a common [`Waitable`]
+base class.
 
 ### Backpressure
 
@@ -630,15 +635,17 @@ comes after:
 
 [Canonical ABI Explainer]: CanonicalABI.md
 [`canon_lift`]: CanonicalABI.md#canon-lift
+[`canon_lift`]: CanonicalABI.md#canon-lift
 [`canon_lower`]: CanonicalABI.md#canon-lower
-[`canon_lower`]: CanonicalABI.md#canon-task-wait
 [`canon_task_wait`]: CanonicalABI.md#-canon-taskwait
 [`canon_task_backpressure`]: CanonicalABI.md#-canon-taskbackpressure
 [`canon_task_return`]: CanonicalABI.md#-canon-taskreturn
-[`Task`]: CanonicalABI.md#runtime-state
-[`Task.enter`]: CanonicalABI.md#runtime-state
-[`Subtask`]: CanonicalABI.md#runtime-state
-[`AsyncTask`]: CanonicalABI.md#runtime-state
+[`Task`]: CanonicalABI.md#task-state
+[`Task.enter`]: CanonicalABI.md#task-state
+[`Waitable`]: CanonicalABI.md#waitable-state
+[`Subtask`]: CanonicalABI.md#subtask-state
+[Stream State]: CanonicalABI.md#stream-state
+[Future State]: CanonicalABI.md#future-state
 
 [Binary Format]: Binary.md
 [WIT]: WIT.md

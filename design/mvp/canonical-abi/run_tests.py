@@ -2,6 +2,7 @@ import definitions
 from definitions import *
 
 definitions.DETERMINISTIC_PROFILE = True
+asyncio.run(Task.current.acquire())
 
 def equal_modulo_string_encoding(s, t):
   if s is None and t is None:
@@ -626,7 +627,7 @@ async def test_async_to_async():
     got = results
 
   consumer_inst = ComponentInstance()
-  await canon_lift(consumer_opts, consumer_inst, ft, consumer, None, on_start, on_return)
+  await canon_lift(consumer_opts, consumer_inst, ft, consumer, None, on_start, on_return, Task.sync_on_block)
   assert(len(got) == 1)
   assert(got[0] == 42)
 
@@ -697,7 +698,7 @@ async def test_async_callback():
   opts.sync = False
   opts.callback = callback
 
-  await canon_lift(opts, consumer_inst, consumer_ft, consumer, None, on_start, on_return)
+  await canon_lift(opts, consumer_inst, consumer_ft, consumer, None, on_start, on_return, Task.sync_on_block)
   assert(got[0] == 83)
 
 
@@ -771,7 +772,7 @@ async def test_async_to_sync():
     nonlocal got
     got = results
 
-  await canon_lift(consumer_opts, consumer_inst, consumer_ft, consumer, None, on_start, on_return)
+  await canon_lift(consumer_opts, consumer_inst, consumer_ft, consumer, None, on_start, on_return, Task.sync_on_block)
   assert(got[0] == 83)
 
 
@@ -846,7 +847,7 @@ async def test_async_backpressure():
     nonlocal got
     got = results
 
-  await canon_lift(consumer_opts, consumer_inst, consumer_ft, consumer, None, on_start, on_return)
+  await canon_lift(consumer_opts, consumer_inst, consumer_ft, consumer, None, on_start, on_return, Task.sync_on_block)
   assert(got[0] == 84)
 
 
@@ -893,23 +894,29 @@ async def test_sync_using_wait():
   inst = ComponentInstance()
   def on_start(): return []
   def on_return(results): pass
-  await canon_lift(mk_opts(), inst, ft, core_func, None, on_start, on_return)
+  await canon_lift(mk_opts(), inst, ft, core_func, None, on_start, on_return, Task.sync_on_block)
 
 
 class HostSource(ReadableStream):
   remaining: list[int]
   destroy_if_empty: bool
   chunk: int
-  waiting: Optional[asyncio.Future]
-  eager_cancel: asyncio.Event
+  eager_cancel: bool
+  pending_dst: Optional[WritableBuffer]
+  pending_on_partial_copy: Optional[Callable]
+  pending_on_copy_done: Optional[Callable]
 
-  def __init__(self, contents, chunk, destroy_if_empty = True):
+  def __init__(self, t, contents, chunk, destroy_if_empty = True):
+    self.t = t
     self.remaining = contents
     self.destroy_if_empty = destroy_if_empty
     self.chunk = chunk
-    self.waiting = None
-    self.eager_cancel = asyncio.Event()
-    self.eager_cancel.set()
+    self.eager_cancel = False
+    self.reset_pending()
+  def reset_pending(self):
+    self.pending_dst = None
+    self.pending_on_partial_copy = None
+    self.pending_on_copy_done = None
 
   def closed(self):
     return not self.remaining and self.destroy_if_empty
@@ -917,45 +924,60 @@ class HostSource(ReadableStream):
     assert(self.closed())
     return None
 
-  def wake_waiting(self, cancelled = False):
-    if self.waiting:
-      self.waiting.set_result(cancelled)
-      self.waiting = None
-
   def close(self, errctx = None):
     self.remaining = []
     self.destroy_if_empty = True
-    self.wake_waiting()
+    if self.pending_dst:
+      self.pending_on_copy_done()
+      self.pending_dst = None
+      self.pending_on_partial_copy = None
+      self.pending_copy_on_done = None
 
   def destroy_once_empty(self):
     self.destroy_if_empty = True
-    if self.closed():
-      self.wake_waiting()
-
-  async def read(self, dst, on_block):
     if not self.remaining:
-      if self.closed():
-        return
-      self.waiting = asyncio.Future()
-      cancelled = await on_block(self.waiting)
-      if cancelled or self.closed():
-        return
-      assert(self.remaining)
+      self.close()
+
+  def read(self, dst, on_partial_copy, on_copy_done):
+    if self.closed():
+      return 'done'
+    elif self.remaining:
+      self.actually_copy(dst)
+      return 'done'
+    else:
+      self.pending_dst = dst
+      self.pending_on_partial_copy = on_partial_copy
+      self.pending_on_copy_done = on_copy_done
+      return 'blocked'
+
+  def actually_copy(self, dst):
     n = min(dst.remain(), len(self.remaining), self.chunk)
-    dst.lower(self.remaining[:n])
+    dst.write(self.remaining[:n])
     del self.remaining[:n]
 
-  async def cancel_read(self, dst, on_block):
-    await on_block(self.eager_cancel.wait())
-    self.wake_waiting(True)
+  def cancel(self):
+    if self.eager_cancel:
+      self.actually_cancel()
+    else:
+      async def async_cancel():
+        self.actually_cancel()
+      asyncio.create_task(async_cancel())
+
+  def actually_cancel(self):
+    self.pending_on_copy_done()
+    self.pending_dst = None
+    self.pending_on_partial_copy = None
+    self.pending_on_copy_done = None
 
   def write(self, vs):
     assert(vs and not self.closed())
     self.remaining += vs
-    self.wake_waiting()
-
-  def maybe_writer_handle_index(self, inst):
-    return None
+    if self.pending_dst:
+      self.actually_copy(self.pending_dst)
+      if self.pending_dst.remain():
+        self.pending_on_partial_copy(self.reset_pending)
+      else:
+        self.actually_cancel()
 
 class HostSink:
   stream: ReadableStream
@@ -976,12 +998,19 @@ class HostSink:
     self.ready_to_consume = asyncio.Event()
     async def read_all():
       while not self.stream.closed():
-        async def on_block(f):
-          return await f
         await self.write_event.wait()
         if self.stream.closed():
           break
-        await self.stream.read(self, on_block)
+        def on_partial_copy(revoke_buffer):
+          revoke_buffer()
+          if not f.done():
+            f.set_result(None)
+        def on_copy_done():
+          if not f.done():
+            f.set_result(None)
+        if self.stream.read(self, on_partial_copy, on_copy_done) != 'done':
+          f = asyncio.Future()
+          await f
       self.ready_to_consume.set()
     asyncio.create_task(read_all())
 
@@ -993,7 +1022,7 @@ class HostSink:
   def remain(self):
     return self.write_remain
 
-  def lower(self, vs):
+  def write(self, vs):
     self.received += vs
     self.ready_to_consume.set()
     self.write_remain -= len(vs)
@@ -1002,10 +1031,10 @@ class HostSink:
 
   async def consume(self, n):
     while n > len(self.received):
-      self.ready_to_consume.clear()
-      await self.ready_to_consume.wait()
       if self.stream.closed():
         return None
+      self.ready_to_consume.clear()
+      await self.ready_to_consume.wait()
     ret = self.received[:n];
     del self.received[:n]
     return ret
@@ -1021,7 +1050,7 @@ async def test_eager_stream_completion():
     assert(len(args) == 1)
     assert(isinstance(args[0], ReadableStream))
     incoming = HostSink(args[0], chunk=4)
-    outgoing = HostSource([], chunk=4, destroy_if_empty=False)
+    outgoing = HostSource(U8Type(), [], chunk=4, destroy_if_empty=False)
     on_return([outgoing])
     async def add10():
       while (vs := await incoming.consume(4)):
@@ -1030,8 +1059,9 @@ async def test_eager_stream_completion():
         outgoing.write(vs)
       outgoing.close()
     asyncio.create_task(add10())
+    await asyncio.sleep(0)
 
-  src_stream = HostSource([1,2,3,4,5,6,7,8], chunk=4)
+  src_stream = HostSource(U8Type(), [1,2,3,4,5,6,7,8], chunk=4)
   def on_start():
     return [src_stream]
 
@@ -1052,11 +1082,13 @@ async def test_eager_stream_completion():
     assert(mem[0:4] == b'\x01\x02\x03\x04')
     [wsi2] = await canon_stream_new(U8Type(), task)
     retp = 12
+    await asyncio.sleep(0)
     [ret] = await canon_lower(opts, ft, host_import, task, [wsi2, retp])
     assert(ret == 0)
     rsi2 = mem[retp]
     [ret] = await canon_stream_write(U8Type(), opts, task, wsi2, 0, 4)
     assert(ret == 4)
+    await asyncio.sleep(0)
     [ret] = await canon_stream_read(U8Type(), opts, task, rsi2, 0, 4)
     assert(ret == 4)
     [ret] = await canon_stream_write(U8Type(), opts, task, wsi1, 0, 4)
@@ -1068,6 +1100,7 @@ async def test_eager_stream_completion():
     assert(mem[0:4] == b'\x05\x06\x07\x08')
     [ret] = await canon_stream_write(U8Type(), opts, task, wsi2, 0, 4)
     assert(ret == 4)
+    await asyncio.sleep(0)
     [ret] = await canon_stream_read(U8Type(), opts, task, rsi2, 0, 4)
     assert(ret == 4)
     [ret] = await canon_stream_write(U8Type(), opts, task, wsi1, 0, 4)
@@ -1078,7 +1111,7 @@ async def test_eager_stream_completion():
     [] = await canon_stream_close_writable(U8Type(), task, wsi2, 0)
     return []
 
-  await canon_lift(opts, inst, ft, core_func, None, on_start, on_return)
+  await canon_lift(opts, inst, ft, core_func, None, on_start, on_return, Task.sync_on_block)
   assert(dst_stream.received == [11,12,13,14,15,16,17,18])
 
 
@@ -1097,16 +1130,18 @@ async def test_async_stream_ops():
     assert(len(args) == 1)
     assert(isinstance(args[0], ReadableStream))
     host_import_incoming = HostSink(args[0], chunk=4, remain = 0)
-    host_import_outgoing = HostSource([], chunk=4, destroy_if_empty=False)
+    host_import_outgoing = HostSource(U8Type(), [], chunk=4, destroy_if_empty=False)
     on_return([host_import_outgoing])
-    while not host_import_incoming.stream.closed():
-      vs = await on_block(host_import_incoming.consume(4))
-      for i in range(len(vs)):
-        vs[i] += 10
+    while True:
+      if (vs := await on_block(host_import_incoming.consume(4))):
+        for i in range(len(vs)):
+          vs[i] += 10
+      else:
+        break
       host_import_outgoing.write(vs)
     host_import_outgoing.destroy_once_empty()
 
-  src_stream = HostSource([], chunk=4, destroy_if_empty = False)
+  src_stream = HostSource(U8Type(), [], chunk=4, destroy_if_empty = False)
   def on_start():
     return [src_stream]
 
@@ -1176,12 +1211,12 @@ async def test_async_stream_ops():
     [] = await canon_stream_close_writable(U8Type(), task, wsi1, 0)
     return []
 
-  await canon_lift(opts, inst, ft, core_func, None, on_start, on_return)
+  await canon_lift(opts, inst, ft, core_func, None, on_start, on_return, Task.sync_on_block)
   assert(dst_stream.received == [11,12,13,14,15,16,17,18])
 
 
 async def test_stream_forward():
-  src_stream = HostSource([1,2,3,4], chunk=4)
+  src_stream = HostSource(U8Type(), [1,2,3,4], chunk=4)
   def on_start():
     return [src_stream]
 
@@ -1200,7 +1235,7 @@ async def test_stream_forward():
   opts = mk_opts()
   inst = ComponentInstance()
   ft = FuncType([StreamType(U8Type())], [StreamType(U8Type())])
-  await canon_lift(opts, inst, ft, core_func, None, on_start, on_return)
+  await canon_lift(opts, inst, ft, core_func, None, on_start, on_return, Task.sync_on_block)
   assert(src_stream is dst_stream)
 
 
@@ -1239,14 +1274,14 @@ async def test_receive_own_stream():
   def on_start(): return []
   def on_return(results): assert(len(results) == 0)
   ft = FuncType([],[])
-  await canon_lift(mk_opts(), inst, ft, core_func, None, on_start, on_return)
+  await canon_lift(mk_opts(), inst, ft, core_func, None, on_start, on_return, Task.sync_on_block)
 
 
 async def test_host_partial_reads_writes():
   mem = bytearray(20)
   opts = mk_opts(memory=mem, sync=False)
 
-  src = HostSource([1,2,3,4], chunk=2, destroy_if_empty = False)
+  src = HostSource(U8Type(), [1,2,3,4], chunk=2, destroy_if_empty = False)
   source_ft = FuncType([], [StreamType(U8Type())])
   async def host_source(task, on_start, on_return, on_block):
     [] = on_start()
@@ -1307,7 +1342,7 @@ async def test_host_partial_reads_writes():
   def on_start(): return []
   def on_return(results): assert(len(results) == 0)
   ft = FuncType([],[])
-  await canon_lift(opts2, inst, ft, core_func, None, on_start, on_return)
+  await canon_lift(opts2, inst, ft, core_func, None, on_start, on_return, Task.sync_on_block)
 
 
 async def test_wasm_to_wasm_stream():
@@ -1399,7 +1434,7 @@ async def test_wasm_to_wasm_stream():
     [] = await canon_error_context_drop(task, errctxi)
     return []
 
-  await canon_lift(opts2, inst2, ft2, core_func2, None, lambda:[], lambda _:())
+  await canon_lift(opts2, inst2, ft2, core_func2, None, lambda:[], lambda _:(), Task.sync_on_block)
 
 
 async def test_wasm_to_wasm_stream_empty():
@@ -1484,7 +1519,7 @@ async def test_wasm_to_wasm_stream_empty():
     [] = await canon_error_context_drop(task, errctxi)
     return []
 
-  await canon_lift(opts2, inst2, ft2, core_func2, None, lambda:[], lambda _:())
+  await canon_lift(opts2, inst2, ft2, core_func2, None, lambda:[], lambda _:(), Task.sync_on_block)
 
 
 async def test_cancel_copy():
@@ -1505,7 +1540,7 @@ async def test_cancel_copy():
   async def host_func2(task, on_start, on_return, on_block):
     nonlocal host_source
     [] = on_start()
-    host_source = HostSource([], chunk=2, destroy_if_empty = False)
+    host_source = HostSource(U8Type(), [], chunk=2, destroy_if_empty = False)
     on_return([host_source])
 
   lift_opts = mk_opts()
@@ -1558,12 +1593,11 @@ async def test_cancel_copy():
     rsi = mem[retp]
     [ret] = await canon_stream_read(U8Type(), lower_opts, task, rsi, 0, 4)
     assert(ret == definitions.BLOCKED)
-    host_source.eager_cancel.clear()
+    host_source.eager_cancel = False
     [ret] = await canon_stream_cancel_read(U8Type(), False, task, rsi)
     assert(ret == definitions.BLOCKED)
     host_source.write([7,8])
     await asyncio.sleep(0)
-    host_source.eager_cancel.set()
     event,p1,p2 = await task.wait(sync = False)
     assert(event == EventCode.STREAM_READ)
     assert(p1 == rsi)
@@ -1573,43 +1607,70 @@ async def test_cancel_copy():
 
     return []
 
-  await canon_lift(lift_opts, inst, FuncType([],[]), core_func, None, lambda:[], lambda _:())
+  await canon_lift(lift_opts, inst, FuncType([],[]), core_func, None, lambda:[], lambda _:(), Task.sync_on_block)
 
 
 class HostFutureSink:
-  v: Optional[any] = None
+  v: Optional[any]
+  has_v: asyncio.Event
+
+  def __init__(self):
+    self.v = None
+    self.has_v = asyncio.Event()
 
   def remain(self):
     return 1 if self.v is None else 0
 
-  def lower(self, v):
+  def write(self, v):
     assert(not self.v)
     assert(len(v) == 1)
     self.v = v[0]
+    self.has_v.set()
 
 class HostFutureSource(ReadableStream):
-  v: Optional[asyncio.Future]
-  def __init__(self):
-    self.v = asyncio.Future()
+  is_closed: bool
+  v: Optional[any]
+  pending_buffer: Optional[WritableBuffer]
+  pending_on_copy_done: Optional[Callable]
+  def __init__(self, t):
+    self.t = t
+    self.is_closed = False
+    self.v = None
+    self.pending_buffer = None
+    self.pending_on_copy_done = None
   def closed(self):
-    return self.v is None
+    return self.is_closed
   def closed_with_error(self):
     assert(self.closed())
     return None
+  def read(self, dst, on_partial_copy, on_copy_done):
+    if self.is_closed:
+      return 'done'
+    elif self.v:
+      dst.write([self.v])
+      self.is_closed = True
+      return 'done'
+    else:
+      self.pending_buffer = dst
+      self.pending_on_copy_done = on_copy_done
+      return 'blocked'
+  def set_result(self, v):
+    assert(not self.is_closed and not self.v)
+    if self.pending_buffer:
+      self.pending_buffer.write([v])
+      self.is_closed = True
+      self.cancel()
+    else:
+      self.v = v
+  def cancel(self):
+    pending_on_copy_done = self.pending_on_copy_done
+    self.pending_buffer = None
+    self.pending_on_copy_done = None
+    pending_on_copy_done()
   def close(self, errctx = None):
-    assert(self.v is None)
-  async def read(self, dst, on_block):
-    assert(self.v is not None)
-    v = await on_block(self.v)
-    if v:
-      dst.lower([v])
-      self.v = None
-  async def cancel_read(self, dst, on_block):
-    if self.v and not self.v.done():
-      self.v.set_result(None)
-      self.v = asyncio.Future()
-  def maybe_writer_handle_index(self, inst):
-    return None
+    self.is_closed = True
+    if self.pending_buffer:
+      self.cancel()
 
 async def test_futures():
   inst = ComponentInstance()
@@ -1619,12 +1680,13 @@ async def test_futures():
   host_ft1 = FuncType([FutureType(U8Type())],[FutureType(U8Type())])
   async def host_func(task, on_start, on_return, on_block):
     [future] = on_start()
-    outgoing = HostFutureSource()
+    outgoing = HostFutureSource(U8Type())
     on_return([outgoing])
     incoming = HostFutureSink()
-    await future.read(incoming, on_block)
+    future.read(incoming, lambda:(), lambda:())
+    await on_block(incoming.has_v.wait())
     assert(incoming.v == 42)
-    outgoing.v.set_result(43)
+    outgoing.set_result(43)
 
   lift_opts = mk_opts()
   async def core_func(task, args):
@@ -1680,7 +1742,7 @@ async def test_futures():
 
     return []
 
-  await canon_lift(lift_opts, inst, FuncType([],[]), core_func, None, lambda:[], lambda _:())
+  await canon_lift(lift_opts, inst, FuncType([],[]), core_func, None, lambda:[], lambda _:(), Task.sync_on_block)
 
 
 async def run_async_tests():
