@@ -582,9 +582,7 @@ comes after:
   tasks), along with cross-task coordination built-ins
 * `subtask.cancel`: allow a supertask to signal to a subtask that its result is
   no longer wanted and to please wrap it up promptly
-* zero-copy forwarding/splicing and built-in way to "tail-call" a subtask so
-  that the current wasm instance can be torn down eagerly while preserving
-  structured concurrency
+* zero-copy forwarding/splicing
 * some way to say "no more elements are coming for a while"
 * `recursive` function type attribute: allow a function to opt in to
   recursive [reentrance], extending the ABI to link the inner and
