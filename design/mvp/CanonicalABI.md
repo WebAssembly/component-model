@@ -2950,7 +2950,7 @@ async def canon_task_yield(sync, task):
   await task.yield_(sync)
   return []
 ```
-If `async` is set, no other tasks *in the same component instance* can
+If `sync` is set, no other tasks *in the same component instance* can
 execute, however tasks in *other* component instances may execute. This allows
 a long-running task in one component to avoid starving other components
 without needing support full reentrancy.
