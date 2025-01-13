@@ -485,7 +485,7 @@ not externally-visible behavior.
       end
       ...                     ;; return a non-zero "cx" value passed to the next call to "cb"
     )
-    (func (export "cb") (param $cx i32) (param $event i32) (param $payload i32)
+    (func (export "cb") (param $cx i32) (param $event i32) (param $p1 i32) (param $p2 i32)
       ...
       if ... subtasks remain ...
         get_local $cx
@@ -519,9 +519,9 @@ subtasks can also be spawned from `cb` (even after the call to `task.return`).
 It's also possible for `summarize` to call `task.return` called eagerly in the
 initial core `summarize` call.
 
-The `$event` and `$payload` parameters passed to `cb` are the same as the return
-values from `task.wait` in the previous example. The precise meaning of these
-values is defined by the Canonical ABI.
+The `$event`, `$p1` and `$p2` parameters passed to `cb` are the same as the
+return values from `task.wait` in the previous example. The precise meaning of
+these values is defined by the Canonical ABI.
 
 
 ## Interaction with multi-threading
