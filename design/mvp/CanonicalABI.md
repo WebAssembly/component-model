@@ -2466,6 +2466,7 @@ validation specifies:
 * `$f` is given type `$ft`
 * a `memory` is present if required by lifting and is a subtype of `(memory 1)`
 * a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
+* if `async` is set, a `post-return` function may not be set
 * if a `post-return` is present, it has type `(func (param flatten_functype({}, $ft, 'lift').results))`
 
 When instantiating component instance `$inst`:
