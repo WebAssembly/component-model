@@ -1288,20 +1288,20 @@ The Canonical ABI will use `realloc` both to allocate (passing `0` for the
 first two parameters) and reallocate. If the Canonical ABI needs `realloc`,
 validation requires this option to be present (there is no default).
 
-The `(post-return ...)` option may only be present in `canon lift`
-and specifies a core function to be called with the original return values
-after they have finished being read, allowing memory to be deallocated and
-destructors called. This immediate is always optional but, if present, is
-validated to have parameters matching the callee's return type and empty
-results.
+The `(post-return ...)` option may only be present in `canon lift` when
+`async` is not present and specifies a core function to be called with the
+original return values after they have finished being read, allowing memory to
+be deallocated and destructors called. This immediate is always optional but,
+if present, is validated to have parameters matching the callee's return type
+and empty results.
 
 🔀 The `async` option specifies that the component wants to make (for imports)
 or support (for exports) multiple concurrent (asynchronous) calls. This option
 can be applied to any component-level function type and changes the derived
 Canonical ABI significantly. See the [async explainer](Async.md) for more
 details. When a function signature contains a `future` or `stream`, validation
-requires the `async` option to be set (since a synchronous call to a function
-using these types is highly likely to deadlock).
+of `canon lower` requires the `async` option to be set (since a synchronous
+call to a function using these types is highly likely to deadlock).
 
 🔀 The `(callback ...)` option may only be present in `canon lift` when the
 `async` option has also been set and specifies a core function that is
