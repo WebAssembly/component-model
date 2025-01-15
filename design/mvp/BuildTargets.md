@@ -84,10 +84,10 @@ direct aliases to the resolved type.
 ## Imports and Exports
 
 Every build target defines the following set of imports:
- 1. [WIT-derived function imports](#wit-derived-imports)
+ 1. [WIT-derived function imports](#wit-derived-function-imports)
 
 and the union of the following sets of exports:
- 1. [WIT-derived function exports](#wit-derived-exports)
+ 1. [WIT-derived function exports](#wit-derived-function-exports)
  2. [Memory exports](#memory-exports)
  3. [Initialization export](#initialization-export)
 
