@@ -555,8 +555,8 @@ defvaltype    ::= bool
                 | (result <valtype>? (error <valtype>)?)
                 | (own <typeidx>)
                 | (borrow <typeidx>)
-                | (stream <typeidx>)
-                | (future <typeidx>)
+                | (stream <typeidx>?)
+                | (future <typeidx>?)
 valtype       ::= <typeidx>
                 | <defvaltype>
 resourcetype  ::= (resource (rep i32) (dtor async? <funcidx> (callback <funcidx>)?)?)
@@ -732,6 +732,14 @@ traditional `async` function -- all functions are effectively `async`. Instead
 futures are useful in more advanced scenarios where a parameter or result
 value may not be ready at the same time as the other synchronous parameters or
 results.
+
+The `T` element type of `stream` and `future` is an optional `valtype`. As with
+variant-case payloads and function results, when `T` is absent, the "value(s)"
+being asynchronously passed can be thought of as [unit] values. In such cases,
+there is no representation of the value in Core WebAssembly (pointers into
+linear memory are ignored) however the *timing* of completed reads and writes
+is observable and meaningful. Thus, empty futures and streams can be useful for
+timing-related APIs.
 
 Currently, validation rejects `(stream T)` and `(future T)` when `T`
 transitively contains a `borrow`. This restriction could be relaxed in the
@@ -2672,6 +2680,7 @@ For some use-case-focused, worked examples, see:
 [Subtyping]: https://en.wikipedia.org/wiki/Subtyping
 [Universal Types]: https://en.wikipedia.org/wiki/System_F
 [Existential Types]: https://en.wikipedia.org/wiki/System_F
+[Unit]: https://en.wikipedia.org/wiki/Unit_type
 
 [Generative]: https://www.researchgate.net/publication/2426300_A_Syntactic_Theory_of_Type_Generativity_and_Sharing
 [Avoidance Problem]: https://counterexamples.org/avoidance.html

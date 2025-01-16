@@ -1557,6 +1557,8 @@ ty ::= 'u8' | 'u16' | 'u32' | 'u64'
      | option
      | result
      | handle
+     | future
+     | stream
      | id
 
 tuple ::= 'tuple' '<' tuple-list '>'
@@ -1574,6 +1576,12 @@ result ::= 'result' '<' ty ',' ty '>'
          | 'result' '<' '_' ',' ty '>'
          | 'result' '<' ty '>'
          | 'result'
+
+future ::= 'future' '<' ty '>'
+         | 'future'
+
+stream ::= 'stream' '<' ty '>'
+         | 'stream'
 ```
 
 The `tuple` type is semantically equivalent to a `record` with numerical fields,
@@ -1607,6 +1615,9 @@ variant result {
 
 These types are so frequently used and frequently have language-specific
 meanings though so they're also provided as first-class types.
+
+The `future` and `stream` types are described as part of the [async
+explainer](Async.md#streams-and-futures).
 
 Finally the last case of a `ty` is simply an `id` which is intended to refer to
 another type or resource defined in the document. Note that definitions can come

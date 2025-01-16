@@ -760,8 +760,9 @@ class BufferGuestImpl(Buffer):
 
   def __init__(self, cx, t, ptr, length):
     trap_if(length == 0 or length > Buffer.MAX_LENGTH)
-    trap_if(ptr != align_to(ptr, alignment(t)))
-    trap_if(ptr + length * elem_size(t) > len(cx.opts.memory))
+    if t:
+      trap_if(ptr != align_to(ptr, alignment(t)))
+      trap_if(ptr + length * elem_size(t) > len(cx.opts.memory))
     self.cx = cx
     self.t = t
     self.ptr = ptr
@@ -774,18 +775,29 @@ class BufferGuestImpl(Buffer):
 class ReadableBufferGuestImpl(BufferGuestImpl):
   def lift(self, n):
     assert(n <= self.remain())
-    vs = load_list_from_valid_range(self.cx, self.ptr, n, self.t)
-    self.ptr += n * elem_size(self.t)
+    if self.t:
+      vs = load_list_from_valid_range(self.cx, self.ptr, n, self.t)
+      self.ptr += n * elem_size(self.t)
+    else:
+      vs = n * [()]
     self.progress += n
     return vs
 
 class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
   def lower(self, vs):
     assert(len(vs) <= self.remain())
-    store_list_into_valid_range(self.cx, vs, self.ptr, self.t)
-    self.ptr += len(vs) * elem_size(self.t)
+    if self.t:
+      store_list_into_valid_range(self.cx, vs, self.ptr, self.t)
+      self.ptr += len(vs) * elem_size(self.t)
+    else:
+      assert(all(v == () for v in vs))
     self.progress += len(vs)
 ```
+Note that when `t` is `None` (arising from `stream` and `future` with empty
+element types), the core-wasm-supplied `ptr` is entirely ignored, while the
+`length` and `progress` are still semantically meaningful. Source bindings may
+represent this case with a generic stream/future of [unit] type or a distinct
+type that conveys events without values.
 
 The `ReadableStreamGuestImpl` class implements `ReadableStream` for a stream
 created by wasm (via `canon stream.new`) and encapsulates the synchronization
