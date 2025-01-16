@@ -296,6 +296,17 @@ readable and writable ends of streams and futures each have a well-defined
 parent `Task` that will receive "progress" events on all child streams/futures
 that have previously blocked.
 
+The `T` element type of streams and futures is optional, such that `future` and
+`stream` can be written in WIT without a trailing `<T>`. In this case, the
+asynchronous "values(s)" being delivered are effectively meaningless [unit]
+values. However, the *timing* of delivery is meaningful and thus `future` and
+`stream` can used to convey timing-related information. Note that, since
+functions are asynchronous by default, a plain `f: func()` conveys completion
+without requiring an explicit `future` return type. Thus, a function like
+`f2: func() -> future` would convey *two* events: first, the return of `f2`, at
+which point the caller receives the readable end of a `future` that, when
+successfully read, conveys the completion of a second event.
+
 From a [structured-concurrency](#structured-concurrency) perspective, the
 readable and writable ends of streams and futures are leaves of the async call
 tree. Unlike subtasks, the parent of the readable ends of streams and future
@@ -606,6 +617,7 @@ comes after:
 [CPS Transform]: https://en.wikipedia.org/wiki/Continuation-passing_style
 [Event Loop]: https://en.wikipedia.org/wiki/Event_loop
 [Structured Concurrency]: https://en.wikipedia.org/wiki/Structured_concurrency
+[Unit]: https://en.wikipedia.org/wiki/Unit_type
 
 [AST Explainer]: Explainer.md
 [Lift and Lower Definitions]: Explainer.md#canonical-definitions

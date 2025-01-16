@@ -203,8 +203,8 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x6a t?:<valtype>? u?:<valtype>?        => (result t? (error u)?)
                 | 0x69 i:<typeidx>                        => (own i)
                 | 0x68 i:<typeidx>                        => (borrow i)
-                | 0x66 i:<typeidx>                        => (stream i)
-                | 0x65 i:<typeidx>                        => (future i)
+                | 0x66 i?:<typeidx>?                      => (stream i?)
+                | 0x65 i?:<typeidx>?                      => (future i?)
 labelvaltype  ::= l:<label'> t:<valtype>                  => l t
 case          ::= l:<label'> t?:<valtype>? 0x00           => (case l t?)
 label'        ::= len:<u32> l:<label>                     => l    (if len = |l|)
