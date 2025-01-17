@@ -738,7 +738,7 @@ variant-case payloads and function results, when `T` is absent, the "value(s)"
 being asynchronously passed can be thought of as [unit] values. In such cases,
 there is no representation of the value in Core WebAssembly (pointers into
 linear memory are ignored) however the *timing* of completed reads and writes
-is observable and meaningful. Thus, empty futures and streams can be useful for
+and the number of elements they contain are observable and meaningful. Thus, empty futures and streams can be useful for
 timing-related APIs.
 
 Currently, validation rejects `(stream T)` and `(future T)` when `T`
