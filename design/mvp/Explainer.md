@@ -2191,9 +2191,12 @@ importname    ::= <exportname>
                 | <urlname>
                 | <hashname>
 plainname     ::= <label>
+                | '[async]' <label> 🔀
                 | '[constructor]' <label>
                 | '[method]' <label> '.' <label>
+                | '[async method]' <label> '.' <label> 🔀
                 | '[static]' <label> '.' <label>
+                | '[async static]' <label> '.' <label> 🔀
 label         ::= <fragment>
                 | <label> '-' <fragment>
 fragment      ::= <word>
@@ -2307,16 +2310,24 @@ The `plainname` production captures several language-neutral syntactic hints
 that allow bindings generators to produce more idiomatic bindings in their
 target language. At the top-level, a `plainname` allows functions to be
 annotated as being a constructor, method or static function of a preceding
-resource. In each of these cases, the first `label` is the name of the resource
-and the second `label` is the logical field name of the function. This
-additional nesting information allows bindings generators to insert the
-function into the nested scope of a class, abstract data type, object,
-namespace, package, module or whatever resources get bound to. For example, a
-function named `[method]C.foo` could be bound in C++ to a member function `foo`
-in a class `C`. The JS API [below](#JS-API) describes how the native JavaScript
-bindings could look. Validation described in [Binary.md](Binary.md) inspects
-the contents of `plainname` and ensures that the function has a compatible
-signature.
+resource and/or being asynchronous.
+
+When a function is annotated with `constructor`, `method` or `static`, the
+first `label` is the name of the resource and the second `label` is the logical
+field name of the function. This additional nesting information allows bindings
+generators to insert the function into the nested scope of a class, abstract
+data type, object, namespace, package, module or whatever resources get bound
+to. For example, a function named `[method]C.foo` could be bound in C++ to a
+member function `foo` in a class `C`. The JS API [below](#JS-API) describes how
+the native JavaScript bindings could look. Validation described in
+[Binary.md](Binary.md) inspects the contents of `plainname` and ensures that
+the function has a compatible signature.
+
+When a function is annotated with `async`, bindings generators are expected to
+emit whatever asynchronous language construct is appropriate (such as an
+`async` function in JS, Python or Rust). Note the absence of
+`[async constructor]`. See the [async
+explainer](Async.md#sync-and-async-functions) for more details.
 
 The `label` production used inside `plainname` as well as the labels of
 `record` and `variant` types are required to have [kebab case]. The reason for
