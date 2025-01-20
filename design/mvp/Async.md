@@ -23,8 +23,8 @@ summary of the motivation and animated sketch of the design in action.
   * [Backpressure](#backpressure)
   * [Returning](#returning)
 * [Examples](#examples)
-* [Interaction with multi-threading](#interaction-with-multi-threading)
 * [Interaction with the start function](#interaction-with-the-start-function)
+* [Interaction with multi-threading](#interaction-with-multi-threading)
 * [TODO](#todo)
 
 
@@ -630,6 +630,46 @@ return values from `task.wait` in the previous example. The precise meaning of
 these values is defined by the Canonical ABI.
 
 
+## Interaction with the start function
+
+Since any component-level function with an empty signature can be used as a
+[`start`] function, there's nothing to stop an `async`-lifted function from
+being used as a `start` function. Async start functions are useful when
+executing general-purpose code at initialization time, e.g.:
+* If the top-level scripts of a scripting language are executed by the `start`
+  function, asychrony arises from regular use of the language's concurrency
+  features. For example, in JS, this takes the form of [top-level `await`].
+* If C++ or other OOPLs global object constructors are executed by the `start`
+  function, these can execute general-purpose code which may use concurrent
+  I/O APIs.
+
+Since component `start` functions are already defined to be executed
+synchronously before the component is considered initialized and ready for its
+exports to be called, the natural thing for `start` to do when calling an
+`async`-lifted function is wait for the callee to reach the ["returned"
+state](#returning). This gives `async` `start` functions a simple way to do
+concurrent initialization and signal completion using the same language
+bindings as regular `async` `export` functions.
+
+However, as explained above, an async task can always continue executing after
+reaching the "returned" state and thus an async task spawned by `start` may
+continue executing even after the component instance is initialized and
+receiving export calls. These post-return `start`-tasks can be used by the
+language toolchain to implement traditional "background tasks" (e.g., the
+`setInterval()` or `requestIdleCallback()` JavaScript APIs). From the
+perspective of [structured concurrency], these background tasks are new task
+tree roots (siblings to the roots created when component exports are
+called by the host). Thus, subtasks and threads spawned by the background task
+will have proper async callstacks as used to define reentrancy and support
+debugging/profiling/tracing.
+
+In future, when [runtime instantiation] is added to the Component Model, the
+component-level function used to create a component instance could be lowered
+with `async` to allow a parent component to instantiate child components
+concurrently, relaxing the fully synchronous model of instantiation supported
+by declarative instantiation and `start` above.
+
+
 ## Interaction with multi-threading
 
 For now, the integration between multi-threading (via [`thread.spawn`]) and
@@ -666,16 +706,6 @@ it does present interesting opportunities to experiment with optimizations over
 time as applications are built with more components.
 
 
-## Interaction with the start function
-
-Since component-level start functions can be any component-level function (with
-type `[] -> []`), async functions can be start functions. This raises some
-interesting questions concerning how much concurrency during instantiation (of
-a whole component DAG) is allowed and how parent components can control this.
-For now, this remains a [TODO](#todo) and validation will reject `async`-lifted
-`start` functions.
-
-
 ## TODO
 
 Native async support is being proposed incrementally. The following features
@@ -684,8 +714,6 @@ will be added in future chunks roughly in the order list to complete the full
 comes after:
 * `nonblocking` function type attribute: allow a function to declare in its
   type that it will not transitively do anything blocking
-* define what `async` means for `start` functions (top-level await + background
-  tasks), along with cross-task coordination built-ins
 * `subtask.cancel`: allow a supertask to signal to a subtask that its result is
   no longer wanted and to please wrap it up promptly
 * zero-copy forwarding/splicing
@@ -747,6 +775,7 @@ comes after:
 [Use Cases]: ../high-level/UseCases.md
 [Blast Zone]: FutureFeatures.md#blast-zones
 [Reentrance]: Explainer.md#component-invariants
+[`start`]: Explainer.md#start-definitions
 
 [stack-switching]: https://github.com/WebAssembly/stack-switching/
 [JSPI]: https://github.com/WebAssembly/js-promise-integration/
@@ -756,3 +785,6 @@ comes after:
 
 [WASI Preview 3]: https://github.com/WebAssembly/WASI/tree/main/wasip2#looking-forward-to-preview-3
 [`wasi:http/handler.handle`]: https://github.com/WebAssembly/wasi-http/blob/main/wit-0.3.0-draft/handler.wit
+[Runtime Instantiation]: https://github.com/WebAssembly/component-model/issues/423
+
+[Top-level `await`]: https://github.com/tc39/proposal-top-level-await
