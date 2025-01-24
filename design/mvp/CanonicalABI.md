@@ -415,8 +415,8 @@ class BufferGuestImpl(Buffer):
   length: int
 
   def __init__(self, t, cx, ptr, length):
-    trap_if(length == 0 or length > Buffer.MAX_LENGTH)
-    if t:
+    trap_if(length > Buffer.MAX_LENGTH)
+    if t and length > 0:
       trap_if(ptr != align_to(ptr, alignment(t)))
       trap_if(ptr + length * elem_size(t) > len(cx.opts.memory))
     self.cx = cx
@@ -1299,10 +1299,13 @@ class ReadableStreamGuestImpl(ReadableStream):
     self.reset_pending()
 
   def reset_pending(self):
-    self.pending_inst = None
-    self.pending_buffer = None
-    self.pending_on_partial_copy = None
-    self.pending_on_copy_done = None
+    self.set_pending(None, None, None, None)
+
+  def set_pending(self, inst, buffer, on_partial_copy, on_copy_done):
+    self.pending_inst = inst
+    self.pending_buffer = buffer
+    self.pending_on_partial_copy = on_partial_copy
+    self.pending_on_copy_done = on_copy_done
 ```
 If set, the `pending_*` fields record the `Buffer` and `On*` callbacks of a
 `read` or `write` that is waiting to rendezvous with a complementary `write` or
@@ -1356,27 +1359,45 @@ but in the opposite direction. Both are implemented by a single underlying
     if self.closed_:
       return 'done'
     elif not self.pending_buffer:
-      self.pending_inst = inst
-      self.pending_buffer = buffer
-      self.pending_on_partial_copy = on_partial_copy
-      self.pending_on_copy_done = on_copy_done
+      self.set_pending(inst, buffer, on_partial_copy, on_copy_done)
       return 'blocked'
     else:
       trap_if(inst is self.pending_inst) # temporary
-      ncopy = min(src.remain(), dst.remain())
-      assert(ncopy > 0)
-      dst.write(src.read(ncopy))
       if self.pending_buffer.remain() > 0:
-        self.pending_on_partial_copy(self.reset_pending)
+        if buffer.remain() > 0:
+          dst.write(src.read(min(src.remain(), dst.remain())))
+          if self.pending_buffer.remain() > 0:
+            self.pending_on_partial_copy(self.reset_pending)
+          else:
+            self.reset_and_notify_pending('completed')
+        return 'done'
       else:
-        self.reset_and_notify_pending('completed')
-      return 'done'
+        if buffer.remain() > 0 or buffer is dst:
+          self.reset_and_notify_pending('completed')
+          self.set_pending(inst, buffer, on_partial_copy, on_copy_done)
+          return 'blocked'
+        else:
+          return 'done'
 ```
-Currently, there is a trap when both the `read` and `write` come from the same
-component instance, but this trapping condition will be removed in a subsequent
-release. The reason for this trap is that when lifting and lowering can alias
-the same memory, interleaving must be handled carefully. Future improvements to
-the Canonical ABI ([lazy lowering]) can greatly simplify this interleaving.
+The meaning of a `read` or `write` when the length is `0` is that the caller is
+querying the "readiness" of the other side. When a `0`-length read/write
+rendezvous with a non-`0`-length read/write, only the `0`-length read/write
+completes; the non-`0`-length read/write is kept pending (and ready for a
+subsequent rendezvous).
+
+In the corner case where a `0`-length read *and* write rendezvous, only the
+*writer* is notified of readiness. To avoid livelock, the Canonical ABI
+requires that a writer *must* (eventually) follow a completed `0`-length write
+with a non-`0`-length write that is allowed to block (allowing the reader end
+to run and rendezvous with its own non-`0`-length read). To implement a
+traditional `O_NONBLOCK` `write()` or `sendmsg()` API, a writer can use a
+buffering scheme in which, after `select()` (or a similar API) signals a file
+descriptor is ready to write, the next `O_NONBLOCK` `write()`/`sendmsg()` on
+that file descriptor copies to an internal buffer and suceeds, issuing an
+`async` `stream.write` in the background and waiting for completion before
+signalling readiness again. Note that buffering only occurs when streaming
+between two components using non-blocking I/O; if either side is the host or a
+component using blocking or completion-based I/O, no buffering is necessary.
 
 Given the above, we can define the `{Readable,Writable}StreamEnd` classes that
 are actually stored in the `waitables` table. The classes are almost entirely
