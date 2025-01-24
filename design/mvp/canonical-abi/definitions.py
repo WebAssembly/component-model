@@ -658,15 +658,40 @@ class ReadableStreamGuestImpl(ReadableStream):
     self.closed_ = False
     self.errctx = None
     self.reset_pending()
+
   def reset_pending(self):
     self.pending_buffer = None
     self.pending_on_partial_copy = None
     self.pending_on_copy_done = None
 
+  def reset_and_notify_pending(self):
+    pending_on_copy_done = self.pending_on_copy_done
+    self.reset_pending()
+    pending_on_copy_done()
+
+  def cancel(self):
+    self.reset_and_notify_pending()
+
+  def close(self, errctx = None):
+    if not self.closed_:
+      self.closed_ = True
+      self.errctx = errctx
+      if self.pending_buffer:
+        self.reset_and_notify_pending()
+
+  def closed(self):
+    return self.closed_
+
+  def closed_with_error(self):
+    assert(self.closed_)
+    return self.errctx
+
   def read(self, dst, on_partial_copy, on_copy_done):
     return self.copy(dst, on_partial_copy, on_copy_done, self.pending_buffer, dst)
+
   def write(self, src, on_partial_copy, on_copy_done):
     return self.copy(src, on_partial_copy, on_copy_done, src, self.pending_buffer)
+
   def copy(self, buffer, on_partial_copy, on_copy_done, src, dst):
     if self.closed_:
       return 'done'
@@ -682,25 +707,8 @@ class ReadableStreamGuestImpl(ReadableStream):
       if self.pending_buffer.remain() > 0:
         self.pending_on_partial_copy(self.reset_pending)
       else:
-        self.cancel()
+        self.reset_and_notify_pending()
       return 'done'
-
-  def cancel(self):
-    pending_on_copy_done = self.pending_on_copy_done
-    self.reset_pending()
-    pending_on_copy_done()
-
-  def close(self, errctx = None):
-    if not self.closed_:
-      self.closed_ = True
-      self.errctx = errctx
-      if self.pending_buffer:
-        self.cancel()
-  def closed(self):
-    return self.closed_
-  def closed_with_error(self):
-    assert(self.closed_)
-    return self.errctx
 
 class StreamEnd(Waitable):
   stream: ReadableStream
@@ -2058,11 +2066,11 @@ BLOCKED = 0xffff_ffff
 CLOSED  = 0x8000_0000
 
 def pack_copy_result(task, buffer, e):
-  if buffer.progress:
+  if buffer.progress or not e.stream.closed():
     assert(buffer.progress <= Buffer.MAX_LENGTH < BLOCKED)
     assert(not (buffer.progress & CLOSED))
     return buffer.progress
-  elif e.stream.closed():
+  else:
     if (errctx := e.stream.closed_with_error()):
       assert(isinstance(e, ReadableStreamEnd|ReadableFutureEnd))
       errctxi = task.inst.error_contexts.add(errctx)
@@ -2072,8 +2080,6 @@ def pack_copy_result(task, buffer, e):
     assert(errctxi <= Table.MAX_LENGTH < BLOCKED)
     assert(not (errctxi & CLOSED))
     return errctxi | CLOSED
-  else:
-    return 0
 
 ### 🔀 `canon {stream,future}.cancel-{read,write}`
 

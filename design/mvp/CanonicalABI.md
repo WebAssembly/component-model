@@ -1083,15 +1083,9 @@ calling core wasm code receives the `STREAM_READ` progress event (in which case
 by the spec, particularly when streaming between two components.
 
 The `ReadableStreamGuestImpl` class implements `ReadableStream` for streams
-created by wasm (via `stream.new`). This class contains both a `read` method
-that is called through the abstract `ReadableStream` interface (by the host or
-another component) as well as a `write` method that is always called by
-`stream.write` from the component instance that called `stream.new`. `write`
-follows the same exact rules as `read` above, except with the `WritableBuffer`
-replaced by a `ReadableBuffer`. This allows both `read` and `write` to be
-implemented by a single underlying `copy` method parameterized by the direction
-of the copy. Given this, the implementation of `ReadableStreamGuestImpl` is
-derived fairly directly from the abstract rules for listed above:
+created by wasm (via `stream.new`) and tracks the common state shared by both
+the readable and writable ends of streams (defined below). Introducing the
+class in chunks, starting with the fields and initialization:
 ```python
 class ReadableStreamGuestImpl(ReadableStream):
   impl: ComponentInstance
@@ -1107,15 +1101,73 @@ class ReadableStreamGuestImpl(ReadableStream):
     self.closed_ = False
     self.errctx = None
     self.reset_pending()
+
   def reset_pending(self):
     self.pending_buffer = None
     self.pending_on_partial_copy = None
     self.pending_on_copy_done = None
+```
+The `impl` field records the component instance that created this stream and is
+used by `lower_stream` below.
 
+If set, the `pending_*` fields record the `Buffer` and `On*` callbacks of a
+`read` or `write` that is waiting to rendezvous with a complementary `write` or
+`read`. Closing the readable or writable end of a stream or cancelling a `read`
+or `write` notifies any pending `read` or `write` via its `OnCopyDone`
+callback, which lets the other side know that ownership of the `Buffer` has
+been returned:
+```python
+  def reset_and_notify_pending(self):
+    pending_on_copy_done = self.pending_on_copy_done
+    self.reset_pending()
+    pending_on_copy_done()
+
+  def cancel(self):
+    self.reset_and_notify_pending()
+
+  def close(self, errctx = None):
+    if not self.closed_:
+      self.closed_ = True
+      self.errctx = errctx
+      if self.pending_buffer:
+        self.reset_and_notify_pending()
+
+  def closed(self):
+    return self.closed_
+
+  def closed_with_error(self):
+    assert(self.closed_)
+    return self.errctx
+```
+While the abstract `ReadableStream` interface *allows* `cancel` to return
+without having returned ownership of the buffer (which, in general, is
+necessary for [various][OIO] [host][io_uring] APIs), when *wasm* is
+implementing the stream, `cancel` always returns ownership of the buffer
+immediately.
+
+`close` takes an optional `error-context` value which can only be supplied to
+the writable end of a stream via `stream.close-writable`. Thus, for the
+readable end of the stream, `close` is effectively nullary, matching
+`ReadableStream.close`.
+
+Note that `cancel` and `close` notify in opposite directions:
+* `cancel` *must* be called on a readable or writable end with an operation
+  pending, and thus `cancel` notifies the same end that called it.
+* `close` *must not* be called on a readable or writable end with an operation
+  pending, and thus `close` notifies the opposite end.
+
+Finally, the meat of the class is the `read` method that is called through the
+abstract `ReadableStream` interface (by the host or another component). There
+is also a symmetric `write` method that follows the same rules as `read`,
+but in the opposite direction. Both are implemented by a single underlying
+`copy` method parameterized by the direction of the copy:
+```python
   def read(self, dst, on_partial_copy, on_copy_done):
     return self.copy(dst, on_partial_copy, on_copy_done, self.pending_buffer, dst)
+
   def write(self, src, on_partial_copy, on_copy_done):
     return self.copy(src, on_partial_copy, on_copy_done, src, self.pending_buffer)
+
   def copy(self, buffer, on_partial_copy, on_copy_done, src, dst):
     if self.closed_:
       return 'done'
@@ -1131,46 +1183,9 @@ class ReadableStreamGuestImpl(ReadableStream):
       if self.pending_buffer.remain() > 0:
         self.pending_on_partial_copy(self.reset_pending)
       else:
-        self.cancel()
+        self.reset_and_notify_pending()
       return 'done'
-
-  def cancel(self):
-    pending_on_copy_done = self.pending_on_copy_done
-    self.reset_pending()
-    pending_on_copy_done()
-
-  def close(self, errctx = None):
-    if not self.closed_:
-      self.closed_ = True
-      self.errctx = errctx
-      if self.pending_buffer:
-        self.cancel()
-  def closed(self):
-    return self.closed_
-  def closed_with_error(self):
-    assert(self.closed_)
-    return self.errctx
 ```
-The `impl` field records the component instance that created this stream and is
-used by `lower_stream` below.
-
-The `copy` method assumes that the calling Canonical ABI definitions have
-already guarded to ensure that there is at most one active `read` or
-`write` call in progress per stream. Thus, when `copy` is called and there is
-already a `pending_buffer`, `copy` can simply assume that it has both a
-`ReadableBuffer` and `WritableBuffer` in `src` and `dst`, resp., and proceed
-with the copy.
-
-While the abstract `ReadableStream` interface *allows* `cancel` to return
-without having returned ownership of the buffer (which, in general, is
-necessary for [various][OIO] [host][io_uring] APIs), when *wasm* is
-implementing the stream, `cancel` always returns ownership of the buffer
-immediately by synchronously calling the `on_copy_done` callback.
-
-The `close` method takes an optional `error-context` value which can only be
-supplied to the writable end of a stream via `stream.close-writable`. Thus, for
-the readable end of the stream, `close` is effectively nullary, matching
-`ReadableStream.close`.
 
 Given the above, we can define the `{Readable,Writable}StreamEnd` classes that
 are actually stored in the `waitables` table. The classes are almost entirely
@@ -3520,11 +3535,11 @@ BLOCKED = 0xffff_ffff
 CLOSED  = 0x8000_0000
 
 def pack_copy_result(task, buffer, e):
-  if buffer.progress:
+  if buffer.progress or not e.stream.closed():
     assert(buffer.progress <= Buffer.MAX_LENGTH < BLOCKED)
     assert(not (buffer.progress & CLOSED))
     return buffer.progress
-  elif e.stream.closed():
+  else:
     if (errctx := e.stream.closed_with_error()):
       assert(isinstance(e, ReadableStreamEnd|ReadableFutureEnd))
       errctxi = task.inst.error_contexts.add(errctx)
@@ -3534,8 +3549,6 @@ def pack_copy_result(task, buffer, e):
     assert(errctxi <= Table.MAX_LENGTH < BLOCKED)
     assert(not (errctxi & CLOSED))
     return errctxi | CLOSED
-  else:
-    return 0
 ```
 The order of tests here indicates that, if some progress was made and then the
 stream was closed, only the progress is reported and the `CLOSED` status is
