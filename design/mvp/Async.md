@@ -325,7 +325,11 @@ These built-ins can either return immediately if >0 elements were able to be
 written or read immediately (without blocking) or return a sentinel "blocked"
 value indicating that the read or write will execute concurrently. The readable
 and writable ends of streams and futures can then be [waited](#waiting) on to
-make progress.
+make progress. Notification of progress signals *completion* of a read or write
+(i.e., the bytes have already been copied into the buffer). Additionally,
+*readiness* (to perform a read or write in the future) can be queried and
+signalled by performing a `0`-length read or write (see the [Stream State]
+section in the Canonical ABI explainer for details).
 
 The `T` element type of streams and futures is optional, such that `future` and
 `stream` can be written in WIT without a trailing `<T>`. In this case, the

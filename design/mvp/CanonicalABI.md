@@ -363,8 +363,8 @@ class BufferGuestImpl(Buffer):
   length: int
 
   def __init__(self, t, cx, ptr, length):
-    trap_if(length == 0 or length > Buffer.MAX_LENGTH)
-    if t:
+    trap_if(length > Buffer.MAX_LENGTH)
+    if t and length > 0:
       trap_if(ptr != align_to(ptr, alignment(t)))
       trap_if(ptr + length * elem_size(t) > len(cx.opts.memory))
     self.cx = cx
@@ -1178,14 +1178,35 @@ but in the opposite direction. Both are implemented by a single underlying
       return 'blocked'
     else:
       ncopy = min(src.remain(), dst.remain())
-      assert(ncopy > 0)
-      dst.write(src.read(ncopy))
-      if self.pending_buffer.remain() > 0:
-        self.pending_on_partial_copy(self.reset_pending)
+      if ncopy > 0:
+        dst.write(src.read(ncopy))
+        if self.pending_buffer.remain() > 0:
+          self.pending_on_partial_copy(self.reset_pending)
+        else:
+          self.reset_and_notify_pending()
+        return 'done'
       else:
-        self.reset_and_notify_pending()
-      return 'done'
+        if self.pending_buffer.remain() == 0:
+          self.reset_and_notify_pending()
+        if buffer.remain() == 0:
+          return 'done'
+        else:
+          self.pending_buffer = buffer
+          self.pending_on_partial_copy = on_partial_copy
+          self.pending_on_copy_done = on_copy_done
+          return 'blocked'
 ```
+The meaning of a `read` or `write` when the length is `0` is that the caller is
+signalling their "readiness" and wants to know when the other side is "ready".
+When a non-`0`-length `read` or `write` rendezvous with a `0`-length `write` or
+`read`, only the `0`-length operation completes, keeping the non-`0`-length
+pending and immediately ready for a future rendezvous. In a rendezvous where
+*both* the `read` and `write` are `0`-length, both operations complete. Thus,
+"readiness" does not guarantee "the next operation is non-blocking" since after
+both sides learn of readiness, one side must subsequently block with a pending
+non-`0`-length operation for the other side to rendezvous with. Consequently,
+components should always follow a successful `0`-length `read` or `write` with
+a non-`0`-length `read` or `write`.
 
 Given the above, we can define the `{Readable,Writable}StreamEnd` classes that
 are actually stored in the `waitables` table. The classes are almost entirely
