@@ -323,10 +323,9 @@ imported `stream.read` or `stream.write` canonical built-ins, resp., passing the
 pointer and length of a linear-memory buffer to write-into or read-from, resp.
 These built-ins can either return immediately if >0 elements were able to be
 written or read immediately (without blocking) or return a sentinel "blocked"
-value indicating that the read or write will execute concurrently. The
-readable and writable ends of streams and futures each have a well-defined
-parent `Task` that will receive "progress" events on all child streams/futures
-that have previously blocked.
+value indicating that the read or write will execute concurrently. The readable
+and writable ends of streams and futures can then be [waited](#waiting) on to
+make progress.
 
 The `T` element type of streams and futures is optional, such that `future` and
 `stream` can be written in WIT without a trailing `<T>`. In this case, the
