@@ -1878,12 +1878,11 @@ delivered to indicate the completion of the `read` or `write`. (See
 
 | Synopsis                                              |                                                                  |
 | ----------------------------------------------------- | ---------------------------------------------------------------- |
-| Approximate WIT signature for `stream.close-readable` | `func<T>(e: readable-stream-end<T>)`                             |
+| Approximate WIT signature for `stream.close-readable` | `func<T>(e: readable-stream-end<T>, err: option<error-context>)` |
 | Approximate WIT signature for `stream.close-writable` | `func<T>(e: writable-stream-end<T>, err: option<error-context>)` |
-| Approximate WIT signature for `future.close-readable` | `func<T>(e: readable-future-end<T>)`                             |
+| Approximate WIT signature for `future.close-readable` | `func<T>(e: readable-future-end<T>, err: option<error-context>)` |
 | Approximate WIT signature for `future.close-writable` | `func<T>(e: writable-future-end<T>, err: option<error-context>)` |
-| Canonical ABI signature for `*.close-readable`        | `[readable-end:i32] -> []`                                       |
-| Canonical ABI signature for `*.close-writable`        | `[writable-end:i32 err:i32] -> []`                               |
+| Canonical ABI signature                               | `[end:i32 err:i32] -> []`                                        |
 
 The `{stream,future}.close-{readable,writable}` built-ins remove the indicated
 [stream or future] from the current component instance's table of [waitables],
