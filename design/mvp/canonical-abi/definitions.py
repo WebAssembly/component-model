@@ -640,14 +640,14 @@ class ReadableStream:
   t: ValType
   read: Callable[[WritableBuffer, OnPartialCopy, OnCopyDone], Literal['done','blocked']]
   cancel: Callable[[], None]
-  close: Callable[[]]
+  close: Callable[[Optional[ErrorContext]]]
   closed: Callable[[], bool]
-  closed_with_error: Callable[[], Optional[ErrorContext]]
+  closed_with: Callable[[], Optional[ErrorContext]]
 
 class ReadableStreamGuestImpl(ReadableStream):
   impl: ComponentInstance
   closed_: bool
-  errctx: Optional[ErrorContext]
+  maybe_errctx: Optional[ErrorContext]
   pending_buffer: Optional[Buffer]
   pending_on_partial_copy: Optional[OnPartialCopy]
   pending_on_copy_done: Optional[OnCopyDone]
@@ -656,7 +656,7 @@ class ReadableStreamGuestImpl(ReadableStream):
     self.t = t
     self.impl = inst
     self.closed_ = False
-    self.errctx = None
+    self.maybe_errctx = None
     self.reset_pending()
 
   def reset_pending(self):
@@ -672,19 +672,19 @@ class ReadableStreamGuestImpl(ReadableStream):
   def cancel(self):
     self.reset_and_notify_pending()
 
-  def close(self, errctx = None):
+  def close(self, maybe_errctx):
     if not self.closed_:
       self.closed_ = True
-      self.errctx = errctx
+      self.maybe_errctx = maybe_errctx
       if self.pending_buffer:
         self.reset_and_notify_pending()
 
   def closed(self):
     return self.closed_
 
-  def closed_with_error(self):
+  def closed_with(self):
     assert(self.closed_)
-    return self.errctx
+    return self.maybe_errctx
 
   def read(self, dst, on_partial_copy, on_copy_done):
     return self.copy(dst, on_partial_copy, on_copy_done, self.pending_buffer, dst)
@@ -719,9 +719,9 @@ class StreamEnd(Waitable):
     self.stream = stream
     self.copying = False
 
-  def drop(self, errctx):
+  def drop(self, maybe_errctx):
     trap_if(self.copying)
-    self.stream.close(errctx)
+    self.stream.close(maybe_errctx)
     Waitable.drop(self)
 
 class ReadableStreamEnd(StreamEnd):
@@ -740,11 +740,11 @@ class FutureEnd(StreamEnd):
     assert(buffer.remain() == 1)
     def on_copy_done_wrapper():
       if buffer.remain() == 0:
-        self.stream.close()
+        self.stream.close(maybe_errctx = None)
       on_copy_done()
     ret = copy_op(buffer, on_partial_copy = None, on_copy_done = on_copy_done_wrapper)
     if ret == 'done' and buffer.remain() == 0:
-      self.stream.close()
+      self.stream.close(maybe_errctx = None)
     return ret
 
 class ReadableFutureEnd(FutureEnd):
@@ -755,9 +755,9 @@ class WritableFutureEnd(FutureEnd):
   paired: bool = False
   def copy(self, src, on_partial_copy, on_copy_done):
     return self.close_after_copy(self.stream.write, src, on_copy_done)
-  def drop(self, errctx):
-    trap_if(not self.stream.closed() and not errctx)
-    FutureEnd.drop(self, errctx)
+  def drop(self, maybe_errctx):
+    trap_if(not self.stream.closed() and not maybe_errctx)
+    FutureEnd.drop(self, maybe_errctx)
 
 ### Despecialization
 
@@ -2071,9 +2071,8 @@ def pack_copy_result(task, buffer, e):
     assert(not (buffer.progress & CLOSED))
     return buffer.progress
   else:
-    if (errctx := e.stream.closed_with_error()):
-      assert(isinstance(e, ReadableStreamEnd|ReadableFutureEnd))
-      errctxi = task.inst.error_contexts.add(errctx)
+    if (maybe_errctx := e.stream.closed_with()):
+      errctxi = task.inst.error_contexts.add(maybe_errctx)
       assert(errctxi != 0)
     else:
       errctxi = 0
@@ -2114,14 +2113,14 @@ async def cancel_copy(EndT, event_code, t, sync, task, i):
 
 ### 🔀 `canon {stream,future}.close-{readable,writable}`
 
-async def canon_stream_close_readable(t, task, i):
-  return await close(ReadableStreamEnd, t, task, i, 0)
+async def canon_stream_close_readable(t, task, i, errctxi):
+  return await close(ReadableStreamEnd, t, task, i, errctxi)
 
 async def canon_stream_close_writable(t, task, hi, errctxi):
   return await close(WritableStreamEnd, t, task, hi, errctxi)
 
-async def canon_future_close_readable(t, task, i):
-  return await close(ReadableFutureEnd, t, task, i, 0)
+async def canon_future_close_readable(t, task, i, errctxi):
+  return await close(ReadableFutureEnd, t, task, i, errctxi)
 
 async def canon_future_close_writable(t, task, hi, errctxi):
   return await close(WritableFutureEnd, t, task, hi, errctxi)
@@ -2130,12 +2129,12 @@ async def close(EndT, t, task, hi, errctxi):
   trap_if(not task.inst.may_leave)
   e = task.inst.waitables.remove(hi)
   if errctxi == 0:
-    errctx = None
+    maybe_errctx = None
   else:
-    errctx = task.inst.error_contexts.get(errctxi)
+    maybe_errctx = task.inst.error_contexts.get(errctxi)
   trap_if(not isinstance(e, EndT))
   trap_if(e.stream.t != t)
-  e.drop(errctx)
+  e.drop(maybe_errctx)
   return []
 
 ### 🔀 `canon error-context.new`
