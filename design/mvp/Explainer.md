@@ -129,7 +129,7 @@ The next kind of definition is, recursively, a component itself. Thus,
 components form trees with all other kinds of definitions only appearing at the
 leaves. For example, with what's defined so far, we can write the following
 component:
-```wasm
+```wat
 (component
   (component
     (core module (func (export "one") (result i32) (i32.const 1)))
@@ -185,7 +185,7 @@ Also [like Core WebAssembly][Core Identifiers], the Component Model text format
 allows *identifiers* to be used in place of these indices, which are resolved
 when parsing into indices in the AST (upon which validation and execution is
 defined). Thus, the following two components are equivalent:
-```wasm
+```wat
 (component
   (core module (; empty ;))
   (component   (; empty ;))
@@ -195,7 +195,7 @@ defined). Thus, the following two components are equivalent:
   (export "M2" (core module 1))
 )
 ```
-```wasm
+```wat
 (component
   (core module $M1 (; empty ;))
   (component $C    (; empty ;))
@@ -251,7 +251,7 @@ indexes into the sort's associated index space to select a definition.
 
 Based on this, we can link two core modules `$A` and `$B` together with the
 following component:
-```wasm
+```wat
 (component
   (core module $A
     (func (export "one") (result i32) (i32.const 1))
@@ -363,12 +363,12 @@ inlinealias ::= (<sort> <u32> <name>+)
 If `<sort>` refers to a `<core:sort>`, then the `<u32>` of `inlinealias` is a
 `<core:instanceidx>`; otherwise it's an `<instanceidx>`. For example, the
 following snippet uses two inline function aliases:
-```wasm
+```wat
 (instance $j (instantiate $J (with "f" (func $i "f"))))
 (export "x" (func $j "g" "h"))
 ```
 which are desugared into:
-```wasm
+```wat
 (alias export $i "f" (func $f_alias))
 (instance $j (instantiate $J (with "f" (func $f_alias))))
 (alias export $j "g" (instance $g_alias))
@@ -379,7 +379,7 @@ which are desugared into:
 For `outer` aliases, the inline sugar is simply the identifier of the outer
 definition, resolved using normal lexical scoping rules. For example, the
 following component:
-```wasm
+```wat
 (component
   (component $C ...)
   (component
@@ -388,7 +388,7 @@ following component:
 )
 ```
 is desugared into:
-```wasm
+```wat
 (component $Parent
   (component $C ...)
   (component
@@ -400,7 +400,7 @@ is desugared into:
 
 Lastly, for symmetry with [imports][func-import-abbrev], aliases can be written
 in an inverted form that puts the sort first:
-```wasm
+```wat
     (func $f (import "i" "f") ...type...) ≡ (import "i" "f" (func $f ...type...))   (WebAssembly 1.0)
           (func $f (alias export $i "f")) ≡ (alias export $i "f" (func $f))
    (core module $m (alias export $i "m")) ≡ (alias export $i "m" (core module $m))
@@ -408,7 +408,7 @@ in an inverted form that puts the sort first:
 ```
 
 With what's defined so far, we're able to link modules with arbitrary renamings:
-```wasm
+```wat
 (component
   (core module $A
     (func (export "one") (result i32) (i32.const 1))
@@ -488,7 +488,7 @@ this, module types start with an empty type index space that is populated by
 `type` declarators, so that, in the future, these `type` declarators can refer to
 type imports local to the module type itself. For example, in the future, the
 following module type would be expressible:
-```wasm
+```wat
 (component $C
   (core type $M (module
     (import "" "T" (type $T))
@@ -511,7 +511,7 @@ future, more kinds of aliases would be meaningful and allowed.
 As an example, the following component defines two semantically-equivalent
 module types, where the former defines the function type via `type` declarator
 and the latter refers via `alias` declarator.
-```wasm
+```wat
 (component $C
   (core type $C1 (module
     (type (func (param i32) (result i32)))
@@ -862,7 +862,7 @@ Relaxing the restrictions of `core:alias` declarators mentioned above, `alias`
 declarators allow both `outer` and `export` aliases of `type` and `instance`
 sorts. This allows the type exports of `instance`-typed import and export
 declarators to be used by subsequent declarators in the type:
-```wasm
+```wat
 (component
   (import "fancy-fs" (instance $fancy-fs
     (export $fs "fs" (instance
@@ -883,7 +883,7 @@ introduced by `importdecl` or `exportdecl`.
 
 With what's defined so far, we can define component types using a mix of type
 definitions:
-```wasm
+```wat
 (component $C
   (type $T (list (tuple string bool)))
   (type $U (option $T))
@@ -927,7 +927,7 @@ nodes. Then, type equality is defined to be AST equality. Importantly, these
 type ASTs do *not* contain any type indices or depend on index space layout;
 these binary format details are consumed by decoding to produce the AST. For
 example, in the following compound component:
-```wasm
+```wat
 (component $A
   (type $ListString1 (list string))
   (type $ListListString1 (list $ListString1))
@@ -990,7 +990,7 @@ subcases of `typebound` to consider: `eq` and `sub`.
 The `eq` bound adds a type equality rule (extending the built-in set of
 subtyping rules mentioned above) saying that the imported type is structurally
 equivalent to the type referenced in the bound. For example, in the component:
-```wasm
+```wat
 (component
   (type $L1 (list u8))
   (import "L2" (type $L2 (eq $L1)))
@@ -1009,7 +1009,7 @@ preceding type definition. Currently (and likely in the MVP), the only
 supported type bound is `resource` (which means "any resource type") and thus
 the only abstract types are abstract *resource* types. As an example, in the
 following component:
-```wasm
+```wat
 (component
   (import "T1" (type $T1 (sub resource)))
   (import "T2" (type $T2 (sub resource)))
@@ -1020,7 +1020,7 @@ the types `$T1` and `$T2` are not equal.
 Once a type is imported, it can be referred to by subsequent equality-bound
 type imports, thereby adding more types that it is equal to. For example, in
 the following component:
-```wasm
+```wat
 (component $C
   (import "T1" (type $T1 (sub resource)))
   (import "T2" (type $T2 (sub resource)))
@@ -1037,7 +1037,7 @@ equal to each other but not to `$List1`.
 Handle types (`own` and `borrow`) are structural types (like `list`) but, since
 they refer to resource types, transitively "inherit" the freshness of abstract
 resource types. For example, in the following component:
-```wasm
+```wat
 (component
   (import "T" (type $T (sub resource)))
   (import "U" (type $U (sub resource)))
@@ -1065,7 +1065,7 @@ each other but not `$Borrow3`. Transitively, the types `$ListOwn1` and
 The above examples all show abstract types in terms of *imports*, but the same
 "freshness" condition applies when aliasing the *exports* of another component
 as well. For example, in this component:
-```wasm
+```wat
 (component
   (import "C" (component $C
     (export "T1" (type (sub resource)))
@@ -1093,7 +1093,7 @@ instantiation generates fresh resource types distinct from all preceding
 instances of the same component, resource types are ["generative"].
 
 For example, in the following example component:
-```wasm
+```wat
 (component
   (type $R1 (resource (rep i32)))
   (type $R2 (resource (rep i32)))
@@ -1107,7 +1107,7 @@ is incompatible with the parameter type of `$f2`.
 The generativity of resource type definitions matches the abstract typing rules
 of type exports mentioned above, which force all clients of the component to
 bind a fresh abstract type. For example, in the following component:
-```wasm
+```wat
 (component
   (component $C
     (type $r1 (export "r1") (resource (rep i32)))
@@ -1127,7 +1127,7 @@ that each instance of `$C` generates two fresh resource types.
 If a single resource type definition is exported more than once, the exports
 after the first are equality-bound to the first export. For example, the
 following component:
-```wasm
+```wat
 (component
   (type $r (resource (rep i32)))
   (export "r1" (type $r))
@@ -1135,7 +1135,7 @@ following component:
 )
 ```
 is assigned the following `componenttype`:
-```wasm
+```wat
 (component
   (export "r1" (type $r1 (sub resource)))
   (export "r2" (type (eq $r1)))
@@ -1149,7 +1149,7 @@ If a component wants to hide this fact and force clients to assume `r1` and
 separate types in the future without breaking clients), an explicit type can be
 ascribed to the export that replaces the `eq` bound with a less-precise `sub`
 bound (using syntax introduced [below](#import-and-export-definitions)).
-```wasm
+```wat
 (component
   (type $r (resource (rep i32)))
   (export "r1" (type $r))
@@ -1157,7 +1157,7 @@ bound (using syntax introduced [below](#import-and-export-definitions)).
 )
 ```
 This component is assigned the following `componenttype`:
-```wasm
+```wat
 (component
   (export "r1" (type (sub resource)))
   (export "r2" (type (sub resource)))
@@ -1170,7 +1170,7 @@ When supplying a resource type (imported *or* defined) to a type import via
 `instantiate`, type checking performs a substitution, replacing all uses of the
 `import` in the instantiated component with the actual type supplied via
 `with`. For example, the following component validates:
-```wasm
+```wat
 (component $P
   (import "C1" (component $C1
     (import "T" (type $T (sub resource)))
@@ -1285,7 +1285,7 @@ validation requires this option to be present (there is no default).
 
 The `(realloc ...)` option specifies a core function that is validated to
 have the following core function type:
-```wasm
+```wat
 (func (param $originalPtr i32)
       (param $originalSize i32)
       (param $alignment i32)
@@ -1314,7 +1314,7 @@ call to a function using these types is highly likely to deadlock).
 🔀 The `(callback ...)` option may only be present in `canon lift` when the
 `async` option has also been set and specifies a core function that is
 validated to have the following core function type:
-```wasm
+```wat
 (func (param $ctx i32)
       (param $event i32)
       (param $payload i32)
@@ -1346,7 +1346,7 @@ stack-switching in component function signatures.
 
 Similar to the `import` and `alias` abbreviations shown above, `canon`
 definitions can also be written in an inverted form that puts the sort first:
-```wasm
+```wat
 (func $f (import "i" "f") ...type...) ≡ (import "i" "f" (func $f ...type...))       (WebAssembly 1.0)
 (func $g ...type... (canon lift ...)) ≡ (canon lift ... (func $g ...type...))
 (core func $h (canon lower ...))      ≡ (canon lower ... (core func $h))
@@ -1356,7 +1356,7 @@ functions (such as types), hence the explicit `sort`.
 
 Using canonical function definitions, we can finally write a non-trivial
 component that takes a string, does some logging, then returns a string.
-```wasm
+```wat
 (component
   (import "logging" (instance $logging
     (export "log" (func (param string)))
@@ -1510,7 +1510,7 @@ hard-coded to always be `i32`.
 
 As an example, the following component imports the `resource.new` built-in,
 allowing it to create and return new resources to its client:
-```wasm
+```wat
 (component
   (import "Libc" (core module $Libc ...))
   (core instance $libc (instantiate $Libc))
@@ -2011,7 +2011,7 @@ of the value definition to be written directly in the text format, analogous to 
 avoiding the need to understand type information when encoding or decoding.
 
 For example:
-```wasm
+```wat
 (component
   (value $a bool true)
   (value $b u8  1)
@@ -2085,14 +2085,14 @@ For example:
 
 As with all definition sorts, values may be imported and exported by
 components. As an example value import:
-```wasm
+```wat
 (import "env" (value $env (record (field "locale" (option string)))))
 ```
 As this example suggests, value imports can serve as generalized [environment
 variables], allowing not just `string`, but the full range of `valtype`.
 
 Values can also be exported.  For example:
-```wasm
+```wat
 (component
   (import "system-port" (value $port u16))
   (value $url string "https://example.com")
@@ -2101,7 +2101,7 @@ Values can also be exported.  For example:
 )
 ```
 The inferred type of this component is:
-```wasm
+```wat
 (component
   (import "system-port" (value $port u16))
   (value $url string "https://example.com")
@@ -2132,7 +2132,7 @@ validated to match the signature of `funcidx`.
 
 With this, we can define a component that imports a string and computes a new
 exported string at instantiation time:
-```wasm
+```wat
 (component
   (import "name" (value $name string))
   (import "libc" (core module $Libc
@@ -2345,7 +2345,7 @@ options for naming imports:
   given exported definition.
 
 As an example, the following component uses all 9 cases of imports and exports:
-```wasm
+```wat
 (component
   (import "custom-hook" (func (param string) (result string)))
   (import "wasi:http/handler" (instance
@@ -2387,7 +2387,7 @@ the definition's type, thereby allowing a private (non-exported) type
 definition to be replaced with a public (exported) type definition.
 
 For example, in the following component:
-```wasm
+```wat
 (component
   (import "R1" (type $R1 (sub resource)))
   (type $R2 (resource (rep i32)))
@@ -2411,7 +2411,7 @@ Similar to type exports, value exports may also ascribe a type to keep the preci
 value from becoming part of the type and public interface.
 
 For example:
-```wasm
+```wat
 (component
   (value $url string "https://example.com")
   (export "default-url" (value $url) (value string))
@@ -2419,7 +2419,7 @@ For example:
 ```
 
 The inferred type of this component is:
-```wasm
+```wat
 (component
   (export "default-url" (value string))
 )
@@ -2511,7 +2511,7 @@ the abovementioned functions (again, using the `layer` field to eagerly
 distinguish between modules and components).
 
 For example, the following component:
-```wasm
+```wat
 ;; a.wasm
 (component
   (import "one" (func))
@@ -2528,7 +2528,7 @@ For example, the following component:
 )
 ```
 and module:
-```wasm
+```wat
 ;; b.wasm
 (module
   (import "six" "a" (func))
@@ -2663,7 +2663,7 @@ must be performed recursively.
 Otherwise, function or value imports are treated like an [Imported Default Binding]
 and the Module Record is converted to its default value. This allows the following
 component:
-```wasm
+```wat
 ;; bar.wasm
 (component
   (import "./foo.js" (func (result string)))

@@ -33,7 +33,7 @@ participating modules. Here, as in most conventions, `libc` serves a special
 role and is assumed to be bundled with the compiler. As part of this special
 role, `libc` defines and exports linear memory, with the convention that
 every other module imports memory from `libc`:
-```wasm
+```wat
 ;; libc.wat
 (module
   (memory (export "memory") 1)
@@ -65,7 +65,7 @@ void* LIBC(malloc)(size_t n);
 
 With these annotations, C programs that include and call this function will be
 compiled to contain the following import:
-```wasm
+```wat
 (import "libc" "malloc" (func (param i32) (result i32)))
 ```
 
@@ -95,7 +95,7 @@ so that client modules generate proper wasm *import definitions* while `libzip.c
 annotates the `zip` definition with an *export* attribute so that this function
 generates a proper *export definition* in the compiled module. Compiling with
 `clang -shared libzip.c` produces a module shaped like:
-```wasm
+```wat
 ;; libzip.wat
 (module
   (import "libc" "memory" (memory 1))
@@ -126,7 +126,7 @@ int main(int argc, char* argv[]) {
 
 When compiled by a (future) component-aware `clang`, the resulting component
 would look like:
-```wasm
+```wat
 ;; zipper.wat
 (component
   (import "libc" (core module $Libc
@@ -207,7 +207,7 @@ Compiling with `clang -shared libimg.c` produces a `libimg` module:
 The main module of the `imgmgk` component is implemented by including
 `stddef.h`, `libzip.h` and `libimg.h`. When compiled by a (future)
 component-aware `clang`, the resulting component would look like:
-```wasm
+```wat
 ;; imgmgk.wat
 (component $Imgmgk
   (import "libc" (core module $Libc ...))
@@ -251,7 +251,7 @@ dynamically-linked modules expressed through `instance` definitions.
 
 Finally, we can create the `app` component by composing the `zipper` and `imgmgk`
 components. The resulting component could look like:
-```wasm
+```wat
 ;; app.wat
 (component
   (import "libc" (core module $Libc ...))

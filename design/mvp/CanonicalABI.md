@@ -2703,7 +2703,7 @@ cover each of these `canon` cases.
 ### `canon lift`
 
 For a canonical definition:
-```wasm
+```wat
 (canon lift $callee:<funcidx> $opts:<canonopt>* (func $f (type $ft)))
 ```
 validation specifies:
@@ -2866,7 +2866,7 @@ async def call_and_trap_on_throw(callee, task, args):
 ### `canon lower`
 
 For a canonical definition:
-```wasm
+```wat
 (canon lower $callee:<funcidx> $opts:<canonopt>* (core func $f))
 ```
 where `$callee` has type `$ft`, validation specifies:
@@ -3016,7 +3016,7 @@ as post-MVP [adapter functions].
 ### `canon resource.new`
 
 For a canonical definition:
-```wasm
+```wat
 (canon resource.new $rt (core func $f))
 ```
 validation specifies:
@@ -3039,7 +3039,7 @@ async def canon_resource_new(rt, task, rep):
 ### `canon resource.drop`
 
 For a canonical definition:
-```wasm
+```wat
 (canon resource.drop $rt $async? (core func $f))
 ```
 validation specifies:
@@ -3093,7 +3093,7 @@ destructor is an encapsualted implementation detail of the resource type.
 ### `canon resource.rep`
 
 For a canonical definition:
-```wasm
+```wat
 (canon resource.rep $rt (core func $f))
 ```
 validation specifies:
@@ -3116,7 +3116,7 @@ component instance defining a resource can access its representation.
 ### 🔀 `canon context.get`
 
 For a canonical definition:
-```wasm
+```wat
 (canon context.get $t $i (core func $f))
 ```
 validation specifies:
@@ -3137,7 +3137,7 @@ async def canon_context_get(t, i, task):
 ### 🔀 `canon context.set`
 
 For a canonical definition:
-```wasm
+```wat
 (canon context.set $t $i (core func $f))
 ```
 validation specifies:
@@ -3159,7 +3159,7 @@ async def canon_context_set(t, i, task, v):
 ### 🔀 `canon backpressure.set`
 
 For a canonical definition:
-```wasm
+```wat
 (canon backpressure.set (core func $f))
 ```
 validation specifies:
@@ -3181,7 +3181,7 @@ consume resources.
 ### 🔀 `canon task.return`
 
 For a canonical definition:
-```wasm
+```wat
 (canon task.return (result $t)? $opts (core func $f))
 ```
 validation specifies:
@@ -3212,7 +3212,7 @@ a thunk that is indirectly called by `task.return` after these guards.
 ### 🔀 `canon yield`
 
 For a canonical definition:
-```wasm
+```wat
 (canon yield $async? (core func $f))
 ```
 validation specifies:
@@ -3240,7 +3240,7 @@ activations.
 ### 🔀 `canon waitable-set.new`
 
 For a canonical definition:
-```wasm
+```wat
 (canon waitable-set.new (core func $f))
 ```
 validation specifies:
@@ -3258,7 +3258,7 @@ async def canon_waitable_set_new(task):
 ### 🔀 `canon waitable-set.wait`
 
 For a canonical definition:
-```wasm
+```wat
 (canon waitable-set.wait $async? (memory $mem) (core func $f))
 ```
 validation specifies:
@@ -3302,7 +3302,7 @@ handle multiple overlapping callback activations.
 ### 🔀 `canon waitable-set.poll`
 
 For a canonical definition:
-```wasm
+```wat
 (canon waitable-set.poll $async? (memory $mem) (core func $f))
 ```
 validation specifies:
@@ -3333,7 +3333,7 @@ activations.
 ### 🔀 `canon waitable-set.drop`
 
 For a canonical definition:
-```wasm
+```wat
 (canon waitable-set.drop (core func $f))
 ```
 validation specifies:
@@ -3354,7 +3354,7 @@ async def canon_waitable_set_drop(task, i):
 ### 🔀 `canon waitable.join`
 
 For a canonical definition:
-```wasm
+```wat
 (canon waitable.join (core func $f))
 ```
 validation specifies:
@@ -3380,7 +3380,7 @@ given waitable is already in one set, it will be transferred.
 ### 🔀 `canon subtask.drop`
 
 For a canonical definition:
-```wasm
+```wat
 (canon subtask.drop (core func $f))
 ```
 validation specifies:
@@ -3402,7 +3402,7 @@ async def canon_subtask_drop(task, i):
 ### 🔀 `canon {stream,future}.new`
 
 For canonical definitions:
-```wasm
+```wat
 (canon stream.new $t (core func $f))
 (canon future.new $t (core func $f))
 ```
@@ -3432,7 +3432,7 @@ the future built-ins below.
 ### 🔀 `canon {stream,future}.{read,write}`
 
 For canonical definitions:
-```wasm
+```wat
 (canon stream.read $t $opts (core func $f))
 (canon stream.write $t $opts (core func $f))
 ```
@@ -3440,7 +3440,7 @@ validation specifies:
 * `$f` is given type `(func (param i32 i32 i32) (result i32))`
 
 For canonical definitions:
-```wasm
+```wat
 (canon future.read $t $opts (core func $f))
 (canon future.write $t $opts (core func $f))
 ```
@@ -3563,7 +3563,7 @@ same direction as values, as an optional last value of the stream or future.
 ### 🔀 `canon {stream,future}.cancel-{read,write}`
 
 For canonical definitions:
-```wasm
+```wat
 (canon stream.cancel-read $t $async? (core func $f))
 (canon stream.cancel-write $t $async? (core func $f))
 (canon future.cancel-read $t $async? (core func $f))
@@ -3629,7 +3629,7 @@ caller can assume that ownership of the buffer has been returned.
 ### 🔀 `canon {stream,future}.close-{readable,writable}`
 
 For canonical definitions:
-```wasm
+```wat
 (canon stream.close-readable $t (core func $f))
 (canon future.close-readable $t (core func $f))
 ```
@@ -3637,7 +3637,7 @@ validation specifies:
 * `$f` is given type `(func (param i32))`
 
 and for canonical definitions:
-```wasm
+```wat
 (canon stream.close-writable $t (core func $f))
 (canon future.close-writable $t (core func $f))
 ```
@@ -3681,7 +3681,7 @@ direction as values as an optional last value of the stream or future.
 ### 🔀 `canon error-context.new`
 
 For a canonical definition:
-```wasm
+```wat
 (canon error-context.new $opts (core func $f))
 ```
 validation specifies:
@@ -3720,7 +3720,7 @@ Canonical ABI and stands for an arbitrary host-defined function.)
 ### 🔀 `canon error-context.debug-message`
 
 For a canonical definition:
-```wasm
+```wat
 (canon error-context.debug-message $opts (core func $f))
 ```
 validation specifies:
@@ -3745,7 +3745,7 @@ the pointer and length of the debug string (allocated via `opts.realloc`).
 ### 🔀 `canon error-context.drop`
 
 For a canonical definition:
-```wasm
+```wat
 (canon error-context.drop (core func $f))
 ```
 validation specifies:
@@ -3764,7 +3764,7 @@ async def canon_error_context_drop(task, i):
 ### 🧵 `canon thread.spawn`
 
 For a canonical definition:
-```wasm
+```wat
 (canon thread.spawn (type $ft) (core func $st))
 ```
 validation specifies:
@@ -3811,7 +3811,7 @@ def canon_thread_spawn(f, c):
 ### 🧵 `canon thread.available_parallelism`
 
 For a canonical definition:
-```wasm
+```wat
 (canon thread.available_parallelism (core func $f))
 ```
 validation specifies:
