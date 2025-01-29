@@ -753,7 +753,7 @@ returned to it when it is notified that the `Subtask` has reached the
 ```
 The maximum flattened core wasm values depends on whether this is a normal
 synchronous call (in which return values are returned by core wasm) or a newer
-async or sychronous-using-`always-task-return` call, in which case return
+async or synchronous-using-`always-task-return` call, in which case return
 values are passed as parameters to `canon task.return`.
 
 Lastly, the `Task.exit` method is called when the task has signalled that it
@@ -887,7 +887,7 @@ A "waitable set" contains a collection of waitables that can be waited on or
 polled for *any* element to make progress. Although the `WaitableSet` class
 below represents `elems` as a `list` and implements `poll` with an O(n) search,
 because a waitable can be associated with at most one set and can contain at
-most one pending event, a real implemenation could instead store a list of
+most one pending event, a real implementation could instead store a list of
 waitables-with-pending-events as a linked list embedded directly in the
 `Waitable` table element to avoid the separate allocation while providing O(1)
 polling.
@@ -2789,7 +2789,7 @@ happens by core wasm calling `waitable-set.wait`.
       task.exit()
       return
 ```
-In contrast, the aynchronous `callback` case does asynchronous waiting in
+In contrast, the asynchronous `callback` case does asynchronous waiting in
 the event loop, with core wasm (repeatedly) returning instructions for what
 to do next:
 ```python
