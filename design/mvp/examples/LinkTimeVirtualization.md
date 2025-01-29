@@ -14,7 +14,7 @@ instance imported by the `parent` instance.
 
 We start with the `child.wat` that has been written and compiled separately,
 without regard to `parent.wasm`:
-```wasm
+```wat
 ;; child.wat
 (component
   (import "wasi:filesystem/types" (instance
@@ -28,7 +28,7 @@ without regard to `parent.wasm`:
 We want to write a parent component that reuses the child component, giving the
 child component a virtual filesystem. This virtual filesystem can be factored
 out and reused as a separate component:
-```wasm
+```wat
 ;; virtualize.wat
 (component
   (import "wasi:filesystem/types" (instance $fs
@@ -46,7 +46,7 @@ out and reused as a separate component:
 
 We now write the parent component by composing `child.wasm` with
 `virtualize.wasm`:
-```wasm
+```wat
 ;; parent.wat
 (component
   (import "wasi:filesystem/types" (instance $real-fs ...))
@@ -63,7 +63,7 @@ We now write the parent component by composing `child.wasm` with
 Here we import the `child` and `virtualize` components, but they could also be
 trivially copied in-line into the `parent` component using nested component
 definitions in place of imports:
-```wasm
+```wat
 ;; parent.wat
 (component
   (import "wasi:filesystem/types" (instance $real-fs ...))

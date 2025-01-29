@@ -111,7 +111,7 @@ represents an interface called `host` which provides one function, `log`, which
 takes a single `string` argument. If this were imported into a component then it
 would correspond to:
 
-```wasm
+```wat
 (component
   (import "local:demo/host" (instance $host
     (export "log" (func (param "msg" string)))
@@ -174,7 +174,7 @@ world my-world {
 
 can be thought of as this component type:
 
-```wasm
+```wat
 (type $my-world (component
   (import "host" (instance
     (export "log" (func (param "param" string)))
@@ -616,7 +616,7 @@ world my-world {
 
 would generate this component:
 
-```wasm
+```wat
 (component
   (import "local:demo/shared" (instance $shared
     (type $metadata (record (; ... ;)))
@@ -1746,7 +1746,7 @@ interface namespace {
 }
 ```
 can be packaged into a component as:
-```wasm
+```wat
 (component
   (type (export "types") (component
     (export "local:demo/types" (instance
@@ -1813,7 +1813,7 @@ interface foo {
 }
 ```
 is encoded as:
-```wasm
+```wat
 (component
   (type (export "foo") (component
     (import "wasi:http/types" (instance $types
@@ -1838,7 +1838,7 @@ world the-world {
 }
 ```
 is encoded as:
-```wasm
+```wat
 (component
   (type (export "the-world") (component
     (export "local:demo/the-world" (component
@@ -1868,7 +1868,7 @@ interface console {
 }
 ```
 is encoded as:
-```wasm
+```wat
 (component
   (type (export "the-world") (component
     (export "local:demo/the-world" (component
@@ -1914,7 +1914,7 @@ world proxy {
 }
 ```
 are encoded as:
-```wasm
+```wat
 (component
   (type (export "types") (component
     (export "wasi:http/types" (instance
