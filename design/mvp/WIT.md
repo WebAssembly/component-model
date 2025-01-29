@@ -926,7 +926,7 @@ nested-package-definition ::= package-decl '{' package-items* '}'
 package-items ::= toplevel-use-item | interface-item | world-item
 ```
 
-Essentially, these top level items are [worlds], [interfaces], [use statements][use] and other package defintions.
+Essentially, these top level items are [worlds], [interfaces], [use statements][use] and other package definitions.
 
 ### Feature Gates
 

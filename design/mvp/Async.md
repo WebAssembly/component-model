@@ -644,7 +644,7 @@ this approach is that a non-`shared` component-level function could be safely
 lowered with `async shared`. In the case that the lifted function being lowered
 was also `async shared`, the entire call could happen on the non-main thread
 without a context switch. But if the lifting side was non-`shared`, then the
-Component Model could automatically handle the synchronization of enqueing a
+Component Model could automatically handle the synchronization of enqueuing a
 call to the export (as in the backpressure case mentioned above), returning a
 subtask for the async caller to wait on as usual. Thus, the sync+async
 composition story described above could naturally be extended to a

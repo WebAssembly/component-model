@@ -88,7 +88,7 @@ shared-nothing linking works at the WAT level, see
 With both `wasm-tools link` and `wac`, the developer will have the option to
 either store child modules or components **inline** or to **import** them from
 an external registry. This registry toolchain integration is still in progress,
-but by reusing common support libries such as [`wasm-pkg-tools`], higher-level
+but by reusing common support libraries such as [`wasm-pkg-tools`], higher-level
 tooling can uniformly interact with multiple kinds of storage backends such as
 local directories, [OCI Wasm Artifacts] stored in standard [OCI Registries] and
 [warg registries]. Of note, even when modules or components are stored inline
