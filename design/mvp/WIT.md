@@ -681,7 +681,7 @@ interface foo {
 }
 ```
 
-Functions can return at most one unnamed type:
+Functions can optionally return a type:
 
 ```wit
 package local:demo;
@@ -692,19 +692,21 @@ interface foo {
 }
 ```
 
-And functions can also return multiple types by naming them:
+Multiple return values can be achieved via `tuple` or `record` type:
 
 ```wit
 package local:demo;
 
 interface foo {
-  a: func() -> (a: u32, b: f32);
+  record r {
+    a: u32,
+    b: f32
+  }
+
+  a1: func() -> r;
+  a2: func() -> tuple<u32, f32>;
 }
 ```
-
-Note that returning multiple values from a function is not equivalent to
-returning a tuple of values from a function. These options are represented
-distinctly in the component binary format.
 
 ## WIT Types
 [types]: #wit-types
