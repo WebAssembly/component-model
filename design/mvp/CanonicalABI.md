@@ -3773,11 +3773,11 @@ async def canon_error_context_drop(task, i):
 ```
 
 
-### 🧵 `canon thread.spawn`
+### 🧵 `canon thread.spawn_ref`
 
 For a canonical definition:
 ```wat
-(canon thread.spawn (type $ft) (core func $st))
+(canon thread.spawn_ref (type $ft) (core func $st))
 ```
 validation specifies:
 * `$ft` must refer to a `shared` function type; initially, only the type `(func
@@ -3802,8 +3802,50 @@ thread which:
 In pseudocode, `$st` looks like:
 
 ```python
-def canon_thread_spawn(f, c):
+def canon_thread_spawn_ref(f, c):
   trap_if(f is None)
+  if DETERMINISTIC_PROFILE:
+    return [-1]
+
+  def thread_start():
+    try:
+      f(c)
+    except CoreWebAssemblyException:
+      trap()
+
+  if spawn(thread_start):
+    return [0]
+  else:
+    return [-1]
+```
+
+
+### 🧵 `canon thread.spawn_indirect`
+
+For a canonical definition:
+```wat
+(canon thread.spawn_indirect (type $ft) (table $t) (core func $st))
+```
+validation specifies:
+* `$ft` must refer to a `shared` function type; initially, only the type `(func
+  shared (param $c i32))` is allowed (see explanation in `thread.spawn_ref`
+  above)
+* `$t` must refer to a table containing `ft`-typed items
+* `$st` is given type `(func (param $i i32) (param $c i32) (result $e
+  i32))`.
+
+Calling `$st` retrieves a function `$f` of type `$ft` from table `$t`. If that
+succeeds, it spawns a thread which:
+  - invokes `$f` with `$c`
+  - executes `$f` until completion or trap in a `shared` context as described by
+    the [shared-everything threads] proposal.
+
+In pseudocode, `$st` looks like:
+
+```python
+def canon_thread_spawn_indirect(t, i, c):
+  trap_if(t[i] is None)
+  f = t[i]
   if DETERMINISTIC_PROFILE:
     return [-1]
 
