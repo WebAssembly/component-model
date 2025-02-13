@@ -121,13 +121,15 @@ pipe) but, rather, more-primitive control-flow mechanisms that synchronize the
 incremental passing of parameters and results during cross-component calls.
 Higher-level resources like channels and pipes could then be defined in terms
 of these lower-level `stream` and `future` primitives, e.g.:
+
 ```wit
 resource pipe {
-  constructor(buffer-size: u32);
-  write: func(bytes: stream<u8>) -> result;
-  read: func() -> stream<u8>;
+    constructor(buffer-size: u32);
+    write: func(bytes: stream<u8>) -> result;
+    read: func() -> stream<u8>;
 }
 ```
+
 but also many other domain-specific concurrent resources like WASI HTTP request
 and response bodies or WASI blobs. Streams and futures are however high-level
 enough to be bound automatically to many source languages' built-in concurrency
