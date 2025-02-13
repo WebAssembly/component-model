@@ -131,10 +131,10 @@ For example, using the Preview 2 feature set of Component Model, a simple
 dynamic plugin interface might look like the following:
 ```wit
 interface plugin-loader {
-  load: func(name: string) -> plugin;
-  resource plugin {
-    handle-event: func(event: string, args: list<string>) -> string;
-  }
+    load: func(name: string) -> plugin;
+    resource plugin {
+      handle-event: func(event: string, args: list<string>) -> string;
+    }
 }
 ```
 The expectation here is that, if plugins are implemented by components, the

@@ -72,11 +72,11 @@ Additionally, many packages can be declared consecutively in one or more files, 
 
 ```wit
 package local:a {
-  interface foo {}
+    interface foo {}
 }
 
 package local:b {
-  interface bar {}
+    interface bar {}
 }
 ```
 
@@ -103,7 +103,7 @@ An example of an interface is:
 package local:demo;
 
 interface host {
-  log: func(msg: string);
+    log: func(msg: string);
 }
 ```
 
@@ -127,16 +127,16 @@ and [function][functions] definitions. For example:
 package wasi:filesystem;
 
 interface types {
-  use wasi:clocks/wall-clock.{datetime};
+    use wasi:clocks/wall-clock.{datetime};
 
-  record stat {
-    ino: u64,
-    size: u64,
-    mtime: datetime,
-    // ...
-  }
+    record stat {
+      ino: u64,
+      size: u64,
+      mtime: datetime,
+      // ...
+    }
 
-  stat-file: func(path: string) -> result<stat>;
+    stat-file: func(path: string) -> result<stat>;
 }
 ```
 
@@ -164,11 +164,11 @@ world:
 package local:demo;
 
 world my-world {
-  import host: interface {
-    log: func(param: string);
-  }
+    import host: interface {
+      log: func(param: string);
+    }
 
-  export run: func();
+    export run: func();
 }
 ```
 
@@ -194,12 +194,12 @@ function or an interface.
 package local:demo;
 
 world command {
-  import wasi:filesystem/filesystem;
-  import wasi:random/random;
-  import wasi:clocks/monotonic-clock;
-  // ...
+    import wasi:filesystem/filesystem;
+    import wasi:random/random;
+    import wasi:clocks/monotonic-clock;
+    // ...
 
-  export main: func(args: list<string>);
+    export main: func(args: list<string>);
 }
 ```
 
@@ -215,15 +215,15 @@ functions. Additionally interfaces can be defined inline with an explicit
 package local:demo;
 
 interface out-of-line {
-  the-function: func();
+    the-function: func();
 }
 
 world your-world {
-  import out-of-line;
-  // ... is roughly equivalent to ...
-  import out-of-line: interface {
-    the-function: func();
-  }
+    import out-of-line;
+    // ... is roughly equivalent to ...
+    import out-of-line: interface {
+      the-function: func();
+    }
 }
 ```
 
@@ -237,23 +237,23 @@ name, and in WIT this is reflected in the syntax:
 package local:demo;
 
 interface my-interface {
-  // ..
+    // ..
 }
 
 world command {
-  // generates an import of the name `local:demo/my-interface`
-  import my-interface;
+    // generates an import of the name `local:demo/my-interface`
+    import my-interface;
 
-  // generates an import of the name `wasi:filesystem/types`
-  import wasi:filesystem/types;
+    // generates an import of the name `wasi:filesystem/types`
+    import wasi:filesystem/types;
 
-  // generates an import of the plain name `foo`
-  import foo: func();
+    // generates an import of the plain name `foo`
+    import foo: func();
 
-  // generates an import of the plain name `bar`
-  import bar: interface {
-    // ...
-  }
+    // generates an import of the plain name `bar`
+    import bar: interface {
+      // ...
+    }
 }
 ```
 
@@ -288,8 +288,8 @@ world my-world-b {
 }
 
 world union-my-world {
-     include my-world-a;
-     include my-world-b;
+    include my-world-a;
+    include my-world-b;
 }
 ```
 
@@ -361,8 +361,8 @@ world union-my-world-a {
 }
 
 world union-my-world-b {
-  import a: func();
-  import b: func();
+    import a: func();
+    import b: func();
 }
 ```
 
@@ -414,13 +414,13 @@ import types:
 package local:demo;
 
 interface types {
-  enum errno { /* ... */ }
+    enum errno { /* ... */ }
 
-  type size = u32;
+    type size = u32;
 }
 
 interface my-host-functions {
-  use types.{errno, size};
+    use types.{errno, size};
 }
 ```
 
@@ -436,7 +436,7 @@ Names imported via `use` can be renamed as they're imported as well:
 package local:demo;
 
 interface my-host-functions {
-  use types.{errno as my-errno};
+    use types.{errno as my-errno};
 }
 ```
 
@@ -449,16 +449,16 @@ interfaces are defined in sibling files:
 ```wit
 // types.wit
 interface types {
-  enum errno { /* ... */ }
+    enum errno { /* ... */ }
 
-  type size = u32;
+    type size = u32;
 }
 
 // host.wit
 package local:demo;
 
 interface my-host-functions {
-  use types.{errno, size};
+    use types.{errno, size};
 }
 ```
 
@@ -477,18 +477,18 @@ the same syntax is used in `import` and `export` directives:
 package local:demo;
 
 world my-world {
-  import host;
+    import host;
 
-  export another-interface;
+    export another-interface;
 }
 
 interface host {
-  // ...
+    // ...
 }
 
 // b.wit
 interface another-interface {
-  // ...
+    // ...
 }
 ```
 
@@ -498,7 +498,7 @@ For example, in this WIT document:
 package local:demo;
 
 world my-world {
-  import wasi:clocks/monotonic-clock;
+    import wasi:clocks/monotonic-clock;
 }
 ```
 The `monotonic-clock` interface of the `wasi:clocks` package is being imported.
@@ -508,7 +508,7 @@ This same syntax can be used in `use` as well:
 package local:demo;
 
 interface my-interface {
-  use wasi:http/types.{request, response};
+    use wasi:http/types.{request, response};
 }
 ```
 
@@ -521,12 +521,12 @@ so far it can get a bit repetitive to be referred to:
 package local:demo;
 
 interface my-interface {
-  use wasi:http/types@1.0.0.{request, response};
+    use wasi:http/types@1.0.0.{request, response};
 }
 
 world my-world {
-  import wasi:http/handler@1.0.0;
-  export wasi:http/handler@1.0.0;
+    import wasi:http/handler@1.0.0;
+    export wasi:http/handler@1.0.0;
 }
 ```
 
@@ -542,12 +542,12 @@ use wasi:http/types@1.0.0;
 use wasi:http/handler@1.0.0;
 
 interface my-interface {
-  use types.{request, response};
+    use types.{request, response};
 }
 
 world my-world {
-  import handler;
-  export handler;
+    import handler;
+    export handler;
 }
 ```
 
@@ -600,17 +600,17 @@ For example this document:
 package local:demo;
 
 interface shared {
-  record metadata {
-    // ...
-  }
+    record metadata {
+      // ...
+    }
 }
 
 world my-world {
-  import host: interface {
-    use shared.{metadata};
+    import host: interface {
+      use shared.{metadata};
 
-    get: func() -> metadata;
-  }
+      get: func() -> metadata;
+    }
 }
 ```
 
@@ -643,19 +643,19 @@ import unless it's explicitly listed as an export. For example, here `w1` is
 equivalent to `w2`:
 ```wit
 interface a {
-  resource r;
+    resource r;
 }
 interface b {
-  use a.{r};
-  foo: func() -> r;
+    use a.{r};
+    foo: func() -> r;
 }
 
 world w1 {
-  export b;
+    export b;
 }
 world w2 {
-  import a;
-  export b;
+    import a;
+    export b;
 }
 ```
 
@@ -675,9 +675,9 @@ be named and have case-insensitively unique names:
 package local:demo;
 
 interface foo {
-  a1: func();
-  a2: func(x: u32);
-  a3: func(y: u64, z: f32);
+    a1: func();
+    a2: func(x: u32);
+    a3: func(y: u64, z: f32);
 }
 ```
 
@@ -687,8 +687,8 @@ Functions can optionally return a type:
 package local:demo;
 
 interface foo {
-  a1: func() -> u32;
-  a2: func() -> string;
+    a1: func() -> u32;
+    a2: func() -> string;
 }
 ```
 
@@ -698,13 +698,13 @@ Multiple return values can be achieved via `tuple` or `record` type:
 package local:demo;
 
 interface foo {
-  record r {
-    a: u32,
-    b: f32
-  }
+    record r {
+      a: u32,
+      b: f32
+    }
 
-  a1: func() -> r;
-  a2: func() -> tuple<u32, f32>;
+    a1: func() -> r;
+    a2: func() -> tuple<u32, f32>;
 }
 ```
 
@@ -719,46 +719,46 @@ component model itself:
 package local:demo;
 
 interface foo {
-  // "package of named fields"
-  record r {
-    a: u32,
-    b: string,
-  }
+    // "package of named fields"
+    record r {
+      a: u32,
+      b: string,
+    }
 
-  // values of this type will be one of the specified cases
-  variant human {
-    baby,
-    child(u32), // optional type payload
-    adult,
-  }
+    // values of this type will be one of the specified cases
+    variant human {
+      baby,
+      child(u32), // optional type payload
+      adult,
+    }
 
-  // similar to `variant`, but no type payloads
-  enum errno {
-    too-big,
-    too-small,
-    too-fast,
-    too-slow,
-  }
+    // similar to `variant`, but no type payloads
+    enum errno {
+      too-big,
+      too-small,
+      too-fast,
+      too-slow,
+    }
 
-  // a bitflags type
-  flags permissions {
-    read,
-    write,
-    exec,
-  }
+    // a bitflags type
+    flags permissions {
+      read,
+      write,
+      exec,
+    }
 
-  // type aliases are allowed to primitive types and additionally here are some
-  // examples of other types
-  type t1 = u32;
-  type t2 = tuple<u32, u64>;
-  type t3 = string;
-  type t4 = option<u32>;
-  type t5 = result<_, errno>;           // no "ok" type
-  type t6 = result<string>;             // no "err" type
-  type t7 = result<char, errno>;        // both types specified
-  type t8 = result;                     // no "ok" or "err" type
-  type t9 = list<string>;
-  type t10 = t9;
+    // type aliases are allowed to primitive types and additionally here are some
+    // examples of other types
+    type t1 = u32;
+    type t2 = tuple<u32, u64>;
+    type t3 = string;
+    type t4 = option<u32>;
+    type t5 = result<_, errno>;           // no "ok" type
+    type t6 = result<string>;             // no "err" type
+    type t7 = result<char, errno>;        // both types specified
+    type t8 = result;                     // no "ok" or "err" type
+    type t9 = list<string>;
+    type t10 = t9;
 }
 ```
 
@@ -938,24 +938,26 @@ update and shouldn't be used when targeting an earlier minor version, or that a
 feature has been deprecated and should no longer be used.
 
 For example, the following interface has 4 items, 3 of which are gated:
+
 ```wit
 interface foo {
-  a: func();
+    a: func();
 
-  @since(version = 0.2.1)
-  b: func();
+    @since(version = 0.2.1)
+    b: func();
 
-  @since(version = 0.2.2, feature = fancy-foo)
-  c: func();
+    @since(version = 0.2.2, feature = fancy-foo)
+    c: func();
 
-  @unstable(feature = fancier-foo)
-  d: func();
+    @unstable(feature = fancier-foo)
+    d: func();
 
-  @since(version = 0.2.0)
-  @deprecated(version = 0.2.2)
-  e: func();
+    @since(version = 0.2.0)
+    @deprecated(version = 0.2.2)
+    e: func();
 }
 ```
+
 The `@since` gate indicates that `b` and `c` were added as part of the `0.2.1`
 and `0.2.2` releases, resp. Thus, when building a component targeting, e.g.,
 `0.2.1`, `b` can be used, but `c` cannot. An important expectation set by the
@@ -1008,10 +1010,10 @@ be compatibly gated. For example, this is an error:
 
 ```wit
 interface i {
-  @since(version = 1.0.1)
-  type t1 = u32;
+    @since(version = 1.0.1)
+    type t1 = u32;
 
-  type t2 = t1; // error
+    type t2 = t1; // error
 }
 ```
 
@@ -1020,10 +1022,10 @@ compatibly gated. For example, this is an error:
 ```wit
 @since(version = 1.0.2)
 interface i {
-  foo: func();  // error: no gate
+    foo: func();  // error: no gate
 
-  @since(version = 1.0.1)
-  bar: func();  // also error: weaker gate
+    @since(version = 1.0.1)
+    bar: func();  // also error: weaker gate
 }
 ```
 
@@ -1044,15 +1046,15 @@ package examples:fgates-calc@0.1.0;
 
 @since(version = 0.1.0)
 interface calc {
-  @since(version = 0.1.0)
-  variant calc-error {
-    integer-overflow,
-    integer-underflow,
-    unexpected,
-  }
+    @since(version = 0.1.0)
+    variant calc-error {
+      integer-overflow,
+      integer-underflow,
+      unexpected,
+    }
 
-  @since(version = 0.1.0)
-  add: func(x: i32, y: i32) -> result<i32, calc-error>;
+    @since(version = 0.1.0)
+    add: func(x: i32, y: i32) -> result<i32, calc-error>;
 }
 ```
 
@@ -1063,21 +1065,21 @@ package examples:fgates-calc@0.1.1;
 
 @since(version = 0.1.0)
 interface calc {
-  @since(version = 0.1.0)
-  variant calc-error {
-    integer-overflow,
-    integer-underflow,
-    unexpected,
-  }
+    @since(version = 0.1.0)
+    variant calc-error {
+      integer-overflow,
+      integer-underflow,
+      unexpected,
+    }
 
-  @since(version = 0.1.0)
-  add: func(x: i32, y: i32) -> result<i32, calc-error>;
+    @since(version = 0.1.0)
+    add: func(x: i32, y: i32) -> result<i32, calc-error>;
 
-  /// By convention, feature flags should be prefixed with package name to reduce chance of collisions
-  ///
-  /// see: https://github.com/WebAssembly/WASI/blob/main/Contributing.md#filing-changes-to-existing-phase-3-proposals
-  @unstable(feature = fgates-calc-minus)
-  sub: func(x: i32, y: i32) -> result<i32, calc-error>;
+    /// By convention, feature flags should be prefixed with package name to reduce chance of collisions
+    ///
+    /// see: https://github.com/WebAssembly/WASI/blob/main/Contributing.md#filing-changes-to-existing-phase-3-proposals
+    @unstable(feature = fgates-calc-minus)
+    sub: func(x: i32, y: i32) -> result<i32, calc-error>;
 }
 ```
 
@@ -1092,18 +1094,18 @@ package examples:fgates-calc@0.1.2;
 
 @since(version = 0.1.0)
 interface calc {
-  @since(version = 0.1.0)
-  variant calc-error {
-    integer-overflow,
-    integer-underflow,
-    unexpected,
-  }
+    @since(version = 0.1.0)
+    variant calc-error {
+      integer-overflow,
+      integer-underflow,
+      unexpected,
+    }
 
-  @since(version = 0.1.0)
-  add: func(x: i32, y: i32) -> result<i32, calc-error>;
+    @since(version = 0.1.0)
+    add: func(x: i32, y: i32) -> result<i32, calc-error>;
 
-  @since(version = 0.1.2)
-  sub: func(x: i32, y: i32) -> result<i32, calc-error>;
+    @since(version = 0.1.2)
+    sub: func(x: i32, y: i32) -> result<i32, calc-error>;
 }
 ```
 
@@ -1118,18 +1120,18 @@ package examples:fgates-deprecation@0.1.1;
 
 @since(version = 0.1.0)
 interface calc {
-  @since(version = 0.1.0)
-  variant calc-error {
-    integer-overflow,
-    integer-underflow,
-    unexpected,
-  }
+    @since(version = 0.1.0)
+    variant calc-error {
+      integer-overflow,
+      integer-underflow,
+      unexpected,
+    }
 
-  @since(version = 0.1.0)
-  add-one: func(x: i32) -> result<i32, calc-error>;
+    @since(version = 0.1.0)
+    add-one: func(x: i32) -> result<i32, calc-error>;
 
-  @since(version = 0.1.1)
-  add: func(x: i32, y: i32) -> result<i32, calc-error>;
+    @since(version = 0.1.1)
+    add: func(x: i32, y: i32) -> result<i32, calc-error>;
 }
 ```
 
@@ -1140,18 +1142,18 @@ package examples:fgates-deprecation@0.1.2;
 
 @since(version = 0.1.0)
 interface calc {
-  @since(version = 0.1.0)
-  variant calc-error {
-    integer-overflow,
-    integer-underflow,
-    unexpected,
-  }
+    @since(version = 0.1.0)
+    variant calc-error {
+      integer-overflow,
+      integer-underflow,
+      unexpected,
+    }
 
-  @deprecated(version = 0.1.2)
-  add-one: func(x: i32) -> result<i32, calc-error>;
+    @deprecated(version = 0.1.2)
+    add-one: func(x: i32) -> result<i32, calc-error>;
 
-  @since(version = 0.1.1)
-  add: func(x: i32, y: i32) -> result<i32, calc-error>;
+    @since(version = 0.1.1)
+    add: func(x: i32, y: i32) -> result<i32, calc-error>;
 }
 ```
 
@@ -1164,15 +1166,15 @@ package examples:fgates-deprecation@0.2.0;
 
 @since(version = 0.1.0)
 interface calc {
-  @since(version = 0.1.0)
-  variant calc-error {
-    integer-overflow,
-    integer-underflow,
-    unexpected,
-  }
+    @since(version = 0.1.0)
+    variant calc-error {
+      integer-overflow,
+      integer-underflow,
+      unexpected,
+    }
 
-  @since(version = 0.1.1)
-  add: func(x: i32, y: i32) -> result<i32, calc-error>;
+    @since(version = 0.1.1)
+    add: func(x: i32, y: i32) -> result<i32, calc-error>;
 }
 ```
 
@@ -1732,22 +1734,25 @@ Using component binaries to package WIT in this manner has several advantages:
   (e.g., an engine component can define and exports its own plugin `world`).
 
 As a first example, the following WIT:
+
 ```wit
 package local:demo;
 
 interface types {
-  resource file {
-    read: func(off: u32, n: u32) -> list<u8>;
-    write: func(off: u32, bytes: list<u8>);
-  }
+    resource file {
+      read: func(off: u32, n: u32) -> list<u8>;
+      write: func(off: u32, bytes: list<u8>);
+    }
 }
 
 interface namespace {
-  use types.{file};
-  open: func(name: string) -> file;
+    use types.{file};
+    open: func(name: string) -> file;
 }
 ```
+
 can be packaged into a component as:
+
 ```wat
 (component
   (type (export "types") (component
@@ -1774,6 +1779,7 @@ can be packaged into a component as:
   ))
 )
 ```
+
 This example illustrates the basic structure of interfaces:
 * Each top-level WIT definition (in this example: `types` and `namespace`)
   turns into a type export of the same kebab-name.
@@ -1806,15 +1812,18 @@ interface names.
 Inter-package references are structurally no different than intra-package
 references other than the referenced WIT definition is not present in
 the component. For example, the following WIT:
+
 ```wit
 package local:demo
 
 interface foo {
-  use wasi:http/types.{request};
-  frob: func(r: request) -> request;
+    use wasi:http/types.{request};
+    frob: func(r: request) -> request;
 }
 ```
+
 is encoded as:
+
 ```wat
 (component
   (type (export "foo") (component
@@ -1831,15 +1840,18 @@ is encoded as:
 
 Worlds are encoded similarly to interfaces, but replace the inner exported
 instance with an inner exported *component*. For example, this WIT:
+
 ```wit
 package local:demo;
 
 world the-world {
-  export test: func();
-  export run: func();
+    export test: func();
+    export run: func();
 }
 ```
+
 is encoded as:
+
 ```wat
 (component
   (type (export "the-world") (component
@@ -1850,6 +1862,7 @@ is encoded as:
   ))
 )
 ```
+
 In the current version of WIT, the outer wrapping component-type will only ever
 contain a single `export` and thus only serves to separate the kebab-name
 export from the inner exported interface name and to provide consistency with
@@ -1858,18 +1871,21 @@ the encoding of `interface` shown above.
 When a world imports or exports an interface, to produce a valid
 component-type, the interface's compiled instance-type ends up getting copied
 into the component-type. For example, the following WIT:
+
 ```wit
 package local:demo;
 
 world the-world {
-  import console;
+    import console;
 }
 
 interface console {
-  log: func(arg: string);
+    log: func(arg: string);
 }
 ```
+
 is encoded as:
+
 ```wat
 (component
   (type (export "the-world") (component
@@ -1891,28 +1907,29 @@ packages, allowing a compiled `world` definition to be fully self-contained and
 able to be used to compile a component without additional type information.
 
 Putting this all together, the following WIT definitions:
+
 ```wit
 // wasi-http repo
 
 // wit/types.wit
 interface types {
-  resource request { ... }
-  resource response { ... }
+    resource request { ... }
+    resource response { ... }
 }
 
 // wit/handler.wit
 interface handler {
-  use types.{request, response};
-  handle: func(r: request) -> response;
+    use types.{request, response};
+    handle: func(r: request) -> response;
 }
 
 // wit/proxy.wit
 package wasi:http;
 
 world proxy {
-  import wasi:logging/logger;
-  import handler;
-  export handler;
+    import wasi:logging/logger;
+    import handler;
+    export handler;
 }
 ```
 are encoded as:
@@ -1973,16 +1990,18 @@ determine whether individual gated features are included in the encoded type or
 not.
 
 For example, the following WIT document:
+
 ```wit
 package ns:p@1.1.0;
 
 interface i {
-  f: func();
+    f: func();
 
-  @since(version = 1.1.0)
-  g: func();
+    @since(version = 1.1.0)
+    g: func();
 }
 ```
+
 is encoded as the following component when the target version is `1.0.0`:
 ```wat
 (component
