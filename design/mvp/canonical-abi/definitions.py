@@ -311,8 +311,8 @@ class BufferGuestImpl(Buffer):
   length: int
 
   def __init__(self, t, cx, ptr, length):
-    trap_if(length == 0 or length > Buffer.MAX_LENGTH)
-    if t:
+    trap_if(length > Buffer.MAX_LENGTH)
+    if t and length > 0:
       trap_if(ptr != align_to(ptr, alignment(t)))
       trap_if(ptr + length * elem_size(t) > len(cx.opts.memory))
     self.cx = cx
@@ -702,13 +702,23 @@ class ReadableStreamGuestImpl(ReadableStream):
       return 'blocked'
     else:
       ncopy = min(src.remain(), dst.remain())
-      assert(ncopy > 0)
-      dst.write(src.read(ncopy))
-      if self.pending_buffer.remain() > 0:
-        self.pending_on_partial_copy(self.reset_pending)
+      if ncopy > 0:
+        dst.write(src.read(ncopy))
+        if self.pending_buffer.remain() > 0:
+          self.pending_on_partial_copy(self.reset_pending)
+        else:
+          self.reset_and_notify_pending()
+        return 'done'
       else:
-        self.reset_and_notify_pending()
-      return 'done'
+        if self.pending_buffer.remain() == 0:
+          self.reset_and_notify_pending()
+        if buffer.remain() == 0:
+          return 'done'
+        else:
+          self.pending_buffer = buffer
+          self.pending_on_partial_copy = on_partial_copy
+          self.pending_on_copy_done = on_copy_done
+          return 'blocked'
 
 class StreamEnd(Waitable):
   stream: ReadableStream
