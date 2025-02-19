@@ -14,7 +14,7 @@ more user-focused explanation, take a look at the
   * [Type definitions](#type-definitions)
     * [Fundamental value types](#fundamental-value-types)
       * [Numeric types](#numeric-types)
-      * [Error Context type](#error-context-type)
+      * [Error Context type](#-error-context-type)
       * [Container types](#container-types)
       * [Handle types](#handle-types)
       * [Asynchronous value types](#asynchronous-value-types)
@@ -543,7 +543,7 @@ defvaltype    ::= bool
                 | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64
                 | f32 | f64
                 | char | string
-                | error-context
+                | error-context 🔀
                 | (record (field "<label>" <valtype>)+)
                 | (variant (case "<label>" <valtype>?)+)
                 | (list <valtype>)
@@ -555,8 +555,8 @@ defvaltype    ::= bool
                 | (result <valtype>? (error <valtype>)?)
                 | (own <typeidx>)
                 | (borrow <typeidx>)
-                | (stream <typeidx>?)
-                | (future <typeidx>?)
+                | (stream <typeidx>?) 🔀
+                | (future <typeidx>?) 🔀
 valtype       ::= <typeidx>
                 | <defvaltype>
 resourcetype  ::= (resource (rep i32) (dtor async? <funcidx> (callback <funcidx>)?)?)
@@ -634,7 +634,7 @@ a single NaN value. And boolean values in core wasm are usually represented as
 `i32`s where operations interpret all-zeros as `false`, while at the
 component-level there is a `bool` type with `true` and `false` values.
 
-##### Error Context type
+##### 🔀 Error Context type
 
 Values of `error-context` type are immutable, non-deterministic, host-defined
 and meant to be propagated from failure sources to callers in order to aid in
