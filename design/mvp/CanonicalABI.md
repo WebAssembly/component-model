@@ -111,7 +111,7 @@ object that is threaded through all the Python functions below as the `cx`
 parameter/field.
 ```python
 class LiftLowerContext:
-  opts: CanonicalOptions
+  opts: LiftLowerOptions
   inst: ComponentInstance
   borrow_scope: Optional[Task|Subtask]
 
@@ -127,14 +127,33 @@ known to not contain `borrow`. The `CanonicalOptions`, `ComponentInstance`,
 
 ### Canonical ABI Options
 
-The `CanonicalOptions` class contains all the possible [`canonopt`]
-immediates that can be passed to the `canon` definition being implemented.
+The `LiftLowerContext` class contains the subset of [`canonopt`] which are
+used to lift and lower the individual parameters and results of function
+calls:
 ```python
 @dataclass
-class CanonicalOptions:
+class LiftLowerOptions:
   memory: Optional[bytearray] = None
   string_encoding: Optional[str] = None
   realloc: Optional[Callable] = None
+
+  def __eq__(self, other):
+    return self.memory is other.memory and \
+           self.string_encoding == other.string_encoding and \
+           self.realloc is other.realloc
+
+  def copy(opts):
+    return LiftLowerOptions(opts.memory, opts.string_encoding, opts.realloc)
+```
+The `__eq__` override specifies that equality of `LiftLowerOptions` (as used
+by, e.g., `canon_task_return` below) is defined in terms of the identity of
+the memory and `realloc`-function instances.
+
+The `CanonicalOptions` class contains the rest of the [`canonopt`] options
+that affect how an overall function is lifted/lowered:
+```python
+@dataclass
+class CanonicalOptions(LiftLowerOptions):
   post_return: Optional[Callable] = None
   sync: bool = True # = !canonopt.async
   callback: Optional[Callable] = None
@@ -3182,15 +3201,16 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `flatten_functype($opts, (func (param $t)?), 'lower')`
+* `$opts` may only contain `memory`, `string-encoding` and `realloc`
 
 Calling `$f` invokes the following function which uses `Task.return_` to lift
 and pass the results to the caller:
 ```python
-async def canon_task_return(task, result_type, opts, flat_args):
+async def canon_task_return(task, result_type, opts: LiftLowerOptions, flat_args):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync and not task.opts.always_task_return)
   trap_if(result_type != task.ft.results)
-  trap_if(opts != task.opts)
+  trap_if(opts != LiftLowerOptions.copy(task.opts))
   task.return_(flat_args)
   return []
 ```
@@ -3199,10 +3219,13 @@ component with multiple exported functions of different types, `task.return` is
 not called with a mismatched result type (which, due to indirect control flow,
 can in general only be caught dynamically).
 
-The `trap_if(opts != task.opts)` guard ensures that the return value is lifted
-the same way as the `canon lift` from which this `task.return` is returning.
-This ensures that AOT fusion of `canon lift` and `canon lower` can generate
-a thunk that is indirectly called by `task.return` after these guards.
+The `trap_if(opts != LiftLowerOptions.copy(task.opts))` guard ensures that
+the return value is lifted the same way as the `canon lift` from which this
+`task.return` is returning. This ensures that AOT fusion of `canon lift` and
+`canon lower` can generate a thunk that is indirectly called by `task.return`
+after these guards. The `LiftLowerOptions.copy` method is used to select just
+the `LiftLowerOptions` subset of `CanonicalOptions` (since fields like
+`async` and `callback` aren't relevant to `task.return`).
 
 
 ### 🔀 `canon yield`
@@ -3273,7 +3296,7 @@ async def canon_waitable_set_wait(sync, mem, task, si, ptr):
 
 def unpack_event(mem, task, ptr, e: EventTuple):
   event, p1, p2 = e
-  cx = LiftLowerContext(CanonicalOptions(memory = mem), task.inst)
+  cx = LiftLowerContext(LiftLowerOptions(memory = mem), task.inst)
   store(cx, p1, U32Type(), ptr)
   store(cx, p2, U32Type(), ptr + 4)
   return [event]

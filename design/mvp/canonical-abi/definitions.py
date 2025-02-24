@@ -179,7 +179,7 @@ class FutureType(ValType):
 ### Lifting and Lowering Context
 
 class LiftLowerContext:
-  opts: CanonicalOptions
+  opts: LiftLowerOptions
   inst: ComponentInstance
   borrow_scope: Optional[Task|Subtask]
 
@@ -192,10 +192,21 @@ class LiftLowerContext:
 ### Canonical ABI Options
 
 @dataclass
-class CanonicalOptions:
+class LiftLowerOptions:
   memory: Optional[bytearray] = None
   string_encoding: Optional[str] = None
   realloc: Optional[Callable] = None
+
+  def __eq__(self, other):
+    return self.memory is other.memory and \
+           self.string_encoding == other.string_encoding and \
+           self.realloc is other.realloc
+
+  def copy(opts):
+    return LiftLowerOptions(opts.memory, opts.string_encoding, opts.realloc)
+
+@dataclass
+class CanonicalOptions(LiftLowerOptions):
   post_return: Optional[Callable] = None
   sync: bool = True # = !canonopt.async
   callback: Optional[Callable] = None
@@ -1920,11 +1931,11 @@ async def canon_backpressure_set(task, flat_args):
 
 ### 🔀 `canon task.return`
 
-async def canon_task_return(task, result_type, opts, flat_args):
+async def canon_task_return(task, result_type, opts: LiftLowerOptions, flat_args):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync and not task.opts.always_task_return)
   trap_if(result_type != task.ft.results)
-  trap_if(opts != task.opts)
+  trap_if(opts != LiftLowerOptions.copy(task.opts))
   task.return_(flat_args)
   return []
 
@@ -1953,7 +1964,7 @@ async def canon_waitable_set_wait(sync, mem, task, si, ptr):
 
 def unpack_event(mem, task, ptr, e: EventTuple):
   event, p1, p2 = e
-  cx = LiftLowerContext(CanonicalOptions(memory = mem), task.inst)
+  cx = LiftLowerContext(LiftLowerOptions(memory = mem), task.inst)
   store(cx, p1, U32Type(), ptr)
   store(cx, p2, U32Type(), ptr + 4)
   return [event]
