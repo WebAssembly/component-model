@@ -32,6 +32,7 @@ more user-focused explanation, take a look at the
   * [Value definitions](#-value-definitions)
   * [Start definitions](#-start-definitions)
   * [Import and export definitions](#import-and-export-definitions)
+    * [Name uniqueness](#name-uniqueness)
 * [Component invariants](#component-invariants)
 * [JavaScript embedding](#JavaScript-embedding)
   * [JS API](#JS-API)
@@ -782,8 +783,8 @@ The remaining 4 type constructors in `deftype` use `valtype` to describe
 shared-nothing functions, resources, components, and component instances:
 
 The `func` type constructor describes a component-level function definition
-that takes a list of uniquely-named `valtype` parameters and optionally returns
-a `valtype`.
+that takes a list of `valtype` parameters with [strongly-unique] names and
+optionally returns a `valtype`.
 
 The `resource` type constructor creates a fresh type for each instance of the
 containing component (with "freshness" and its interaction with general
@@ -2191,16 +2192,17 @@ new identifier `$x`).
 import ::= (import "<importname>" bind-id(<externdesc>))
 export ::= (export <id>? "<exportname>" <sortidx> <externdesc>?)
 ```
-All import names are required to be unique and all export names are required to
-be unique. The rest of the grammar for imports and exports defines a structured
-syntax for the contents of import and export names. Syntactically, these names
-appear inside quoted string literals. The grammar thus restricts the contents
-of these string literals to provide more structured information that can be
-mechanically interpreted by toolchains and runtimes to support idiomatic
-developer workflows and source-language bindings. The rules defining this
-structured name syntax below are to be interpreted as a *lexical* grammar
-defining a single token and thus whitespace is not automatically inserted, all
-terminals are single-quoted, and everything unquoted is a meta-character.
+All import names are required to be [strongly-unique]. Separately, all export
+names are also required to be [strongly-unique]. The rest of the grammar for
+imports and exports defines a structured syntax for the contents of import and
+export names. Syntactically, these names appear inside quoted string literals.
+The grammar thus restricts the contents of these string literals to provide
+more structured information that can be mechanically interpreted by toolchains
+and runtimes to support idiomatic developer workflows and source-language
+bindings. The rules defining this structured name syntax below are to be
+interpreted as a *lexical* grammar defining a single token and thus whitespace
+is not automatically inserted, all terminals are single-quoted, and everything
+unquoted is a meta-character.
 ```ebnf
 exportname    ::= <plainname>
                 | <interfacename>
@@ -2358,12 +2360,6 @@ mapped to `isXML`, `IsXml`, `is_XML` or `is_xml`, depending on the target
 language/convention. The highly-restricted character set ensures that
 capitalization is trivial and does not require consulting Unicode tables.
 
-Because some casing schemes (such as all-lowercase) would lead to clashes if
-two `label`s differed only in case, in all cases where "uniqueness" is required
-between a set of names (viz., import/export names, record field labels, variant
-case labels, and function parameter/result names), two `label`s that differ
-only in case are considered equal and thus rejected.
-
 Components provide two options for naming exports, symmetric to the first two
 options for naming imports:
 * a **plain name** that leaves it up to the developer to "read the docs"
@@ -2454,6 +2450,39 @@ The inferred type of this component is:
 ```
 
 Note, that the `url` value definition is absent from the component type
+
+### Name Uniqueness
+
+The goal of the `label`, `exportname` and `importname` productions defined and
+used above is to allow automated bindings generators to map these names into
+something more idiomatic to the language. For example, the `plainname`
+`[method]my-resource.my-method` might get mapped to a method named `myMethod`
+nested inside a class `MyResource`. To unburden bindings generators from having
+to consider pathological cases where two unique-in-the-component names get
+mapped to the same source-language identifier, Component Model validation
+imposes a stronger form of uniquness than simple string equality on all the
+names that appear within the same scope.
+
+To determine whether two names (defined as sequences of [Unicode Scalar
+Values]) are **strongly-unique**:
+* If one name is `l` and the other name is `[constructor]l` (for the same
+  `label` `l`), they are strongly-unique.
+* Otherwise:
+  * Lowercase all the `acronym`s (uppercase letters) in both names.
+  * Strip any `[...]` annotation prefix from both names.
+  * The names are strongly-unique if the resulting strings are unequal.
+
+Thus, the following names are strongly-unique:
+* `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[method]foo.baz`
+
+but attempting to add *any* of the following names would be a validation error:
+* `foo`, `foo-BAR`, `[constructor]foo-BAR`, `[async]foo`, `[method]foo.BAR`
+
+Note that additional validation rules involving types apply to names with
+annotations. For example, the validation rules for `[constructor]foo` require
+`foo` to be a resource type. See [Binary.md](Binary.md#import-and-export-definitions)
+for details.
+
 
 ## Component Invariants
 
@@ -2811,6 +2840,8 @@ For some use-case-focused, worked examples, see:
 [shared-everything-threads]: https://github.com/WebAssembly/shared-everything-threads
 [WASI Preview 2]: https://github.com/WebAssembly/WASI/tree/main/wasip2#readme
 [reference types]: https://github.com/WebAssembly/reference-types/blob/master/proposals/reference-types/Overview.md
+
+[Strongly-unique]: #name-uniqueness
 
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Canonical ABI explainer]: CanonicalABI.md
