@@ -3835,12 +3835,12 @@ validation specifies:
 * `$ft` must refer to a `shared` function type; initially, only the type
   `(shared (func shared (param $c i32)))` is allowed (see explanation in
   `thread.spawn_ref` above)
-* `$t` must refer to a table containing `ft`-typed items
+* `$t` must refer to a table with type `(table (ref null (shared func)) shared)`
 * `$st` is given type `(func (param $i i32) (param $c i32) (result $e
   i32))`.
 
-Calling `$st` retrieves a function `$f` of type `$ft` from table `$t`. If that
-succeeds, it spawns a thread which:
+Calling `$st` retrieves a reference to function `$f` from table `$t` and checks
+that `$f` is of type `$ft`. If that succeeds, it spawns a thread which:
   - invokes `$f` with `$c`
   - executes `$f` until completion or trap in a `shared` context as described by
     the [shared-everything threads] proposal.
