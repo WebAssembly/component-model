@@ -1438,7 +1438,8 @@ canon ::= ...
         | (canon error-context.new <canonopt>* (core func <id>?))
         | (canon error-context.debug-message <canonopt>* (core func <id>?))
         | (canon error-context.drop (core func <id>?))
-        | (canon thread.spawn <typeidx> (core func <id>?)) 🧵
+        | (canon thread.spawn_ref <typeidx> (core func <id>?)) 🧵
+        | (canon thread.spawn_indirect <typeidx> <core:tableidx> (core func <id>?)) 🧵
         | (canon thread.available_parallelism (core func <id>?)) 🧵
 ```
 
@@ -1945,19 +1946,34 @@ thread management. These are specified as built-ins and not core WebAssembly
 instructions because browsers expect this functionality to come from existing
 Web/JS APIs.
 
-###### 🧵 `thread.spawn`
+###### 🧵 `thread.spawn_ref`
 
 | Synopsis                   |                                                           |
 | -------------------------- | --------------------------------------------------------- |
 | Approximate WIT signature  | `func<FuncT>(f: FuncT, c: FuncT.params[0]) -> bool`       |
 | Canonical ABI signature    | `[f:(ref null (func shared (param i32))) c:i32] -> [i32]` |
 
-The `thread.spawn` built-in spawns a new thread by invoking the shared function
-`f` while passing `c` to it, returning whether a thread was successfully
-spawned. While it's designed to allow different types in the future, the type
-of `c` is currently hard-coded to always be `i32`.
+The `thread.spawn_ref` built-in spawns a new thread by invoking the shared
+function `f` while passing `c` to it, returning whether a thread was
+successfully spawned. While it's designed to allow different types in the
+future, the type of `c` is currently hard-coded to always be `i32`.
 
-(See also [`canon_thread_spawn`] in the Canonical ABI explainer.)
+(See also [`canon_thread_spawn_ref`] in the Canonical ABI explainer.)
+
+
+###### 🧵 `thread.spawn_indirect`
+
+| Synopsis                   |                                                   |
+| -------------------------- | ------------------------------------------------- |
+| Approximate WIT signature  | `func<FuncT>(i: i32, c: FuncT.params[0]) -> bool` |
+| Canonical ABI signature    | `[i:i32 c:i32] -> [i32]`                          |
+
+The `thread.spawn_indirect` built-in spawns a new thread by retrieving the
+shared function `f` from a table using index `i` (much like the `call_indirect`
+core instruction). Once `f` is retrieved, this built-in operates like
+`thread.spawn_ref` above, including the limitations on `f`'s parameters.
+
+(See also [`canon_thread_spawn_indirect`] in the Canonical ABI explainer.)
 
 ###### 🧵 `thread.available_parallelism`
 
@@ -2806,7 +2822,8 @@ For some use-case-focused, worked examples, see:
 [`canon_error_context_new`]: CanonicalABI.md#-canon-error-contextnew
 [`canon_error_context_debug_message`]: CanonicalABI.md#-canon-error-contextdebug-message
 [`canon_error_context_drop`]: CanonicalABI.md#-canon-error-contextdrop
-[`canon_thread_spawn`]: CanonicalABI.md#-canon-theadspawn
+[`canon_thread_spawn_ref`]: CanonicalABI.md#-canon-threadspawnref
+[`canon_thread_spawn_indirect`]: CanonicalABI.md#-canon-threadspawnindirect
 [`canon_thread_available_parallelism`]: CanonicalABI.md#-canon-threadavailable_parallelism
 [`pack_async_copy_result`]: CanonicalABI.md#-canon-streamfuturereadwrite
 [the `close` built-ins]: CanonicalABI.md#-canon-streamfutureclose-readablewritable

@@ -78,12 +78,11 @@ these languages' concurrency features are already bound (making the Component
 Model "just another OS" from the language toolchains' perspective).
 
 Moreover, this async ABI does not require components to use preemptive
-multi-threading ([`thread.spawn`]) in order to achieve concurrency. Instead,
-concurrency can be achieved by cooperatively switching between different
-logical tasks running on a single thread. This switching may require the use of
-[fibers] or a [CPS transform], but may also be avoided entirely when a
-component's producer toolchain is engineered to always return to an
-[event loop].
+multi-threading ([`thread.spawn*`]) in order to achieve concurrency. Instead,
+concurrency can be achieved by cooperatively switching between different logical
+tasks running on a single thread. This switching may require the use of [fibers]
+or a [CPS transform], but may also be avoided entirely when a component's
+producer toolchain is engineered to always return to an [event loop].
 
 To avoid partitioning the world along sync/async lines as mentioned in the
 Goals section, the Component Model allows *every* component-level function type
@@ -672,11 +671,11 @@ by declarative instantiation and `start` above.
 
 ## Interaction with multi-threading
 
-For now, the integration between multi-threading (via [`thread.spawn`]) and
-native async is limited. In particular, because all [lift and lower
-definitions] produce non-`shared` functions, any threads spawned by a component
-via `thread.spawn` will not be able to directly call imports (synchronously
-*or* asynchronously) and will thus have to use Core WebAssembly `atomics.*`
+For now, the integration between multi-threading (via [`thread.spawn*`]) and
+native async is limited. In particular, because all [lift and lower definitions]
+produce non-`shared` functions, any threads spawned by a component via
+`thread.spawn*` will not be able to directly call imports (synchronously *or*
+asynchronously) and will thus have to use Core WebAssembly `atomics.*`
 instructions to switch back to a non-`shared` function running on the "main"
 thread (i.e., whichever thread was used to call the component's exports).
 
@@ -693,8 +692,8 @@ composition story described above could naturally be extended to a
 sync+async+shared composition story, continuing to avoid the "what color is
 your function" problem (where `shared` is the [color]).
 
-Even without any use of `thread.new`, native async provides an opportunity to
-achieve some automatic parallelism "for free". In particular, due to the
+Even without any use of [`thread.spawn*`], native async provides an opportunity
+to achieve some automatic parallelism "for free". In particular, due to the
 shared-nothing nature of components, each component instance could be given a
 separate thread on which to interleave all tasks executing in that instance.
 Thus, in a cross-component call from `C1` to `C2`, `C2`'s task can run in a
@@ -750,7 +749,7 @@ comes after:
 [`yield`]: Explainer.md#-yield
 [`waitable-set.wait`]: Explainer.md#-waitable-setwait
 [`waitable-set.poll`]: Explainer.md#-waitable-setpoll
-[`thread.spawn`]: Explainer.md#-threadspawn
+[`thread.spawn*`]: Explainer.md#-threadspawnref
 [ESM-integration]: Explainer.md#ESM-integration
 
 [Canonical ABI Explainer]: CanonicalABI.md

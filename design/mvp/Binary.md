@@ -286,9 +286,10 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x01 0x00 f:<funcidx> opts:<opts>                   => (canon lower f opts (core func))
            | 0x02 rt:<typeidx>                                   => (canon resource.new rt (core func))
            | 0x03 rt:<typeidx>                                   => (canon resource.drop rt (core func))
-           | 0x07 rt:<typdidx>                                   => (canon resource.drop rt async (core func)) 🔀
+           | 0x07 rt:<typeidx>                                   => (canon resource.drop rt async (core func)) 🔀
            | 0x04 rt:<typeidx>                                   => (canon resource.rep rt (core func))
-           | 0x05 ft:<typeidx>                                   => (canon thread.spawn ft (core func)) 🧵
+           | 0x05 ft:<typeidx>                                   => (canon thread.spawn_ref ft (core func)) 🧵
+           | 0x24 ft:<typeidx> t:<core:tabidx>                   => (canon thread.spawn_indirect ft (table t) (core func)) 🧵
            | 0x06                                                => (canon thread.available_parallelism (core func)) 🧵
            | 0x08                                                => (canon backpressure.set (core func)) 🔀
            | 0x09 rs:<resultlist> opts:<opts>                    => (canon task.return rs opts (core func)) 🔀
