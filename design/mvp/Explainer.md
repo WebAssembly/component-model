@@ -1276,7 +1276,7 @@ encoding across Java, JavaScript and .NET VMs and allows a dynamic choice
 between either Latin-1 (which has a fixed 1-byte encoding, but limited Code
 Point range) or UTF-16 (which can express all Code Points, but uses either
 2 or 4 bytes per Code Point). If no `string-encoding` option is specified, the
-default is UTF-8. It is a validation error to include more than one
+default is `utf8`. It is a validation error to include more than one
 `string-encoding` option.
 
 The `(memory ...)` option specifies the memory that the Canonical ABI will

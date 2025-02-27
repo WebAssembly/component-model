@@ -127,23 +127,28 @@ known to not contain `borrow`. The `CanonicalOptions`, `ComponentInstance`,
 
 ### Canonical ABI Options
 
+The following two classes list the various Canonical ABI options ([`canonopt`])
+that can be set on various Canonical ABI definitions. The default values of the
+Python fields are the default values when the associated `canonopt` is not
+present in the binary or text format definition.
+
 The `LiftLowerContext` class contains the subset of [`canonopt`] which are
 used to lift and lower the individual parameters and results of function
 calls:
 ```python
 @dataclass
 class LiftLowerOptions:
+  string_encoding: str = 'utf8'
   memory: Optional[bytearray] = None
-  string_encoding: Optional[str] = None
   realloc: Optional[Callable] = None
 
   def __eq__(self, other):
-    return self.memory is other.memory and \
-           self.string_encoding == other.string_encoding and \
+    return self.string_encoding == other.string_encoding and \
+           self.memory is other.memory and \
            self.realloc is other.realloc
 
   def copy(opts):
-    return LiftLowerOptions(opts.memory, opts.string_encoding, opts.realloc)
+    return LiftLowerOptions(opts.string_encoding, opts.memory, opts.realloc)
 ```
 The `__eq__` override specifies that equality of `LiftLowerOptions` (as used
 by, e.g., `canon_task_return` below) is defined in terms of the identity of
