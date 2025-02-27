@@ -3785,16 +3785,16 @@ For a canonical definition:
 (canon thread.spawn_ref (type $ft) (core func $st))
 ```
 validation specifies:
-* `$ft` must refer to a `shared` function type; initially, only the type `(func
-  shared (param $c i32))` is allowed (see explanation below)
+* `$ft` must refer to a `shared` function type; initially, only the type
+  `(shared (func (param $c i32)))` is allowed (see explanation below)
 * `$st` is given type `(func (param $f (ref null $ft)) (param $c i32) (result $e
   i32))`.
 
 > Note: ideally, a thread could be spawned with [arbitrary thread parameters].
 > Currently, that would require additional work in the toolchain to support so,
-> for simplicity, the current proposal simply fixes a single `i32` parameter type.
-> However, `thread.spawn` could be extended to allow arbitrary thread parameters
-> in the future, once it's concretely beneficial to the toolchain.
+> for simplicity, the current proposal simply fixes a single `i32` parameter
+> type. However, `thread.spawn_ref` could be extended to allow arbitrary thread
+> parameters in the future, once it's concretely beneficial to the toolchain.
 > The inclusion of `$ft` ensures backwards compatibility for when arbitrary
 > parameters are allowed.
 
@@ -3832,9 +3832,9 @@ For a canonical definition:
 (canon thread.spawn_indirect (type $ft) (table $t) (core func $st))
 ```
 validation specifies:
-* `$ft` must refer to a `shared` function type; initially, only the type `(func
-  shared (param $c i32))` is allowed (see explanation in `thread.spawn_ref`
-  above)
+* `$ft` must refer to a `shared` function type; initially, only the type
+  `(shared (func shared (param $c i32)))` is allowed (see explanation in
+  `thread.spawn_ref` above)
 * `$t` must refer to a table containing `ft`-typed items
 * `$st` is given type `(func (param $i i32) (param $c i32) (result $e
   i32))`.
