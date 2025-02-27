@@ -193,17 +193,17 @@ class LiftLowerContext:
 
 @dataclass
 class LiftLowerOptions:
+  string_encoding: str = 'utf8'
   memory: Optional[bytearray] = None
-  string_encoding: Optional[str] = None
   realloc: Optional[Callable] = None
 
   def __eq__(self, other):
-    return self.memory is other.memory and \
-           self.string_encoding == other.string_encoding and \
+    return self.string_encoding == other.string_encoding and \
+           self.memory is other.memory and \
            self.realloc is other.realloc
 
   def copy(opts):
-    return LiftLowerOptions(opts.memory, opts.string_encoding, opts.realloc)
+    return LiftLowerOptions(opts.string_encoding, opts.memory, opts.realloc)
 
 @dataclass
 class CanonicalOptions(LiftLowerOptions):
