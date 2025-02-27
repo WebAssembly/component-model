@@ -335,6 +335,8 @@ Notes:
 * The second `0x00` byte in `canon` stands for the `func` sort and thus the
   `0x00 <u32>` pair standards for a `func` `sortidx` or `core:sortidx`.
 * Validation prevents duplicate or conflicting `canonopt`.
+* When there is no `string-encoding` present, the default value is `utf8`.
+  For all other values, the default value is "none".
 * Validation of the individual canonical definitions is described in
   [`CanonicalABI.md`](CanonicalABI.md#canonical-definitions).
 
