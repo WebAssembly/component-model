@@ -862,6 +862,7 @@ keywords is still in flux at this time but the current set is:
 
 ```ebnf
 keyword ::= 'as'
+          | 'async'
           | 'bool'
           | 'borrow'
           | 'char'
@@ -1299,7 +1300,7 @@ typedef-item ::= resource-item
 
 func-item ::= id ':' func-type ';'
 
-func-type ::= 'func' param-list result-list
+func-type ::= 'async'? 'func' param-list result-list
 
 param-list ::= '(' named-type-list ')'
 
@@ -1311,6 +1312,17 @@ named-type-list ::= ϵ
 
 named-type ::= id ':' ty
 ```
+
+The optional `async` hint in a WIT function type indicates that the callee
+is expected to block and thus the caller should emit whatever asynchronous
+language bindings are appropriate (e.g., in JS, Python, C# or Rust, an `async`
+WIT function would emit an `async` JS/Python/C#/Rust function). Because `async`
+is just a hint and not enforced by the runtime, it is technically possible for
+a non-`async` callee to block. In that case, though, it is the *callee's* fault
+for any resultant loss of concurrency, not the caller's. Thus, `async` is
+primarily intended to document expectations in a way that can be taken
+advantage of by bindings generators. (For more details, see the [async
+explainer](Async.md#sync-and-async-functions).)
 
 
 ## Item: `use`
@@ -1528,9 +1540,12 @@ Specifically, the syntax for a `resource` definition is:
 resource-item ::= 'resource' id ';'
                 | 'resource' id '{' resource-method* '}'
 resource-method ::= func-item
-                  | id ':' 'static' func-type ';'
+                  | id ':' 'static' 'async'? func-type ';'
                   | 'constructor' param-list ';'
 ```
+
+The optional `async` hint on `static` functions has the same meaning as
+in a non-`static` `func-item`.
 
 The syntax for handle types is presented [below](#handles).
 

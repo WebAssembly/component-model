@@ -154,7 +154,40 @@ component-level function that has been [lifted] from Core WebAssembly with the
 function that does not have the `async` option set (which is the default and
 only option prior to Preview 3). Thus, the sync/async distinction appears
 only independently in how a component-level function is *implemented* or
-*called*.
+*called*. This lack of distinction helps to avoid the classic ["What Color Is
+Your Function?"][Color] problem.
+
+Functions *may* however be annotated (in both WIT and component binaries) with
+`async` as a *hint*. This hint is intended to inform the default language
+bindings generation, indicating whether to use a source-level `async` function
+or not in languages that have such a distinction (e.g., JS, Python, C# and
+Rust). In the absence of such a hint, a bindings generator would be forced to
+make a uniform decision for what to do by default for all functions or require
+manual programmer directives. However, because `async` is just a hint, there is
+no prohibition against non-`async`-exported functions calling imported `async`
+functions. This does mean that non-`async` functions may end up blocking
+their caller, but (1) any loss in performance is the callee's "fault", (2) the
+caller can still lower `async` if they want to (overriding the default hint),
+(3) any *transitive* caller an lower `async` to avoid blocking.
+
+For example, given this interface:
+```wit
+interface filesystem {
+  resource file {
+    constructor();
+    is-closed: func() -> bool;
+    read: async func(num-bytes: u32) -> result<list<u8>>;
+    from-bytes: static func(bytes: list<u8>) -> file;
+    from-stream: static async func(bytes: stream<u8>) -> file;
+  }
+}
+```
+a bindings generator in a language with `async` would only emit `async`
+functions for `read` and `fetch`. Since in many languages `new` expressions
+cannot be async, there is no `async constructor`. Use cases requiring
+asynchronous construction can instead use `static async` functions, similar to
+`from-stream` in this example.
+
 
 ### Task
 
@@ -709,11 +742,9 @@ time as applications are built with more components.
 ## TODO
 
 Native async support is being proposed incrementally. The following features
-will be added in future chunks roughly in the order list to complete the full
+will be added in future chunks roughly in the order listed to complete the full
 "async" story, with a TBD cutoff between what's in [WASI Preview 3] and what
 comes after:
-* `nonblocking` function type attribute: allow a function to declare in its
-  type that it will not transitively do anything blocking
 * `subtask.cancel`: allow a supertask to signal to a subtask that its result is
   no longer wanted and to please wrap it up promptly
 * zero-copy forwarding/splicing
