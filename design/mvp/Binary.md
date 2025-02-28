@@ -288,9 +288,6 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x03 rt:<typeidx>                                   => (canon resource.drop rt (core func))
            | 0x07 rt:<typeidx>                                   => (canon resource.drop rt async (core func)) 🔀
            | 0x04 rt:<typeidx>                                   => (canon resource.rep rt (core func))
-           | 0x05 ft:<typeidx>                                   => (canon thread.spawn_ref ft (core func)) 🧵
-           | 0x24 ft:<typeidx> t:<core:tableidx>                 => (canon thread.spawn_indirect ft (table t) (core func)) 🧵
-           | 0x06                                                => (canon thread.available_parallelism (core func)) 🧵
            | 0x08                                                => (canon backpressure.set (core func)) 🔀
            | 0x09 rs:<resultlist> opts:<opts>                    => (canon task.return rs opts (core func)) 🔀
            | 0x0a 0x7f i:<u32>                                   => (canon context.get i32 i (core func)) 🔀
@@ -319,6 +316,9 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x21 async?:<async>? m:<core:memidx>                => (canon waitable-set.poll async? (memory m) (core func)) 🔀
            | 0x22                                                => (canon waitable-set.drop (core func)) 🔀
            | 0x23                                                => (canon waitable.join (core func)) 🔀
+           | 0x40 ft:<typeidx>                                   => (canon thread.spawn_ref ft (core func)) 🧵
+           | 0x41 ft:<typeidx> t:<core:tableidx>                 => (canon thread.spawn_indirect ft (table t) (core func)) 🧵
+           | 0x42                                                => (canon thread.available_parallelism (core func)) 🧵
 async?   ::= 0x00                                                =>
            | 0x01                                                => async
 opts     ::= opt*:vec(<canonopt>)                                => opt*
