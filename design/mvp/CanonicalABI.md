@@ -3788,8 +3788,8 @@ For a canonical definition:
 validation specifies:
 * `$ft` must refer to a `shared` function type; initially, only the type
   `(shared (func (param $c i32)))` is allowed (see explanation below)
-* `$spawn_ref` is given type `(func (param $f (ref null $ft)) (param $c i32) (result $e
-  i32))`.
+* `$spawn_ref` is given type `(func (param $f (ref null $ft)) (param $c i32)
+  (result $e i32))`.
 
 > Note: ideally, a thread could be spawned with [arbitrary thread parameters].
 > Currently, that would require additional work in the toolchain to support so,
@@ -3836,12 +3836,14 @@ validation specifies:
 * `$ft` must refer to a `shared` function type; initially, only the type
   `(shared (func (param $c i32)))` is allowed (see explanation in
   `thread.spawn_ref` above)
-* `$tbl` must refer to a table with type `(table (ref null (shared func)) shared)`
-* `$spawn_indirect` is given type `(func (param $i i32) (param $c i32) (result $e
-  i32))`.
+* `$tbl` must refer to a table with type `(table (ref null (shared func))
+  shared)`
+* `$spawn_indirect` is given type `(func (param $i i32) (param $c i32) (result
+  $e i32))`.
 
-Calling `$spawn_indirect` retrieves a reference to function `$f` from table `$tbl` and checks
-that `$f` is of type `$ft`. If that succeeds, it spawns a thread which:
+Calling `$spawn_indirect` retrieves a reference to function `$f` from table
+`$tbl` and checks that `$f` is of type `$ft`. If that succeeds, it spawns a
+thread which:
   - invokes `$f` with `$c`
   - executes `$f` until completion or trap in a `shared` context as described by
     the [shared-everything threads] proposal.
