@@ -270,8 +270,7 @@ Notes:
 * All parameter labels, result labels, record field labels, variant case
   labels, flag labels, enum case labels, component import names, component
   export names, instance import names and instance export names must be
-  unique in their containing scope, considering two labels that differ only in
-  case to be equal and thus rejected.
+  [strongly-unique] in their containing scope.
 * Validation of `externdesc` requires the various `typeidx` type constructors
   to match the preceding `sort`.
 * (The `0x00` immediate of `case` may be reinterpreted in the future as the
@@ -386,8 +385,8 @@ Notes:
   of the inferred `externdesc` of the `sortidx`.
 * `<importname>` and `<exportname>` refer to the productions defined in the
   [text format](Explainer.md#import-and-export-definitions).
-* The `<importname>`s of a component must be unique and the `<exportname>`s of
-  a component must be unique as well (defined in terms of raw string equality).
+* The `<importname>`s of a component must all be [strongly-unique]. Separately,
+  the `<exportname>`s of a component must also all be [strongly-unique].
 * Validation requires that annotated `plainname`s only occur on `func` imports
   or exports and that the first label of a `[constructor]`, `[method]` or
   `[static]` matches the `plainname` of a preceding `resource` import or
@@ -397,8 +396,6 @@ Notes:
   `(result (own $R))`, where `$R` is the resource labeled `r`.
 * Validation of `[method]` names requires the first parameter of the function
   to be `(param "self" (borrow $R))`, where `$R` is the resource labeled `r`.
-* Validation of `[method]` and `[static]` names ensures that all field names
-  are disjoint.
 * `<valid semver>` is as defined by [https://semver.org](https://semver.org/)
 * `<integrity-metadata>` is as defined by the
   [SRI](https://www.w3.org/TR/SRI/#dfn-integrity-metadata) spec.
@@ -516,6 +513,8 @@ named once.
 [`core:importdesc`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-importdesc
 [`core:functype`]: https://webassembly.github.io/spec/core/binary/types.html#binary-functype
 [`core:rectype]: https://webassembly.github.io/gc/core/binary/types.html#recursive-types
+
+[Strongly-unique]: Explainer.md#name-uniqueness
 
 [type-imports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
 [module-linking]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md
