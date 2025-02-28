@@ -1951,7 +1951,7 @@ Web/JS APIs.
 | Synopsis                   |                                                           |
 | -------------------------- | --------------------------------------------------------- |
 | Approximate WIT signature  | `func<FuncT>(f: FuncT, c: FuncT.params[0]) -> bool`       |
-| Canonical ABI signature    | `[f:(ref null (func shared (param i32))) c:i32] -> [i32]` |
+| Canonical ABI signature    | `[f:(ref null (shared (func (param i32))) c:i32] -> [i32]` |
 
 The `thread.spawn_ref` built-in spawns a new thread by invoking the shared
 function `f` while passing `c` to it, returning whether a thread was
