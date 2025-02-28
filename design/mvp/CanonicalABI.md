@@ -3778,7 +3778,7 @@ async def canon_error_context_drop(task, i):
 
 For a canonical definition:
 ```wat
-(canon thread.spawn_ref (type $ft) (core func $spawn_ref))
+(canon thread.spawn_ref $ft (core func $spawn_ref))
 ```
 validation specifies:
 * `$ft` must refer to a `shared` function type; initially, only the type
@@ -3794,13 +3794,13 @@ validation specifies:
 > The inclusion of `$ft` ensures backwards compatibility for when arbitrary
 > parameters are allowed.
 
-Calling `$st` checks that the reference `$f` is not null. Then, it spawns a
-thread which:
+Calling `$spawn_ref` checks that the reference `$f` is not null. Then, it spawns
+a thread which:
   - invokes `$f` with `$c`
   - executes `$f` until completion or trap in a `shared` context as described by
     the [shared-everything threads] proposal.
 
-In pseudocode, `$st` looks like:
+In pseudocode, `$spawn_ref` looks like:
 
 ```python
 def canon_thread_spawn_ref(f, c):
