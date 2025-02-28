@@ -3777,7 +3777,7 @@ async def canon_error_context_drop(task, i):
 
 For a canonical definition:
 ```wat
-(canon thread.spawn_ref (type $ft) (core func $st))
+(canon thread.spawn_ref (type $ft) (core func $spawn_ref))
 ```
 validation specifies:
 * `$ft` must refer to a `shared` function type; initially, only the type
