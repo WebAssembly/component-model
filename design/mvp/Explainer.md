@@ -1948,9 +1948,9 @@ Web/JS APIs.
 
 ###### 🧵 `thread.spawn_ref`
 
-| Synopsis                   |                                                           |
-| -------------------------- | --------------------------------------------------------- |
-| Approximate WIT signature  | `func<FuncT>(f: FuncT, c: FuncT.params[0]) -> bool`       |
+| Synopsis                   |                                                            |
+| -------------------------- | ---------------------------------------------------------- |
+| Approximate WIT signature  | `func<FuncT>(f: FuncT, c: FuncT.params[0]) -> bool`        |
 | Canonical ABI signature    | `[f:(ref null (shared (func (param i32))) c:i32] -> [i32]` |
 
 The `thread.spawn_ref` built-in spawns a new thread by invoking the shared
@@ -1970,9 +1970,9 @@ future, the type of `c` is currently hard-coded to always be `i32`.
 
 The `thread.spawn_indirect` built-in spawns a new thread by retrieving the
 shared function `f` from a table using index `i` and traps if the type of `f` is
-not equal to `FuncT` (much like the `call_indirect`
-core instruction). Once `f` is retrieved, this built-in operates like
-`thread.spawn_ref` above, including the limitations on `f`'s parameters.
+not equal to `FuncT` (much like the `call_indirect` core instruction). Once `f`
+is retrieved, this built-in operates like `thread.spawn_ref` above, including
+the limitations on `f`'s parameters.
 
 (See also [`canon_thread_spawn_indirect`] in the Canonical ABI explainer.)
 
@@ -1983,14 +1983,15 @@ core instruction). Once `f` is retrieved, this built-in operates like
 | Approximate WIT signature  | `func() -> u32` |
 | Canonical ABI signature    | `[] -> [i32]`   |
 
-The `thread.available_parallelism` built-in returns the number of threads that can be
-expected to execute in parallel.
+The `thread.available_parallelism` built-in returns the number of threads that
+can be expected to execute in parallel.
 
 The concept of "available parallelism" corresponds is sometimes referred to
 as "hardware concurrency", such as in [`navigator.hardwareConcurrency`] in
 JavaScript.
 
-(See also [`canon_thread_available_parallelism`] in the Canonical ABI explainer.)
+(See also [`canon_thread_available_parallelism`] in the Canonical ABI
+explainer.)
 
 ### 🪙 Value Definitions
 
