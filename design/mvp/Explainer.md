@@ -2823,8 +2823,8 @@ For some use-case-focused, worked examples, see:
 [`canon_error_context_new`]: CanonicalABI.md#-canon-error-contextnew
 [`canon_error_context_debug_message`]: CanonicalABI.md#-canon-error-contextdebug-message
 [`canon_error_context_drop`]: CanonicalABI.md#-canon-error-contextdrop
-[`canon_thread_spawn_ref`]: CanonicalABI.md#-canon-threadspawnref
-[`canon_thread_spawn_indirect`]: CanonicalABI.md#-canon-threadspawnindirect
+[`canon_thread_spawn_ref`]: CanonicalABI.md#-canon-threadspawn_ref
+[`canon_thread_spawn_indirect`]: CanonicalABI.md#-canon-threadspawn_indirect
 [`canon_thread_available_parallelism`]: CanonicalABI.md#-canon-threadavailable_parallelism
 [`pack_async_copy_result`]: CanonicalABI.md#-canon-streamfuturereadwrite
 [the `close` built-ins]: CanonicalABI.md#-canon-streamfutureclose-readablewritable

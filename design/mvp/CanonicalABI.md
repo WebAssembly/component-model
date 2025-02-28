@@ -54,7 +54,8 @@ being specified here.
   * [`canon error-context.new`](#-canon-error-contextnew) 🔀
   * [`canon error-context.debug-message`](#-canon-error-contextdebug-message) 🔀
   * [`canon error-context.drop`](#-canon-error-contextdrop) 🔀
-  * [`canon thread.spawn`](#-canon-threadspawn) 🧵
+  * [`canon thread.spawn_ref`](#-canon-threadspawn_ref) 🧵
+  * [`canon thread.spawn_indirect`](#-canon-threadspawn_indirect) 🧵
   * [`canon thread.available_parallelism`](#-canon-threadavailable_parallelism) 🧵
 
 ## Supporting definitions
