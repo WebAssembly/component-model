@@ -1969,7 +1969,8 @@ future, the type of `c` is currently hard-coded to always be `i32`.
 | Canonical ABI signature    | `[i:i32 c:i32] -> [i32]`                          |
 
 The `thread.spawn_indirect` built-in spawns a new thread by retrieving the
-shared function `f` from a table using index `i` (much like the `call_indirect`
+shared function `f` from a table using index `i` and traps if the type of `f` is
+not equal to `FuncT` (much like the `call_indirect`
 core instruction). Once `f` is retrieved, this built-in operates like
 `thread.spawn_ref` above, including the limitations on `f`'s parameters.
 
