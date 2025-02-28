@@ -1965,7 +1965,7 @@ future, the type of `c` is currently hard-coded to always be `i32`.
 
 | Synopsis                   |                                                   |
 | -------------------------- | ------------------------------------------------- |
-| Approximate WIT signature  | `func<FuncT>(i: i32, c: FuncT.params[0]) -> bool` |
+| Approximate WIT signature  | `func<FuncT>(i: u32, c: FuncT.params[0]) -> bool` |
 | Canonical ABI signature    | `[i:i32 c:i32] -> [i32]`                          |
 
 The `thread.spawn_indirect` built-in spawns a new thread by retrieving the
