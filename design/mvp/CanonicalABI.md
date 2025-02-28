@@ -3834,7 +3834,7 @@ validation specifies:
 * `$st` is given type `(func (param $i i32) (param $c i32) (result $e
   i32))`.
 
-Calling `$st` retrieves a reference to function `$f` from table `$t` and checks
+Calling `$spawn_indirect` retrieves a reference to function `$f` from table `$tbl` and checks
 that `$f` is of type `$ft`. If that succeeds, it spawns a thread which:
   - invokes `$f` with `$c`
   - executes `$f` until completion or trap in a `shared` context as described by
