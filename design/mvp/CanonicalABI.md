@@ -3787,7 +3787,7 @@ For a canonical definition:
 validation specifies:
 * `$ft` must refer to a `shared` function type; initially, only the type
   `(shared (func (param $c i32)))` is allowed (see explanation below)
-* `$st` is given type `(func (param $f (ref null $ft)) (param $c i32) (result $e
+* `$spawn_ref` is given type `(func (param $f (ref null $ft)) (param $c i32) (result $e
   i32))`.
 
 > Note: ideally, a thread could be spawned with [arbitrary thread parameters].
