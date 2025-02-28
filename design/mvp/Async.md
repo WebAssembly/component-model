@@ -749,7 +749,7 @@ comes after:
 [`yield`]: Explainer.md#-yield
 [`waitable-set.wait`]: Explainer.md#-waitable-setwait
 [`waitable-set.poll`]: Explainer.md#-waitable-setpoll
-[`thread.spawn*`]: Explainer.md#-threadspawnref
+[`thread.spawn*`]: Explainer.md#-threadspawn_ref
 [ESM-integration]: Explainer.md#ESM-integration
 
 [Canonical ABI Explainer]: CanonicalABI.md
