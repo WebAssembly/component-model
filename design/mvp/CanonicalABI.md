@@ -3830,7 +3830,7 @@ validation specifies:
 * `$ft` must refer to a `shared` function type; initially, only the type
   `(shared (func shared (param $c i32)))` is allowed (see explanation in
   `thread.spawn_ref` above)
-* `$t` must refer to a table with type `(table (ref null (shared func)) shared)`
+* `$tbl` must refer to a table with type `(table (ref null (shared func)) shared)`
 * `$st` is given type `(func (param $i i32) (param $c i32) (result $e
   i32))`.
 
