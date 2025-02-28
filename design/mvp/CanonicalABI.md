@@ -3845,7 +3845,7 @@ that `$f` is of type `$ft`. If that succeeds, it spawns a thread which:
   - executes `$f` until completion or trap in a `shared` context as described by
     the [shared-everything threads] proposal.
 
-In pseudocode, `$st` looks like:
+In pseudocode, `$spawn_indirect` looks like:
 
 ```python
 def canon_thread_spawn_indirect(t, i, c):
