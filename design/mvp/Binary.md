@@ -317,7 +317,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x22                                                => (canon waitable-set.drop (core func)) 🔀
            | 0x23                                                => (canon waitable.join (core func)) 🔀
            | 0x40 ft:<typeidx>                                   => (canon thread.spawn_ref ft (core func)) 🧵
-           | 0x41 ft:<typeidx> t:<core:tableidx>                 => (canon thread.spawn_indirect ft (table t) (core func)) 🧵
+           | 0x41 ft:<typeidx> tbl:<core:tableidx>               => (canon thread.spawn_indirect ft tbl (core func)) 🧵
            | 0x42                                                => (canon thread.available_parallelism (core func)) 🧵
 async?   ::= 0x00                                                =>
            | 0x01                                                => async
