@@ -3830,7 +3830,7 @@ def canon_thread_spawn_ref(f, c):
 
 For a canonical definition:
 ```wat
-(canon thread.spawn_indirect (type $ft) (table $t) (core func $st))
+(canon thread.spawn_indirect $ft $tbl (core func $spawn_indirect))
 ```
 validation specifies:
 * `$ft` must refer to a `shared` function type; initially, only the type
