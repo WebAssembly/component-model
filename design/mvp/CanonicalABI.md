@@ -3843,9 +3843,10 @@ that `$f` is of type `$ft`. If that succeeds, it spawns a thread which:
 In pseudocode, `$spawn_indirect` looks like:
 
 ```python
-def canon_thread_spawn_indirect(t, i, c):
-  trap_if(t[i] is None)
-  f = t[i]
+def canon_thread_spawn_indirect(ft, tbl, i, c):
+  f = tbl[i]
+  trap_if(f is None)
+  trap_if(f.type != ft)
   if DETERMINISTIC_PROFILE:
     return [-1]
 
