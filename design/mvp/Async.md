@@ -16,12 +16,12 @@ summary of the motivation and animated sketch of the design in action.
   * [Task](#task)
   * [Current task](#current-task)
   * [Context-Local Storage](#context-local-storage)
-  * [Subtask and Supertask](#subtask-and-supertask)
   * [Structured concurrency](#structured-concurrency)
   * [Streams and Futures](#streams-and-futures)
   * [Waiting](#waiting)
   * [Backpressure](#backpressure)
   * [Returning](#returning)
+  * [Borrows](#borrows)
 * [Async ABI](#async-abi)
   * [Async Import ABI](#async-import-abi)
   * [Async Export ABI](#async-export-abi)
@@ -251,70 +251,64 @@ reason why "context-local" storage is not called "task-local" storage (where a
 For details, see [`context.get`] in the AST explainer and [`canon_context_get`]
 in the Canonical ABI explainer.
 
-### Subtask and Supertask
-
-Each component-to-component call necessarily creates a new task in the callee.
-The callee task is a **subtask** of the calling task (and, conversely, the
-calling task is a **supertask** of the callee task. This sub/super relationship
-is immutable and doesn't change over time (until the callee task completes and
-is destroyed).
-
-The Canonical ABI's Python code represents the subtask relationship between a
-caller `Task` and a callee `Task` via the Python [`Subtask`] class. Whereas a
-`Task` object is created by each call to [`canon_lift`], a `Subtask` object is
-created by each call to [`canon_lower`]. This allows `Subtask`s to store the
-state that enforces the caller side of the Canonical ABI rules.
-
 ### Structured concurrency
 
-To realize the above goals of always having a well-defined cross-component
-async callstack, the Component Model's Canonical ABI enforces [Structured
-Concurrency] by dynamically requiring that a task waits for all its subtasks to
-[return](#returning) before the task itself is allowed to finish. This means
-that a subtask cannot be orphaned and there will always be an async callstack
-rooted at an invocation of an export by the host. Moreover, at any one point in
-time, the set of tasks active in a linked component graph form a forest of
-async call trees which e.g., can be visualized using a traditional flamegraph.
+Calling *into* a component creates a `Task` to track ABI state related to the
+*callee* (like "number of outstanding borrows"). Calling *out* of a component
+creates a `Subtask` to track ABI state related to the *caller* (like "which
+handles have been lent"). When one component calls another, there is thus a
+`Subtask`+`Task` pair that collectively maintains the overall state of the call
+and enforces that both components uphold their end of the ABI contract. But
+when the host calls into a component, there is only a `Task` and,
+symmetrically, when a component calls into the host, there is only a `Subtask`.
 
-The Canonical ABI's Python code enforces Structured Concurrency by incrementing
-a per-task "`num_subtasks`" counter when a subtask is created, decrementing
-when the subtask [returns](#returning), and trapping if `num_subtasks > 0` when
-a task attempts to exit.
+Based on this, the call stack at any point in time when a component calls a
+host-defined import will have a callstack of the general form:
+```
+[Host caller] <- [Task] <- [Subtask+Task]* <- [Subtask] <- [Host callee]
+```
+Here, the `<-` arrow represents the `supertask` relationship that is immutably
+established when first making the call. A paired `Subtask` and `Task` have the
+same `supertask` and can thus be visualized as a single node in the callstack.
 
-There is a subtle nuance to these Structured Concurrency rules deriving from
-the fact that subtasks may continue execution after [returning](#returning)
-their value to their caller. The ability to execute after returning value is
-necessary for being able to do work off the caller's critical path. A concrete
-example is an HTTP service that does some logging or billing operations after
-finishing an HTTP response, where the HTTP response is the return value of the
-[`wasi:http/handler.handle`] function. Since the `num_subtasks` counter is
-decremented when a subtask *returns* (as opposed to *exits*), this means that
-subtasks may continue execution even once their supertask has exited. To
-maintain Structured Concurrency (for purposes of checking [reentrance],
-scheduler prioritization and debugging/observability), we can consider
-the supertask to still be alive but in the process of "asynchronously
-tail-calling" its still-executing subtasks. (For scenarios where one
-component wants to non-cooperatively bound the execution of another
-component, a separate "[blast zone]" feature is necessary in any
-case.)
+(These concepts are represented in the Canonical ABI Python code via the
+[`Task`] and [`Subtask`] classes.)
 
-This async call tree provided by Structured Concurrency interacts naturally
-with the `borrow` handle type and its associated dynamic rules for preventing
-use-after-free. When a caller initially lends an `own`ed or `borrow`ed handle
-to a callee, a "`num_lends`" counter on the lent handle is incremented when the
-subtask starts and decremented when the caller is notified that the subtask has
-[returned](#returning). If the caller tries to drop a handle while the handle's
-`num_lends` is greater than zero, it traps. Symmetrically, each `borrow` handle
-passed to a callee task increments a "`num_borrows`" counter on the task that
-is decremented when the `borrow` handle is dropped. With async calls, there can
-of course be multiple overlapping async tasks and thus `borrow` handles must
-remember which particular task's `num_borrows` counter to drop. If a task
-attempts to return (which, for `async` tasks, means calling `task.return`) when
-its `num_borrows` is greater than zero, it traps. These interlocking rules for
-the `num_lends` and `num_borrows` fields inductively ensure that nested async
-call trees that transitively propagate `borrow`ed handles maintain the
-essential invariant that dropping an `own`ed handle never destroys a resource
-while there is any `borrow` handle anywhere pointing to that resource.
+One semantically-observable use of this async call stack is to distinguish
+between hazardous **recursive reentrance**, in which a component instance is
+reentered when one of its tasks is already on the callstack, from
+business-as-usual **sibling reentrance**, in which a component instance is
+freshly reentered when its other tasks are suspended waiting on I/O. Recursive
+reentrance currently always traps, but may be allowed (and indicated to core
+wasm) in an opt-in manner in the [future](#TODO).
+
+The async call stack is also useful for non-semantic purposes such as providing
+backtraces when debugging, profiling and distributed tracing. While particular
+languages can and do maintain their own async call stacks in core wasm state,
+without the Component Model's async call stack, linkage *between* different
+languages would be lost at component boundaries, leading to a loss of overall
+context in multi-component applications.
+
+There is an important nuance to the Component Model's minimal form of
+Structured Concurrency compared to Structured Concurrency support that appears
+in popular source language features/libraries. Often, "Structured Concurrency"
+refers to an invariant that all "child" tasks finish or are cancelled before a
+"parent" task completes. However, the Component Model doesn't force subtasks to
+[return](#returning) or be cancelled before the supertask returns (this is left
+as an option to particular source langauges to enforce or not). The reason for
+not enforcing a stricter form of Structured Concurrency at the Component
+Model level is that there are important use cases where forcing a supertask to
+stay resident simply to wait for a subtask to finish would waste resources
+without tangible benefit. Instead, we can say that once the core wasm
+implementing a supertask finishes execution, the supertask semantically "tail
+calls" any still-live subtasks, staying technically-alive until they complete,
+but not consuming real resources. Concretely, this means that a supertask that
+finishes executing stays on the callstack of any still-executing subtasks for
+the abovementioned purposes until all transitive subtasks finish.
+
+For scenarios where one component wants to *non-cooperatively* put an upper
+bound on execution of a call into another component, a separate "[blast zone]"
+feature is necessary in any case (due to iloops and traps).
 
 ### Streams and Futures
 
@@ -485,6 +479,28 @@ A task may not call `task.return` unless it is in the "started" state. Once
 `task.return` is called, the task is in the "returned" state. A task can only
 finish once it is in the "returned" state. See the [`canon_task_return`]
 function in the Canonical ABI explainer for more details.
+
+### Borrows
+
+Component Model async support is careful to ensure that `borrow`ed handles work
+as expected in an asynchronous setting, extending the dynamic enforcement used
+for synchronous code:
+
+When a caller initially lends an `own`ed or `borrow`ed handle to a callee, a
+`num_lends` counter on the lent handle is incremented when the subtask starts
+and decremented when the caller is notified that the subtask has
+[returned](#returning). If the caller tries to drop a handle while the handle's
+`num_lends` is greater than zero, the caller traps. Symmetrically, each
+`borrow` handle passed to a callee increments a `num_borrows` counter on the
+callee task that is decremented when the `borrow` handle is dropped. If a
+callee task attempts to return when its `num_borrows` is greater than zero, the
+callee traps.
+
+In an asynchronous setting, the only generalization necessary is that, since
+there can be multiple overlapping async tasks executing in a component
+instance, a borrowed handle must track *which* task's `num_borrow`s was
+incremented so that the correct counter can be decremented.
+
 
 ## Async ABI
 
@@ -962,6 +978,7 @@ comes after:
 [`Task.enter`]: CanonicalABI.md#task-state
 [`Task.wait`]: CanonicalABI.md#task-state
 [`Waitable`]: CanonicalABI.md#waitable-state
+[`Task`]: CanonicalABI.md#task-state
 [`Subtask`]: CanonicalABI.md#subtask-state
 [Stream State]: CanonicalABI.md#stream-state
 [Future State]: CanonicalABI.md#future-state
