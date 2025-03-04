@@ -469,21 +469,19 @@ class Task:
   opts: CanonicalOptions
   inst: ComponentInstance
   ft: FuncType
-  caller: Optional[Task]
+  supertask: Optional[Task]
   on_return: Optional[Callable]
   on_block: Callable[[Awaitable], Awaitable]
-  num_subtasks: int
   num_borrows: int
   context: ContextLocalStorage
 
-  def __init__(self, opts, inst, ft, caller, on_return, on_block):
+  def __init__(self, opts, inst, ft, supertask, on_return, on_block):
     self.opts = opts
     self.inst = inst
     self.ft = ft
-    self.caller = caller
+    self.supertask = supertask
     self.on_return = on_return
     self.on_block = on_block
-    self.num_subtasks = 0
     self.num_borrows = 0
     self.context = ContextLocalStorage()
 ```
@@ -558,7 +556,7 @@ the given arguments into the callee's memory (possibly executing `realloc`)
 returning the final set of flat arguments to pass into the core wasm callee.
 
 The `Task.trap_if_on_the_stack` method called by `enter` prevents reentrance
-using the `caller` field of `Task` which points to the task's supertask in the
+using the `supertask` field of `Task` which points to the task's supertask in the
 async call tree defined by [structured concurrency]. Structured concurrency
 is necessary to distinguish between the deadlock-hazardous kind of reentrance
 (where the new task is a transitive subtask of a task already running in the
@@ -569,10 +567,10 @@ function to opt in (via function type attribute) to the hazardous kind of
 reentrance, which will nuance this test.
 ```python
   def trap_if_on_the_stack(self, inst):
-    c = self.caller
+    c = self.supertask
     while c is not None:
       trap_if(c.inst is inst)
-      c = c.caller
+      c = c.supertask
 ```
 An optimizing implementation can avoid the O(n) loop in `trap_if_on_the_stack`
 in several ways:
@@ -791,7 +789,6 @@ may be a synchronous task unblocked by the clearing of `calling_sync_export`.
 ```python
   def exit(self):
     assert(Task.current.locked())
-    trap_if(self.num_subtasks > 0)
     trap_if(self.on_return)
     assert(self.num_borrows == 0)
     if self.opts.sync:
@@ -805,7 +802,7 @@ may be a synchronous task unblocked by the clearing of `calling_sync_export`.
 
 A "waitable" is anything that can be stored in the component instance's
 `waitables` table. Currently, there are 5 different kinds of waitables:
-[subtasks](Async.md#subtask-and-supertask) and the 4 combinations of the
+[subtasks](Async.md#structured-concurrency) and the 4 combinations of the
 [readable and writable ends of futures and streams](Async.md#streams-and-futures).
 
 Waitables deliver "events" which are values of the following `EventTuple` type.
@@ -963,18 +960,10 @@ delivery.
 #### Subtask State
 
 While `canon_lift` creates `Task` objects when called, `canon_lower` creates
-`Subtask` objects when called. If the callee (being `canon_lower`ed) is another
-component's (`canon_lift`ed) function, there will thus be a `Subtask`+`Task`
-pair created. However, if the callee is a host-defined function, the `Subtask`
-will stand alone. Thus, in general, the call stack at any point in time when
-wasm calls a host-defined import will have the form:
-```
-[Host caller] -> [Task] -> [Subtask+Task]* -> [Subtask] -> [Host callee]
-```
-
-The `Subtask` class is simpler than `Task` and only manages a few fields of
-state that are relevant to the caller. As with `Task`, this section will
-introduce `Subtask` incrementally, starting with its fields and initialization:
+`Subtask` objects when called. The `Subtask` class is simpler than `Task` and
+only manages a few fields of state that are relevant to the caller. As with
+`Task`, this section will introduce `Subtask` incrementally, starting with its
+fields and initialization:
 ```python
 class Subtask(Waitable):
   state: CallState
@@ -1002,14 +991,9 @@ turn only happens if the call is `async` *and* blocks. In this case, the
   def add_to_waitables(self, task):
     assert(not self.supertask)
     self.supertask = task
-    self.supertask.num_subtasks += 1
     Waitable.__init__(self)
     return task.inst.waitables.add(self)
 ```
-The `num_subtasks` increment ensures that the parent `Task` cannot `exit`
-without having waited for all its subtasks to return (or, in the
-[future](Async.md#TODO) be cancelled), thereby preserving [structured
-concurrency].
 
 The `Subtask.add_lender` method is called by `lift_borrow` (below). This method
 increments the `num_lends` counter on the handle being lifted, which is guarded
@@ -1040,7 +1024,6 @@ its value to the caller.
   def drop(self):
     trap_if(not self.finished)
     assert(self.state == CallState.RETURNED)
-    self.supertask.num_subtasks -= 1
     Waitable.drop(self)
 ```
 
