@@ -3836,8 +3836,8 @@ validation specifies:
 * `$ft` must refer to a `shared` function type; initially, only the type
   `(shared (func (param $c i32)))` is allowed (see explanation in
   `thread.spawn_ref` above)
-* `$tbl` must refer to a table with type `(table (ref null (shared func))
-  shared)`
+* `$tbl` must refer to a shared table whose element type matches `(ref null
+  (shared func))`
 * `$spawn_indirect` is given type `(func (param $i i32) (param $c i32) (result
   $e i32))`.
 
