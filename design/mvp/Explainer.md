@@ -1759,11 +1759,11 @@ An analogous relationship exists among `readable-future-end<T>`,
 
 ###### 🔀 `stream.read` and `stream.write`
 
-| Synopsis                   |                                                                             |
-| -------------------------- | --------------------------------------------------------------------------- |
-| Approximate WIT signature  | `func<T>(e: readable-stream-end<T>, b: writable-buffer<T>) -> read-status`  |
-| Approximate WIT signature  | `func<T>(e: writable-stream-end<T>, b: readable-buffer<T>) -> write-status` |
-| Canonical ABI signature    | `[stream-end:i32 ptr:i32 num:i32] -> [i32]`                                 |
+| Synopsis                                     |                                                                             |
+| -------------------------------------------- | --------------------------------------------------------------------------- |
+| Approximate WIT signature for `stream.read`  | `func<T>(e: readable-stream-end<T>, b: writable-buffer<T>) -> read-status`  |
+| Approximate WIT signature for `stream.write` | `func<T>(e: writable-stream-end<T>, b: readable-buffer<T>) -> write-status` |
+| Canonical ABI signature                      | `[stream-end:i32 ptr:i32 num:i32] -> [i32]`                                 |
 
 where `read-status` is defined in WIT as:
 ```wit
