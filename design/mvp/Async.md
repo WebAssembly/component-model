@@ -22,6 +22,9 @@ summary of the motivation and animated sketch of the design in action.
   * [Waiting](#waiting)
   * [Backpressure](#backpressure)
   * [Returning](#returning)
+* [Async ABI](#async-abi)
+  * [Async Import ABI](#async-import-abi)
+  * [Async Export ABI](#async-export-abi)
 * [Examples](#examples)
 * [Interaction with the start function](#interaction-with-the-start-function)
 * [Interaction with multi-threading](#interaction-with-multi-threading)
@@ -483,6 +486,169 @@ A task may not call `task.return` unless it is in the "started" state. Once
 finish once it is in the "returned" state. See the [`canon_task_return`]
 function in the Canonical ABI explainer for more details.
 
+## Async ABI
+
+At an ABI level, native async in the Component Model defines for every WIT
+function an async-oriented core function signature that can be used instead of
+or in addition to the existing (Preview-2-defined) synchronous core function
+signature. This async-oriented core function signature is intended to be called
+or implemented by generated bindings which then map the low-level core async
+protocol to the languages' higher-level native concurrency features. Because
+the WIT-level `async` attribute is purely a *hint* (as mentioned
+[above](#sync-and-async-functions)), *every* WIT function has an async core
+function signature; `async` just provides hints to the bindings generator for
+which to use by default.
+
+### Async Import ABI
+
+Given an imported WIT function:
+```wit
+world w {
+  import foo: func(s: string) -> string;
+}
+```
+the default sync import function signature is:
+```wat
+;; sync
+(func (param $s-ptr i32) (param $s-len i32) (param $out i32))
+```
+where `$out` must be a 4-byte-aligned pointer into linear memory into which the
+8-byte (pointer, length) of the returned string will be stored.
+
+The new async import function signature is:
+```wat
+;; async
+(func (param $in i32) (param $out i32) (result i32))
+```
+where `$in` must be a 4-byte-aligned pointer into linear memory from which the
+8-byte (pointer, length) of the string argument will be loaded and `$out` works
+the same as in the synchronous case. What's different, however, is *when* `$in`
+and `$out` are read or written. In a synchronous call, they are always read or
+written before the call returns. In an asynchronous call, there is a set of
+possibilities indicated by the `(result i32)` value:
+* If the returned `i32` is `0`, then the call completed synchronously without
+  blocking and so `$in` has been read and `$out` has been written.
+* Otherwise, the high 28 bits of the `i32` are the index of a new `Subtask`
+  in the current component instance's `waitables` table. The low 4 bits
+  indicate how far the callee made it before blocking:
+  * If `1`, the callee didn't even start (due to backpressure), and thus
+    neither `$in` nor `$out` have been accessed yet.
+  * If `2`, the callee started by reading `$in`, but blocked before writing
+    `$out`.
+
+The async signature `(func (param i32 i32) (result i32))` is the same for
+almost all WIT function types since the ABI stores everything in linear memory.
+However, there are three special cases:
+* If the WIT parameter list is empty, `$in` is removed.
+* If the WIT parameter list flattens to exactly 1 core value type (`i32` or
+  otherwise), `$in` uses that core value type and the argument is passed
+  by value.
+* If the WIT result is empty, `$out` is removed.
+
+For example:
+| WIT function type                         | Async ABI             |
+| ----------------------------------------- | --------------------- |
+| `func()`                                  | `(func (result i32))` |
+| `func() -> string`                        | `(func (param $out i32) (result i32))` |
+| `func(s: string)`                         | `(func (param $in i32) (result i32))` |
+| `func(x: f32) -> f32`                     | `(func (param $in f32) (param $out i32) (result i32))` |
+| `func(x: list<list<u8>>) -> list<string>` | `(func (param $in i32) (param $out i32) (result i32))` |
+
+`future` and `stream` can appear anywhere in the parameter or result types. For example:
+```wit
+func(s1: stream<future<string>>, s2: list<stream<string>>) -> result<stream<string>, stream<error>>
+```
+In *both* the sync and async ABIs, a `future` or `stream` in the WIT-level type
+translates to a single `i32` in the ABI.  This `i32` is an index into the
+component instance's `waitables` table. For example, for the WIT function type:
+```wit
+func(f: future<string>) -> future<u32>
+```
+the synchronous ABI has signature:
+```wat
+(func (param $f i32) (result i32))
+```
+and the asynchronous ABI has the signature:
+```wat
+(func (param $in i32) (param $out i32) (result i32))
+```
+where, according to the above rules, `$in` is the index of a future in the
+`waitables` table (not a pointer to one) while `$out` is a pointer to a linear
+memory location that will receive an `i32` index.
+
+For the runtime semantics of this `i32` index, see `lift_stream`,
+`lift_future`, `lower_stream` and `lower_future` in the [Canonical ABI
+Explainer]. For a complete description of how async imports work, see
+[`canon_lower`] in the Canonical ABI Explainer.
+
+
+#### Async Export ABI
+
+Given an exported WIT function:
+```wit
+world w {
+  export foo: func(s: string) -> string;
+}
+```
+the default sync export function signature is:
+```wat
+;; sync
+(func (param $s-ptr i32) (param $s-len i32) (result $retp i32))
+```
+where (working around the continued lack of multi-return support throughout
+the core wasm toolchain) `$retp` must be a 4-byte-aligned pointer into linear
+memory from which the 8-byte (pointer, length) of the string result can be
+loaded.
+
+The async export ABI provides two flavors: stackful and stackless.
+
+The async stackful export function signature is:
+```wat
+;; async, no callback
+(func (param $s-ptr i32) (param $s-len i32))
+```
+The parameters work just like synchronous parameters. There is no core function
+result because a callee [returns](#returning) their value by *calling* the
+*imported* `task.return` function which has signature:
+```wat
+;; task.return
+(func (param $ret-ptr i32) (result $ret-len i32))
+```
+The parameters of `task.return` work the same as if the WIT return type was the
+WIT parameter type of a synchronous function. For example, if more than 16
+core parameters would be needed, a single `i32` pointer into linear memory is
+used.
+
+The async stackless export function signature is:
+```wat
+;; async, callback
+(func (param $s-ptr i32) (param $s-len i32) (result i32))
+```
+The parameters also work just like synchronous parameters. The callee returns
+their value by calling `task.return` just like the stackful case. The `(result
+i32)` lets the core function return what it wants the runtime to do next:
+* If the low 4 bits are `0`, the callee completed (and called `task.return`)
+  without blocking.
+* If the low 4 bits are `1`, the callee wants to yield, allowing other code
+  to run, but resuming thereafter without waiting on anything else.
+* If the low 4 bits are `2`, the callee wants to wait for an event to occur in
+  the waitable set whose index is stored in the high 28 bits.
+* If the low 4 bits are `3`, the callee wants to poll for any events that have
+  occurred in the waitable set whose index is stored in the high 28 bits.
+
+When an async stackless function is exported, a companion "callback" function
+must also be exported with signature:
+```wat
+(func (param i32 i32 i32) (result i32))
+```
+The `(result i32)` has the same interpretation as the stackless export function
+and the runtime will repeatedly call the callback until a value of `0` is
+returned. The `i32` parameters describe what happened that caused the callback
+to be called again.
+
+For a complete description of how async exports work, see [`canon_lift`] in the
+Canonical ABI Explainer.
+
 
 ## Examples
 
@@ -784,6 +950,7 @@ comes after:
 [ESM-integration]: Explainer.md#ESM-integration
 
 [Canonical ABI Explainer]: CanonicalABI.md
+[ABI Options]: CanonicalABI.md#canonical-abi-options
 [`canon_lift`]: CanonicalABI.md#canon-lift
 [`unpack_callback_result`]: CanonicalABI.md#canon-lift
 [`canon_lower`]: CanonicalABI.md#canon-lower
