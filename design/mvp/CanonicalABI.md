@@ -128,35 +128,36 @@ known to not contain `borrow`. The `CanonicalOptions`, `ComponentInstance`,
 
 ### Canonical ABI Options
 
-The following two classes list the various Canonical ABI options ([`canonopt`])
-that can be set on various Canonical ABI definitions. The default values of the
-Python fields are the default values when the associated `canonopt` is not
-present in the binary or text format definition.
+The following classes list the various Canonical ABI options ([`canonopt`])
+that can be set on various Canonical ABI definitions. The default values of
+the Python fields are the default values when the associated `canonopt` is
+not present in the binary or text format definition.
 
-The `LiftLowerContext` class contains the subset of [`canonopt`] which are
-used to lift and lower the individual parameters and results of function
-calls:
+The `LiftOptions` class contains the subset of [`canonopt`] which are needed
+when lifting individual parameters and results:
 ```python
 @dataclass
-class LiftLowerOptions:
+class LiftOptions:
   string_encoding: str = 'utf8'
   memory: Optional[bytearray] = None
-  realloc: Optional[Callable] = None
 
-  def __eq__(self, other):
-    return self.string_encoding == other.string_encoding and \
-           self.memory is other.memory and \
-           self.realloc is other.realloc
-
-  def copy(opts):
-    return LiftLowerOptions(opts.string_encoding, opts.memory, opts.realloc)
+  def equal(lhs, rhs):
+    return lhs.string_encoding == rhs.string_encoding and \
+           lhs.memory is rhs.memory
 ```
-The `__eq__` override specifies that equality of `LiftLowerOptions` (as used
-by, e.g., `canon_task_return` below) is defined in terms of the identity of
-the memory and `realloc`-function instances.
+The `equal` static method is used by `task.return` below to dynamically
+compare equality of just this subset of `canonopt`.
 
-The `CanonicalOptions` class contains the rest of the [`canonopt`] options
-that affect how an overall function is lifted/lowered:
+The `LiftLowerOptions` class contains the subset of [`canonopt`] which are
+needed when lifting *or* lowering individual parameters and results:
+```python
+@dataclass
+class LiftLowerOptions(LiftOptions):
+  realloc: Optional[Callable] = None
+```
+
+The `CanonicalOptions` class contains the rest of the [`canonopt`]
+options that affect how an overall function is lifted/lowered:
 ```python
 @dataclass
 class CanonicalOptions(LiftLowerOptions):
@@ -3207,7 +3208,7 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `flatten_functype($opts, (func (param $t)?), 'lower')`
-* `$opts` may only contain `memory`, `string-encoding` and `realloc`
+* `$opts` may only contain `memory` and `string-encoding`
 
 Calling `$f` invokes the following function which uses `Task.return_` to lift
 and pass the results to the caller:
@@ -3216,7 +3217,7 @@ async def canon_task_return(task, result_type, opts: LiftLowerOptions, flat_args
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync and not task.opts.always_task_return)
   trap_if(result_type != task.ft.results)
-  trap_if(opts != LiftLowerOptions.copy(task.opts))
+  trap_if(not LiftOptions.equal(opts, task.opts))
   task.return_(flat_args)
   return []
 ```
@@ -3225,13 +3226,18 @@ component with multiple exported functions of different types, `task.return` is
 not called with a mismatched result type (which, due to indirect control flow,
 can in general only be caught dynamically).
 
-The `trap_if(opts != LiftLowerOptions.copy(task.opts))` guard ensures that
-the return value is lifted the same way as the `canon lift` from which this
+The `trap_if(not LiftOptions.equal(opts, task.opts))` guard ensures that the
+return value is lifted the same way as the `canon lift` from which this
 `task.return` is returning. This ensures that AOT fusion of `canon lift` and
 `canon lower` can generate a thunk that is indirectly called by `task.return`
-after these guards. The `LiftLowerOptions.copy` method is used to select just
-the `LiftLowerOptions` subset of `CanonicalOptions` (since fields like
-`async` and `callback` aren't relevant to `task.return`).
+after these guards. Inside `LiftOptions.equal`, `opts.memory` is compared with
+`task.opts.memory` via object identity of the mutable memory instance. Since
+`memory` refers to a mutable *instance* of memory, this comparison is not
+concerned with the static memory indices (in `canon lift` and `canon
+task.return`), only the identity of the memories created
+at instantiation-/ run-time. In Core WebAssembly spec terms, the test is on the
+equality of the [`memaddr`] values stored in the instance's [`memaddrs` table]
+which is indexed by the static [`memidx`].
 
 
 ### 🔀 `canon yield`
@@ -3919,6 +3925,9 @@ def canon_thread_available_parallelism():
 [WASI]: https://github.com/webassembly/wasi
 [Deterministic Profile]: https://github.com/WebAssembly/profiles/blob/main/proposals/profiles/Overview.md
 [stack-switching]: https://github.com/WebAssembly/stack-switching
+[`memaddr`]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-memaddr
+[`memaddrs` table]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-moduleinst
+[`memidx`]: https://webassembly.github.io/spec/core/syntax/modules.html#syntax-memidx
 
 [Alignment]: https://en.wikipedia.org/wiki/Data_structure_alignment
 [UTF-8]: https://en.wikipedia.org/wiki/UTF-8

@@ -192,18 +192,17 @@ class LiftLowerContext:
 ### Canonical ABI Options
 
 @dataclass
-class LiftLowerOptions:
+class LiftOptions:
   string_encoding: str = 'utf8'
   memory: Optional[bytearray] = None
+
+  def equal(lhs, rhs):
+    return lhs.string_encoding == rhs.string_encoding and \
+           lhs.memory is rhs.memory
+
+@dataclass
+class LiftLowerOptions(LiftOptions):
   realloc: Optional[Callable] = None
-
-  def __eq__(self, other):
-    return self.string_encoding == other.string_encoding and \
-           self.memory is other.memory and \
-           self.realloc is other.realloc
-
-  def copy(opts):
-    return LiftLowerOptions(opts.string_encoding, opts.memory, opts.realloc)
 
 @dataclass
 class CanonicalOptions(LiftLowerOptions):
@@ -1931,11 +1930,11 @@ async def canon_backpressure_set(task, flat_args):
 
 ### 🔀 `canon task.return`
 
-async def canon_task_return(task, result_type, opts: LiftLowerOptions, flat_args):
+async def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync and not task.opts.always_task_return)
   trap_if(result_type != task.ft.results)
-  trap_if(opts != LiftLowerOptions.copy(task.opts))
+  trap_if(not LiftOptions.equal(opts, task.opts))
   task.return_(flat_args)
   return []
 

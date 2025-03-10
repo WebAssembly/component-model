@@ -1590,9 +1590,10 @@ The `task.return` built-in takes as parameters the result values of the
 currently-executing task. This built-in must be called exactly once per export
 activation. The `canon task.return` definition takes component-level return
 type and the list of `canonopt` to be used to lift the return value. When
-called, the declared return type and `canonopt`s are checked to exactly match
-those of the current task. (See also "[Returning]" in the async explainer and
-[`canon_task_return`] in the Canonical ABI explainer.)
+called, the declared return type and the `string-encoding` and `memory`
+`canonopt`s are checked to exactly match those of the current task. (See also
+"[Returning]" in the async explainer and [`canon_task_return`] in the Canonical
+ABI explainer.)
 
 ###### 🔀 `yield`
 
