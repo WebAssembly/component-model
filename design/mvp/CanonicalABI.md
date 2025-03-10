@@ -33,7 +33,6 @@ being specified here.
 * [Canonical definitions](#canonical-definitions)
   * [`canon lift`](#canon-lift)
   * [`canon lower`](#canon-lower)
-  * [`canon $opts`](#canon-opts)
   * [`canon resource.new`](#canon-resourcenew)
   * [`canon resource.drop`](#canon-resourcedrop)
   * [`canon resource.rep`](#canon-resourcerep)
@@ -2728,14 +2727,12 @@ For a canonical definition:
 ```wat
 (canon lift $callee:<funcidx> $opts:<canonopt>* (func $f (type $ft)))
 ```
-
-In addition to [general validation of `$opts`](#canon-opts) the additional
-validation is performed:
-
+validation specifies:
 * `$callee` must have type `flatten_functype($opts, $ft, 'lift')`
 * `$f` is given type `$ft`
-* a `memory` is present if required by lifting
-* a `realloc` is present if required by lifting
+* a `memory` is present if required by lifting and is a subtype of `(memory 1)`
+* a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
+* if `async` is set, a `post-return` function may not be set
 * if a `post-return` is present, it has type `(func (param flatten_functype({}, $ft, 'lift').results))`
 
 When instantiating component instance `$inst`:
@@ -2893,13 +2890,11 @@ For a canonical definition:
 ```wat
 (canon lower $callee:<funcidx> $opts:<canonopt>* (core func $f))
 ```
-
-In addition to [general validation of `$opts`](#canon-opts) the additional
-validation is performed where `$callee` has type `$ft`:
-
+where `$callee` has type `$ft`, validation specifies:
 * `$f` is given type `flatten_functype($opts, $ft, 'lower')`
-* a `memory` is present if required by lowering
-* a `realloc` is present if required by lowering
+* a `memory` is present if required by lifting and is a subtype of `(memory 1)`
+* a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
+* there is no `post-return` in `$opts`
 * if `contains_async_value($ft)`, then `$opts.async` must be set
 
 When instantiating component instance `$inst`:
@@ -3037,26 +3032,6 @@ Since any cross-component call necessarily transits through a statically-known
 efficient compilation of permissive subtyping between components (including the
 elimination of string operations on the labels of records and variants) as well
 as post-MVP [adapter functions].
-
-
-### `canon $opts`
-
-Canonical options, specified here as `$opts` in a number of locations
-throughout this document, can be specified at most once per `$opts`. For example
-specifying `string-encoding=utf8` twice is an error. Each individual option, if
-present, is validated as such:
-
-* `string-encoding=utf8` - cannot be combined with `utf16` or `latin1+utf16`
-* `string-encoding=utf16` - cannot be combined with `utf8` or `latin1+utf16`
-* `string-encoding=latin1+utf16` - cannot be combined with `utf8` or `utf16`
-* `memory` - this is a subtype of `(memory 1)`
-* `realloc` - the function has type `(func (param i32 i32 i32 i32) (result i32))`
-* `post-return` - only allowed on [`canon lift`](#canon-lift), which has rules
-  for validation
-* 🔀 `async` - cannot be present with `post-return`
-* 🔀 `callback` - the function has type `(func (param i32 i32 i32 i32) (result
-  i32))` and cannot be present without `async` and is only allowed with [`canon
-  lift`](#canon-lift)
 
 
 ### `canon resource.new`
@@ -3230,10 +3205,7 @@ For a canonical definition:
 ```wat
 (canon task.return (result $t)? $opts (core func $f))
 ```
-
-In addition to [general validation of `$opts`](#canon-opts) validation
-specifies:
-
+validation specifies:
 * `$f` is given type `flatten_functype($opts, (func (param $t)?), 'lower')`
 * `$opts` may only contain `memory`, `string-encoding` and `realloc`
 
@@ -3489,12 +3461,8 @@ For canonical definitions:
 (canon stream.read $t $opts (core func $f))
 (canon stream.write $t $opts (core func $f))
 ```
-In addition to [general validation of `$opts`](#canon-opts) validation
-specifies:
+validation specifies:
 * `$f` is given type `(func (param i32 i32 i32) (result i32))`
-* `memory` is required for `stream.write` if required by lowering
-* `memory` is required for `stream.read` if required by lifting
-* `realloc` is required for `stream.read` if required by lifting
 
 For canonical definitions:
 ```wat
@@ -3503,9 +3471,6 @@ For canonical definitions:
 ```
 validation specifies:
 * `$f` is given type `(func (param i32 i32) (result i32))`
-* `memory` is required for `future.write` if required by lowering
-* `memory` is required for `future.read` if required by lifting
-* `realloc` is required for `future.read` if required by lifting
 
 The implementation of these four built-ins all funnel down to a single
 parameterized `copy` function:
@@ -3739,8 +3704,6 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func (param i32 i32) (result i32))`
-* `async` is not present
-* `memory` must be present
 
 Calling `$f` calls the following function which uses the `$opts` immediate to
 (non-deterministically) lift the debug message, create a new `ErrorContext`
@@ -3780,9 +3743,6 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func (param i32 i32))`
-* `async` is not present
-* `memory` must be present
-* `realloc` must be present
 
 Calling `$f` calls the following function which uses the `$opts` immediate to
 lowers the `ErrorContext`'s debug message. While *producing* an `error-context`
