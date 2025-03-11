@@ -192,18 +192,17 @@ class LiftLowerContext:
 ### Canonical ABI Options
 
 @dataclass
-class LiftLowerOptions:
+class LiftOptions:
   string_encoding: str = 'utf8'
   memory: Optional[bytearray] = None
+
+  def equal(lhs, rhs):
+    return lhs.string_encoding == rhs.string_encoding and \
+           lhs.memory is rhs.memory
+
+@dataclass
+class LiftLowerOptions(LiftOptions):
   realloc: Optional[Callable] = None
-
-  def __eq__(self, other):
-    return self.string_encoding == other.string_encoding and \
-           self.memory is other.memory and \
-           self.realloc is other.realloc
-
-  def copy(opts):
-    return LiftLowerOptions(opts.string_encoding, opts.memory, opts.realloc)
 
 @dataclass
 class CanonicalOptions(LiftLowerOptions):
@@ -378,21 +377,19 @@ class Task:
   opts: CanonicalOptions
   inst: ComponentInstance
   ft: FuncType
-  caller: Optional[Task]
+  supertask: Optional[Task]
   on_return: Optional[Callable]
   on_block: Callable[[Awaitable], Awaitable]
-  num_subtasks: int
   num_borrows: int
   context: ContextLocalStorage
 
-  def __init__(self, opts, inst, ft, caller, on_return, on_block):
+  def __init__(self, opts, inst, ft, supertask, on_return, on_block):
     self.opts = opts
     self.inst = inst
     self.ft = ft
-    self.caller = caller
+    self.supertask = supertask
     self.on_return = on_return
     self.on_block = on_block
-    self.num_subtasks = 0
     self.num_borrows = 0
     self.context = ContextLocalStorage()
 
@@ -419,10 +416,10 @@ class Task:
     return lower_flat_values(cx, MAX_FLAT_PARAMS, on_start(), self.ft.param_types())
 
   def trap_if_on_the_stack(self, inst):
-    c = self.caller
+    c = self.supertask
     while c is not None:
       trap_if(c.inst is inst)
-      c = c.caller
+      c = c.supertask
 
   def may_enter(self, pending_task):
     return not self.inst.backpressure and \
@@ -501,7 +498,6 @@ class Task:
 
   def exit(self):
     assert(Task.current.locked())
-    trap_if(self.num_subtasks > 0)
     trap_if(self.on_return)
     assert(self.num_borrows == 0)
     if self.opts.sync:
@@ -620,7 +616,6 @@ class Subtask(Waitable):
   def add_to_waitables(self, task):
     assert(not self.supertask)
     self.supertask = task
-    self.supertask.num_subtasks += 1
     Waitable.__init__(self)
     return task.inst.waitables.add(self)
 
@@ -638,7 +633,6 @@ class Subtask(Waitable):
   def drop(self):
     trap_if(not self.finished)
     assert(self.state == CallState.RETURNED)
-    self.supertask.num_subtasks -= 1
     Waitable.drop(self)
 
 #### Stream State
@@ -1931,11 +1925,11 @@ async def canon_backpressure_set(task, flat_args):
 
 ### 🔀 `canon task.return`
 
-async def canon_task_return(task, result_type, opts: LiftLowerOptions, flat_args):
+async def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync and not task.opts.always_task_return)
   trap_if(result_type != task.ft.results)
-  trap_if(opts != LiftLowerOptions.copy(task.opts))
+  trap_if(not LiftOptions.equal(opts, task.opts))
   task.return_(flat_args)
   return []
 

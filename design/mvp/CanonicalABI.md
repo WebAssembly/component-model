@@ -129,35 +129,36 @@ known to not contain `borrow`. The `CanonicalOptions`, `ComponentInstance`,
 
 ### Canonical ABI Options
 
-The following two classes list the various Canonical ABI options ([`canonopt`])
-that can be set on various Canonical ABI definitions. The default values of the
-Python fields are the default values when the associated `canonopt` is not
-present in the binary or text format definition.
+The following classes list the various Canonical ABI options ([`canonopt`])
+that can be set on various Canonical ABI definitions. The default values of
+the Python fields are the default values when the associated `canonopt` is
+not present in the binary or text format definition.
 
-The `LiftLowerContext` class contains the subset of [`canonopt`] which are
-used to lift and lower the individual parameters and results of function
-calls:
+The `LiftOptions` class contains the subset of [`canonopt`] which are needed
+when lifting individual parameters and results:
 ```python
 @dataclass
-class LiftLowerOptions:
+class LiftOptions:
   string_encoding: str = 'utf8'
   memory: Optional[bytearray] = None
-  realloc: Optional[Callable] = None
 
-  def __eq__(self, other):
-    return self.string_encoding == other.string_encoding and \
-           self.memory is other.memory and \
-           self.realloc is other.realloc
-
-  def copy(opts):
-    return LiftLowerOptions(opts.string_encoding, opts.memory, opts.realloc)
+  def equal(lhs, rhs):
+    return lhs.string_encoding == rhs.string_encoding and \
+           lhs.memory is rhs.memory
 ```
-The `__eq__` override specifies that equality of `LiftLowerOptions` (as used
-by, e.g., `canon_task_return` below) is defined in terms of the identity of
-the memory and `realloc`-function instances.
+The `equal` static method is used by `task.return` below to dynamically
+compare equality of just this subset of `canonopt`.
 
-The `CanonicalOptions` class contains the rest of the [`canonopt`] options
-that affect how an overall function is lifted/lowered:
+The `LiftLowerOptions` class contains the subset of [`canonopt`] which are
+needed when lifting *or* lowering individual parameters and results:
+```python
+@dataclass
+class LiftLowerOptions(LiftOptions):
+  realloc: Optional[Callable] = None
+```
+
+The `CanonicalOptions` class contains the rest of the [`canonopt`]
+options that affect how an overall function is lifted/lowered:
 ```python
 @dataclass
 class CanonicalOptions(LiftLowerOptions):
@@ -470,21 +471,19 @@ class Task:
   opts: CanonicalOptions
   inst: ComponentInstance
   ft: FuncType
-  caller: Optional[Task]
+  supertask: Optional[Task]
   on_return: Optional[Callable]
   on_block: Callable[[Awaitable], Awaitable]
-  num_subtasks: int
   num_borrows: int
   context: ContextLocalStorage
 
-  def __init__(self, opts, inst, ft, caller, on_return, on_block):
+  def __init__(self, opts, inst, ft, supertask, on_return, on_block):
     self.opts = opts
     self.inst = inst
     self.ft = ft
-    self.caller = caller
+    self.supertask = supertask
     self.on_return = on_return
     self.on_block = on_block
-    self.num_subtasks = 0
     self.num_borrows = 0
     self.context = ContextLocalStorage()
 ```
@@ -559,7 +558,7 @@ the given arguments into the callee's memory (possibly executing `realloc`)
 returning the final set of flat arguments to pass into the core wasm callee.
 
 The `Task.trap_if_on_the_stack` method called by `enter` prevents reentrance
-using the `caller` field of `Task` which points to the task's supertask in the
+using the `supertask` field of `Task` which points to the task's supertask in the
 async call tree defined by [structured concurrency]. Structured concurrency
 is necessary to distinguish between the deadlock-hazardous kind of reentrance
 (where the new task is a transitive subtask of a task already running in the
@@ -570,10 +569,10 @@ function to opt in (via function type attribute) to the hazardous kind of
 reentrance, which will nuance this test.
 ```python
   def trap_if_on_the_stack(self, inst):
-    c = self.caller
+    c = self.supertask
     while c is not None:
       trap_if(c.inst is inst)
-      c = c.caller
+      c = c.supertask
 ```
 An optimizing implementation can avoid the O(n) loop in `trap_if_on_the_stack`
 in several ways:
@@ -792,7 +791,6 @@ may be a synchronous task unblocked by the clearing of `calling_sync_export`.
 ```python
   def exit(self):
     assert(Task.current.locked())
-    trap_if(self.num_subtasks > 0)
     trap_if(self.on_return)
     assert(self.num_borrows == 0)
     if self.opts.sync:
@@ -806,7 +804,7 @@ may be a synchronous task unblocked by the clearing of `calling_sync_export`.
 
 A "waitable" is anything that can be stored in the component instance's
 `waitables` table. Currently, there are 5 different kinds of waitables:
-[subtasks](Async.md#subtask-and-supertask) and the 4 combinations of the
+[subtasks](Async.md#structured-concurrency) and the 4 combinations of the
 [readable and writable ends of futures and streams](Async.md#streams-and-futures).
 
 Waitables deliver "events" which are values of the following `EventTuple` type.
@@ -964,18 +962,10 @@ delivery.
 #### Subtask State
 
 While `canon_lift` creates `Task` objects when called, `canon_lower` creates
-`Subtask` objects when called. If the callee (being `canon_lower`ed) is another
-component's (`canon_lift`ed) function, there will thus be a `Subtask`+`Task`
-pair created. However, if the callee is a host-defined function, the `Subtask`
-will stand alone. Thus, in general, the call stack at any point in time when
-wasm calls a host-defined import will have the form:
-```
-[Host caller] -> [Task] -> [Subtask+Task]* -> [Subtask] -> [Host callee]
-```
-
-The `Subtask` class is simpler than `Task` and only manages a few fields of
-state that are relevant to the caller. As with `Task`, this section will
-introduce `Subtask` incrementally, starting with its fields and initialization:
+`Subtask` objects when called. The `Subtask` class is simpler than `Task` and
+only manages a few fields of state that are relevant to the caller. As with
+`Task`, this section will introduce `Subtask` incrementally, starting with its
+fields and initialization:
 ```python
 class Subtask(Waitable):
   state: CallState
@@ -1003,14 +993,9 @@ turn only happens if the call is `async` *and* blocks. In this case, the
   def add_to_waitables(self, task):
     assert(not self.supertask)
     self.supertask = task
-    self.supertask.num_subtasks += 1
     Waitable.__init__(self)
     return task.inst.waitables.add(self)
 ```
-The `num_subtasks` increment ensures that the parent `Task` cannot `exit`
-without having waited for all its subtasks to return (or, in the
-[future](Async.md#TODO) be cancelled), thereby preserving [structured
-concurrency].
 
 The `Subtask.add_lender` method is called by `lift_borrow` (below). This method
 increments the `num_lends` counter on the handle being lifted, which is guarded
@@ -1041,7 +1026,6 @@ its value to the caller.
   def drop(self):
     trap_if(not self.finished)
     assert(self.state == CallState.RETURNED)
-    self.supertask.num_subtasks -= 1
     Waitable.drop(self)
 ```
 
@@ -3257,7 +3241,7 @@ async def canon_task_return(task, result_type, opts: LiftLowerOptions, flat_args
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync and not task.opts.always_task_return)
   trap_if(result_type != task.ft.results)
-  trap_if(opts != LiftLowerOptions.copy(task.opts))
+  trap_if(not LiftOptions.equal(opts, task.opts))
   task.return_(flat_args)
   return []
 ```
@@ -3266,13 +3250,18 @@ component with multiple exported functions of different types, `task.return` is
 not called with a mismatched result type (which, due to indirect control flow,
 can in general only be caught dynamically).
 
-The `trap_if(opts != LiftLowerOptions.copy(task.opts))` guard ensures that
-the return value is lifted the same way as the `canon lift` from which this
+The `trap_if(not LiftOptions.equal(opts, task.opts))` guard ensures that the
+return value is lifted the same way as the `canon lift` from which this
 `task.return` is returning. This ensures that AOT fusion of `canon lift` and
 `canon lower` can generate a thunk that is indirectly called by `task.return`
-after these guards. The `LiftLowerOptions.copy` method is used to select just
-the `LiftLowerOptions` subset of `CanonicalOptions` (since fields like
-`async` and `callback` aren't relevant to `task.return`).
+after these guards. Inside `LiftOptions.equal`, `opts.memory` is compared with
+`task.opts.memory` via object identity of the mutable memory instance. Since
+`memory` refers to a mutable *instance* of memory, this comparison is not
+concerned with the static memory indices (in `canon lift` and `canon
+task.return`), only the identity of the memories created
+at instantiation-/ run-time. In Core WebAssembly spec terms, the test is on the
+equality of the [`memaddr`] values stored in the instance's [`memaddrs` table]
+which is indexed by the static [`memidx`].
 
 
 ### 🔀 `canon yield`
@@ -3972,6 +3961,9 @@ def canon_thread_available_parallelism():
 [WASI]: https://github.com/webassembly/wasi
 [Deterministic Profile]: https://github.com/WebAssembly/profiles/blob/main/proposals/profiles/Overview.md
 [stack-switching]: https://github.com/WebAssembly/stack-switching
+[`memaddr`]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-memaddr
+[`memaddrs` table]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-moduleinst
+[`memidx`]: https://webassembly.github.io/spec/core/syntax/modules.html#syntax-memidx
 
 [Alignment]: https://en.wikipedia.org/wiki/Data_structure_alignment
 [UTF-8]: https://en.wikipedia.org/wiki/UTF-8
