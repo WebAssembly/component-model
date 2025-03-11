@@ -31,6 +31,7 @@ being specified here.
   * [Flat Lowering](#flat-lowering)
   * [Lifting and Lowering Values](#lifting-and-lowering-values)
 * [Canonical definitions](#canonical-definitions)
+  * [`canonopt` Validation](#canonopt-validation)
   * [`canon lift`](#canon-lift)
   * [`canon lower`](#canon-lower)
   * [`canon resource.new`](#canon-resourcenew)
@@ -2705,19 +2706,51 @@ Using the above supporting definitions, we can describe the static and dynamic
 semantics of component-level [`canon`] definitions. The following subsections
 cover each of these `canon` cases.
 
+### `canonopt` Validation
+
+Canonical options, often referred to as `$opts` in the definitions below,
+can be specified at most once in any particular list of options. For example
+specifying `string-encoding=utf8` twice is an error. Each individual option, if
+present, is validated as such:
+
+* `string-encoding=N` - can be passed at most once, regardless of `N`.
+* `memory` - this is a subtype of `(memory 1)`
+* `realloc` - the function has type `(func (param i32 i32 i32 i32) (result i32))`
+* if `realloc` is present, then `memory` must be present
+* `post-return` - only allowed on [`canon lift`](#canon-lift), which has rules
+  for validation
+* 🔀 `async` - cannot be present with `post-return`
+* 🔀 `callback` - the function has type `(func (param i32 i32 i32 i32) (result
+  i32))` and cannot be present without `async` and is only allowed with [`canon
+  lift`](#canon-lift)
+
+Additionally some options are required depending on lift/lower operations
+performed for a component. These are defined as:
+
+* `lower(T)`
+  * requires `memory` if `T` contains a `list` or `string`
+
+* `lift(T)`
+  * requires `realloc` if `T` contains a `list` or `string`
+
+
 ### `canon lift`
 
 For a canonical definition:
 ```wat
 (canon lift $callee:<funcidx> $opts:<canonopt>* (func $f (type $ft)))
 ```
-validation specifies:
+
+In addition to [general validation of `$opts`](#canonopt-validation) the additional
+validation is performed:
+
 * `$callee` must have type `flatten_functype($opts, $ft, 'lift')`
 * `$f` is given type `$ft`
-* a `memory` is present if required by lifting and is a subtype of `(memory 1)`
-* a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
-* if `async` is set, a `post-return` function may not be set
 * if a `post-return` is present, it has type `(func (param flatten_functype({}, $ft, 'lift').results))`
+* requires options based on [`lift(param)`](#canonopt-validation) for all parameters in `ft`
+* requires options based on [`lower(result)`](#canonopt-validation) if `ft` has a result
+* if `len(flatten_types(ft.param_types())) > MAX_FLAT_PARAMS`, `realloc` is required
+* if `len(flatten_types(ft.result_types())) > MAX_FLAT_RESULTS`, `memory` is required
 
 When instantiating component instance `$inst`:
 * Define `$f` to be the partially-bound closure `canon_lift($opts, $inst, $ft, $callee)`
@@ -2874,12 +2907,16 @@ For a canonical definition:
 ```wat
 (canon lower $callee:<funcidx> $opts:<canonopt>* (core func $f))
 ```
-where `$callee` has type `$ft`, validation specifies:
+
+In addition to [general validation of `$opts`](#canonopt-validation) the additional
+validation is performed where `$callee` has type `$ft`:
+
 * `$f` is given type `flatten_functype($opts, $ft, 'lower')`
-* a `memory` is present if required by lifting and is a subtype of `(memory 1)`
-* a `realloc` is present if required by lifting and has type `(func (param i32 i32 i32 i32) (result i32))`
-* there is no `post-return` in `$opts`
-* if `contains_async_value($ft)`, then `$opts.async` must be set
+* requires options [based on `lower(param)`](#canonopt-validation) for all parameters in `ft`
+* requires options [based on `lift(result)`](#canonopt-validation) if `ft` has a result
+* if `len(flatten_types(ft.param_types())) > max_flat_params`, `memory` is required
+* if `len(flatten_types(ft.result_types())) > max_flat_results`, `realloc` is required
+* 🔀 if `async` is specified, `memory` must be present
 
 When instantiating component instance `$inst`:
 * Define `$f` to be the partially-bound closure: `canon_lower($opts, $ft, $callee)`
@@ -3189,9 +3226,13 @@ For a canonical definition:
 ```wat
 (canon task.return (result $t)? $opts (core func $f))
 ```
-validation specifies:
+
+In addition to [general validation of `$opts`](#canonopt-validation) validation
+specifies:
+
 * `$f` is given type `flatten_functype($opts, (func (param $t)?), 'lower')`
 * `$opts` may only contain `memory` and `string-encoding`
+* [`lift($f.result)` above](#canonopt-validation) defines required options
 
 Calling `$f` invokes the following function which uses `Task.return_` to lift
 and pass the results to the caller:
@@ -3450,8 +3491,12 @@ For canonical definitions:
 (canon stream.read $t $opts (core func $f))
 (canon stream.write $t $opts (core func $f))
 ```
-validation specifies:
+In addition to [general validation of `$opts`](#canonopt-validation) validation
+specifies:
 * `$f` is given type `(func (param i32 i32 i32) (result i32))`
+* [`lower($t)` above](#canonopt-validation) defines required options for `stream.write`
+* [`lift($t)` above](#canonopt-validation) defines required options for `stream.read`
+* `memory` is required to be present
 
 For canonical definitions:
 ```wat
@@ -3460,6 +3505,9 @@ For canonical definitions:
 ```
 validation specifies:
 * `$f` is given type `(func (param i32 i32) (result i32))`
+* [`lower($t)` above](#canonopt-validation) defines required options for `future.write`
+* [`lift($t)` above](#canonopt-validation) defines required options for `future.read`
+* `memory` is required to be present
 
 The implementation of these four built-ins all funnel down to a single
 parameterized `copy` function:
@@ -3693,6 +3741,8 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func (param i32 i32) (result i32))`
+* `async` is not present
+* `memory` must be present
 
 Calling `$f` calls the following function which uses the `$opts` immediate to
 (non-deterministically) lift the debug message, create a new `ErrorContext`
@@ -3732,6 +3782,9 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func (param i32 i32))`
+* `async` is not present
+* `memory` must be present
+* `realloc` must be present
 
 Calling `$f` calls the following function which uses the `$opts` immediate to
 lowers the `ErrorContext`'s debug message. While *producing* an `error-context`
