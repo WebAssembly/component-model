@@ -377,21 +377,19 @@ class Task:
   opts: CanonicalOptions
   inst: ComponentInstance
   ft: FuncType
-  caller: Optional[Task]
+  supertask: Optional[Task]
   on_return: Optional[Callable]
   on_block: Callable[[Awaitable], Awaitable]
-  num_subtasks: int
   num_borrows: int
   context: ContextLocalStorage
 
-  def __init__(self, opts, inst, ft, caller, on_return, on_block):
+  def __init__(self, opts, inst, ft, supertask, on_return, on_block):
     self.opts = opts
     self.inst = inst
     self.ft = ft
-    self.caller = caller
+    self.supertask = supertask
     self.on_return = on_return
     self.on_block = on_block
-    self.num_subtasks = 0
     self.num_borrows = 0
     self.context = ContextLocalStorage()
 
@@ -418,10 +416,10 @@ class Task:
     return lower_flat_values(cx, MAX_FLAT_PARAMS, on_start(), self.ft.param_types())
 
   def trap_if_on_the_stack(self, inst):
-    c = self.caller
+    c = self.supertask
     while c is not None:
       trap_if(c.inst is inst)
-      c = c.caller
+      c = c.supertask
 
   def may_enter(self, pending_task):
     return not self.inst.backpressure and \
@@ -500,7 +498,6 @@ class Task:
 
   def exit(self):
     assert(Task.current.locked())
-    trap_if(self.num_subtasks > 0)
     trap_if(self.on_return)
     assert(self.num_borrows == 0)
     if self.opts.sync:
@@ -619,7 +616,6 @@ class Subtask(Waitable):
   def add_to_waitables(self, task):
     assert(not self.supertask)
     self.supertask = task
-    self.supertask.num_subtasks += 1
     Waitable.__init__(self)
     return task.inst.waitables.add(self)
 
@@ -637,7 +633,6 @@ class Subtask(Waitable):
   def drop(self):
     trap_if(not self.finished)
     assert(self.state == CallState.RETURNED)
-    self.supertask.num_subtasks -= 1
     Waitable.drop(self)
 
 #### Stream State
