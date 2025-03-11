@@ -2724,8 +2724,8 @@ cover each of these `canon` cases.
 
 ### `canonopt` Validation
 
-Canonical options, specified here as `$opts` in a number of locations
-throughout this document, can be specified at most once per `$opts`. For example
+Canonical options, often referred to as `$opts` in the definitions below,
+can be specified at most once in any particular list of options. For example
 specifying `string-encoding=utf8` twice is an error. Each individual option, if
 present, is validated as such:
 
