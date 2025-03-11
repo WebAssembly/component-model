@@ -2916,7 +2916,7 @@ validation is performed where `$callee` has type `$ft`:
 * requires options [based on `lift(result)`](#canonopt-validation) if `ft` has a result
 * if `len(flatten_types(ft.param_types())) > max_flat_params`, `memory` is required
 * if `len(flatten_types(ft.result_types())) > max_flat_results`, `realloc` is required
-* if `async` is specified, `memory` must be present
+* 🔀 if `async` is specified, `memory` must be present
 
 When instantiating component instance `$inst`:
 * Define `$f` to be the partially-bound closure: `canon_lower($opts, $ft, $callee)`
