@@ -2743,18 +2743,6 @@ present, is validated as such:
 Additionally some options are required depending on lift/lower operations
 performed for a component. These are defined as:
 
-* `lower_func(ft)`
-  * requires options based on `lower(param)` for all parameters in `ft`
-  * requires options based on `lift(result)` if `ft` has a result
-  * if `len(flatten_types(ft.param_types())) > MAX_FLAT_PARAMS`, `memory` is required
-  * if `len(flatten_types(ft.result_types())) > MAX_FLAT_RESULTS`, `realloc` is required
-
-* `lift_func(ft)`
-  * requires options based on `lift(param)` for all parameters in `ft`
-  * requires options based on `lower(result)` if `ft` has a result
-  * if `len(flatten_types(ft.param_types())) > MAX_FLAT_PARAMS`, `realloc` is required
-  * if `len(flatten_types(ft.result_types())) > MAX_FLAT_RESULTS`, `memory` is required
-
 * `lower(T)`
   * requires `memory` if `T` contains a `list` or `string`
 
@@ -2775,7 +2763,10 @@ validation is performed:
 * `$callee` must have type `flatten_functype($opts, $ft, 'lift')`
 * `$f` is given type `$ft`
 * if a `post-return` is present, it has type `(func (param flatten_functype({}, $ft, 'lift').results))`
-* [`lift_func($ft)` above](#canonopt-validation) defines extra required options.
+* requires options based on [`lift(param)`](#canonopt-validation) for all parameters in `ft`
+* requires options based on [`lower(result)`](#canonopt-validation) if `ft` has a result
+* if `len(flatten_types(ft.param_types())) > MAX_FLAT_PARAMS`, `realloc` is required
+* if `len(flatten_types(ft.result_types())) > MAX_FLAT_RESULTS`, `memory` is required
 
 When instantiating component instance `$inst`:
 * Define `$f` to be the partially-bound closure `canon_lift($opts, $inst, $ft, $callee)`
@@ -2937,7 +2928,10 @@ In addition to [general validation of `$opts`](#canonopt-validation) the additio
 validation is performed where `$callee` has type `$ft`:
 
 * `$f` is given type `flatten_functype($opts, $ft, 'lower')`
-* [`lower_func($ft)` above](#canonopt-validation) defines extra required options.
+* requires options [based on `lower(param)`](#canonopt-validation) for all parameters in `ft`
+* requires options [based on `lift(result)`](#canonopt-validation) if `ft` has a result
+* if `len(flatten_types(ft.param_types())) > max_flat_params`, `memory` is required
+* if `len(flatten_types(ft.result_types())) > max_flat_results`, `realloc` is required
 * if `async` is specified, `memory` must be present
 
 When instantiating component instance `$inst`:
@@ -3254,7 +3248,7 @@ specifies:
 
 * `$f` is given type `flatten_functype($opts, (func (param $t)?), 'lower')`
 * `$opts` may only contain `memory` and `string-encoding`
-* [`lift_func($f.result)` above](#canonopt-validation) defines required options
+* [`lift($f.result)` above](#canonopt-validation) defines required options
 
 Calling `$f` invokes the following function which uses `Task.return_` to lift
 and pass the results to the caller:
