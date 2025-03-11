@@ -50,6 +50,8 @@ implemented, considered stable and included in a future milestone:
 * 🪙: value imports/exports and component-level start function
 * 🪺: nested namespaces and packages in import/export names
 * 🔀: async
+  * 🚝: marking some builtins as `async`
+  * 🚟: using `async` with `canon lift` without `callback` (stackful lift)
 * 🧵: threading built-ins
 * 🔧: fixed-length lists
 
