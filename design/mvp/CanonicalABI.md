@@ -3275,7 +3275,7 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func)`
-* 🚝 - `async` is allowed (otherwise it must be `false`)
+* 🚟 - `async` is allowed (otherwise it must be `false`)
 
 Calling `$f` calls `Task.yield_` to allow other tasks to execute:
 ```python
@@ -3322,6 +3322,7 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func (param $si) (param $ptr i32) (result i32))`
+* 🚟 - `async` is allowed (otherwise it must be `false`)
 
 Calling `$f` invokes the following function which waits for progress to be made
 on a waitable in the given waitable set (indicated by index `$si`) and then
@@ -3366,7 +3367,7 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func (param $si i32) (param $ptr i32) (result i32))`
-* 🚝 - `async` is allowed (otherwise it must be `false`)
+* 🚟 - `async` is allowed (otherwise it must be `false`)
 
 Calling `$f` invokes the following function, which returns `NONE` (`0`) instead
 of blocking if there is no event available, and otherwise returns the event the
