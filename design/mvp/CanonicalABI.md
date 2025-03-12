@@ -2843,14 +2843,14 @@ to do next:
             task.exit()
             return
           case CallbackCode.YIELD:
-            await task.yield_(opts.sync)
+            await task.yield_(sync = False)
             e = None
           case CallbackCode.WAIT:
             trap_if(not s)
             e = await task.wait_on(s.wait(), sync = False)
           case CallbackCode.POLL:
             trap_if(not s)
-            await task.yield_(opts.sync)
+            await task.yield_(sync = False)
             e = s.poll()
         if e:
           event, p1, p2 = e
