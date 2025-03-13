@@ -452,7 +452,6 @@ class Task:
       self.maybe_start_pending_task()
       v = await self.on_block(awaitable)
       while self.inst.calling_sync_import:
-        Task.current.release()
         await self.async_waiting_tasks.wait()
     return v
 
