@@ -2720,9 +2720,9 @@ present, is validated as such:
 * `post-return` - only allowed on [`canon lift`](#canon-lift), which has rules
   for validation
 * 🔀 `async` - cannot be present with `post-return`
-* 🔀 `callback` - the function has type `(func (param i32 i32 i32 i32) (result
-  i32))` and cannot be present without `async` and is only allowed with [`canon
-  lift`](#canon-lift)
+* 🔀 `callback` - the function has type `(func (param i32 i32 i32) (result i32))`
+  and cannot be present without `async` and is only allowed with
+  [`canon lift`](#canon-lift)
 
 Additionally some options are required depending on lift/lower operations
 performed for a component. These are defined as:
