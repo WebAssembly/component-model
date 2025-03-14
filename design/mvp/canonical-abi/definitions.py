@@ -452,7 +452,6 @@ class Task:
       self.maybe_start_pending_task()
       v = await self.on_block(awaitable)
       while self.inst.calling_sync_import:
-        Task.current.release()
         await self.async_waiting_tasks.wait()
     return v
 
@@ -1770,14 +1769,14 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_return, on_blo
             task.exit()
             return
           case CallbackCode.YIELD:
-            await task.yield_(opts.sync)
+            await task.yield_(sync = False)
             e = None
           case CallbackCode.WAIT:
             trap_if(not s)
             e = await task.wait_on(s.wait(), sync = False)
           case CallbackCode.POLL:
             trap_if(not s)
-            await task.yield_(opts.sync)
+            await task.yield_(sync = False)
             e = s.poll()
         if e:
           event, p1, p2 = e

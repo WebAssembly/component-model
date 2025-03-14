@@ -678,7 +678,6 @@ signalled asynchronously via the `async_waiting_tasks` [`asyncio.Condition`].
       self.maybe_start_pending_task()
       v = await self.on_block(awaitable)
       while self.inst.calling_sync_import:
-        Task.current.release()
         await self.async_waiting_tasks.wait()
     return v
 ```
@@ -2722,9 +2721,9 @@ present, is validated as such:
 * 🔀 `async` - cannot be present with `post-return`
 * 🔀,not(🚟) `async` - `callback` must also be present. Note that with the 🚟
   feature (the "stackful" ABI), this restriction is lifted.
-* 🔀 `callback` - the function has type `(func (param i32 i32 i32 i32) (result
-  i32))` and cannot be present without `async` and is only allowed with [`canon
-  lift`](#canon-lift)
+* 🔀 `callback` - the function has type `(func (param i32 i32 i32) (result i32))`
+  and cannot be present without `async` and is only allowed with
+  [`canon lift`](#canon-lift)
 
 Additionally some options are required depending on lift/lower operations
 performed for a component. These are defined as:
@@ -2845,14 +2844,14 @@ to do next:
             task.exit()
             return
           case CallbackCode.YIELD:
-            await task.yield_(opts.sync)
+            await task.yield_(sync = False)
             e = None
           case CallbackCode.WAIT:
             trap_if(not s)
             e = await task.wait_on(s.wait(), sync = False)
           case CallbackCode.POLL:
             trap_if(not s)
-            await task.yield_(opts.sync)
+            await task.yield_(sync = False)
             e = s.poll()
         if e:
           event, p1, p2 = e
