@@ -616,7 +616,8 @@ the core wasm toolchain) `$retp` must be a 4-byte-aligned pointer into linear
 memory from which the 8-byte (pointer, length) of the string result can be
 loaded.
 
-The async export ABI provides two flavors: stackful and stackless.
+The async export ABI provides two flavors: stackful and stackless. The stackful
+ABI is currently gated by the 🚟 feature.
 
 The async stackful export function signature is:
 ```wat
@@ -716,11 +717,12 @@ replaced with `...` to focus on the overall flow of function calls.
   (core instance $libc (instantiate $Libc))
   (alias $libc "mem" (core memory $mem))
   (alias $libc "realloc" (core func $realloc))
+  ;; requires 🚟 for the stackful abi
   (canon lower $fetch async (memory $mem) (realloc $realloc) (core func $fetch'))
   (canon waitable-set.new (core func $new))
   (canon waitable-set.wait async (memory $mem) (core func $wait))
   (canon waitable.join (core func $join))
-  (canon task.return (result string) async (memory $mem) (realloc $realloc) (core func $task_return))
+  (canon task.return (result string) (memory $mem) (core func $task_return))
   (core instance $main (instantiate $Main (with "" (instance
     (export "mem" (memory $mem))
     (export "realloc" (func $realloc))

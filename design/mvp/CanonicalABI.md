@@ -2719,6 +2719,8 @@ present, is validated as such:
 * `post-return` - only allowed on [`canon lift`](#canon-lift), which has rules
   for validation
 * 🔀 `async` - cannot be present with `post-return`
+* 🔀,not(🚟) `async` - `callback` must also be present. Note that with the 🚟
+  feature (the "stackful" ABI), this restriction is lifted.
 * 🔀 `callback` - the function has type `(func (param i32 i32 i32) (result i32))`
   and cannot be present without `async` and is only allowed with
   [`canon lift`](#canon-lift)
@@ -3086,6 +3088,7 @@ For a canonical definition:
 validation specifies:
 * `$rt` must refer to resource type
 * `$f` is given type `(func (param i32))`
+* 🔀+🚝 - `async` is allowed (otherwise it is not allowed)
 
 Calling `$f` invokes the following function, which removes the handle from the
 current component instance's `resources` table and, if the handle was owning,
@@ -3271,6 +3274,7 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func)`
+* 🚟 - `async` is allowed (otherwise it must be `false`)
 
 Calling `$f` calls `Task.yield_` to allow other tasks to execute:
 ```python
@@ -3317,6 +3321,7 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func (param $si) (param $ptr i32) (result i32))`
+* 🚟 - `async` is allowed (otherwise it must be `false`)
 
 Calling `$f` invokes the following function which waits for progress to be made
 on a waitable in the given waitable set (indicated by index `$si`) and then
@@ -3361,6 +3366,7 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func (param $si i32) (param $ptr i32) (result i32))`
+* 🚟 - `async` is allowed (otherwise it must be `false`)
 
 Calling `$f` invokes the following function, which returns `NONE` (`0`) instead
 of blocking if there is no event available, and otherwise returns the event the
@@ -3626,6 +3632,7 @@ For canonical definitions:
 ```
 validation specifies:
 * `$f` is given type `(func (param i32) (result i32))`
+* 🚝 - `async` is allowed (otherwise it must be `false`)
 
 The implementation of these four built-ins all funnel down to a single
 parameterized `cancel_copy` function:
