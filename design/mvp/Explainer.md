@@ -2463,7 +2463,7 @@ something more idiomatic to the language. For example, the `plainname`
 nested inside a class `MyResource`. To unburden bindings generators from having
 to consider pathological cases where two unique-in-the-component names get
 mapped to the same source-language identifier, Component Model validation
-imposes a stronger form of uniquness than simple string equality on all the
+imposes a stronger form of uniqueness than simple string equality on all the
 names that appear within the same scope.
 
 To determine whether two names (defined as sequences of [Unicode Scalar
