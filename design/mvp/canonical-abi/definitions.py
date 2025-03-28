@@ -321,8 +321,8 @@ class BufferGuestImpl(Buffer):
   length: int
 
   def __init__(self, t, cx, ptr, length):
-    trap_if(length == 0 or length > Buffer.MAX_LENGTH)
-    if t:
+    trap_if(length > Buffer.MAX_LENGTH)
+    if t and length > 0:
       trap_if(ptr != align_to(ptr, alignment(t)))
       trap_if(ptr + length * elem_size(t) > len(cx.opts.memory))
     self.cx = cx
@@ -664,9 +664,12 @@ class ReadableStreamGuestImpl(ReadableStream):
     self.reset_pending()
 
   def reset_pending(self):
-    self.pending_buffer = None
-    self.pending_on_partial_copy = None
-    self.pending_on_copy_done = None
+    self.set_pending(None, None, None)
+
+  def set_pending(self, buffer, on_partial_copy, on_copy_done):
+    self.pending_buffer = buffer
+    self.pending_on_partial_copy = on_partial_copy
+    self.pending_on_copy_done = on_copy_done
 
   def reset_and_notify_pending(self):
     pending_on_copy_done = self.pending_on_copy_done
@@ -700,19 +703,24 @@ class ReadableStreamGuestImpl(ReadableStream):
     if self.closed_:
       return 'done'
     elif not self.pending_buffer:
-      self.pending_buffer = buffer
-      self.pending_on_partial_copy = on_partial_copy
-      self.pending_on_copy_done = on_copy_done
+      self.set_pending(buffer, on_partial_copy, on_copy_done)
       return 'blocked'
     else:
-      ncopy = min(src.remain(), dst.remain())
-      assert(ncopy > 0)
-      dst.write(src.read(ncopy))
       if self.pending_buffer.remain() > 0:
-        self.pending_on_partial_copy(self.reset_pending)
+        if buffer.remain() > 0:
+          dst.write(src.read(min(src.remain(), dst.remain())))
+          if self.pending_buffer.remain() > 0:
+            self.pending_on_partial_copy(self.reset_pending)
+          else:
+            self.reset_and_notify_pending()
+        return 'done'
       else:
-        self.reset_and_notify_pending()
-      return 'done'
+        if buffer.remain() > 0 or buffer is dst:
+          self.reset_and_notify_pending()
+          self.set_pending(buffer, on_partial_copy, on_copy_done)
+          return 'blocked'
+        else:
+          return 'done'
 
 class StreamEnd(Waitable):
   stream: ReadableStream
