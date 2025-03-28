@@ -1055,7 +1055,7 @@ interface calc {
     }
 
     @since(version = 0.1.0)
-    add: func(x: i32, y: i32) -> result<i32, calc-error>;
+    add: func(x: s32, y: s32) -> result<s32, calc-error>;
 }
 ```
 
@@ -1074,13 +1074,13 @@ interface calc {
     }
 
     @since(version = 0.1.0)
-    add: func(x: i32, y: i32) -> result<i32, calc-error>;
+    add: func(x: s32, y: s32) -> result<s32, calc-error>;
 
     /// By convention, feature flags should be prefixed with package name to reduce chance of collisions
     ///
     /// see: https://github.com/WebAssembly/WASI/blob/main/Contributing.md#filing-changes-to-existing-phase-3-proposals
     @unstable(feature = fgates-calc-minus)
-    sub: func(x: i32, y: i32) -> result<i32, calc-error>;
+    sub: func(x: s32, y: s32) -> result<s32, calc-error>;
 }
 ```
 
@@ -1103,10 +1103,10 @@ interface calc {
     }
 
     @since(version = 0.1.0)
-    add: func(x: i32, y: i32) -> result<i32, calc-error>;
+    add: func(x: s32, y: s32) -> result<s32, calc-error>;
 
     @since(version = 0.1.2)
-    sub: func(x: i32, y: i32) -> result<i32, calc-error>;
+    sub: func(x: s32, y: s32) -> result<s32, calc-error>;
 }
 ```
 
@@ -1129,10 +1129,10 @@ interface calc {
     }
 
     @since(version = 0.1.0)
-    add-one: func(x: i32) -> result<i32, calc-error>;
+    add-one: func(x: s32) -> result<s32, calc-error>;
 
     @since(version = 0.1.1)
-    add: func(x: i32, y: i32) -> result<i32, calc-error>;
+    add: func(x: s32, y: s32) -> result<s32, calc-error>;
 }
 ```
 
@@ -1151,10 +1151,10 @@ interface calc {
     }
 
     @deprecated(version = 0.1.2)
-    add-one: func(x: i32) -> result<i32, calc-error>;
+    add-one: func(x: s32) -> result<s32, calc-error>;
 
     @since(version = 0.1.1)
-    add: func(x: i32, y: i32) -> result<i32, calc-error>;
+    add: func(x: s32, y: s32) -> result<s32, calc-error>;
 }
 ```
 
@@ -1175,7 +1175,7 @@ interface calc {
     }
 
     @since(version = 0.1.1)
-    add: func(x: i32, y: i32) -> result<i32, calc-error>;
+    add: func(x: s32, y: s32) -> result<s32, calc-error>;
 }
 ```
 

@@ -295,7 +295,7 @@ in popular source language features/libraries. Often, "Structured Concurrency"
 refers to an invariant that all "child" tasks finish or are cancelled before a
 "parent" task completes. However, the Component Model doesn't force subtasks to
 [return](#returning) or be cancelled before the supertask returns (this is left
-as an option to particular source langauges to enforce or not). The reason for
+as an option to particular source languages to enforce or not). The reason for
 not enforcing a stricter form of Structured Concurrency at the Component
 Model level is that there are important use cases where forcing a supertask to
 stay resident simply to wait for a subtask to finish would waste resources
