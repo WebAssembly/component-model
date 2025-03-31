@@ -922,7 +922,7 @@ readability but this isn't required.
 Concretely, the structure of a `wit` file is:
 
 ```ebnf
-wit-file ::= package-decl? (package-items | nested-package-definition)*
+wit-file ::= (package-decl ';')? (package-items | nested-package-definition)*
 
 nested-package-definition ::= package-decl '{' package-items* '}'
 
@@ -1188,7 +1188,7 @@ WIT files optionally start with a package declaration which defines the name of
 the package.
 
 ```ebnf
-package-decl        ::= 'package' ( id ':' )+ id ( '/' id )* ('@' valid-semver)?  ';'
+package-decl        ::= 'package' ( id ':' )+ id ( '/' id )* ('@' valid-semver)?
 ```
 
 The production `valid-semver` is as defined by
