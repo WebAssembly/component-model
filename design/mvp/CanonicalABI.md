@@ -269,7 +269,7 @@ that are used in preference to growing the table. The free list is represented
 as a Python list here, but an optimizing implementation could instead store the
 free list in the free elements of `array`.
 
-The limit of `2**30` ensures that the high 2 bits of table indices are unset
+The limit of `2**28` ensures that the high 2 bits of table indices are unset
 and available for other use in guest code (e.g., for tagging, packed words or
 sentinel values).
 
