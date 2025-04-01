@@ -52,9 +52,9 @@ being specified here.
   * [`canon {stream,future}.{read,write}`](#-canon-streamfuturereadwrite) 🔀
   * [`canon {stream,future}.cancel-{read,write}`](#-canon-streamfuturecancel-readwrite) 🔀
   * [`canon {stream,future}.close-{readable,writable}`](#-canon-streamfutureclose-readablewritable) 🔀
-  * [`canon error-context.new`](#-canon-error-contextnew) 🔀
-  * [`canon error-context.debug-message`](#-canon-error-contextdebug-message) 🔀
-  * [`canon error-context.drop`](#-canon-error-contextdrop) 🔀
+  * [`canon error-context.new`](#-canon-error-contextnew) 📝
+  * [`canon error-context.debug-message`](#-canon-error-contextdebug-message) 📝
+  * [`canon error-context.drop`](#-canon-error-contextdrop) 📝
   * [`canon thread.spawn_ref`](#-canon-threadspawn_ref) 🧵
   * [`canon thread.spawn_indirect`](#-canon-threadspawn_indirect) 🧵
   * [`canon thread.available_parallelism`](#-canon-threadavailable_parallelism) 🧵
@@ -1062,9 +1062,8 @@ class ReadableStream:
   t: ValType
   read: Callable[[WritableBuffer, OnPartialCopy, OnCopyDone], Literal['done','blocked']]
   cancel: Callable[[], None]
-  close: Callable[[Optional[ErrorContext]]]
+  close: Callable[[]]
   closed: Callable[[], bool]
-  closed_with: Callable[[], Optional[ErrorContext]]
 ```
 The key operation is `read` which works as follows:
 * `read` is non-blocking, returning `'blocked'` if it would have blocked.
@@ -1100,7 +1099,6 @@ class in chunks, starting with the fields and initialization:
 class ReadableStreamGuestImpl(ReadableStream):
   impl: ComponentInstance
   closed_: bool
-  maybe_errctx: Optional[ErrorContext]
   pending_buffer: Optional[Buffer]
   pending_on_partial_copy: Optional[OnPartialCopy]
   pending_on_copy_done: Optional[OnCopyDone]
@@ -1109,7 +1107,6 @@ class ReadableStreamGuestImpl(ReadableStream):
     self.t = t
     self.impl = inst
     self.closed_ = False
-    self.maybe_errctx = None
     self.reset_pending()
 
   def reset_pending(self):
@@ -1135,19 +1132,14 @@ been returned:
   def cancel(self):
     self.reset_and_notify_pending()
 
-  def close(self, maybe_errctx):
+  def close(self):
     if not self.closed_:
       self.closed_ = True
-      self.maybe_errctx = maybe_errctx
       if self.pending_buffer:
         self.reset_and_notify_pending()
 
   def closed(self):
     return self.closed_
-
-  def closed_with(self):
-    assert(self.closed_)
-    return self.maybe_errctx
 ```
 While the abstract `ReadableStream` interface *allows* `cancel` to return
 without having returned ownership of the buffer (which, in general, is
@@ -1212,9 +1204,9 @@ class StreamEnd(Waitable):
     self.stream = stream
     self.copying = False
 
-  def drop(self, maybe_errctx):
+  def drop(self):
     trap_if(self.copying)
-    self.stream.close(maybe_errctx)
+    self.stream.close()
     Waitable.drop(self)
 
 class ReadableStreamEnd(StreamEnd):
@@ -1251,11 +1243,11 @@ class FutureEnd(StreamEnd):
     assert(buffer.remain() == 1)
     def on_copy_done_wrapper():
       if buffer.remain() == 0:
-        self.stream.close(maybe_errctx = None)
+        self.stream.close()
       on_copy_done()
     ret = copy_op(buffer, on_partial_copy = None, on_copy_done = on_copy_done_wrapper)
     if ret == 'done' and buffer.remain() == 0:
-      self.stream.close(maybe_errctx = None)
+      self.stream.close()
     return ret
 
 class ReadableFutureEnd(FutureEnd):
@@ -1266,9 +1258,8 @@ class WritableFutureEnd(FutureEnd):
   paired: bool = False
   def copy(self, src, on_partial_copy, on_copy_done):
     return self.close_after_copy(self.stream.write, src, on_copy_done)
-  def drop(self, maybe_errctx):
-    trap_if(not self.stream.closed() and not maybe_errctx)
-    FutureEnd.drop(self, maybe_errctx)
+  def drop(self):
+    FutureEnd.drop(self)
 ```
 The `future.{read,write}` built-ins fix the buffer length to `1`, ensuring the
 `assert(buffer.remain() == 1)` holds. Because of this, there are no partial
@@ -3607,14 +3598,7 @@ def pack_copy_result(task, buffer, e):
     assert(not (buffer.progress & CLOSED))
     return buffer.progress
   else:
-    if (maybe_errctx := e.stream.closed_with()):
-      errctxi = task.inst.error_contexts.add(maybe_errctx)
-      assert(errctxi != 0)
-    else:
-      errctxi = 0
-    assert(errctxi <= Table.MAX_LENGTH < BLOCKED)
-    assert(not (errctxi & CLOSED))
-    return errctxi | CLOSED
+    return CLOSED
 ```
 The order of tests here indicates that, if some progress was made and then the
 stream was closed, only the progress is reported and the `CLOSED` status is
@@ -3705,41 +3689,29 @@ the given index from the current component instance's `waitable` table,
 performing the guards and bookkeeping defined by
 `{Readable,Writable}{Stream,Future}End.drop()` above.
 ```python
-async def canon_stream_close_readable(t, task, i, errctxi):
-  return await close(ReadableStreamEnd, t, task, i, errctxi)
+async def canon_stream_close_readable(t, task, i):
+  return await close(ReadableStreamEnd, t, task, i)
 
-async def canon_stream_close_writable(t, task, hi, errctxi):
-  return await close(WritableStreamEnd, t, task, hi, errctxi)
+async def canon_stream_close_writable(t, task, hi):
+  return await close(WritableStreamEnd, t, task, hi)
 
-async def canon_future_close_readable(t, task, i, errctxi):
-  return await close(ReadableFutureEnd, t, task, i, errctxi)
+async def canon_future_close_readable(t, task, i):
+  return await close(ReadableFutureEnd, t, task, i)
 
-async def canon_future_close_writable(t, task, hi, errctxi):
-  return await close(WritableFutureEnd, t, task, hi, errctxi)
+async def canon_future_close_writable(t, task, hi):
+  return await close(WritableFutureEnd, t, task, hi)
 
-async def close(EndT, t, task, hi, errctxi):
+async def close(EndT, t, task, hi):
   trap_if(not task.inst.may_leave)
   e = task.inst.waitables.remove(hi)
-  if errctxi == 0:
-    maybe_errctx = None
-  else:
-    maybe_errctx = task.inst.error_contexts.get(errctxi)
   trap_if(not isinstance(e, EndT))
   trap_if(e.stream.t != t)
-  e.drop(maybe_errctx)
+  e.drop()
   return []
 ```
-Passing a non-zero `errctxi` index indicates that this stream end is being
-closed due to an error, with the given `error-context` providing information
-that can be printed to aid in debugging. While, as explained above, the
-*contents* of the `error-context` value are non-deterministic (and may, e.g.,
-be empty), the presence or absence of an `error-context` value is semantically
-meaningful for distinguishing between success or failure. Concretely, the
-packed `i32` returned by `{stream,future}.{read,write}` operations indicates
-success or failure by whether the `error-context` index is `0` or not.
 
 
-### 🔀 `canon error-context.new`
+### 📝 `canon error-context.new`
 
 For a canonical definition:
 ```wat
@@ -3780,7 +3752,7 @@ are not checked. (Note that `host_defined_transformation` is not defined by the
 Canonical ABI and stands for an arbitrary host-defined function.)
 
 
-### 🔀 `canon error-context.debug-message`
+### 📝 `canon error-context.debug-message`
 
 For a canonical definition:
 ```wat
@@ -3808,7 +3780,7 @@ async def canon_error_context_debug_message(opts, task, i, ptr):
 Note that `ptr` points to an 8-byte region of memory into which will be stored
 the pointer and length of the debug string (allocated via `opts.realloc`).
 
-### 🔀 `canon error-context.drop`
+### 📝 `canon error-context.drop`
 
 For a canonical definition:
 ```wat

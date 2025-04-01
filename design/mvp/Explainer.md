@@ -54,6 +54,7 @@ implemented, considered stable and included in a future milestone:
   * 🚟: using `async` with `canon lift` without `callback` (stackful lift)
 * 🧵: threading built-ins
 * 🔧: fixed-length lists
+* 📝: the `error-context` type
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
 this repo merges and supersedes the [module-linking] and [interface-types]
@@ -546,7 +547,7 @@ defvaltype    ::= bool
                 | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64
                 | f32 | f64
                 | char | string
-                | error-context 🔀
+                | error-context 📝
                 | (record (field "<label>" <valtype>)+)
                 | (variant (case "<label>" <valtype>?)+)
                 | (list <valtype>)
@@ -605,14 +606,14 @@ sets of abstract values:
 | `u8`, `u16`, `u32`, `u64` | integers in the range [0, 2<sup>N</sup>-1] |
 | `f32`, `f64`              | [IEEE754] floating-point numbers, with a single NaN value |
 | `char`                    | [Unicode Scalar Values] |
-| `error-context`           | an immutable, non-deterministic, host-defined value meant to aid in debugging |
+| `error-context` 📝        | an immutable, non-deterministic, host-defined value meant to aid in debugging |
 | `record`                  | heterogeneous [tuples] of named values |
 | `variant`                 | heterogeneous [tagged unions] of named values |
 | `list`                    | homogeneous, variable- or fixed-length [sequences] of values |
 | `own`                     | a unique, opaque address of a resource that will be destroyed when this value is dropped |
 | `borrow`                  | an opaque address of a resource that must be dropped before the current export call returns |
-| `stream`                  | an asynchronously-passed list of homogeneous values |
-| `future`                  | an asynchronously-passed single value |
+| `stream` 🔀               | an asynchronously-passed list of homogeneous values |
+| `future` 🔀               | an asynchronously-passed single value |
 
 How these abstract values are produced and consumed from Core WebAssembly
 values and linear memory is configured by the component via *canonical lifting
@@ -637,7 +638,7 @@ a single NaN value. And boolean values in core wasm are usually represented as
 `i32`s where operations interpret all-zeros as `false`, while at the
 component-level there is a `bool` type with `true` and `false` values.
 
-##### 🔀 Error Context type
+##### 📝 Error Context type
 
 Values of `error-context` type are immutable, non-deterministic, host-defined
 and meant to be propagated from failure sources to callers in order to aid in
@@ -1438,9 +1439,9 @@ canon ::= ...
         | (canon future.cancel-write <typeidx> async? (core func <id>?)) 🔀
         | (canon future.close-readable <typeidx> (core func <id>?)) 🔀
         | (canon future.close-writable <typeidx> (core func <id>?)) 🔀
-        | (canon error-context.new <canonopt>* (core func <id>?))
-        | (canon error-context.debug-message <canonopt>* (core func <id>?))
-        | (canon error-context.drop (core func <id>?))
+        | (canon error-context.new <canonopt>* (core func <id>?)) 📝
+        | (canon error-context.debug-message <canonopt>* (core func <id>?)) 📝
+        | (canon error-context.drop (core func <id>?)) 📝
         | (canon thread.spawn_ref <typeidx> (core func <id>?)) 🧵
         | (canon thread.spawn_indirect <typeidx> <core:tableidx> (core func <id>?)) 🧵
         | (canon thread.available_parallelism (core func <id>?)) 🧵
@@ -1780,7 +1781,7 @@ enum read-status {
     blocked,
 
     // The end of the stream has been reached.
-    closed(option<error-context>),
+    closed,
 }
 ```
 
@@ -1816,8 +1817,6 @@ the Canonical ABI explainer for details.)
 `read-status` and `write-status` are lowered in the Canonical ABI as:
  - The value `0xffff_ffff` represents `blocked`.
  - Otherwise, if the bit `0x8000_0000` is set, the value represents `closed`.
-   For `read-status`, the remaining bits `0x7fff_ffff` contain the index of an
-   `error-context` in the instance's `error-context` table.
  - Otherwise, the value represents `complete` and contains the number of
    element read or written.
 
@@ -1883,10 +1882,10 @@ delivered to indicate the completion of the `read` or `write`. (See
 
 | Synopsis                                              |                                                                  |
 | ----------------------------------------------------- | ---------------------------------------------------------------- |
-| Approximate WIT signature for `stream.close-readable` | `func<T>(e: readable-stream-end<T>, err: option<error-context>)` |
-| Approximate WIT signature for `stream.close-writable` | `func<T>(e: writable-stream-end<T>, err: option<error-context>)` |
-| Approximate WIT signature for `future.close-readable` | `func<T>(e: readable-future-end<T>, err: option<error-context>)` |
-| Approximate WIT signature for `future.close-writable` | `func<T>(e: writable-future-end<T>, err: option<error-context>)` |
+| Approximate WIT signature for `stream.close-readable` | `func<T>(e: readable-stream-end<T>)` |
+| Approximate WIT signature for `stream.close-writable` | `func<T>(e: writable-stream-end<T>)` |
+| Approximate WIT signature for `future.close-readable` | `func<T>(e: readable-future-end<T>)` |
+| Approximate WIT signature for `future.close-writable` | `func<T>(e: writable-future-end<T>)` |
 | Canonical ABI signature                               | `[end:i32 err:i32] -> []`                                        |
 
 The `{stream,future}.close-{readable,writable}` built-ins remove the indicated
@@ -1894,13 +1893,9 @@ The `{stream,future}.close-{readable,writable}` built-ins remove the indicated
 trapping if the stream or future has a mismatched direction or type or are in
 the middle of a `read` or `write`.
 
-In the Canonical ABI, an `err` value of `0` represents `none`, and a non-zero
-value represents `some` of the index of an `error-context` in the instance's
-table. (See also [the `close` built-ins] in the Canonical ABI explainer.)
+##### 📝 Error Context built-ins
 
-##### 🔀 Error Context built-ins
-
-###### `error-context.new`
+###### 📝 `error-context.new`
 
 | Synopsis                         |                                          |
 | -------------------------------- | ---------------------------------------- |
@@ -1915,7 +1910,7 @@ In the Canonical ABI, the returned value is an index into a
 per-component-instance table. (See also [`canon_error_context_new`] in the
 Canonical ABI explainer.)
 
-###### `error-context.debug-message`
+###### 📝 `error-context.debug-message`
 
 | Synopsis                         |                                         |
 | -------------------------------- | --------------------------------------- |
@@ -1930,7 +1925,7 @@ In the Canonical ABI, it writes the debug message into `ptr` as an 8-byte
 `<canonopt>*` immediates. (See also [`canon_error_context_debug_message`] in
 the Canonical ABI explainer.)
 
-###### `error-context.drop`
+###### 📝 `error-context.drop`
 
 | Synopsis                         |                               |
 | -------------------------------- | ----------------------------- |
