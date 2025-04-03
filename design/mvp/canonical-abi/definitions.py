@@ -651,7 +651,6 @@ class ReadableStream:
 class ReadableStreamGuestImpl(ReadableStream):
   impl: ComponentInstance
   closed_: bool
-  maybe_errctx: Optional[ErrorContext]
   pending_buffer: Optional[Buffer]
   pending_on_partial_copy: Optional[OnPartialCopy]
   pending_on_copy_done: Optional[OnCopyDone]
@@ -660,7 +659,6 @@ class ReadableStreamGuestImpl(ReadableStream):
     self.t = t
     self.impl = inst
     self.closed_ = False
-    self.maybe_errctx = None
     self.reset_pending()
 
   def reset_pending(self):
@@ -676,19 +674,14 @@ class ReadableStreamGuestImpl(ReadableStream):
   def cancel(self):
     self.reset_and_notify_pending()
 
-  def close(self, maybe_errctx):
+  def close(self):
     if not self.closed_:
       self.closed_ = True
-      self.maybe_errctx = maybe_errctx
       if self.pending_buffer:
         self.reset_and_notify_pending()
 
   def closed(self):
     return self.closed_
-
-  def closed_with(self):
-    assert(self.closed_)
-    return self.maybe_errctx
 
   def read(self, dst, on_partial_copy, on_copy_done):
     return self.copy(dst, on_partial_copy, on_copy_done, self.pending_buffer, dst)
@@ -723,9 +716,9 @@ class StreamEnd(Waitable):
     self.stream = stream
     self.copying = False
 
-  def drop(self, maybe_errctx):
+  def drop(self):
     trap_if(self.copying)
-    self.stream.close(maybe_errctx)
+    self.stream.close()
     Waitable.drop(self)
 
 class ReadableStreamEnd(StreamEnd):
@@ -744,11 +737,11 @@ class FutureEnd(StreamEnd):
     assert(buffer.remain() == 1)
     def on_copy_done_wrapper():
       if buffer.remain() == 0:
-        self.stream.close(maybe_errctx = None)
+        self.stream.close()
       on_copy_done()
     ret = copy_op(buffer, on_partial_copy = None, on_copy_done = on_copy_done_wrapper)
     if ret == 'done' and buffer.remain() == 0:
-      self.stream.close(maybe_errctx = None)
+      self.stream.close()
     return ret
 
 class ReadableFutureEnd(FutureEnd):
@@ -759,9 +752,8 @@ class WritableFutureEnd(FutureEnd):
   paired: bool = False
   def copy(self, src, on_partial_copy, on_copy_done):
     return self.close_after_copy(self.stream.write, src, on_copy_done)
-  def drop(self, maybe_errctx):
-    trap_if(not self.stream.closed() and not maybe_errctx)
-    FutureEnd.drop(self, maybe_errctx)
+  def drop(self):
+    FutureEnd.drop(self)
 
 ### Despecialization
 
@@ -2075,14 +2067,7 @@ def pack_copy_result(task, buffer, e):
     assert(not (buffer.progress & CLOSED))
     return buffer.progress
   else:
-    if (maybe_errctx := e.stream.closed_with()):
-      errctxi = task.inst.error_contexts.add(maybe_errctx)
-      assert(errctxi != 0)
-    else:
-      errctxi = 0
-    assert(errctxi <= Table.MAX_LENGTH < BLOCKED)
-    assert(not (errctxi & CLOSED))
-    return errctxi | CLOSED
+    return CLOSED
 
 ### 🔀 `canon {stream,future}.cancel-{read,write}`
 
@@ -2117,31 +2102,27 @@ async def cancel_copy(EndT, event_code, t, sync, task, i):
 
 ### 🔀 `canon {stream,future}.close-{readable,writable}`
 
-async def canon_stream_close_readable(t, task, i, errctxi):
-  return await close(ReadableStreamEnd, t, task, i, errctxi)
+async def canon_stream_close_readable(t, task, i):
+  return await close(ReadableStreamEnd, t, task, i)
 
-async def canon_stream_close_writable(t, task, hi, errctxi):
-  return await close(WritableStreamEnd, t, task, hi, errctxi)
+async def canon_stream_close_writable(t, task, hi):
+  return await close(WritableStreamEnd, t, task, hi)
 
-async def canon_future_close_readable(t, task, i, errctxi):
-  return await close(ReadableFutureEnd, t, task, i, errctxi)
+async def canon_future_close_readable(t, task, i):
+  return await close(ReadableFutureEnd, t, task, i)
 
-async def canon_future_close_writable(t, task, hi, errctxi):
-  return await close(WritableFutureEnd, t, task, hi, errctxi)
+async def canon_future_close_writable(t, task, hi):
+  return await close(WritableFutureEnd, t, task, hi)
 
-async def close(EndT, t, task, hi, errctxi):
+async def close(EndT, t, task, hi):
   trap_if(not task.inst.may_leave)
   e = task.inst.waitables.remove(hi)
-  if errctxi == 0:
-    maybe_errctx = None
-  else:
-    maybe_errctx = task.inst.error_contexts.get(errctxi)
   trap_if(not isinstance(e, EndT))
   trap_if(e.stream.t != t)
-  e.drop(maybe_errctx)
+  e.drop()
   return []
 
-### 🔀 `canon error-context.new`
+### 📝 `canon error-context.new`
 
 @dataclass
 class ErrorContext:
@@ -2158,7 +2139,7 @@ async def canon_error_context_new(opts, task, ptr, tagged_code_units):
   i = task.inst.error_contexts.add(ErrorContext(s))
   return [i]
 
-### 🔀 `canon error-context.debug-message`
+### 📝 `canon error-context.debug-message`
 
 async def canon_error_context_debug_message(opts, task, i, ptr):
   trap_if(not task.inst.may_leave)
@@ -2167,7 +2148,7 @@ async def canon_error_context_debug_message(opts, task, i, ptr):
   store_string(cx, errctx.debug_message, ptr)
   return []
 
-### 🔀 `canon error-context.drop`
+### 📝 `canon error-context.drop`
 
 async def canon_error_context_drop(task, i):
   trap_if(not task.inst.may_leave)
