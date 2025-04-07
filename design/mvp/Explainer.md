@@ -2464,7 +2464,9 @@ names that appear within the same scope.
 To determine whether two names (defined as sequences of [Unicode Scalar
 Values]) are **strongly-unique**:
 * If one name is `l` and the other name is `[constructor]l` (for the same
-  `label` `l`), they are strongly-unique.
+  `label` `l`), they *are* strongly-unique.
+* If one name is `l` and the other name is `[method]l.l` (for the same
+  `label` `l`), they *are not* strongly-unique.
 * Otherwise:
   * Lowercase all the `acronym`s (uppercase letters) in both names.
   * Strip any `[...]` annotation prefix from both names.
@@ -2474,7 +2476,7 @@ Thus, the following names are strongly-unique:
 * `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[method]foo.baz`
 
 but attempting to add *any* of the following names would be a validation error:
-* `foo`, `foo-BAR`, `[constructor]foo-BAR`, `[async]foo`, `[method]foo.BAR`
+* `foo`, `foo-BAR`, `[constructor]foo-BAR`, `[method]foo.foo`, `[async]foo`, `[method]foo.BAR`
 
 Note that additional validation rules involving types apply to names with
 annotations. For example, the validation rules for `[constructor]foo` require
