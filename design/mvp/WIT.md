@@ -947,7 +947,7 @@ interface foo {
     @since(version = 0.2.1)
     b: func();
 
-    @since(version = 0.2.2, feature = fancy-foo)
+    @since(version = 0.2.2)
     c: func();
 
     @unstable(feature = fancier-foo)
@@ -973,18 +973,13 @@ default unless explicitly opted-into by the developer.
 
 Finally, the `@deprecated` gate on `e` indicates that `e` should no longer be
 used starting version `0.2.2`. Both toolchains and host runtimes may warn users
-if they detect an `@deprecated` API is being used. An `@deprecated` gate is
+if they detect an `@deprecated` API is being used. A `@deprecated` gate is
 required to always be paired up with either a `@since` or `@deprecated` gate.
 
 Together, these gates support a development flow in which new features start
 with an `@unstable` gate while the details are still being hashed out. Then,
 once the feature is stable (and, in a WASI context, voted upon), the
 `@unstable` gate is switched to a `@since` gate.
-
-Thus, `c` is enabled if the version is `0.2.2` or newer or the
-`fancy-foo` feature is explicitly enabled by the developer. The `feature` field
-can be removed once producer toolchains have updated their default version to
-enable the feature by default.
 
 #### Feature gate syntax
 
