@@ -318,13 +318,10 @@ a `stream` or `future` somewhere in the parameter types) or result (of an
 import call with a `stream` or `future` somewhere in the result type), the
 receiver always gets *unique ownership* of the *readable end* of the `stream`
 or `future`. When *producing* a `stream` or `future` value as a parameter (of
-an import call) or result (of an export call), the producer can either
-*transfer ownership* of a readable end it has already received or it can create
-a fresh writable end (via `stream.new` or `future.new`) and then lift this
-writable end to create a fresh readable end in the consumer while maintaining
-ownership of the writable end in the producer. To maintain the invariant that
-readable ends are unique, a writable end can be lifted at most once, trapping
-otherwise.
+an import call) or result (of an export call), the producer can *transfer
+ownership* of a readable end that it has either been given by the outside world
+or freshly created via `{stream,future}.new` (which also return a fresh paired
+writable end that is permanently owned by the calling component instance).
 
 Based on this, `stream<T>` and `future<T>` values can be passed between
 functions as if they were synchronous `list<T>` and `T` values, resp. For
@@ -339,16 +336,6 @@ its returned `stream<T>` with an [`error-context`](Explainer.md#error-context-ty
 value which `g` will receive along with the notification that its readable
 stream was closed.
 
-If a component instance *would* receive the readable end of a stream for which
-it already owns the writable end, the readable end disappears and the existing
-writable end is received instead (since the guest can now handle the whole
-stream more efficiently wholly from within guest code). E.g., if the same
-component instance defined `f` and `g` above, the composition `g(f(x))` would
-just instruct the guest to stream directly from `f` into `g` without crossing a
-component boundary or performing any extra copies. Thus, strengthening the
-previously-mentioned invariant, the readable and writable ends of a stream are
-unique *and never in the same component*.
-
 Given the readable or writable end of a stream, core wasm code can call the
 imported `stream.read` or `stream.write` canonical built-ins, resp., passing the
 pointer and length of a linear-memory buffer to write-into or read-from, resp.
@@ -357,6 +344,10 @@ written or read immediately (without blocking) or return a sentinel "blocked"
 value indicating that the read or write will execute concurrently. The readable
 and writable ends of streams and futures can then be [waited](#waiting) on to
 make progress.
+
+As a temporary limitation, if a `read` and `write` for a single stream or
+future occur from within the same component, there is a trap. In the future
+this limitation will be removed.
 
 The `T` element type of streams and futures is optional, such that `future` and
 `stream` can be written in WIT without a trailing `<T>`. In this case, the
@@ -368,14 +359,6 @@ without requiring an explicit `future` return type. Thus, a function like
 `f2: func() -> future` would convey *two* events: first, the return of `f2`, at
 which point the caller receives the readable end of a `future` that, when
 successfully read, conveys the completion of a second event.
-
-From a [structured-concurrency](#structured-concurrency) perspective, the
-readable and writable ends of streams and futures are leaves of the async call
-tree. Unlike subtasks, the parent of the readable ends of streams and future
-*can* change over time (when transferred via function call, as mentioned
-above). However, there is always *some* parent `Task` and this parent `Task`
-is prevented from orphaning its children using the same reference-counting
-guard mentioned above for subtasks.
 
 The [Stream State] and [Future State] sections describe the runtime state
 maintained for streams and futures by the Canonical ABI.
@@ -928,6 +911,8 @@ Native async support is being proposed incrementally. The following features
 will be added in future chunks roughly in the order listed to complete the full
 "async" story, with a TBD cutoff between what's in [WASI Preview 3] and what
 comes after:
+* remove the temporary trap mentioned above that occurs when a `read` and
+  `write` of a stream/future happen from within the same component instance
 * `subtask.cancel`: allow a supertask to signal to a subtask that its result is
   no longer wanted and to please wrap it up promptly
 * zero-copy forwarding/splicing
