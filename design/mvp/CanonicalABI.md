@@ -3230,7 +3230,7 @@ specifies:
 Calling `$f` invokes the following function which uses `Task.return_` to lift
 and pass the results to the caller:
 ```python
-async def canon_task_return(task, result_type, opts: LiftLowerOptions, flat_args):
+async def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync and not task.opts.always_task_return)
   trap_if(result_type != task.ft.results)

@@ -644,9 +644,8 @@ class ReadableStream:
   t: ValType
   read: Callable[[WritableBuffer, OnPartialCopy, OnCopyDone], Literal['done','blocked']]
   cancel: Callable[[], None]
-  close: Callable[[Optional[ErrorContext]]]
+  close: Callable[[]]
   closed: Callable[[], bool]
-  closed_with: Callable[[], Optional[ErrorContext]]
 
 class ReadableStreamGuestImpl(ReadableStream):
   impl: ComponentInstance
