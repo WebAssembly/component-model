@@ -1055,7 +1055,7 @@ that there is no Component Model type for passing the writable end of a
 stream.)
 ```python
 RevokeBuffer = Callable[[], None]
-OnPartialCopy = Callable[RevokeBuffer, None]
+OnPartialCopy = Callable[[RevokeBuffer], None]
 OnCopyDone = Callable[[], None]
 
 class ReadableStream:

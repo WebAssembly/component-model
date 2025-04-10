@@ -637,7 +637,7 @@ class Subtask(Waitable):
 #### Stream State
 
 RevokeBuffer = Callable[[], None]
-OnPartialCopy = Callable[RevokeBuffer, None]
+OnPartialCopy = Callable[[RevokeBuffer], None]
 OnCopyDone = Callable[[], None]
 
 class ReadableStream:
