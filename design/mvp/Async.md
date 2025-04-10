@@ -251,6 +251,35 @@ reason why "context-local" storage is not called "task-local" storage (where a
 For details, see [`context.get`] in the AST explainer and [`canon_context_get`]
 in the Canonical ABI explainer.
 
+#### Context-Local Storage Conventions
+
+While this is not required it's recommended that toolchains follow a set of
+conventions around using context-local storage to ensure that different
+languages and libraries can all interoperate together within the same component.
+
+* The 0th slot of context-local storage is reserved for the runtime managing
+  each `canon lift`'d function.
+* The 1st slot of context-local storage is reserved for future expansion to
+  threads or similar.
+* Runtimes should null-out (store 0) to a slot during execution of an exported
+  function, only restoring the value when yielding.
+* Runtimes should double-check the pointer loaded is non-null and looks like a
+  pointer for the runtime in question, for example by storing a 32-bit "magic
+  value" at the start of the pointer.
+
+Notably this means that conventionally the 0th slot of context-local storage is
+exclusively owned by **export**ed functions, notably not imported functions. In
+a polyglot or multiple-library scenario it might be possible to have multiple
+bindings generators, and in this scenario only the bindings generator managing
+exported functions will access context-local storage.
+
+Bindings generators for imported functions are recommended to use a
+language-specific convention or mechanism through which to communicate with
+exported tasks. How exactly this is done is left up to toolchains/languages, but
+one example is that the `wit-bindgen` runtime in Rust relies on a C-style API to
+communicate between exports and imports. For some more background on this see
+WebAssembly/component-model#485
+
 ### Structured concurrency
 
 Calling *into* a component creates a `Task` to track ABI state related to the
