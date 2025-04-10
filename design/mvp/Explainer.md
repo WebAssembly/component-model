@@ -1641,9 +1641,7 @@ record event {
 }
 enum event-code {
     none,
-    call-starting,
-    call-started,
-    call-returned,
+    subtask,
     stream-read,
     stream-write,
     future-read,
