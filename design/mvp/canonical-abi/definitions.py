@@ -597,6 +597,8 @@ class CallState(IntEnum):
   STARTING = 0
   STARTED = 1
   RETURNED = 2
+  CANCEL_BEFORE_STARTED = 3
+  CANCEL_BEFORE_RETURNED = 4
 
 class Subtask(Waitable):
   state: CallState
@@ -1980,6 +1982,19 @@ async def canon_waitable_join(task, wi, si):
   else:
     w.join(task.inst.waitable_sets.get(si))
   return []
+
+### 🔀 `canon subtask.cancel`
+
+async def canon_subtask_cancel(task, i):
+  trap_if(not task.inst.may_leave)
+  s = task.inst.waitables.get(i)
+  trap_if(not isinstance(s, Subtask))
+  trap_if(s.finished)
+
+  # TODO: don't lose state change from STARTING --> STARTED
+  if not s.in_terminal_state():
+    return [BLOCKED]
+  return [...]
 
 ### 🔀 `canon subtask.drop`
 
