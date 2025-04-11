@@ -63,6 +63,9 @@ def mk_tup(*a):
 def unpack_lower_result(ret):
   return (ret & 0xf, ret >> 4)
 
+def unpack_new_ends(packed):
+  return (packed & 0xffff_ffff, packed >> 32)
+
 def fail(msg):
   raise BaseException(msg)
 
@@ -1000,7 +1003,7 @@ class HostSource(ReadableStream):
     if not self.remaining:
       self.close()
 
-  def read(self, dst, on_partial_copy, on_copy_done):
+  def read(self, inst, dst, on_partial_copy, on_copy_done):
     if self.closed():
       return 'done'
     elif self.remaining:
@@ -1070,7 +1073,7 @@ class HostSink:
         def on_copy_done():
           if not f.done():
             f.set_result(None)
-        if self.stream.read(self, on_partial_copy, on_copy_done) != 'done':
+        if self.stream.read(None, self, on_partial_copy, on_copy_done) != 'done':
           f = asyncio.Future()
           await f
       self.ready_to_consume.set()
@@ -1137,40 +1140,42 @@ async def test_eager_stream_completion():
     assert(len(args) == 1)
     rsi1 = args[0]
     assert(rsi1 == 1)
-    [wsi1] = await canon_stream_new(U8Type(), task)
-    [] = await canon_task_return(task, [StreamType(U8Type())], opts, [wsi1])
+    [packed] = await canon_stream_new(U8Type(), task)
+    rsi2,wsi2 = unpack_new_ends(packed)
+    [] = await canon_task_return(task, [StreamType(U8Type())], opts, [rsi2])
     [ret] = await canon_stream_read(U8Type(), opts, task, rsi1, 0, 4)
     assert(ret == 4)
     assert(mem[0:4] == b'\x01\x02\x03\x04')
-    [wsi2] = await canon_stream_new(U8Type(), task)
+    [packed] = await canon_stream_new(U8Type(), task)
+    rsi3,wsi3 = unpack_new_ends(packed)
     retp = 12
     await asyncio.sleep(0)
-    [ret] = await canon_lower(opts, ft, host_import, task, [wsi2, retp])
+    [ret] = await canon_lower(opts, ft, host_import, task, [rsi3, retp])
     assert(ret == 0)
-    rsi2 = mem[retp]
-    [ret] = await canon_stream_write(U8Type(), opts, task, wsi2, 0, 4)
+    rsi4 = mem[retp]
+    [ret] = await canon_stream_write(U8Type(), opts, task, wsi3, 0, 4)
     assert(ret == 4)
     await asyncio.sleep(0)
-    [ret] = await canon_stream_read(U8Type(), opts, task, rsi2, 0, 4)
+    [ret] = await canon_stream_read(U8Type(), opts, task, rsi4, 0, 4)
     assert(ret == 4)
-    [ret] = await canon_stream_write(U8Type(), opts, task, wsi1, 0, 4)
+    [ret] = await canon_stream_write(U8Type(), opts, task, wsi2, 0, 4)
     assert(ret == 4)
     [ret] = await canon_stream_read(U8Type(), opts, task, rsi1, 0, 4)
     assert(ret == 4)
     [ret] = await canon_stream_read(U8Type(), opts, task, rsi1, 0, 4)
     assert(ret == definitions.CLOSED)
     assert(mem[0:4] == b'\x05\x06\x07\x08')
-    [ret] = await canon_stream_write(U8Type(), opts, task, wsi2, 0, 4)
+    [ret] = await canon_stream_write(U8Type(), opts, task, wsi3, 0, 4)
     assert(ret == 4)
     await asyncio.sleep(0)
-    [ret] = await canon_stream_read(U8Type(), opts, task, rsi2, 0, 4)
+    [ret] = await canon_stream_read(U8Type(), opts, task, rsi4, 0, 4)
     assert(ret == 4)
-    [ret] = await canon_stream_write(U8Type(), opts, task, wsi1, 0, 4)
+    [ret] = await canon_stream_write(U8Type(), opts, task, wsi2, 0, 4)
     assert(ret == 4)
     [] = await canon_stream_close_readable(U8Type(), task, rsi1)
-    [] = await canon_stream_close_readable(U8Type(), task, rsi2)
-    [] = await canon_stream_close_writable(U8Type(), task, wsi1)
+    [] = await canon_stream_close_readable(U8Type(), task, rsi4)
     [] = await canon_stream_close_writable(U8Type(), task, wsi2)
+    [] = await canon_stream_close_writable(U8Type(), task, wsi3)
     return []
 
   await canon_lift(opts, inst, ft, core_func, None, on_start, on_return, Task.sync_on_block)
@@ -1216,8 +1221,9 @@ async def test_async_stream_ops():
   async def core_func(task, args):
     [rsi1] = args
     assert(rsi1 == 1)
-    [wsi1] = await canon_stream_new(U8Type(), task)
-    [] = await canon_task_return(task, [StreamType(U8Type())], opts, [wsi1])
+    [packed] = await canon_stream_new(U8Type(), task)
+    rsi2,wsi2 = unpack_new_ends(packed)
+    [] = await canon_task_return(task, [StreamType(U8Type())], opts, [rsi2])
     [ret] = await canon_stream_read(U8Type(), opts, task, rsi1, 0, 4)
     assert(ret == definitions.BLOCKED)
     src_stream.write([1,2,3,4])
@@ -1229,28 +1235,29 @@ async def test_async_stream_ops():
     assert(mem[retp+0] == rsi1)
     assert(mem[retp+4] == 4)
     assert(mem[0:4] == b'\x01\x02\x03\x04')
-    [wsi2] = await canon_stream_new(U8Type(), task)
-    [ret] = await canon_lower(opts, ft, host_import, task, [wsi2, retp])
+    [packed] = await canon_stream_new(U8Type(), task)
+    rsi3,wsi3 = unpack_new_ends(packed)
+    [ret] = await canon_lower(opts, ft, host_import, task, [rsi3, retp])
     assert(ret == 0)
-    rsi2 = mem[16]
-    assert(rsi2 == 4)
-    [ret] = await canon_stream_write(U8Type(), opts, task, wsi2, 0, 4)
+    rsi4 = mem[16]
+    assert(rsi4 == 2)
+    [ret] = await canon_stream_write(U8Type(), opts, task, wsi3, 0, 4)
     assert(ret == definitions.BLOCKED)
     host_import_incoming.set_remain(100)
+    [] = await canon_waitable_join(task, wsi3, seti)
+    [event] = await canon_waitable_set_wait(False, mem, task, seti, retp)
+    assert(event == EventCode.STREAM_WRITE)
+    assert(mem[retp+0] == wsi3)
+    assert(mem[retp+4] == 4)
+    [ret] = await canon_stream_read(U8Type(), sync_opts, task, rsi4, 0, 4)
+    assert(ret == 4)
+    [ret] = await canon_stream_write(U8Type(), opts, task, wsi2, 0, 4)
+    assert(ret == definitions.BLOCKED)
+    dst_stream.set_remain(100)
     [] = await canon_waitable_join(task, wsi2, seti)
     [event] = await canon_waitable_set_wait(False, mem, task, seti, retp)
     assert(event == EventCode.STREAM_WRITE)
     assert(mem[retp+0] == wsi2)
-    assert(mem[retp+4] == 4)
-    [ret] = await canon_stream_read(U8Type(), sync_opts, task, rsi2, 0, 4)
-    assert(ret == 4)
-    [ret] = await canon_stream_write(U8Type(), opts, task, wsi1, 0, 4)
-    assert(ret == definitions.BLOCKED)
-    dst_stream.set_remain(100)
-    [] = await canon_waitable_join(task, wsi1, seti)
-    [event] = await canon_waitable_set_wait(False, mem, task, seti, retp)
-    assert(event == EventCode.STREAM_WRITE)
-    assert(mem[retp+0] == wsi1)
     assert(mem[retp+4] == 4)
     src_stream.write([5,6,7,8])
     src_stream.destroy_once_empty()
@@ -1260,22 +1267,22 @@ async def test_async_stream_ops():
     assert(ret == definitions.CLOSED)
     [] = await canon_stream_close_readable(U8Type(), task, rsi1)
     assert(mem[0:4] == b'\x05\x06\x07\x08')
-    [ret] = await canon_stream_write(U8Type(), opts, task, wsi2, 0, 4)
+    [ret] = await canon_stream_write(U8Type(), opts, task, wsi3, 0, 4)
     assert(ret == 4)
-    [] = await canon_stream_close_writable(U8Type(), task, wsi2)
-    [ret] = await canon_stream_read(U8Type(), opts, task, rsi2, 0, 4)
+    [] = await canon_stream_close_writable(U8Type(), task, wsi3)
+    [ret] = await canon_stream_read(U8Type(), opts, task, rsi4, 0, 4)
     assert(ret == definitions.BLOCKED)
-    [] = await canon_waitable_join(task, rsi2, seti)
+    [] = await canon_waitable_join(task, rsi4, seti)
     [event] = await canon_waitable_set_wait(False, mem, task, seti, retp)
     assert(event == EventCode.STREAM_READ)
-    assert(mem[retp+0] == rsi2)
+    assert(mem[retp+0] == rsi4)
     assert(mem[retp+4] == 4)
-    [ret] = await canon_stream_read(U8Type(), opts, task, rsi2, 0, 4)
+    [ret] = await canon_stream_read(U8Type(), opts, task, rsi4, 0, 4)
     assert(ret == definitions.CLOSED)
-    [] = await canon_stream_close_readable(U8Type(), task, rsi2)
-    [ret] = await canon_stream_write(U8Type(), sync_opts, task, wsi1, 0, 4)
+    [] = await canon_stream_close_readable(U8Type(), task, rsi4)
+    [ret] = await canon_stream_write(U8Type(), sync_opts, task, wsi2, 0, 4)
     assert(ret == 4)
-    [] = await canon_stream_close_writable(U8Type(), task, wsi1)
+    [] = await canon_stream_close_writable(U8Type(), task, wsi2)
     [] = await canon_waitable_set_drop(task, seti)
     return []
 
@@ -1321,21 +1328,21 @@ async def test_receive_own_stream():
 
   async def core_func(task, args):
     assert(len(args) == 0)
-    [wsi] = await canon_stream_new(U8Type(), task)
-    assert(wsi == 1)
+    [packed] = await canon_stream_new(U8Type(), task)
+    rsi,wsi = unpack_new_ends(packed)
+    assert(rsi == 1)
+    assert(wsi == 2)
     [ret] = await canon_stream_write(U8Type(), opts, task, wsi, 0, 4)
     assert(ret == definitions.BLOCKED)
     retp = 8
-    [ret] = await canon_lower(opts, host_ft, host_import, task, [wsi, retp])
+    [ret] = await canon_lower(opts, host_ft, host_import, task, [rsi, retp])
     assert(ret == 0)
-    result = int.from_bytes(mem[retp : retp+4], 'little', signed=False)
-    assert(result == (wsi | 2**31))
-    [ret] = await canon_lower(opts, host_ft, host_import, task, [wsi, retp])
-    assert(ret == 0)
-    result = int.from_bytes(mem[retp : retp+4], 'little', signed=False)
-    assert(result == (wsi | 2**31))
-    [ret] = await canon_stream_cancel_write(U8Type(), True, task, wsi)
-    assert(ret == 0)
+    rsi2 = int.from_bytes(mem[retp : retp+4], 'little', signed=False)
+    assert(rsi2 == 1)
+    try:
+      await canon_stream_cancel_write(U8Type(), True, task, wsi)
+    except Trap:
+      pass
     [] = await canon_stream_close_writable(U8Type(), task, wsi)
     return []
 
@@ -1388,9 +1395,11 @@ async def test_host_partial_reads_writes():
     assert(mem[retp+4] == 2)
     [] = await canon_stream_close_readable(U8Type(), task, rsi)
 
-    [wsi] = await canon_stream_new(U8Type(), task)
-    assert(wsi == 1)
-    [ret] = await canon_lower(opts, sink_ft, host_sink, task, [wsi])
+    [packed] = await canon_stream_new(U8Type(), task)
+    rsi,wsi = unpack_new_ends(packed)
+    assert(rsi == 1)
+    assert(wsi == 2)
+    [ret] = await canon_lower(opts, sink_ft, host_sink, task, [rsi])
     assert(ret == 0)
     mem[0:6] = b'\x01\x02\x03\x04\x05\x06'
     [ret] = await canon_stream_write(U8Type(), opts, task, wsi, 0, 6)
@@ -1427,8 +1436,9 @@ async def test_wasm_to_wasm_stream():
   ft1 = FuncType([], [StreamType(U8Type())])
   async def core_func1(task, args):
     assert(not args)
-    [wsi] = await canon_stream_new(U8Type(), task)
-    [] = await canon_task_return(task, [StreamType(U8Type())], opts1, [wsi])
+    [packed] = await canon_stream_new(U8Type(), task)
+    rsi,wsi = unpack_new_ends(packed)
+    [] = await canon_task_return(task, [StreamType(U8Type())], opts1, [rsi])
 
     await task.on_block(fut1)
 
@@ -1523,8 +1533,9 @@ async def test_wasm_to_wasm_stream_empty():
   ft1 = FuncType([], [StreamType(None)])
   async def core_func1(task, args):
     assert(not args)
-    [wsi] = await canon_stream_new(None, task)
-    [] = await canon_task_return(task, [StreamType(None)], opts1, [wsi])
+    [packed] = await canon_stream_new(None, task)
+    rsi,wsi = unpack_new_ends(packed)
+    [] = await canon_task_return(task, [StreamType(None)], opts1, [rsi])
 
     await task.on_block(fut1)
 
@@ -1627,8 +1638,9 @@ async def test_cancel_copy():
   async def core_func(task, args):
     assert(not args)
 
-    [wsi] = await canon_stream_new(U8Type(), task)
-    [ret] = await canon_lower(lower_opts, host_ft1, host_func1, task, [wsi])
+    [packed] = await canon_stream_new(U8Type(), task)
+    rsi,wsi = unpack_new_ends(packed)
+    [ret] = await canon_lower(lower_opts, host_ft1, host_func1, task, [rsi])
     assert(ret == 0)
     mem[0:4] = b'\x0a\x0b\x0c\x0d'
     [ret] = await canon_stream_write(U8Type(), lower_opts, task, wsi, 0, 4)
@@ -1642,8 +1654,9 @@ async def test_cancel_copy():
     host_sink.set_remain(100)
     assert(await host_sink.consume(100) is None)
 
-    [wsi] = await canon_stream_new(U8Type(), task)
-    [ret] = await canon_lower(lower_opts, host_ft1, host_func1, task, [wsi])
+    [packed] = await canon_stream_new(U8Type(), task)
+    rsi,wsi = unpack_new_ends(packed)
+    [ret] = await canon_lower(lower_opts, host_ft1, host_func1, task, [rsi])
     assert(ret == 0)
     mem[0:4] = b'\x01\x02\x03\x04'
     [ret] = await canon_stream_write(U8Type(), lower_opts, task, wsi, 0, 4)
@@ -1722,7 +1735,7 @@ class HostFutureSource(ReadableStream):
     self.pending_on_copy_done = None
   def closed(self):
     return self.is_closed
-  def read(self, dst, on_partial_copy, on_copy_done):
+  def read(self, inst, dst, on_partial_copy, on_copy_done):
     if self.is_closed:
       return 'done'
     elif self.v:
@@ -1762,7 +1775,7 @@ async def test_futures():
     outgoing = HostFutureSource(U8Type())
     on_return([outgoing])
     incoming = HostFutureSink()
-    future.read(incoming, lambda:(), lambda:())
+    future.read(None, incoming, lambda:(), lambda:())
     await on_block(incoming.has_v.wait())
     assert(incoming.v == 42)
     outgoing.set_result(43)
@@ -1770,9 +1783,10 @@ async def test_futures():
   lift_opts = mk_opts()
   async def core_func(task, args):
     assert(not args)
-    [wfi] = await canon_future_new(U8Type(), task)
+    [packed] = await canon_future_new(U8Type(), task)
+    rfi,wfi = unpack_new_ends(packed)
     retp = 16
-    [ret] = await canon_lower(lower_opts, host_ft1, host_func, task, [wfi, retp])
+    [ret] = await canon_lower(lower_opts, host_ft1, host_func, task, [rfi, retp])
     assert(ret == 0)
     rfi = mem[retp]
 
@@ -1797,8 +1811,9 @@ async def test_futures():
     [] = await canon_future_close_readable(U8Type(), task, rfi)
     [] = await canon_waitable_set_drop(task, seti)
 
-    [wfi] = await canon_future_new(U8Type(), task)
-    [ret] = await canon_lower(lower_opts, host_ft1, host_func, task, [wfi, retp])
+    [packed] = await canon_future_new(U8Type(), task)
+    rfi,wfi = unpack_new_ends(packed)
+    [ret] = await canon_lower(lower_opts, host_ft1, host_func, task, [rfi, retp])
     assert(ret == 0)
     rfi = mem[retp]
 

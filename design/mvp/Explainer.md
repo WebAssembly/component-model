@@ -1737,26 +1737,22 @@ instance's table of [waitables], trapping if the subtask hasn't returned. (See
 
 ###### 🔀 `stream.new` and `future.new`
 
-| Synopsis                                   |                                       |
-| ------------------------------------------ | ------------------------------------- |
-| Approximate WIT signature for `stream.new` | `func<T>() -> writable-stream-end<T>` |
-| Approximate WIT signature for `future.new` | `func<T>() -> writable-future-end<T>` |
-| Canonical ABI signature                    | `[] -> [writable-end:i32]`            |
+| Synopsis                                   |                                                                      |
+| ------------------------------------------ | -------------------------------------------------------------------- |
+| Approximate WIT signature for `stream.new` | `func<T>() -> tuple<readable-stream-end<T>, writable-stream-end<T>>` |
+| Approximate WIT signature for `future.new` | `func<T>() -> tuple<readable-future-end<T>, writable-future-end<T>>` |
+| Canonical ABI signature                    | `[] -> [packed-ends:i64]`                                            |
 
-The `stream.new` and `future.new` built-ins return the [writable end] of a new
-`stream<T>` or `future<T>`. (See also [`canon_stream_new`] in the Canonical ABI
-explainer for details.)
+The `stream.new` and `future.new` built-ins return the [readable and writable ends]
+of a new `stream<T>` or `future<T>`. The readable and writable ends are added to
+the current instance's table of [waitables] and then the two `i32` indices of the
+two ends are packed into a single `i64` return value (with the readable end in the low
+32 bits). (See also [`canon_stream_new`] in the Canonical ABI explainer for
+details.)
 
 The types `readable-stream-end<T>` and `writable-stream-end<T>` are not WIT
 types; they are the conceptual lower-level types that describe how the
 canonical built-ins use the readable and writable ends of a `stream<T>`.
-`writable-stream-end<T>`s are obtained from `stream.new`. A
-`readable-stream-end<T>` is created by calling `stream.new` to create a fresh
-"unpaired" `writable-stream<T>` and then lifting it as the `stream<T>`
-parameter of an import call or the `stream<T>` result of an export call. This
-lifted `stream<T>` value is then lowered by the receiving component into a
-`readable-stream-end<T>` that is "paired" with the original
-`writable-stream-end<T>`.
 
 An analogous relationship exists among `readable-future-end<T>`,
 `writable-future-end<T>`, and the WIT `future<T>`.
@@ -2881,6 +2877,7 @@ For some use-case-focused, worked examples, see:
 [Context-Local Storage]: Async.md#context-local-storage
 [Subtask]: Async.md#subtask
 [Stream or Future]: Async.md#streams-and-futures
+[Readable and Writable Ends]: Async.md#streams-and-futures
 [Readable or Writable End]: Async.md#streams-and-futures
 [Writable End]: Async.md#streams-and-futures
 [Waiting]: Async.md#waiting

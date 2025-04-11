@@ -93,10 +93,9 @@ out-of-memory conditions (such as `memory.grow` returning `-1` from within
 `realloc`) will trap (via `unreachable`). This significantly simplifies the
 Canonical ABI by avoiding the need to support the complicated protocols
 necessary to support recovery in the middle of nested allocations. (Note: by
-nature of eliminating `realloc`, switching to
-[lazy lowering](https://github.com/WebAssembly/component-model/issues/383)
-would obviate this issue, allowing guest wasm code to handle failure by eagerly
-returning some value of the declared return type to indicate failure.
+nature of eliminating `realloc`, switching to [lazy lowering] would obviate
+this issue, allowing guest wasm code to handle failure by eagerly returning
+some value of the declared return type to indicate failure.
 
 
 ### Lifting and Lowering Context
@@ -1060,7 +1059,7 @@ OnCopyDone = Callable[[], None]
 
 class ReadableStream:
   t: ValType
-  read: Callable[[WritableBuffer, OnPartialCopy, OnCopyDone], Literal['done','blocked']]
+  read: Callable[[ComponentInstance, WritableBuffer, OnPartialCopy, OnCopyDone], Literal['done','blocked']]
   cancel: Callable[[], None]
   close: Callable[[]]
   closed: Callable[[], bool]
@@ -1097,26 +1096,23 @@ the readable and writable ends of streams (defined below). Introducing the
 class in chunks, starting with the fields and initialization:
 ```python
 class ReadableStreamGuestImpl(ReadableStream):
-  impl: ComponentInstance
   closed_: bool
+  pending_inst: Optional[ComponentInstance]
   pending_buffer: Optional[Buffer]
   pending_on_partial_copy: Optional[OnPartialCopy]
   pending_on_copy_done: Optional[OnCopyDone]
 
-  def __init__(self, t, inst):
+  def __init__(self, t):
     self.t = t
-    self.impl = inst
     self.closed_ = False
     self.reset_pending()
 
   def reset_pending(self):
+    self.pending_inst = None
     self.pending_buffer = None
     self.pending_on_partial_copy = None
     self.pending_on_copy_done = None
 ```
-The `impl` field records the component instance that created this stream and is
-used by `lower_stream` below.
-
 If set, the `pending_*` fields record the `Buffer` and `On*` callbacks of a
 `read` or `write` that is waiting to rendezvous with a complementary `write` or
 `read`. Closing the readable or writable end of a stream or cancelling a `read`
@@ -1159,21 +1155,23 @@ is also a symmetric `write` method that follows the same rules as `read`,
 but in the opposite direction. Both are implemented by a single underlying
 `copy` method parameterized by the direction of the copy:
 ```python
-  def read(self, dst, on_partial_copy, on_copy_done):
-    return self.copy(dst, on_partial_copy, on_copy_done, self.pending_buffer, dst)
+  def read(self, inst, dst, on_partial_copy, on_copy_done):
+    return self.copy(inst, dst, on_partial_copy, on_copy_done, self.pending_buffer, dst)
 
-  def write(self, src, on_partial_copy, on_copy_done):
-    return self.copy(src, on_partial_copy, on_copy_done, src, self.pending_buffer)
+  def write(self, inst, src, on_partial_copy, on_copy_done):
+    return self.copy(inst, src, on_partial_copy, on_copy_done, src, self.pending_buffer)
 
-  def copy(self, buffer, on_partial_copy, on_copy_done, src, dst):
+  def copy(self, inst, buffer, on_partial_copy, on_copy_done, src, dst):
     if self.closed_:
       return 'done'
     elif not self.pending_buffer:
+      self.pending_inst = inst
       self.pending_buffer = buffer
       self.pending_on_partial_copy = on_partial_copy
       self.pending_on_copy_done = on_copy_done
       return 'blocked'
     else:
+      trap_if(inst is self.pending_inst) # temporary
       ncopy = min(src.remain(), dst.remain())
       assert(ncopy > 0)
       dst.write(src.read(ncopy))
@@ -1183,17 +1181,21 @@ but in the opposite direction. Both are implemented by a single underlying
         self.reset_and_notify_pending()
       return 'done'
 ```
+Currently, there is a trap when both the `read` and `write` come from the same
+component instance, but this trapping condition will be removed in a subsequent
+release. The reason for this trap is that when lifting and lowering can alias
+the same memory, interleaving must be handled carefully. Future improvements to
+the Canonical ABI ([lazy lowering]) can greatly simplify this interleaving.
 
 Given the above, we can define the `{Readable,Writable}StreamEnd` classes that
 are actually stored in the `waitables` table. The classes are almost entirely
-symmetric, with the only difference being that `WritableStreamEnd` has an
-additional `paired` boolean field that is used by `{lift,lower}_stream` below
-to ensure that there is at most one readable end of a stream. The `copying`
-field tracks whether there is an asynchronous read or write in progress and is
-maintained by the definitions of `stream.{read,write}` below. Importantly,
-`paired`, `copying`, and the inherited fields of `Waitable` are per-*end*, not
-per-*stream* (unlike the fields of `ReadableStreamGuestImpl` shown above, which
-are per-stream and shared by both ends via their common `stream` field).
+symmetric, with the only difference being whether the polymorphic `copy` method
+(used below) calls `read` or `write`. The `copying` field tracks whether there
+is an asynchronous read or write in progress and is maintained by the
+definitions of `stream.{read,write}` below. Importantly, `copying` and the
+inherited fields of `Waitable` are per-*end*, not per-*stream* (unlike the
+fields of `ReadableStreamGuestImpl` shown above, which are per-stream and
+shared by both ends via their common `stream` field).
 ```python
 class StreamEnd(Waitable):
   stream: ReadableStream
@@ -1210,13 +1212,12 @@ class StreamEnd(Waitable):
     Waitable.drop(self)
 
 class ReadableStreamEnd(StreamEnd):
-  def copy(self, dst, on_partial_copy, on_copy_done):
-    return self.stream.read(dst, on_partial_copy, on_copy_done)
+  def copy(self, inst, dst, on_partial_copy, on_copy_done):
+    return self.stream.read(inst, dst, on_partial_copy, on_copy_done)
 
 class WritableStreamEnd(StreamEnd):
-  paired: bool = False
-  def copy(self, src, on_partial_copy, on_copy_done):
-    return self.stream.write(src, on_partial_copy, on_copy_done)
+  def copy(self, inst, src, on_partial_copy, on_copy_done):
+    return self.stream.write(inst, src, on_partial_copy, on_copy_done)
 ```
 Dropping a stream end from the `waitables` table while an asynchronous read or
 write is in progress traps since the async read or write cannot be cancelled
@@ -1239,25 +1240,24 @@ can be achieved by simply wrapping the `on_copy_done` callback (defined above)
 and closing once a value has been read-from or written-to the given buffer:
 ```python
 class FutureEnd(StreamEnd):
-  def close_after_copy(self, copy_op, buffer, on_copy_done):
+  def close_after_copy(self, copy_op, inst, buffer, on_copy_done):
     assert(buffer.remain() == 1)
     def on_copy_done_wrapper():
       if buffer.remain() == 0:
         self.stream.close()
       on_copy_done()
-    ret = copy_op(buffer, on_partial_copy = None, on_copy_done = on_copy_done_wrapper)
+    ret = copy_op(inst, buffer, on_partial_copy = None, on_copy_done = on_copy_done_wrapper)
     if ret == 'done' and buffer.remain() == 0:
       self.stream.close()
     return ret
 
 class ReadableFutureEnd(FutureEnd):
-  def copy(self, dst, on_partial_copy, on_copy_done):
-    return self.close_after_copy(self.stream.read, dst, on_copy_done)
+  def copy(self, inst, dst, on_partial_copy, on_copy_done):
+    return self.close_after_copy(self.stream.read, inst, dst, on_copy_done)
 
 class WritableFutureEnd(FutureEnd):
-  paired: bool = False
-  def copy(self, src, on_partial_copy, on_copy_done):
-    return self.close_after_copy(self.stream.write, src, on_copy_done)
+  def copy(self, inst, src, on_partial_copy, on_copy_done):
+    return self.close_after_copy(self.stream.write, inst, src, on_copy_done)
   def drop(self):
     FutureEnd.drop(self)
 ```
@@ -1731,42 +1731,25 @@ being that it is a dynamic error to attempt to lift a `future` that has already
 been successfully read (which will leave it `closed()`):
 ```python
 def lift_stream(cx, i, t):
-  return lift_async_value(ReadableStreamEnd, WritableStreamEnd, cx, i, t)
+  return lift_async_value(ReadableStreamEnd, cx, i, t)
 
 def lift_future(cx, i, t):
-  v = lift_async_value(ReadableFutureEnd, WritableFutureEnd, cx, i, t)
+  v = lift_async_value(ReadableFutureEnd, cx, i, t)
   trap_if(v.closed())
   return v
 
-def lift_async_value(ReadableEndT, WritableEndT, cx, i, t):
+def lift_async_value(ReadableEndT, cx, i, t):
   assert(not contains_borrow(t))
-  e = cx.inst.waitables.get(i)
-  match e:
-    case ReadableEndT():
-      trap_if(e.copying)
-      cx.inst.waitables.remove(i)
-    case WritableEndT():
-      trap_if(e.paired)
-      e.paired = True
-    case _:
-      trap()
+  e = cx.inst.waitables.remove(i)
+  trap_if(not isinstance(e, ReadableEndT))
   trap_if(e.stream.t != t)
+  trap_if(e.copying)
   return e.stream
 ```
-Since the `waitables` table is heterogeneous, dynamic checks are
-necessary to ensure that `i` index actually refers to stream/future end
-of the correct type.
-
-Lifting the readable end (of a stream or future) transfers ownership of the
-readable end and traps if a read was in progress (which would now be dangling).
-
-Lifting the writable end of a stream leaves the writable end in place (allowing
-there to be a write in progress) and shares the writable end's contained
-`ReadableStreamGuestImpl` object with the readable end created by
-`lower_stream`, pairing the two ends together. As an invariant, each stream can
-have at most one readable and writable end, so the `paired` field of
-`Writable{Stream,Future}End` is used to track whether there is already a
-readable end and trapping if another would be created.
+Since the `waitables` table is heterogeneous, dynamic checks are necessary to
+ensure that `i` index actually refers to the readable end of a stream/future of
+the correct type. Lifting transfers ownership of the readable end and traps if
+a read was in progress (which would now be dangling).
 
 
 ### Storing
@@ -2189,47 +2172,23 @@ type, the only thing the borrowed handle is good for is calling
 `resource.rep`, so lowering might as well avoid the overhead of creating an
 intermediate borrow handle.
 
-Lowering a `stream` or `future` is almost entirely symmetric. The
-`trap_if(v.closed())` in `lift_future` ensures the validity of the
-`assert(not v.closed())` in `lower_future`.
+Lowering a `stream` or `future` is almost entirely symmetric and simply add a
+new readable end to the `waitables` table, passing the index of the new element
+to core wasm. The `trap_if(v.closed())` in `lift_future` ensures the validity
+of the `assert(not v.closed())` in `lower_future`.
 ```python
 def lower_stream(cx, v, t):
-  return lower_async_value(ReadableStreamEnd, WritableStreamEnd, cx, v, t)
+  return lower_async_value(ReadableStreamEnd, cx, v, t)
 
 def lower_future(cx, v, t):
   assert(not v.closed())
-  return lower_async_value(ReadableFutureEnd, WritableFutureEnd, cx, v, t)
+  return lower_async_value(ReadableFutureEnd, cx, v, t)
 
-def lower_async_value(ReadableEndT, WritableEndT, cx, v, t):
+def lower_async_value(ReadableEndT, cx, v, t):
   assert(isinstance(v, ReadableStream))
   assert(not contains_borrow(t))
-  if isinstance(v, ReadableStreamGuestImpl) and cx.inst is v.impl:
-    for i,e in enumerate(cx.inst.waitables.array):
-      if isinstance(e, WritableEndT) and e.stream is v:
-        break
-    assert(e.paired)
-    e.paired = False
-    assert(i <= Table.MAX_LENGTH < 2**31)
-    return i | (2**31)
-  else:
-    return cx.inst.waitables.add(ReadableEndT(v))
+  return cx.inst.waitables.add(ReadableEndT(v))
 ```
-In the ordinary (`else`) case, the `ReadableStream` value (which may be
-implemented by the host or wasm) is stored in a new readable end in the
-`waitables` table.
-
-The interesting case is when a component instance receives a `ReadableStream`
-for which the component instance already holds writable end. Without specially
-handling this case, this would lead to copies from a single linear memory into
-itself which is both inefficient and raises subtle semantic interleaving
-questions that we would rather avoid. To avoid both, this case is detected and
-the index of the existing writable end is returned instead of a new readable
-end, setting the high bit to signal this fact to guest code. Guest code must
-therefore handle this special case by collapsing the two ends of the stream to
-work fully within guest code (since the Canonical ABI is now wholly unnecessary
-to pass values from writer to reader). The O(N) search through the `waitables`
-table is expected to be optimized away by instead storing a pointer or index
-of the writable end in the stream itself (alongside the `impl` field).
 
 
 ### Flattening
@@ -3458,21 +3417,30 @@ For canonical definitions:
 (canon future.new $t (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (result i32))`
+* `$f` is given type `(func (result i64))`
 
-Calling `$f` calls `canon_{stream,future}_new` which creates a new abstract
-{stream, future} and adds a new writable end for it to the `waitables` table
-and returns its index.
+Calling `$f` calls `canon_{stream,future}_new` which adds two elements to the
+current component instance's `waitables` table and returns the indices packed
+into a single `i64`. The first element (in the low 32 bits) is the readable end
+(of the new {stream, future}) and the second element (in the high 32 bits) is
+the writable end. The expectation is that, after calling `{stream,future}.new`,
+the readable end is subsequently transferred to another component (or the host)
+via `stream` or `future` parameter/result type (see `lift_{stream,future}`
+above).
 ```python
 async def canon_stream_new(elem_type, task):
   trap_if(not task.inst.may_leave)
-  stream = ReadableStreamGuestImpl(elem_type, task.inst)
-  return [ task.inst.waitables.add(WritableStreamEnd(stream)) ]
+  stream = ReadableStreamGuestImpl(elem_type)
+  ri = task.inst.waitables.add(ReadableStreamEnd(stream))
+  wi = task.inst.waitables.add(WritableStreamEnd(stream))
+  return [ ri | (wi << 32) ]
 
 async def canon_future_new(t, task):
   trap_if(not task.inst.may_leave)
-  future = ReadableStreamGuestImpl(t, task.inst)
-  return [ task.inst.waitables.add(WritableFutureEnd(future)) ]
+  future = ReadableStreamGuestImpl(t)
+  ri = task.inst.waitables.add(ReadableFutureEnd(future))
+  wi = task.inst.waitables.add(WritableFutureEnd(future))
+  return [ ri | (wi << 32) ]
 ```
 Because futures are just streams with extra limitations, here we see that a
 `WritableFutureEnd` shares the same `ReadableStreamGuestImpl` type as
@@ -3558,7 +3526,7 @@ multiple partial copies before having to context-switch back.
       if not async_copy.done():
         async_copy.set_result(None)
     on_copy_done = partial(on_partial_copy, revoke_buffer = lambda:())
-    if e.copy(buffer, on_partial_copy, on_copy_done) != 'done':
+    if e.copy(task.inst, buffer, on_partial_copy, on_copy_done) != 'done':
       async_copy = asyncio.Future()
       await task.wait_on(async_copy, sync = True)
       final_revoke_buffer()
@@ -3581,7 +3549,7 @@ context-switching overhead.
       e.set_event(partial(copy_event, revoke_buffer))
     def on_copy_done():
       e.set_event(partial(copy_event, revoke_buffer = lambda:()))
-    if e.copy(buffer, on_partial_copy, on_copy_done) != 'done':
+    if e.copy(task.inst, buffer, on_partial_copy, on_copy_done) != 'done':
       e.copying = True
       return [BLOCKED]
   return [pack_copy_result(task, buffer, e)]
@@ -3928,6 +3896,7 @@ def canon_thread_available_parallelism():
 [Current Task]: Async.md#current-task
 [Readable and Writable Ends]: Async.md#streams-and-futures
 [Context-Local Storage]: Async.md#context-local-storage
+[Lazy Lowering]: https://github.com/WebAssembly/component-model/issues/383
 
 [Administrative Instructions]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-instr-admin
 [Implementation Limits]: https://webassembly.github.io/spec/core/appendix/implementation.html
