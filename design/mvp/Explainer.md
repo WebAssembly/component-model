@@ -2465,8 +2465,9 @@ To determine whether two names (defined as sequences of [Unicode Scalar
 Values]) are **strongly-unique**:
 * If one name is `l` and the other name is `[constructor]l` (for the same
   `label` `l`), they *are* strongly-unique.
-* If one name is `l` and the other name is `[method]l.l` (for the same
-  `label` `l`), they *are not* strongly-unique.
+* If one name is `l` and the other name is `[*]l.l` (for the same
+  `label` `l` and any annotation `*` with a dotted `l.l` name), they *are
+  not* strongly-unique.
 * Otherwise:
   * Lowercase all the `acronym`s (uppercase letters) in both names.
   * Strip any `[...]` annotation prefix from both names.
