@@ -354,7 +354,7 @@ values *into* the buffer's memory. Buffers are represented by the following 3
 abstract Python classes:
 ```python
 class Buffer:
-  MAX_LENGTH = 2**30 - 1
+  MAX_LENGTH = 2**28 - 1
   t: ValType
   remain: Callable[[], int]
 
@@ -1055,7 +1055,7 @@ stream.)
 ```python
 RevokeBuffer = Callable[[], None]
 OnPartialCopy = Callable[[RevokeBuffer], None]
-OnCopyDone = Callable[[], None]
+OnCopyDone = Callable[[Literal['completed','cancelled']], None]
 
 class ReadableStream:
   t: ValType
@@ -1068,7 +1068,8 @@ The key operation is `read` which works as follows:
 * `read` is non-blocking, returning `'blocked'` if it would have blocked.
 * The `On*` callbacks are only called *after* `read` returns `'blocked'`.
 * `OnCopyDone` is called to indicate that the caller has regained ownership of
-  the buffer.
+  the buffer and whether this was due to the read/write completing or
+  being cancelled.
 * `OnPartialCopy` is called to indicate a partial write has been made to the
   buffer, but there may be further writes made in the future, so the caller
   has *not* regained ownership of the buffer.
@@ -1118,21 +1119,21 @@ If set, the `pending_*` fields record the `Buffer` and `On*` callbacks of a
 `read`. Closing the readable or writable end of a stream or cancelling a `read`
 or `write` notifies any pending `read` or `write` via its `OnCopyDone`
 callback, which lets the other side know that ownership of the `Buffer` has
-been returned:
+been returned and why:
 ```python
-  def reset_and_notify_pending(self):
+  def reset_and_notify_pending(self, why):
     pending_on_copy_done = self.pending_on_copy_done
     self.reset_pending()
-    pending_on_copy_done()
+    pending_on_copy_done(why)
 
   def cancel(self):
-    self.reset_and_notify_pending()
+    self.reset_and_notify_pending('cancelled')
 
   def close(self):
     if not self.closed_:
       self.closed_ = True
       if self.pending_buffer:
-        self.reset_and_notify_pending()
+        self.reset_and_notify_pending('completed')
 
   def closed(self):
     return self.closed_
@@ -1178,7 +1179,7 @@ but in the opposite direction. Both are implemented by a single underlying
       if self.pending_buffer.remain() > 0:
         self.pending_on_partial_copy(self.reset_pending)
       else:
-        self.reset_and_notify_pending()
+        self.reset_and_notify_pending('completed')
       return 'done'
 ```
 Currently, there is a trap when both the `read` and `write` come from the same
@@ -1242,10 +1243,10 @@ and closing once a value has been read-from or written-to the given buffer:
 class FutureEnd(StreamEnd):
   def close_after_copy(self, copy_op, inst, buffer, on_copy_done):
     assert(buffer.remain() == 1)
-    def on_copy_done_wrapper():
+    def on_copy_done_wrapper(why):
       if buffer.remain() == 0:
         self.stream.close()
-      on_copy_done()
+      on_copy_done(why)
     ret = copy_op(inst, buffer, on_partial_copy = None, on_copy_done = on_copy_done_wrapper)
     if ret == 'done' and buffer.remain() == 0:
       self.stream.close()
@@ -3520,7 +3521,8 @@ multiple partial copies before having to context-switch back.
 ```python
   if opts.sync:
     final_revoke_buffer = None
-    def on_partial_copy(revoke_buffer):
+    def on_partial_copy(revoke_buffer, why = 'completed'):
+      assert(why == 'completed')
       nonlocal final_revoke_buffer
       final_revoke_buffer = revoke_buffer
       if not async_copy.done():
@@ -3531,6 +3533,8 @@ multiple partial copies before having to context-switch back.
       await task.wait_on(async_copy, sync = True)
       final_revoke_buffer()
 ```
+(When non-cooperative threads are added, the assertion that synchronous copies
+can only be `completed`, and not `cancelled`, will no longer hold.)
 
 In the asynchronous case, the `on_*` callbacks set a pending event on the
 `Waitable` which will be delivered to core wasm when core wasm calls
@@ -3541,36 +3545,46 @@ allowing multiple partial copies to complete in the interim, reducing overall
 context-switching overhead.
 ```python
   else:
-    def copy_event(revoke_buffer):
+    def copy_event(why, revoke_buffer):
       revoke_buffer()
       e.copying = False
-      return (event_code, i, pack_copy_result(task, buffer, e))
+      return (event_code, i, pack_copy_result(task, e, buffer, why))
     def on_partial_copy(revoke_buffer):
-      e.set_event(partial(copy_event, revoke_buffer))
-    def on_copy_done():
-      e.set_event(partial(copy_event, revoke_buffer = lambda:()))
+      e.set_event(partial(copy_event, 'completed', revoke_buffer))
+    def on_copy_done(why):
+      e.set_event(partial(copy_event, why, revoke_buffer = lambda:()))
     if e.copy(task.inst, buffer, on_partial_copy, on_copy_done) != 'done':
       e.copying = True
       return [BLOCKED]
-  return [pack_copy_result(task, buffer, e)]
+  return [pack_copy_result(task, e, buffer, 'completed')]
 ```
 However the copy completes, the results are reported to the caller via
 `pack_copy_result`:
 ```python
-BLOCKED = 0xffff_ffff
-CLOSED  = 0x8000_0000
+BLOCKED   = 0xffff_ffff
+COMPLETED = 0x0
+CLOSED    = 0x1
+CANCELLED = 0x2
 
-def pack_copy_result(task, buffer, e):
-  if buffer.progress or not e.stream.closed():
-    assert(buffer.progress <= Buffer.MAX_LENGTH < BLOCKED)
-    assert(not (buffer.progress & CLOSED))
-    return buffer.progress
+def pack_copy_result(task, e, buffer, why):
+  if e.stream.closed():
+    result = CLOSED
+  elif why == 'cancelled':
+    result = CANCELLED
   else:
-    return CLOSED
+    assert(why == 'completed')
+    assert(not isinstance(e, FutureEnd))
+    result = COMPLETED
+  assert(buffer.progress <= Buffer.MAX_LENGTH < 2**28)
+  packed = result | (buffer.progress << 4)
+  assert(packed != BLOCKED)
+  return packed
 ```
-The order of tests here indicates that, if some progress was made and then the
-stream was closed, only the progress is reported and the `CLOSED` status is
-left to be discovered next time.
+The `result` indicates whether the stream was closed by the other end, the
+copy was cancelled by this end (via `{stream,future}.cancel-{read,write}`) or,
+otherwise, completed successfully. In all cases, any number of elements (from
+`0` to `n`) may have *first* been copied into or out of the buffer passed to
+the `read` or `write` and so this number is packed into the `i32` result.
 
 
 ### 🔀 `canon {stream,future}.cancel-{read,write}`
