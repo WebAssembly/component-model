@@ -812,20 +812,13 @@ to be interpreted based on the `EventCode`. The meaning of the different
 code that produces the events (specifically, in `subtask_event` and
 `copy_event`).
 ```python
-class CallState(IntEnum):
-  STARTING = 1
-  STARTED = 2
-  RETURNED = 3
-
 class EventCode(IntEnum):
   NONE = 0
-  CALL_STARTING = CallState.STARTING
-  CALL_STARTED = CallState.STARTED
-  CALL_RETURNED = CallState.RETURNED
-  STREAM_READ = 5
-  STREAM_WRITE = 6
-  FUTURE_READ = 7
-  FUTURE_WRITE = 8
+  SUBTASK = 1
+  STREAM_READ = 2
+  STREAM_WRITE = 3
+  FUTURE_READ = 4
+  FUTURE_WRITE = 5
 
 EventTuple = tuple[EventCode, int, int]
 ```
@@ -966,6 +959,11 @@ only manages a few fields of state that are relevant to the caller. As with
 `Task`, this section will introduce `Subtask` incrementally, starting with its
 fields and initialization:
 ```python
+class CallState(IntEnum):
+  STARTING = 0
+  STARTED = 1
+  RETURNED = 2
+
 class Subtask(Waitable):
   state: CallState
   lenders: list[ResourceHandle]
@@ -978,10 +976,10 @@ class Subtask(Waitable):
     self.finished = False
     self.supertask = None
 ```
-The `state` field of `Subtask` holds a `CallState` enum value (defined above as
-part of the definition of `EventCode`) that describes the callee's current
-state along the linear progression from [`STARTING`](Async.md#backpressure) to
-`STARTED` to [`RETURNED`](Async.md#returning).
+The `state` field of `Subtask` holds a `CallState` enum value that describes
+the callee's current state along the linear progression from
+[`STARTING`](Async.md#backpressure) to `STARTED` to
+[`RETURNED`](Async.md#returning).
 
 Although `Subtask` derives `Waitable`, `__init__` does not initialize the
 `Waitable` base object. Instead, the `Waitable` base is only initialized when
@@ -2954,7 +2952,7 @@ immediately return control flow back to the `async` caller if `callee` blocks:
           def subtask_event():
             if subtask.state == CallState.RETURNED:
               subtask.finish()
-            return (EventCode(subtask.state), subtaski, 0)
+            return (EventCode.SUBTASK, subtaski, subtask.state)
           subtask.set_event(subtask_event)
         assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
         assert(0 <= int(subtask.state) < 2**4)

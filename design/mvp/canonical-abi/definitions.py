@@ -506,20 +506,13 @@ class Task:
 
 #### Waitable State
 
-class CallState(IntEnum):
-  STARTING = 1
-  STARTED = 2
-  RETURNED = 3
-
 class EventCode(IntEnum):
   NONE = 0
-  CALL_STARTING = CallState.STARTING
-  CALL_STARTED = CallState.STARTED
-  CALL_RETURNED = CallState.RETURNED
-  STREAM_READ = 5
-  STREAM_WRITE = 6
-  FUTURE_READ = 7
-  FUTURE_WRITE = 8
+  SUBTASK = 1
+  STREAM_READ = 2
+  STREAM_WRITE = 3
+  FUTURE_READ = 4
+  FUTURE_WRITE = 5
 
 EventTuple = tuple[EventCode, int, int]
 
@@ -600,6 +593,11 @@ class WaitableSet:
     trap_if(self.num_waiting > 0)
 
 #### Subtask State
+
+class CallState(IntEnum):
+  STARTING = 0
+  STARTED = 1
+  RETURNED = 2
 
 class Subtask(Waitable):
   state: CallState
@@ -1826,7 +1824,7 @@ async def canon_lower(opts, ft, callee, task, flat_args):
           def subtask_event():
             if subtask.state == CallState.RETURNED:
               subtask.finish()
-            return (EventCode(subtask.state), subtaski, 0)
+            return (EventCode.SUBTASK, subtaski, subtask.state)
           subtask.set_event(subtask_event)
         assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
         assert(0 <= int(subtask.state) < 2**4)

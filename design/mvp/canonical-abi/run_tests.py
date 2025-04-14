@@ -586,19 +586,22 @@ async def test_async_to_async():
 
     waitretp = consumer_heap.realloc(0, 0, 8, 4)
     [event] = await canon_waitable_set_wait(False, consumer_heap.memory, task, seti, waitretp)
-    assert(event == EventCode.CALL_RETURNED)
+    assert(event == EventCode.SUBTASK)
     assert(consumer_heap.memory[waitretp] == subi1)
+    assert(consumer_heap.memory[waitretp+4] == CallState.RETURNED)
     [] = await canon_subtask_drop(task, subi1)
 
     [event] = await canon_waitable_set_wait(True, consumer_heap.memory, task, seti, waitretp)
-    assert(event == EventCode.CALL_STARTED)
+    assert(event == EventCode.SUBTASK)
     assert(consumer_heap.memory[waitretp] == subi2)
+    assert(consumer_heap.memory[waitretp+4] == CallState.STARTED)
     assert(consumer_heap.memory[retp] == 13)
     fut2.set_result(None)
 
     [event] = await canon_waitable_set_wait(False, consumer_heap.memory, task, seti, waitretp)
-    assert(event == EventCode.CALL_RETURNED)
+    assert(event == EventCode.SUBTASK)
     assert(consumer_heap.memory[waitretp] == subi2)
+    assert(consumer_heap.memory[waitretp+4] == CallState.RETURNED)
     assert(consumer_heap.memory[retp] == 44)
     [] = await canon_subtask_drop(task, subi2)
     fut3.set_result(None)
@@ -626,8 +629,9 @@ async def test_async_to_async():
 
     [] = await canon_waitable_join(task, dtorsubi, seti)
     [event] = await canon_waitable_set_wait(False, consumer_heap.memory, task, seti, waitretp)
-    assert(event == CallState.RETURNED)
+    assert(event == EventCode.SUBTASK)
     assert(consumer_heap.memory[waitretp] == dtorsubi)
+    assert(consumer_heap.memory[waitretp+4] == CallState.RETURNED)
     assert(dtor_value == 50)
     [] = await canon_subtask_drop(task, dtorsubi)
     [] = await canon_waitable_set_drop(task, seti)
@@ -698,9 +702,9 @@ async def test_async_callback():
     [ctx] = await canon_context_get('i32', 0, task)
     match ctx:
       case 42:
-        assert(args[0] == EventCode.CALL_RETURNED)
+        assert(args[0] == EventCode.SUBTASK)
         assert(args[1] == 1)
-        assert(args[2] == 0)
+        assert(args[2] == CallState.RETURNED)
         await canon_subtask_drop(task, 1)
         [] = await canon_context_set('i32', 0, task, 52)
         return [definitions.CallbackCode.YIELD]
@@ -712,9 +716,9 @@ async def test_async_callback():
         [] = await canon_context_set('i32', 0, task, 62)
         return [definitions.CallbackCode.WAIT]
       case 62:
-        assert(args[0] == EventCode.CALL_RETURNED)
+        assert(args[0] == EventCode.SUBTASK)
         assert(args[1] == 2)
-        assert(args[2] == 0)
+        assert(args[2] == CallState.RETURNED)
         await canon_subtask_drop(task, 2)
         [] = await canon_task_return(task, [U32Type()], opts, [83])
         return [definitions.CallbackCode.EXIT]
@@ -789,8 +793,9 @@ async def test_async_to_sync():
 
     retp = consumer_heap.realloc(0,0,8,4)
     [event] = await canon_waitable_set_wait(False, consumer_heap.memory, task, seti, retp)
-    assert(event == EventCode.CALL_RETURNED)
+    assert(event == EventCode.SUBTASK)
     assert(consumer_heap.memory[retp] == subi1)
+    assert(consumer_heap.memory[retp+4] == CallState.RETURNED)
     await canon_subtask_drop(task, subi1)
     assert(producer1_done == True)
 
@@ -799,8 +804,9 @@ async def test_async_to_sync():
     assert(producer2_done == True)
 
     [event] = await canon_waitable_set_poll(False, consumer_heap.memory, task, seti, retp)
-    assert(event == EventCode.CALL_RETURNED)
+    assert(event == EventCode.SUBTASK)
     assert(consumer_heap.memory[retp] == subi2)
+    assert(consumer_heap.memory[retp+4] == CallState.RETURNED)
     await canon_subtask_drop(task, subi2)
     assert(producer2_done == True)
 
@@ -876,13 +882,15 @@ async def test_async_backpressure():
 
     retp = consumer_heap.realloc(0,0,8,4)
     [event] = await canon_waitable_set_wait(False, consumer_heap.memory, task, seti, retp)
-    assert(event == EventCode.CALL_RETURNED)
+    assert(event == EventCode.SUBTASK)
     assert(consumer_heap.memory[retp] == subi1)
+    assert(consumer_heap.memory[retp+4] == CallState.RETURNED)
     assert(producer1_done == True)
 
     [event] = await canon_waitable_set_poll(False, consumer_heap.memory, task, seti, retp)
-    assert(event == EventCode.CALL_RETURNED)
+    assert(event == EventCode.SUBTASK)
     assert(consumer_heap.memory[retp] == subi2)
+    assert(consumer_heap.memory[retp+4] == CallState.RETURNED)
     assert(producer2_done == True)
 
     await canon_subtask_drop(task, subi1)
@@ -944,14 +952,16 @@ async def test_sync_using_wait():
 
     retp = lower_heap.realloc(0,0,8,4)
     [event] = await canon_waitable_set_wait(False, lower_heap.memory, task, seti, retp)
-    assert(event == EventCode.CALL_RETURNED)
+    assert(event == EventCode.SUBTASK)
     assert(lower_heap.memory[retp] == subi1)
+    assert(lower_heap.memory[retp+4] == CallState.RETURNED)
 
     fut2.set_result(None)
 
     [event] = await canon_waitable_set_wait(False, lower_heap.memory, task, seti, retp)
-    assert(event == EventCode.CALL_RETURNED)
+    assert(event == EventCode.SUBTASK)
     assert(lower_heap.memory[retp] == subi2)
+    assert(lower_heap.memory[retp+4] == CallState.RETURNED)
 
     await canon_subtask_drop(task, subi1)
     await canon_subtask_drop(task, subi2)
