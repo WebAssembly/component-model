@@ -585,7 +585,8 @@ class WaitableSet:
         return e
 
   def poll(self) -> Optional[EventTuple]:
-    random.shuffle(self.elems)
+    if not DETERMINISTIC_PROFILE:
+      random.shuffle(self.elems)
     for w in self.elems:
       assert(self is w.maybe_waitable_set)
       if w.has_pending_event():
