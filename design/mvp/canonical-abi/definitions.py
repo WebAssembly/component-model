@@ -358,7 +358,7 @@ class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
 #### Context-Local Storage
 
 class ContextLocalStorage:
-  LENGTH = 2
+  LENGTH = 1
   array: list[int]
 
   def __init__(self):

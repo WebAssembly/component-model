@@ -226,15 +226,14 @@ current task's context-local storage can be read and written from core wasm
 code by calling the [`context.get`] and [`context.set`] built-ins.
 
 The context-local storage array's length is currently fixed to contain exactly
-2 `i32`s with the goal of allowing this array to be stored inline in whatever
+1 `i32` with the goal of allowing this array to be stored inline in whatever
 existing runtime data structure is already efficiently reachable from ambient
 compiled wasm code. Because module instantiation is declarative in the
 Component Model, the imported `context.{get,set}` built-ins can be inlined by
 the core wasm compiler as-if they were instructions, allowing the generated
 machine code to be a single load or store. This makes context-local storage a
-good place to store the linear-memory shadow stack pointer as well as the
-pointer to the struct used to implement [thread-local storage] APIs used by
-guest code.
+good place to store the pointer to the struct used to implement [thread-local
+storage] APIs used by guest code.
 
 When [memory64] is integrated into the Component Model's Canonical ABI,
 `context.{get,set}` will be backwards-compatibly relaxed to allow `i64`
@@ -246,7 +245,20 @@ When [threads are added](#interaction-with-multi-threading), each thread will
 also get its own distinct mutable context-local storage array. This is the
 reason why "context-local" storage is not called "task-local" storage (where a
 "context" is a finer-grained unit of execution than either a "task" or a
-"thread").
+"thread"). As part of this, the context-local storage array length will be
+increased to 2, allowing the linear-memory stack pointer to be moved from a
+core wasm `global` into context-local storage.
+
+Since the same mutable context-local storage cells are shared by all core wasm
+running under the same task/thread in the same component, the cells' contents
+must be carefully coordinated in the same way as native code has to carefully
+coordinate native ISA state (e.g., the [FS or GS segment base address]). In the
+common case, context-local storage is only `context.set` by the entry
+trampoline invoked by [`canon_lift`] and then all transitively reachable core
+wasm code (including from any `callback`) assumes `context.get` returns the
+same value. Thus, if any *non*-entry-trampoline code calls `context.set`, it is
+the responsibility of *that code* to restore this default assumption before
+allowing control flow to escape into the wild.
 
 For details, see [`context.get`] in the AST explainer and [`canon_context_get`]
 in the Canonical ABI explainer.
@@ -937,6 +949,7 @@ comes after:
 [Structured Concurrency]: https://en.wikipedia.org/wiki/Structured_concurrency
 [Unit]: https://en.wikipedia.org/wiki/Unit_type
 [Thread-local Storage]: https://en.wikipedia.org/wiki/Thread-local_storage
+[FS or GS Segment Base Address]: https://docs.kernel.org/arch/x86/x86_64/fsgs.html
 
 [AST Explainer]: Explainer.md
 [Lift and Lower Definitions]: Explainer.md#canonical-definitions
