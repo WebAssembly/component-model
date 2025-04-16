@@ -444,7 +444,7 @@ when threads are integrated, each `thread.spawn`ed thread would also get a
 fresh, zero-initialized `ContextLocalStorage`.)
 ```python
 class ContextLocalStorage:
-  LENGTH = 2
+  LENGTH = 1
   array: list[int]
 
   def __init__(self):
@@ -457,6 +457,9 @@ class ContextLocalStorage:
   def get(self, i):
     return self.array[i]
 ```
+`LENGTH` is currently set to `1`, but the plan is to increase it to `2` once
+toolchains are ready to migrate the linear-memory-stack pointer from a
+`global` to context-local storage as part of implementing threads.
 
 
 #### Task State
