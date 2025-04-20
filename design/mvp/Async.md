@@ -409,7 +409,7 @@ While the two approaches have significant runtime implementation differences
 (the former requires [fibers] or a [CPS transform] while the latter only
 requires storing fixed-size context-local storage and [`Task`] state),
 semantically they do the same thing which, in the Canonical ABI Python code, is
-factored out into the [`Task.wait`] method. Thus, the difference between
+factored out into the [`Task.wait_on`] method. Thus, the difference between
 `callback` and non-`callback` is one of optimization, not expressivity.
 
 In addition to waiting for an event to occur, a task can also **poll** for
@@ -470,9 +470,8 @@ loop interleaving `stream.read`s (of the readable end passed for `in`) and
 `stream.write`s (of the writable end it `stream.new`ed) before exiting the
 task.
 
-A task may not call `task.return` unless it is in the "started" state. Once
-`task.return` is called, the task is in the "returned" state. A task can only
-finish once it is in the "returned" state. See the [`canon_task_return`]
+Once `task.return` is called, the task is in the "returned" state. A task can
+only finish once it is in the "returned" state. See the [`canon_task_return`]
 function in the Canonical ABI explainer for more details.
 
 ### Borrows
@@ -976,7 +975,7 @@ comes after:
 [`canon_task_return`]: CanonicalABI.md#-canon-taskreturn
 [`Task`]: CanonicalABI.md#task-state
 [`Task.enter`]: CanonicalABI.md#task-state
-[`Task.wait`]: CanonicalABI.md#task-state
+[`Task.wait_on`]: CanonicalABI.md#task-state
 [`Waitable`]: CanonicalABI.md#waitable-state
 [`Task`]: CanonicalABI.md#task-state
 [`Subtask`]: CanonicalABI.md#subtask-state

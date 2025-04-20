@@ -1633,29 +1633,27 @@ populated explicitly with [waitables] by `waitable.join`. (See also
 | Approximate WIT signature  | `func<async?>(s: waitable-set) -> event`       |
 | Canonical ABI signature    | `[s:i32 payload-addr:i32] -> [event-code:i32]` |
 
-where `event`, `event-code`, and `payload` are defined in WIT as:
+where `event` is defined in WIT as:
 ```wit
-record event {
-    kind: event-code,
-    payload: payload,
-}
-enum event-code {
+variant event {
     none,
-    subtask,
-    stream-read,
-    stream-write,
-    future-read,
-    future-write,
+    subtask(subtask-index, subtask-state),
+    stream-read(stream-index, read-status),
+    stream-write(stream-index, write-status),
+    future-read(future-index, read-status),
+    future-write(future-index, write-status),
 }
-record payload {
-    payload1: u32,
-    payload2: u32,
+
+enum subtask-state {
+    starting,
+    started,
+    returned,
 }
 ```
 
 The `waitable-set.wait` built-in waits for any one of the [waitables] in the
 given [waitable set] `s` to make progress and then returns an `event`
-describing the event. The `event-code` `none` is never returned. Waitable sets
+describing the event. The `event` `none` is never returned. Waitable sets
 may be `wait`ed upon when empty, in which case the caller will necessarily
 block until another task adds a waitable to the set that can make progress.
 
@@ -1665,10 +1663,10 @@ can be started (via export call) or resumed while the current task blocks. If
 code until `wait` returns (however, *other* component instances may execute
 code in the interim).
 
-In the Canonical ABI, the return value provides the `event-code`, and the
-`payload` value is stored at the address passed as the `payload-addr`
-parameter. (See also [`canon_waitable_set_wait`] in the Canonical ABI explainer
-for details.)
+In the Canonical ABI, the `event-code` return value provides the `event`
+discriminant and the case payloads are stored as two contiguous `i32`s at the
+8-byte-aligned address `payload-addr`. (See also [`canon_waitable_set_wait`]
+in the Canonical ABI explainer for details.)
 
 ###### 🔀 `waitable-set.poll`
 
@@ -1677,10 +1675,9 @@ for details.)
 | Approximate WIT signature  | `func<async?>(s: waitable-set) -> event`       |
 | Canonical ABI signature    | `[s:i32 payload-addr:i32] -> [event-code:i32]` |
 
-where `event`, `event-code`, and `payload` are defined as in
-[`waitable-set.wait`](#-waitable-setwait).
+where `event` is defined as in [`waitable-set.wait`](#-waitable-setwait).
 
-The `waitable-set.poll` built-in returns the `event-code` `none` if no event
+The `waitable-set.poll` built-in returns the `event` `none` if no event
 was available without blocking. `poll` implicitly performs a `yield`, allowing
 other tasks to be scheduled before `poll` returns. The `async?` immediate is
 passed to `yield`, determining whether other code in the same component

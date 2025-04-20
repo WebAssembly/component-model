@@ -213,6 +213,10 @@ class CanonicalOptions(LiftLowerOptions):
 
 ### Runtime State
 
+scheduler = asyncio.Lock()
+
+#### Component Instance State
+
 class ComponentInstance:
   resources: Table[ResourceHandle]
   waitables: Table[Waitable]
@@ -224,6 +228,7 @@ class ComponentInstance:
   calling_sync_import: bool
   pending_tasks: list[tuple[Task, asyncio.Future]]
   starting_pending_task: bool
+  async_waiting_tasks: asyncio.Condition
 
   def __init__(self):
     self.resources = Table[ResourceHandle]()
@@ -236,6 +241,7 @@ class ComponentInstance:
     self.calling_sync_import = False
     self.pending_tasks = []
     self.starting_pending_task = False
+    self.async_waiting_tasks = asyncio.Condition(scheduler)
 
 #### Table State
 
@@ -371,139 +377,6 @@ class ContextLocalStorage:
   def get(self, i):
     return self.array[i]
 
-#### Task State
-
-class Task:
-  opts: CanonicalOptions
-  inst: ComponentInstance
-  ft: FuncType
-  supertask: Optional[Task]
-  on_return: Optional[Callable]
-  on_block: Callable[[Awaitable], Awaitable]
-  num_borrows: int
-  context: ContextLocalStorage
-
-  def __init__(self, opts, inst, ft, supertask, on_return, on_block):
-    self.opts = opts
-    self.inst = inst
-    self.ft = ft
-    self.supertask = supertask
-    self.on_return = on_return
-    self.on_block = on_block
-    self.num_borrows = 0
-    self.context = ContextLocalStorage()
-
-  current = asyncio.Lock()
-
-  async def sync_on_block(a: Awaitable):
-    Task.current.release()
-    v = await a
-    await Task.current.acquire()
-    return v
-
-  async def enter(self, on_start):
-    assert(Task.current.locked())
-    self.trap_if_on_the_stack(self.inst)
-    if not self.may_enter(self) or self.inst.pending_tasks:
-      f = asyncio.Future()
-      self.inst.pending_tasks.append((self, f))
-      await self.on_block(f)
-      assert(self.may_enter(self) and self.inst.starting_pending_task)
-      self.inst.starting_pending_task = False
-    if self.opts.sync:
-      self.inst.calling_sync_export = True
-    cx = LiftLowerContext(self.opts, self.inst, self)
-    return lower_flat_values(cx, MAX_FLAT_PARAMS, on_start(), self.ft.param_types())
-
-  def trap_if_on_the_stack(self, inst):
-    c = self.supertask
-    while c is not None:
-      trap_if(c.inst is inst)
-      c = c.supertask
-
-  def may_enter(self, pending_task):
-    return not self.inst.backpressure and \
-           not self.inst.calling_sync_import and \
-           not (self.inst.calling_sync_export and pending_task.opts.sync)
-
-  def maybe_start_pending_task(self):
-    if self.inst.starting_pending_task:
-      return
-    for i,(pending_task,pending_future) in enumerate(self.inst.pending_tasks):
-      if self.may_enter(pending_task):
-        self.inst.pending_tasks.pop(i)
-        self.inst.starting_pending_task = True
-        pending_future.set_result(None)
-        return
-
-  async def yield_(self, sync):
-    await self.wait_on(asyncio.sleep(0), sync)
-
-  async_waiting_tasks = asyncio.Condition(current)
-
-  async def wait_on(self, awaitable, sync):
-    assert(not self.inst.calling_sync_import)
-    if sync:
-      self.inst.calling_sync_import = True
-      v = await self.on_block(awaitable)
-      self.inst.calling_sync_import = False
-      self.async_waiting_tasks.notify_all()
-    else:
-      self.maybe_start_pending_task()
-      v = await self.on_block(awaitable)
-      while self.inst.calling_sync_import:
-        await self.async_waiting_tasks.wait()
-    return v
-
-  async def call_sync(self, callee, *args):
-    assert(not self.inst.calling_sync_import)
-    self.inst.calling_sync_import = True
-    v = await callee(*args, self.on_block)
-    self.inst.calling_sync_import = False
-    self.async_waiting_tasks.notify_all()
-    return v
-
-  async def call_async(self, callee, *args):
-    ret = asyncio.Future()
-    async def async_on_block(a: Awaitable):
-      if not ret.done():
-        ret.set_result(None)
-      else:
-        Task.current.release()
-      v = await a
-      await Task.current.acquire()
-      return v
-    async def do_call():
-      await callee(*args, async_on_block)
-      if not ret.done():
-        ret.set_result(None)
-      else:
-        Task.current.release()
-    asyncio.create_task(do_call())
-    await ret
-
-  def return_(self, flat_results):
-    trap_if(not self.on_return)
-    trap_if(self.num_borrows > 0)
-    if self.opts.sync and not self.opts.always_task_return:
-      maxflat = MAX_FLAT_RESULTS
-    else:
-      maxflat = MAX_FLAT_PARAMS
-    ts = self.ft.result_types()
-    cx = LiftLowerContext(self.opts, self.inst, self)
-    vs = lift_flat_values(cx, maxflat, CoreValueIter(flat_results), ts)
-    self.on_return(vs)
-    self.on_return = None
-
-  def exit(self):
-    assert(Task.current.locked())
-    trap_if(self.on_return)
-    assert(self.num_borrows == 0)
-    if self.opts.sync:
-      assert(self.inst.calling_sync_export)
-      self.inst.calling_sync_export = False
-    self.maybe_start_pending_task()
-
 #### Waitable State
 
 class EventCode(IntEnum):
@@ -569,14 +442,6 @@ class WaitableSet:
     self.maybe_has_pending_event = asyncio.Event()
     self.num_waiting = 0
 
-  async def wait(self) -> EventTuple:
-    self.num_waiting += 1
-    while True:
-      await self.maybe_has_pending_event.wait()
-      if (e := self.poll()):
-        self.num_waiting -= 1
-        return e
-
   def poll(self) -> Optional[EventTuple]:
     if not DETERMINISTIC_PROFILE:
       random.shuffle(self.elems)
@@ -592,45 +457,199 @@ class WaitableSet:
     trap_if(len(self.elems) > 0)
     trap_if(self.num_waiting > 0)
 
+#### Task State
+
+OnStart = Callable[[], list[any]]
+OnReturn = Callable[[list[any]], None]
+OnBlock = Callable[[Awaitable], Awaitable]
+
+class Task:
+  opts: CanonicalOptions
+  inst: ComponentInstance
+  ft: FuncType
+  supertask: Optional[Task]
+  on_return: Optional[OnReturn]
+  on_block: OnBlock
+  num_borrows: int
+  context: ContextLocalStorage
+
+  def __init__(self, opts, inst, ft, supertask, on_return, on_block):
+    self.opts = opts
+    self.inst = inst
+    self.ft = ft
+    self.supertask = supertask
+    self.on_return = on_return
+    self.on_block = on_block
+    self.num_borrows = 0
+    self.context = ContextLocalStorage()
+
+  async def enter(self):
+    assert(scheduler.locked())
+    self.trap_if_on_the_stack(self.inst)
+    if not self.may_enter(self) or self.inst.pending_tasks:
+      f = asyncio.Future()
+      self.inst.pending_tasks.append((self, f))
+      await self.on_block(f)
+      assert(self.may_enter(self) and self.inst.starting_pending_task)
+      self.inst.starting_pending_task = False
+    if self.opts.sync:
+      self.inst.calling_sync_export = True
+
+  def trap_if_on_the_stack(self, inst):
+    c = self.supertask
+    while c is not None:
+      trap_if(c.inst is inst)
+      c = c.supertask
+
+  def may_enter(self, pending_task):
+    return not self.inst.backpressure and \
+           not self.inst.calling_sync_import and \
+           not (self.inst.calling_sync_export and pending_task.opts.sync)
+
+  def maybe_start_pending_task(self):
+    if self.inst.starting_pending_task:
+      return
+    for i,(pending_task,pending_future) in enumerate(self.inst.pending_tasks):
+      if self.may_enter(pending_task):
+        self.inst.pending_tasks.pop(i)
+        self.inst.starting_pending_task = True
+        pending_future.set_result(None)
+        return
+
+  async def wait_on(self, awaitable, sync):
+    awaitable = asyncio.ensure_future(awaitable)
+    assert(not self.inst.calling_sync_import)
+    if sync:
+      self.inst.calling_sync_import = True
+    else:
+      self.maybe_start_pending_task()
+    await self.on_block(awaitable)
+    if sync:
+      self.inst.calling_sync_import = False
+      self.inst.async_waiting_tasks.notify_all()
+    else:
+      while self.inst.calling_sync_import:
+        await self.inst.async_waiting_tasks.wait()
+
+  async def call_sync(self, callee, on_start, on_return):
+    assert(not self.inst.calling_sync_import)
+    self.inst.calling_sync_import = True
+    await callee(self, on_start, on_return, self.on_block)
+    self.inst.calling_sync_import = False
+    self.inst.async_waiting_tasks.notify_all()
+
+  async def wait_for_event(self, waitable_set, sync) -> EventTuple:
+    waitable_set.num_waiting += 1
+    e = None
+    while not e:
+      await self.wait_on(waitable_set.maybe_has_pending_event.wait(), sync)
+      e = waitable_set.poll()
+    waitable_set.num_waiting -= 1
+    return e
+
+  async def yield_(self, sync):
+    await self.wait_on(asyncio.sleep(0), sync)
+
+  async def poll_for_event(self, waitable_set, sync) -> Optional[EventTuple]:
+    await self.yield_(sync)
+    if (e := waitable_set.poll()):
+      return e
+    else:
+      return (EventCode.NONE, 0, 0)
+
+  def return_(self, results):
+    trap_if(not self.on_return)
+    trap_if(self.num_borrows > 0)
+    self.on_return(results)
+    self.on_return = None
+
+  def exit(self):
+    assert(scheduler.locked())
+    trap_if(self.on_return)
+    assert(self.num_borrows == 0)
+    if self.opts.sync:
+      assert(self.inst.calling_sync_export)
+      self.inst.calling_sync_export = False
+    self.maybe_start_pending_task()
+
 #### Subtask State
 
-class CallState(IntEnum):
-  STARTING = 0
-  STARTED = 1
-  RETURNED = 2
-
 class Subtask(Waitable):
-  state: CallState
-  lenders: list[ResourceHandle]
-  finished: bool
+  class State(IntEnum):
+    STARTING = 0
+    STARTED = 1
+    RETURNED = 2
+
+  state: State
   supertask: Optional[Task]
+  lenders: Optional[list[ResourceHandle]]
 
-  def __init__(self):
-    self.state = CallState.STARTING
-    self.lenders = []
-    self.finished = False
-    self.supertask = None
-
-  def add_to_waitables(self, task):
-    assert(not self.supertask)
-    self.supertask = task
+  def __init__(self, supertask):
     Waitable.__init__(self)
-    return task.inst.waitables.add(self)
+    self.state = Subtask.State.STARTING
+    self.supertask = supertask
+    self.lenders = []
+
+  async def call_sync(self, callee, on_start, on_return):
+    def sync_on_start():
+      assert(self.state == Subtask.State.STARTING)
+      self.state = Subtask.State.STARTED
+      return on_start()
+
+    def sync_on_return(results):
+      assert(self.state == Subtask.State.STARTED)
+      self.state = Subtask.State.RETURNED
+      on_return(results)
+
+    await Task.call_sync(self.supertask, callee, sync_on_start, sync_on_return)
+
+  async def call_async(self, callee, on_start, on_return):
+    async def do_call():
+      await callee(self.supertask, async_on_start, async_on_return, async_on_block)
+      relinquish_control()
+
+    def async_on_start():
+      assert(self.state == Subtask.State.STARTING)
+      self.state = Subtask.State.STARTED
+      return on_start()
+
+    def async_on_return(results):
+      assert(self.state == Subtask.State.STARTED)
+      self.state = Subtask.State.RETURNED
+      on_return(results)
+
+    async def async_on_block(awaitable):
+      relinquish_control()
+      await awaitable
+      await scheduler.acquire()
+
+    def relinquish_control():
+      if not ret.done():
+        ret.set_result(None)
+      else:
+        scheduler.release()
+
+    ret = asyncio.Future()
+    asyncio.create_task(do_call())
+    await ret
 
   def add_lender(self, lending_handle):
-    assert(not self.finished and self.state != CallState.RETURNED)
+    assert(not self.return_delivered() and self.state != Subtask.State.RETURNED)
     lending_handle.num_lends += 1
     self.lenders.append(lending_handle)
 
-  def finish(self):
-    assert(not self.finished and self.state == CallState.RETURNED)
+  def deliver_return(self):
+    assert(not self.return_delivered() and self.state == Subtask.State.RETURNED)
     for h in self.lenders:
       h.num_lends -= 1
-    self.finished = True
+    self.lenders = None
+
+  def return_delivered(self):
+    assert(self.lenders is not None or self.state == Subtask.State.RETURNED)
+    return self.lenders is None
 
   def drop(self):
-    trap_if(not self.finished)
-    assert(self.state == CallState.RETURNED)
+    trap_if(not self.return_delivered())
     Waitable.drop(self)
 
 #### Stream State
@@ -1713,50 +1732,52 @@ def lower_heap_values(cx, vs, ts, out_param):
 
 async def canon_lift(opts, inst, ft, callee, caller, on_start, on_return, on_block):
   task = Task(opts, inst, ft, caller, on_return, on_block)
-  flat_args = await task.enter(on_start)
+  await task.enter()
+
+  cx = LiftLowerContext(opts, inst, task)
+  args = on_start()
+  flat_args = lower_flat_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
   flat_ft = flatten_functype(opts, ft, 'lift')
   assert(types_match_values(flat_ft.params, flat_args))
+
   if opts.sync:
     flat_results = await call_and_trap_on_throw(callee, task, flat_args)
     if not opts.always_task_return:
       assert(types_match_values(flat_ft.results, flat_results))
-      task.return_(flat_results)
+      results = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types())
+      task.return_(results)
       if opts.post_return is not None:
         [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
     task.exit()
     return
-  else:
-    if not opts.callback:
-      [] = await call_and_trap_on_throw(callee, task, flat_args)
-      assert(types_match_values(flat_ft.results, []))
-      task.exit()
-      return
-    else:
-      [packed] = await call_and_trap_on_throw(callee, task, flat_args)
-      s = None
-      while True:
-        code,si = unpack_callback_result(packed)
-        if si != 0:
-          s = task.inst.waitable_sets.get(si)
-        match code:
-          case CallbackCode.EXIT:
-            task.exit()
-            return
-          case CallbackCode.YIELD:
-            await task.yield_(sync = False)
-            e = None
-          case CallbackCode.WAIT:
-            trap_if(not s)
-            e = await task.wait_on(s.wait(), sync = False)
-          case CallbackCode.POLL:
-            trap_if(not s)
-            await task.yield_(sync = False)
-            e = s.poll()
-        if e:
-          event, p1, p2 = e
-        else:
-          event, p1, p2 = (EventCode.NONE, 0, 0)
-        [packed] = await call_and_trap_on_throw(opts.callback, task, [event, p1, p2])
+
+  if not opts.callback:
+    [] = await call_and_trap_on_throw(callee, task, flat_args)
+    assert(types_match_values(flat_ft.results, []))
+    task.exit()
+    return
+
+  [packed] = await call_and_trap_on_throw(callee, task, flat_args)
+  s = None
+  while True:
+    code,si = unpack_callback_result(packed)
+    if si != 0:
+      s = task.inst.waitable_sets.get(si)
+    match code:
+      case CallbackCode.EXIT:
+        task.exit()
+        return
+      case CallbackCode.YIELD:
+        await task.yield_(sync = False)
+        e = (EventCode.NONE, 0, 0)
+      case CallbackCode.WAIT:
+        trap_if(not s)
+        e = await task.wait_for_event(s, sync = False)
+      case CallbackCode.POLL:
+        trap_if(not s)
+        e = await task.poll_for_event(s, sync = False)
+    event_code, p1, p2 = e
+    [packed] = await call_and_trap_on_throw(opts.callback, task, [event_code, p1, p2])
 
 class CallbackCode(IntEnum):
   EXIT = 0
@@ -1783,54 +1804,52 @@ async def call_and_trap_on_throw(callee, task, args):
 
 async def canon_lower(opts, ft, callee, task, flat_args):
   trap_if(not task.inst.may_leave)
-  subtask = Subtask()
+  subtask = Subtask(task)
   cx = LiftLowerContext(opts, task.inst, subtask)
-
   flat_ft = flatten_functype(opts, ft, 'lower')
   assert(types_match_values(flat_ft.params, flat_args))
   flat_args = CoreValueIter(flat_args)
-  flat_results = None
-  on_progress = lambda: None
-  def on_start():
-    subtask.state = CallState.STARTED
-    on_progress()
-    return lift_flat_values(cx, max_flat_params, flat_args, ft.param_types())
-  def on_return(vs):
-    subtask.state = CallState.RETURNED
-    on_progress()
-    nonlocal flat_results
-    flat_results = lower_flat_values(cx, max_flat_results, vs, ft.result_types(), flat_args)
-    assert(flat_args.done())
 
   if opts.sync:
-    assert(not contains_async_value(ft))
-    max_flat_params = MAX_FLAT_PARAMS
-    max_flat_results = MAX_FLAT_RESULTS
-    await task.call_sync(callee, task, on_start, on_return)
-    assert(subtask.state == CallState.RETURNED)
-    subtask.finish()
-    assert(types_match_values(flat_ft.results, flat_results))
-  else:
-    max_flat_params = 1
-    max_flat_results = 0
-    await task.call_async(callee, task, on_start, on_return)
-    match subtask.state:
-      case CallState.RETURNED:
-        subtask.finish()
-        flat_results = [0]
-      case _:
-        subtaski = subtask.add_to_waitables(task)
-        def on_progress():
-          def subtask_event():
-            if subtask.state == CallState.RETURNED:
-              subtask.finish()
-            return (EventCode.SUBTASK, subtaski, subtask.state)
-          subtask.set_event(subtask_event)
-        assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
-        assert(0 <= int(subtask.state) < 2**4)
-        flat_results = [int(subtask.state) | (subtaski << 4)]
+    def on_start():
+      return lift_flat_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
-  return flat_results
+    flat_results = None
+    def on_return(results):
+      nonlocal flat_results
+      flat_results = lower_flat_values(cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
+
+    await subtask.call_sync(callee, on_start, on_return)
+    assert(types_match_values(flat_ft.results, flat_results))
+    subtask.deliver_return()
+    return flat_results
+
+  def on_start():
+    on_progress()
+    return lift_flat_values(cx, 1, flat_args, ft.param_types())
+
+  def on_return(results):
+    on_progress()
+    [] = lower_flat_values(cx, 0, results, ft.result_types(), flat_args)
+
+  subtaski = None
+  def on_progress():
+    if subtaski is not None:
+      def subtask_event():
+        if subtask.state == Subtask.State.RETURNED:
+          subtask.deliver_return()
+        return (EventCode.SUBTASK, subtaski, subtask.state)
+      subtask.set_event(subtask_event)
+
+  await subtask.call_async(callee, on_start, on_return)
+  if subtask.state == Subtask.State.RETURNED:
+    subtask.deliver_return()
+    return [0]
+
+  subtaski = task.inst.waitables.add(subtask)
+  assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
+  assert(0 <= int(subtask.state) < 2**4)
+  return [int(subtask.state) | (subtaski << 4)]
 
 ### `canon resource.new`
 
@@ -1903,7 +1922,9 @@ async def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
   trap_if(task.opts.sync and not task.opts.always_task_return)
   trap_if(result_type != task.ft.results)
   trap_if(not LiftOptions.equal(opts, task.opts))
-  task.return_(flat_args)
+  cx = LiftLowerContext(opts, task.inst, task)
+  results = lift_flat_values(cx, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_types())
+  task.return_(results)
   return []
 
 ### 🔀 `canon yield`
@@ -1926,7 +1947,7 @@ async def canon_waitable_set_wait(sync, mem, task, si, ptr):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback and not sync)
   s = task.inst.waitable_sets.get(si)
-  e = await task.wait_on(s.wait(), sync)
+  e = await task.wait_for_event(s, sync)
   return unpack_event(mem, task, ptr, e)
 
 def unpack_event(mem, task, ptr, e: EventTuple):
@@ -1942,10 +1963,8 @@ async def canon_waitable_set_poll(sync, mem, task, si, ptr):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback and not sync)
   s = task.inst.waitable_sets.get(si)
-  await task.yield_(sync)
-  if (e := s.poll()):
-    return unpack_event(mem, task, ptr, e)
-  return [EventCode.NONE]
+  e = await task.poll_for_event(s, sync)
+  return unpack_event(mem, task, ptr, e)
 
 ### 🔀 `canon waitable-set.drop`
 
@@ -2026,7 +2045,7 @@ async def copy(EndT, BufferT, event_code, t, opts, task, i, ptr, n):
       final_revoke_buffer = revoke_buffer
       if not async_copy.done():
         async_copy.set_result(None)
-    on_copy_done = partial(on_partial_copy, revoke_buffer = lambda:())
+    on_copy_done = partial(on_partial_copy, lambda:())
     if e.copy(task.inst, buffer, on_partial_copy, on_copy_done) != 'done':
       async_copy = asyncio.Future()
       await task.wait_on(async_copy, sync = True)
