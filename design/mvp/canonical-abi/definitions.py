@@ -386,6 +386,7 @@ class EventCode(IntEnum):
   STREAM_WRITE = 3
   FUTURE_READ = 4
   FUTURE_WRITE = 5
+  TASK_CANCELLED = 6
 
 EventTuple = tuple[EventCode, int, int]
 
@@ -460,25 +461,33 @@ class WaitableSet:
 #### Task State
 
 OnStart = Callable[[], list[any]]
-OnReturn = Callable[[list[any]], None]
-OnBlock = Callable[[Awaitable], Awaitable]
+OnResolve = Callable[[Optional[list[any]]], None]
+OnBlock = Callable[[Awaitable], Awaitable[bool]]
 
 class Task:
+  class State(IntEnum):
+    INITIAL = 1
+    PENDING_CANCEL = 2
+    CANCEL_DELIVERED = 3
+    RESOLVED = 4
+
+  state: State
   opts: CanonicalOptions
   inst: ComponentInstance
   ft: FuncType
   supertask: Optional[Task]
-  on_return: Optional[OnReturn]
+  on_resolve: OnResolve
   on_block: OnBlock
   num_borrows: int
   context: ContextLocalStorage
 
-  def __init__(self, opts, inst, ft, supertask, on_return, on_block):
+  def __init__(self, opts, inst, ft, supertask, on_resolve, on_block):
+    self.state = Task.State.INITIAL
     self.opts = opts
     self.inst = inst
     self.ft = ft
     self.supertask = supertask
-    self.on_return = on_return
+    self.on_resolve = on_resolve
     self.on_block = on_block
     self.num_borrows = 0
     self.context = ContextLocalStorage()
@@ -489,11 +498,16 @@ class Task:
     if not self.may_enter(self) or self.inst.pending_tasks:
       f = asyncio.Future()
       self.inst.pending_tasks.append((self, f))
-      await self.on_block(f)
+      if await self.on_block(f):
+        [i] = [i for i,(t,_) in enumerate(self.inst.pending_tasks) if t == self]
+        self.inst.pending_tasks.pop(i)
+        self.on_resolve(None)
+        return False
       assert(self.may_enter(self) and self.inst.starting_pending_task)
       self.inst.starting_pending_task = False
     if self.opts.sync:
       self.inst.calling_sync_export = True
+    return True
 
   def trap_if_on_the_stack(self, inst):
     c = self.supertask
@@ -516,56 +530,94 @@ class Task:
         pending_future.set_result(None)
         return
 
-  async def wait_on(self, awaitable, sync):
+  async def wait_on(self, awaitable, sync, cancellable = False) -> bool:
     awaitable = asyncio.ensure_future(awaitable)
     assert(not self.inst.calling_sync_import)
     if sync:
       self.inst.calling_sync_import = True
     else:
       self.maybe_start_pending_task()
-    await self.on_block(awaitable)
+    cancelled = await self.on_block(awaitable)
+    if cancelled and not cancellable:
+      assert(self.state == Task.State.INITIAL)
+      self.state = Task.State.PENDING_CANCEL
+      cancelled = await self.on_block(awaitable)
+      assert(not cancelled)
     if sync:
       self.inst.calling_sync_import = False
       self.inst.async_waiting_tasks.notify_all()
     else:
       while self.inst.calling_sync_import:
         await self.inst.async_waiting_tasks.wait()
+    return cancelled
 
   async def call_sync(self, callee, on_start, on_return):
+    async def sync_on_block(awaitable):
+      if await self.on_block(awaitable):
+        assert(self.state == Task.State.INITIAL)
+        self.state = Task.State.PENDING_CANCEL
+        assert(not await self.on_block(awaitable))
+      return False
+
     assert(not self.inst.calling_sync_import)
     self.inst.calling_sync_import = True
-    await callee(self, on_start, on_return, self.on_block)
+    await callee(self, on_start, on_return, sync_on_block)
     self.inst.calling_sync_import = False
     self.inst.async_waiting_tasks.notify_all()
 
   async def wait_for_event(self, waitable_set, sync) -> EventTuple:
-    waitable_set.num_waiting += 1
-    e = None
-    while not e:
-      await self.wait_on(waitable_set.maybe_has_pending_event.wait(), sync)
-      e = waitable_set.poll()
-    waitable_set.num_waiting -= 1
+    if self.state == Task.State.PENDING_CANCEL:
+      self.state = Task.State.CANCEL_DELIVERED
+      return (EventCode.TASK_CANCELLED, 0, 0)
+    else:
+      waitable_set.num_waiting += 1
+      e = None
+      while not e:
+        maybe_event = waitable_set.maybe_has_pending_event.wait()
+        if await self.wait_on(maybe_event, sync, cancellable = True):
+          assert(self.state == Task.State.INITIAL)
+          self.state = Task.State.CANCEL_DELIVERED
+          return (EventCode.TASK_CANCELLED, 0, 0)
+        e = waitable_set.poll()
+      waitable_set.num_waiting -= 1
     return e
 
-  async def yield_(self, sync):
-    await self.wait_on(asyncio.sleep(0), sync)
+  async def yield_(self, sync) -> bool:
+    if self.state == Task.State.PENDING_CANCEL:
+      self.state = Task.State.CANCEL_DELIVERED
+      return (EventCode.TASK_CANCELLED, 0, 0)
+    elif await self.wait_on(asyncio.sleep(0), sync, cancellable = True):
+      assert(self.state == Task.State.INITIAL)
+      self.state = Task.State.CANCEL_DELIVERED
+      return (EventCode.TASK_CANCELLED, 0, 0)
+    else:
+      return (EventCode.NONE, 0, 0)
 
   async def poll_for_event(self, waitable_set, sync) -> Optional[EventTuple]:
-    await self.yield_(sync)
-    if (e := waitable_set.poll()):
+    event_code,_,_ = e = await self.yield_(sync)
+    if event_code == EventCode.TASK_CANCELLED:
+      return e
+    elif (e := waitable_set.poll()):
       return e
     else:
       return (EventCode.NONE, 0, 0)
 
   def return_(self, results):
-    trap_if(not self.on_return)
+    trap_if(self.state == Task.State.RESOLVED)
     trap_if(self.num_borrows > 0)
-    self.on_return(results)
-    self.on_return = None
+    assert(results is not None)
+    self.on_resolve(results)
+    self.state = Task.State.RESOLVED
+
+  def cancel(self):
+    trap_if(self.state != Task.State.CANCEL_DELIVERED)
+    trap_if(self.num_borrows > 0)
+    self.on_resolve(None)
+    self.state = Task.State.RESOLVED
 
   def exit(self):
     assert(scheduler.locked())
-    trap_if(self.on_return)
+    trap_if(self.state != Task.State.RESOLVED)
     assert(self.num_borrows == 0)
     if self.opts.sync:
       assert(self.inst.calling_sync_export)
@@ -579,33 +631,58 @@ class Subtask(Waitable):
     STARTING = 0
     STARTED = 1
     RETURNED = 2
+    CANCELLED_BEFORE_STARTED = 3
+    CANCELLED_BEFORE_RETURNED = 4
 
   state: State
   supertask: Optional[Task]
   lenders: Optional[list[ResourceHandle]]
+  request_cancel_begin: asyncio.Future
+  request_cancel_end: asyncio.Future
 
   def __init__(self, supertask):
     Waitable.__init__(self)
     self.state = Subtask.State.STARTING
     self.supertask = supertask
     self.lenders = []
+    self.request_cancel_begin = asyncio.Future()
+    self.request_cancel_end = asyncio.Future()
 
-  async def call_sync(self, callee, on_start, on_return):
+  async def call_sync(self, callee, on_start, on_resolve):
     def sync_on_start():
       assert(self.state == Subtask.State.STARTING)
       self.state = Subtask.State.STARTED
       return on_start()
 
-    def sync_on_return(results):
+    def sync_on_resolve(results):
+      assert(results is not None)
       assert(self.state == Subtask.State.STARTED)
       self.state = Subtask.State.RETURNED
-      on_return(results)
+      on_resolve(results)
 
-    await Task.call_sync(self.supertask, callee, sync_on_start, sync_on_return)
+    await Task.call_sync(self.supertask, callee, sync_on_start, sync_on_resolve)
 
-  async def call_async(self, callee, on_start, on_return):
+  def cancelled(self):
+    return self.request_cancel_begin.done()
+
+  def resolved(self):
+    match self.state:
+      case (Subtask.State.STARTING |
+            Subtask.State.STARTED):
+        return False
+      case (Subtask.State.RETURNED |
+            Subtask.State.CANCELLED_BEFORE_STARTED |
+            Subtask.State.CANCELLED_BEFORE_RETURNED):
+        return True
+
+  async def request_cancel(self):
+    assert(not self.cancelled() and not self.resolved())
+    self.request_cancel_begin.set_result(None)
+    await self.request_cancel_end
+
+  async def call_async(self, callee, on_start, on_resolve):
     async def do_call():
-      await callee(self.supertask, async_on_start, async_on_return, async_on_block)
+      await callee(self.supertask, async_on_start, async_on_resolve, async_on_block)
       relinquish_control()
 
     def async_on_start():
@@ -613,19 +690,36 @@ class Subtask(Waitable):
       self.state = Subtask.State.STARTED
       return on_start()
 
-    def async_on_return(results):
-      assert(self.state == Subtask.State.STARTED)
-      self.state = Subtask.State.RETURNED
-      on_return(results)
+    def async_on_resolve(results):
+      if results is None:
+        if self.state == Subtask.State.STARTING:
+          self.state = Subtask.State.CANCELLED_BEFORE_STARTED
+        else:
+          assert(self.state == Subtask.State.STARTED)
+          self.state = Subtask.State.CANCELLED_BEFORE_RETURNED
+      else:
+        assert(self.state == Subtask.State.STARTED)
+        self.state = Subtask.State.RETURNED
+      on_resolve(results)
 
     async def async_on_block(awaitable):
       relinquish_control()
-      await awaitable
+      if not self.request_cancel_end.done():
+        await asyncio.wait([awaitable, self.request_cancel_begin],
+                           return_when = asyncio.FIRST_COMPLETED)
+        if self.request_cancel_begin.done():
+          return True
+      else:
+        await awaitable
+      assert(awaitable.done())
       await scheduler.acquire()
+      return False
 
     def relinquish_control():
       if not ret.done():
         ret.set_result(None)
+      elif self.request_cancel_begin.done() and not self.request_cancel_end.done():
+        self.request_cancel_end.set_result(None)
       else:
         scheduler.release()
 
@@ -634,22 +728,22 @@ class Subtask(Waitable):
     await ret
 
   def add_lender(self, lending_handle):
-    assert(not self.return_delivered() and self.state != Subtask.State.RETURNED)
+    assert(not self.resolve_delivered() and not self.resolved())
     lending_handle.num_lends += 1
     self.lenders.append(lending_handle)
 
-  def deliver_return(self):
-    assert(not self.return_delivered() and self.state == Subtask.State.RETURNED)
+  def deliver_resolve(self):
+    assert(not self.resolve_delivered() and self.resolved())
     for h in self.lenders:
       h.num_lends -= 1
     self.lenders = None
 
-  def return_delivered(self):
-    assert(self.lenders is not None or self.state == Subtask.State.RETURNED)
+  def resolve_delivered(self):
+    assert(self.lenders is not None or self.resolved())
     return self.lenders is None
 
   def drop(self):
-    trap_if(not self.return_delivered())
+    trap_if(not self.resolve_delivered())
     Waitable.drop(self)
 
 #### Stream State
@@ -1730,9 +1824,10 @@ def lower_heap_values(cx, vs, ts, out_param):
 
 ### `canon lift`
 
-async def canon_lift(opts, inst, ft, callee, caller, on_start, on_return, on_block):
-  task = Task(opts, inst, ft, caller, on_return, on_block)
-  await task.enter()
+async def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve, on_block):
+  task = Task(opts, inst, ft, caller, on_resolve, on_block)
+  if not await task.enter():
+    return
 
   cx = LiftLowerContext(opts, inst, task)
   args = on_start()
@@ -1768,8 +1863,7 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_return, on_blo
         task.exit()
         return
       case CallbackCode.YIELD:
-        await task.yield_(sync = False)
-        e = (EventCode.NONE, 0, 0)
+        e = await task.yield_(sync = False)
       case CallbackCode.WAIT:
         trap_if(not s)
         e = await task.wait_for_event(s, sync = False)
@@ -1815,35 +1909,36 @@ async def canon_lower(opts, ft, callee, task, flat_args):
       return lift_flat_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
     flat_results = None
-    def on_return(results):
+    def on_resolve(results):
       nonlocal flat_results
       flat_results = lower_flat_values(cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
 
-    await subtask.call_sync(callee, on_start, on_return)
+    await subtask.call_sync(callee, on_start, on_resolve)
     assert(types_match_values(flat_ft.results, flat_results))
-    subtask.deliver_return()
+    subtask.deliver_resolve()
     return flat_results
 
   def on_start():
     on_progress()
     return lift_flat_values(cx, 1, flat_args, ft.param_types())
 
-  def on_return(results):
+  def on_resolve(results):
     on_progress()
-    [] = lower_flat_values(cx, 0, results, ft.result_types(), flat_args)
+    if results is not None:
+      [] = lower_flat_values(cx, 0, results, ft.result_types(), flat_args)
 
   subtaski = None
   def on_progress():
     if subtaski is not None:
       def subtask_event():
-        if subtask.state == Subtask.State.RETURNED:
-          subtask.deliver_return()
+        if subtask.resolved():
+          subtask.deliver_resolve()
         return (EventCode.SUBTASK, subtaski, subtask.state)
       subtask.set_event(subtask_event)
 
-  await subtask.call_async(callee, on_start, on_return)
-  if subtask.state == Subtask.State.RETURNED:
-    subtask.deliver_return()
+  await subtask.call_async(callee, on_start, on_resolve)
+  if subtask.resolved():
+    subtask.deliver_resolve()
     return [0]
 
   subtaski = task.inst.waitables.add(subtask)
@@ -1927,13 +2022,25 @@ async def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
   task.return_(results)
   return []
 
+### 🔀 `canon task.cancel`
+
+async def canon_task_cancel(task):
+  trap_if(not task.inst.may_leave)
+  trap_if(task.opts.sync and not task.opts.always_task_return)
+  task.cancel()
+  return []
+
 ### 🔀 `canon yield`
 
 async def canon_yield(sync, task):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback and not sync)
-  await task.yield_(sync)
-  return []
+  event_code,_,_ = await task.yield_(sync)
+  match event_code:
+    case EventCode.NONE:
+      return [0]
+    case EventCode.TASK_CANCELLED:
+      return [1]
 
 ### 🔀 `canon waitable-set.new`
 
@@ -1984,6 +2091,32 @@ async def canon_waitable_join(task, wi, si):
   else:
     w.join(task.inst.waitable_sets.get(si))
   return []
+
+### 🔀 `canon subtask.cancel`
+
+BLOCKED = 0xffff_fffff
+
+async def canon_subtask_cancel(sync, task, i):
+  trap_if(not task.inst.may_leave)
+  subtask = task.inst.waitables.get(i)
+  trap_if(not isinstance(subtask, Subtask))
+  trap_if(subtask.resolve_delivered() or subtask.cancelled())
+  if subtask.resolved():
+    assert(subtask.has_pending_event())
+  else:
+    await subtask.request_cancel()
+    if sync:
+      while not subtask.resolved():
+        if subtask.has_pending_event():
+          _ = subtask.get_event()
+        await task.wait_on(subtask.wait_for_pending_event(), sync = True)
+    else:
+      if not subtask.resolved():
+        return [BLOCKED]
+  code,index,payload = subtask.get_event()
+  assert(code == EventCode.SUBTASK and index == i and payload == subtask.state)
+  assert(subtask.resolve_delivered())
+  return [subtask.state]
 
 ### 🔀 `canon subtask.drop`
 

@@ -1418,12 +1418,14 @@ canon ::= ...
         | (canon context.set <valtype> <u32> (core func <id>?)) 🔀
         | (canon backpressure.set (core func <id>?)) 🔀
         | (canon task.return (result <valtype>)? <canonopt>* (core func <id>?)) 🔀
+        | (canon task.cancel (core func <id>?)) 🔀
         | (canon yield async? (core func <id>?)) 🔀
         | (canon waitable-set.new (core func <id>?)) 🔀
         | (canon waitable-set.wait async? (memory <core:memidx>) (core func <id>?)) 🔀
         | (canon waitable-set.poll async? (memory <core:memidx>) (core func <id>?)) 🔀
         | (canon waitable-set.drop (core func <id>?)) 🔀
         | (canon waitable.join (core func <id>?)) 🔀
+        | (canon subtask.cancel async? (core func <id>?)) 🔀
         | (canon subtask.drop (core func <id>?)) 🔀
         | (canon stream.new <typeidx> (core func <id>?)) 🔀
         | (canon stream.read <typeidx> <canonopt>* (core func <id>?)) 🔀
@@ -1598,20 +1600,37 @@ called, the declared return type and the `string-encoding` and `memory`
 "[Returning]" in the async explainer and [`canon_task_return`] in the Canonical
 ABI explainer.)
 
+###### 🔀 `task.cancel`
+
+| Synopsis                   |            |
+| -------------------------- | ---------- |
+| Approximate WIT signature  | `func()`   |
+| Canonical ABI signature    | `[] -> []` |
+
+The `task.cancel` built-in indicates that the [current task] is now [resolved]
+and has dropped all borrowed handles lent to it during the call (trapping if
+otherwise). `task.cancel` can only be called after `waitable-set.{wait,poll}`
+or `yield` has indicated that the supertask has requested cancellation and
+thus is not expecting a return value. (See also "[Cancellation]" in the async
+explainer and [`canon_task_cancel`] in the Canonical ABI explainer for
+details.)
+
 ###### 🔀 `yield`
 
-| Synopsis                   |                    |
-| -------------------------- | ------------------ |
-| Approximate WIT signature  | `func<async?>()`   |
-| Canonical ABI signature    | `[] -> []`         |
+| Synopsis                   |                          |
+| -------------------------- | ------------------------ |
+| Approximate WIT signature  | `func<async?>() -> bool` |
+| Canonical ABI signature    | `[] -> [i32]`            |
 
 The `yield` built-in allows the runtime to switch to other tasks, enabling a
-long-running computation to cooperatively interleave execution. If the `async`
-immediate is present, the runtime can switch to other tasks in the *same*
-component instance, which the calling core wasm must be prepared to handle. If
-`async` is not present, only tasks in *other* component instances may be
-switched to. (See also [`canon_yield`] in the Canonical ABI explainer for
-details.)
+long-running computation to cooperatively interleave execution. `yield` returns
+`true` (`1`) if the caller has requested [cancellation] of the [current task].
+
+If the `async` immediate is present, the runtime can switch to other tasks in
+the *same* component instance, which the calling core wasm must be prepared to
+handle. If `async` is not present, only tasks in *other* component instances
+may be switched to. (See also [`canon_yield`] in the Canonical ABI explainer
+for details.)
 
 ###### 🔀 `waitable-set.new`
 
@@ -1642,12 +1661,15 @@ variant event {
     stream-write(stream-index, write-status),
     future-read(future-index, read-status),
     future-write(future-index, write-status),
+    task-cancelled,
 }
 
 enum subtask-state {
     starting,
     started,
     returned,
+    cancelled-before-started,
+    cancelled-before-returned,
 }
 ```
 
@@ -1718,6 +1740,20 @@ table and can be any type of waitable (`subtask` or
 `{readable,writable}-{stream,future}-end`). A value of `0` represents a `none`
 `maybe_set`, since `0` is not a valid table index. (See also
 [`canon_waitable_join`] in the Canonical ABI explainer for details.)
+
+###### 🔀 `subtask.cancel`
+
+| Synopsis                   |                                                   |
+| -------------------------- | ------------------------------------------------- |
+| Approximate WIT signature  | `func(subtask: subtask) -> option<subtask-state>` |
+| Canonical ABI signature    | `[subtask:i32] -> [i32]`                          |
+
+The `subtask.cancel` built-in requests [cancellation] of the indicated subtask.
+If `none` is returned (reprented as `-1` in the Canonical ABI), the subtask
+blocked before it was resolved. Otherwise, the subtask resolved synchronously
+and ended up in one of the 3 [resolved] states (`returned`,
+`cancelled-before-started` or `cancelled-before-returned`). (See also
+[`canon_subtask_cancel`] in the Canonical ABI explainer for details.)
 
 ###### 🔀 `subtask.drop`
 
@@ -2841,6 +2877,7 @@ For some use-case-focused, worked examples, see:
 [`canon_context_set`]: CanonicalABI.md#-canon-contextset
 [`canon_backpressure_set`]: CanonicalABI.md#-canon-backpressureset
 [`canon_task_return`]: CanonicalABI.md#-canon-taskreturn
+[`canon_task_cancel`]: CanonicalABI.md#-canon-taskcancel
 [`canon_yield`]: CanonicalABI.md#-canon-yield
 [`canon_waitable_set_new`]: CanonicalABI.md#-canon-waitable-setnew
 [`canon_waitable_set_wait`]: CanonicalABI.md#-canon-waitable-setwait
@@ -2851,6 +2888,7 @@ For some use-case-focused, worked examples, see:
 [`canon_stream_read`]: CanonicalABI.md#-canon-streamfuturereadwrite
 [`canon_future_read`]: CanonicalABI.md#-canon-streamfuturereadwrite
 [`canon_stream_cancel_read`]: CanonicalABI.md#-canon-streamfuturecancel-readwrite
+[`canon_subtask_cancel`]: CanonicalABI.md#-canon-subtaskcancel
 [`canon_subtask_drop`]: CanonicalABI.md#-canon-subtaskdrop
 [`canon_resource_new`]: CanonicalABI.md#canon-resourcenew
 [`canon_resource_drop`]: CanonicalABI.md#canon-resourcedrop
@@ -2880,6 +2918,8 @@ For some use-case-focused, worked examples, see:
 [Waitable Set]: Async.md#waiting
 [Backpressure]: Async.md#backpressure
 [Returning]: Async.md#returning
+[Resolved]: Async.md#cancellation
+[Cancellation]: Async.md#cancellation
 
 [Component Model Documentation]: https://component-model.bytecodealliance.org
 [`wizer`]: https://github.com/bytecodealliance/wizer

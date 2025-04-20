@@ -22,6 +22,7 @@ summary of the motivation and animated sketch of the design in action.
   * [Backpressure](#backpressure)
   * [Returning](#returning)
   * [Borrows](#borrows)
+  * [Cancellation](#cancellation)
 * [Async ABI](#async-abi)
   * [Async Import ABI](#async-import-abi)
   * [Async Export ABI](#async-export-abi)
@@ -470,9 +471,9 @@ loop interleaving `stream.read`s (of the readable end passed for `in`) and
 `stream.write`s (of the writable end it `stream.new`ed) before exiting the
 task.
 
-Once `task.return` is called, the task is in the "returned" state. A task can
-only finish once it is in the "returned" state. See the [`canon_task_return`]
-function in the Canonical ABI explainer for more details.
+Once `task.return` is called, the task is in the "returned" state and can
+finish execution any time thereafter. See the [`canon_task_return`] function in
+the Canonical ABI explainer for more details.
 
 ### Borrows
 
@@ -495,6 +496,54 @@ there can be multiple overlapping async tasks executing in a component
 instance, a borrowed handle must track *which* task's `num_borrow`s was
 incremented so that the correct counter can be decremented.
 
+### Cancellation
+
+Once an async call has started, blocked and been added to the caller's table of
+waitables, the caller may decide that it no longer needs the results or effects
+of the subtask and **cancel** the subtask by calling the [`subtask.cancel`]
+built-in.
+
+Once cancellation is requested, since the subtask may have already racily
+returned a value, the caller may still receive a return value. However, the
+caller may also be notified that the subtask is in one of two additional
+terminal states:
+* the subtask was **cancelled before it started**, in which case the caller's
+  arguments were not passed to the callee (in particular, owned handles were
+  not transferred); or
+* the subtask was **cancelled before it returned**, in which case the arguments
+  were passed, but no values were returned. However, all borrowed handles lent
+  during the call have been dropped.
+
+Thus there are *three* terminal states for a subtask: returned,
+cancelled-before-started and cancelled-before-returned. A subtask in one of
+these terminal states is said to be **resolved**. A resolved subtask has always
+dropped all the borrowed handles that it was lent during the call.
+
+As with the rest of async, cancellation is *cooperative*, allowing the subtask
+a chance to execute and clean up before it transitions to a resolved state (and
+relinquishes its borrowed handles). Since there are valid use cases where
+successful cancellation requires performing additional I/O using borrowed
+handles and potentially blocking in the process, the Component Model does not
+impose any limits on what a subtask can do after receiving a cancellation
+request nor is there a non-cooperative option to force termination (instead,
+this functionality would come as part of a future "[blast zone]" feature).
+Thus, the `subtask.cancel` built-in can block and works just like an import
+call in that it can be called synchronously or asynchronously.
+
+On the callee side of cancellation: when a caller requests cancellation via
+`subtask.cancel`, the callee receives a [`TASK_CANCELLED`] event (produced by
+one of the `waitable-set.{wait,poll}` or `yield` built-ins). Upon receiving
+notice of cancellation, the callee can call the [`task.cancel`] built-in to
+resolve the subtask without returning a value or the callee can call
+[`task.return`] as-if there were no cancellation. `task.cancel` doesn't take a
+value to return but does enforce the same [borrow](#borrows) rules as
+`task.return`. Ideally, a callee will `task.cancel` itself as soon as possible
+after receiving a `TASK_CANCELLED` event so that any caller waiting for the
+recovery of lent handles is unblocked ASAP. As with `task.return`, after
+calling `task.cancel`, a callee can continue executing before exiting the task.
+
+See the [`canon_subtask_cancel`] and [`canon_task_cancel`] functions in the
+Canonical ABI explainer for more details.
 
 ## Async ABI
 
@@ -924,8 +973,6 @@ will be added in future chunks roughly in the order listed to complete the full
 comes after:
 * remove the temporary trap mentioned above that occurs when a `read` and
   `write` of a stream/future happen from within the same component instance
-* `subtask.cancel`: allow a supertask to signal to a subtask that its result is
-  no longer wanted and to please wrap it up promptly
 * zero-copy forwarding/splicing
 * some way to say "no more elements are coming for a while"
 * `recursive` function type attribute: allow a function to opt in to
@@ -958,6 +1005,8 @@ comes after:
 [`context.set`]: Explainer.md#-contextset
 [`backpressure.set`]: Explainer.md#-backpressureset
 [`task.return`]: Explainer.md#-taskreturn
+[`task.cancel`]: Explainer.md#-taskcancel
+[`subtask.cancel`]: Explainer.md#-subtaskcancel
 [`yield`]: Explainer.md#-yield
 [`waitable-set.wait`]: Explainer.md#-waitable-setwait
 [`waitable-set.poll`]: Explainer.md#-waitable-setpoll
@@ -973,10 +1022,13 @@ comes after:
 [`canon_backpressure_set`]: CanonicalABI.md#-canon-backpressureset
 [`canon_waitable_set_wait`]: CanonicalABI.md#-canon-waitable-setwait
 [`canon_task_return`]: CanonicalABI.md#-canon-taskreturn
+[`canon_task_cancel`]: CanonicalABI.md#-canon-taskcancel
+[`canon_subtask_cancel`]: CanonicalABI.md#-canon-subtaskcancel
 [`Task`]: CanonicalABI.md#task-state
 [`Task.enter`]: CanonicalABI.md#task-state
 [`Task.wait_on`]: CanonicalABI.md#task-state
 [`Waitable`]: CanonicalABI.md#waitable-state
+[`TASK_CANCELLED`]: CanonicalABI.md#waitable-state
 [`Task`]: CanonicalABI.md#task-state
 [`Subtask`]: CanonicalABI.md#subtask-state
 [Stream State]: CanonicalABI.md#stream-state
