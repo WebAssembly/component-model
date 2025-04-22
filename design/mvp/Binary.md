@@ -275,6 +275,8 @@ Notes:
   to match the preceding `sort`.
 * (The `0x00` immediate of `case` may be reinterpreted in the future as the
   `none` case of an optional immediate.)
+* 🔧 for fixed-sized lists the length of the list must be larger than 0 to pass
+  validation.
 
 
 ## Canonical Definitions
