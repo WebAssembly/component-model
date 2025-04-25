@@ -1609,11 +1609,11 @@ ABI explainer.)
 
 The `task.cancel` built-in indicates that the [current task] is now [resolved]
 and has dropped all borrowed handles lent to it during the call (trapping if
-otherwise). `task.cancel` can only be called after `waitable-set.{wait,poll}`
-or `yield` has indicated that the supertask has requested cancellation and
-thus is not expecting a return value. (See also "[Cancellation]" in the async
-explainer and [`canon_task_cancel`] in the Canonical ABI explainer for
-details.)
+otherwise). `task.cancel` can only be called after the `TASK_CANCELLED` event
+has been received (via `callback`, `waitable-set.{wait,poll}` or `yield`) to
+indicate that the supertask has requested cancellation and thus is not
+expecting a return value. (See also "[Cancellation]" in the async explainer and
+[`canon_task_cancel`] in the Canonical ABI explainer for details.)
 
 ###### 🔀 `yield`
 
