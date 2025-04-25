@@ -672,7 +672,7 @@ and sequencing contained values.
 
 🔧 When the optional `<u32>` immediate of the `list` type constructor is present,
 the list has a fixed length and the representation of the list in memory is
-specialized to this length.
+specialized to this length. Note that the fixed length must be larger than 0.
 
 ##### Handle types
 
