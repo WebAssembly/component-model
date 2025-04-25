@@ -664,6 +664,80 @@ world w2 {
 > configure that a `use`'d interface is a particular import or a particular
 > export.
 
+## Unlocked Dependency Imports
+
+When working with a registry, the keyword `unlocked-dep` is available to specify dependencies with package name and version requirements.  For example:
+
+```wit
+world w {
+  unlocked-dep foo:bar@{>=x.x.x <y.y.y};
+}
+```
+
+The binary format has a corresponding [import definition](Explainer.md#import-and-export-definitions) and this WIT syntax informs
+bindgen tooling that it should be used.
+
+The point of `unlocked-dep` is to specify a dependency on a _component implementation_ (or a semver *range* of implementations), rather than on an abstract WIT interface (with an unspecified implementation).
+
+### Example Unlocked Dependency Workflow
+Let's say someone authoring a Rust component `my:component` targeting the `wasi:http/proxy` world adds a dependency on another component `foo:bar` by adding the following (hypothetical) lines to their `Cargo.toml`:
+
+```
+[package.metadata.component.target]
+target = "wasi:http/proxy@0.2.0"
+
+[package.metadata.component.dependencies]
+"foo:bar" = "1.2"
+The language toolchain would first generate a new world that augments the target world with an additional unlocked dependency:   
+```wit
+package my:component;
+world generated-world {
+  include wasi:http/proxy@0.2.0;
+  unlocked-dep foo:bar@{>=1.2.0};
+}
+```
+
+Now say that `foo:bar@1.2.0` implements the following `exports` interface:
+```wit
+package foo:bar@1.2.0;
+interface exports {
+  calc: func(x: u64) -> u64;
+}
+```
+
+The next step is to expand `generated-world` with nested packages fetched from all the relevant registries, producing an all-in-one WIT file with no external references:  
+```wit
+package my:component;
+
+package wasi:http@0.2.0 {
+  ...
+  world proxy { ... }
+}
+
+package foo:bar@1.2.0 {
+  interface exports {
+    calc: func(x: u64) -> u64;
+  }
+}
+
+world generated-world {
+  include wasi:http/proxy@0.2.0;
+  unlocked-dep foo:bar/exports@{>=1.2.0};
+}
+```
+Note that `exports` is an arbitrary name and can be anything because the WIT bindings generation will always strip off the final interface name, leaving only the package name.  In particular, the Component Model type for this world is:
+```wat
+(component
+  (import "wasi:http/types@0.2.0" (instance ...))
+  (import "wasi:http/outgoing-handler@0.2.0" (instance ...))
+  (import "unlocked-dep=<foo:bar@{>=1.2.0}>" (instance
+    (export "calc" (func (param "x" u64) (result u64)))
+  ))
+  (export "wasi:http/incoming-handler@0.2.0" (instance ...))
+)
+```
+
+A wasm component that contains `unlocked-dep` imports is referred to as an "unlocked component".  Unlocked components are what you normally would want to publish to a registry, since it allows users of the unlocked component to perform the final dependency solving across a DAG of components.
 ## WIT Functions
 [functions]: #wit-functions
 
