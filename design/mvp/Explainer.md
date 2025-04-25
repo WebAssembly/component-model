@@ -1743,17 +1743,18 @@ table and can be any type of waitable (`subtask` or
 
 ###### 🔀 `subtask.cancel`
 
-| Synopsis                   |                                                   |
-| -------------------------- | ------------------------------------------------- |
-| Approximate WIT signature  | `func(subtask: subtask) -> option<subtask-state>` |
-| Canonical ABI signature    | `[subtask:i32] -> [i32]`                          |
+| Synopsis                   |                                                           |
+| -------------------------- | --------------------------------------------------------- |
+| Approximate WIT signature  | `func<async?>(subtask: subtask) -> option<subtask-state>` |
+| Canonical ABI signature    | `[subtask:i32] -> [i32]`                                  |
 
 The `subtask.cancel` built-in requests [cancellation] of the indicated subtask.
-If `none` is returned (reprented as `-1` in the Canonical ABI), the subtask
-blocked before it was resolved. Otherwise, the subtask resolved synchronously
-and ended up in one of the 3 [resolved] states (`returned`,
-`cancelled-before-started` or `cancelled-before-returned`). (See also
-[`canon_subtask_cancel`] in the Canonical ABI explainer for details.)
+If the `async` is present, `none` is returned (reprented as `-1` in the
+Canonical ABI) to indicate that the subtask blocked before it was [resolved].
+Otherwise, `subtask.cancel` returns the `subtask-state` that the subtask
+resolved to (which is one of `returned`, `cancelled-before-started` or
+`cancelled-before-returned`). (See also [`canon_subtask_cancel`] in the
+Canonical ABI explainer for details.)
 
 ###### 🔀 `subtask.drop`
 
