@@ -810,7 +810,8 @@ class ReadableStreamGuestImpl(ReadableStream):
       self.set_pending(inst, buffer, on_partial_copy, on_copy_done)
       return 'blocked'
     else:
-      trap_if(inst is self.pending_inst) # temporary
+      assert(self.t == src.t == dst.t)
+      trap_if(inst is self.pending_inst and self.t is not None) # temporary
       if self.pending_buffer.remain() > 0:
         if buffer.remain() > 0:
           dst.write(src.read(min(src.remain(), dst.remain())))
