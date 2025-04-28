@@ -500,8 +500,8 @@ incremented so that the correct counter can be decremented.
 
 Once an async call has started, blocked and been added to the caller's table of
 waitables, the caller may decide that it no longer needs the results or effects
-of the subtask and **cancel** the subtask by calling the [`subtask.cancel`]
-built-in.
+of the subtask. In this case, the caller may **cancel** the subtask by calling
+the [`subtask.cancel`] built-in.
 
 Once cancellation is requested, since the subtask may have already racily
 returned a value, the caller may still receive a return value. However, the
@@ -531,16 +531,17 @@ Thus, the `subtask.cancel` built-in can block and works just like an import
 call in that it can be called synchronously or asynchronously.
 
 On the callee side of cancellation: when a caller requests cancellation via
-`subtask.cancel`, the callee receives a [`TASK_CANCELLED`] event (produced by
-one of the `waitable-set.{wait,poll}` or `yield` built-ins). Upon receiving
-notice of cancellation, the callee can call the [`task.cancel`] built-in to
-resolve the subtask without returning a value or the callee can call
-[`task.return`] as-if there were no cancellation. `task.cancel` doesn't take a
-value to return but does enforce the same [borrow](#borrows) rules as
-`task.return`. Ideally, a callee will `task.cancel` itself as soon as possible
-after receiving a `TASK_CANCELLED` event so that any caller waiting for the
-recovery of lent handles is unblocked ASAP. As with `task.return`, after
-calling `task.cancel`, a callee can continue executing before exiting the task.
+`subtask.cancel`, the callee receives a [`TASK_CANCELLED`] event (as produced
+by one of the `waitable-set.{wait,poll}` or `yield` built-ins or as received by
+the `callback` function). Upon receiving notice of cancellation, the callee can
+call the [`task.cancel`] built-in to resolve the subtask without returning a
+value. Alternatively, the callee can still call [`task.return`] as-if there
+were no cancellation. `task.cancel` doesn't take a value to return but does
+enforce the same [borrow](#borrows) rules as `task.return`. Ideally, a callee
+will `task.cancel` itself as soon as possible after receiving a
+`TASK_CANCELLED` event so that any caller waiting for the recovery of lent
+handles is unblocked ASAP. As with `task.return`, after calling `task.cancel`,
+a callee can continue executing before exiting the task.
 
 See the [`canon_subtask_cancel`] and [`canon_task_cancel`] functions in the
 Canonical ABI explainer for more details.
