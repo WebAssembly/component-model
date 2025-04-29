@@ -1609,14 +1609,14 @@ def convert_i32_to_char(cx, i):
 ```
 
 Strings are loaded from two `i32` values: a pointer (offset in linear memory)
-and a number of bytes. There are three supported string encodings in [`canonopt`]:
-[UTF-8], [UTF-16] and `latin1+utf16`. This last options allows a *dynamic*
-choice between [Latin-1] and UTF-16, indicated by the high bit of the second
-`i32`. String values include their original encoding and byte length as a
-"hint" that enables `store_string` (defined below) to make better up-front
-allocation size choices in many cases. Thus, the value produced by
-`load_string` isn't simply a Python `str`, but a *tuple* containing a `str`,
-the original encoding and the original byte length.
+and a number of [code units]. There are three supported string encodings in
+[`canonopt`]: [UTF-8], [UTF-16] and `latin1+utf16`. This last options allows a
+*dynamic* choice between [Latin-1] and UTF-16, indicated by the high bit of the
+second `i32`. String values include their original encoding and length in
+tagged code units as a "hint" that enables `store_string` (defined below) to
+make better up-front allocation size choices in many cases. Thus, the value
+produced by `load_string` isn't simply a Python `str`, but a *tuple* containing
+a `str`, the original encoding and the number of source code units.
 ```python
 String = tuple[str, str, int]
 
@@ -1910,8 +1910,8 @@ approach to update the allocation size during the single copy. A blind
 `realloc` approach would normally suffer from multiple reallocations per string
 (e.g., using the standard doubling-growth strategy). However, as already shown
 in `load_string` above, string values come with two useful hints: their
-original encoding and byte length. From this hint data, `store_string` can do a
-much better job minimizing the number of reallocations.
+original encoding and number of source [code units]. From this hint data,
+`store_string` can do a much better job minimizing the number of reallocations.
 
 We start with a case analysis to enumerate all the meaningful encoding
 combinations, subdividing the `latin1+utf16` encoding into either `latin1` or
@@ -1975,7 +1975,7 @@ def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment
   return (ptr, src_code_units)
 ```
 The choice of `MAX_STRING_BYTE_LENGTH` constant ensures that the high bit of a
-string's byte length is never set, keeping it clear for `UTF16_BIT`.
+string's number of code units is never set, keeping it clear for `UTF16_BIT`.
 
 The 2 cases of transcoding into UTF-8 share an algorithm that starts by
 optimistically assuming that each code unit of the source string fits in a
@@ -3903,6 +3903,7 @@ def canon_thread_available_parallelism():
 [Latin-1]: https://en.wikipedia.org/wiki/ISO/IEC_8859-1
 [Unicode Scalar Value]: https://unicode.org/glossary/#unicode_scalar_value
 [Unicode Code Point]: https://unicode.org/glossary/#code_point
+[Code Units]: https://www.unicode.org/glossary/#code_unit
 [Surrogate]: https://unicode.org/faq/utf_bom.html#utf16-2
 [Name Mangling]: https://en.wikipedia.org/wiki/Name_mangling
 [Fibers]: https://en.wikipedia.org/wiki/Fiber_(computer_science)
