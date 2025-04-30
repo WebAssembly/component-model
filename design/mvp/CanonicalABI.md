@@ -41,12 +41,14 @@ being specified here.
   * [`canon context.set`](#-canon-contextset) 🔀
   * [`canon backpressure.set`](#-canon-backpressureset) 🔀
   * [`canon task.return`](#-canon-taskreturn) 🔀
+  * [`canon task.cancel`](#-canon-taskcancel) 🔀
   * [`canon yield`](#-canon-yield) 🔀
   * [`canon waitable-set.new`](#-canon-waitable-setnew) 🔀
   * [`canon waitable-set.wait`](#-canon-waitable-setwait) 🔀
   * [`canon waitable-set.poll`](#-canon-waitable-setpoll) 🔀
   * [`canon waitable-set.drop`](#-canon-waitable-setdrop) 🔀
   * [`canon waitable.join`](#-canon-waitablejoin) 🔀
+  * [`canon subtask.cancel`](#-canon-subtaskcancel) 🔀
   * [`canon subtask.drop`](#-canon-subtaskdrop) 🔀
   * [`canon {stream,future}.new`](#-canon-streamfuturenew) 🔀
   * [`canon {stream,future}.{read,write}`](#-canon-streamfuturereadwrite) 🔀
@@ -506,6 +508,7 @@ class EventCode(IntEnum):
   STREAM_WRITE = 3
   FUTURE_READ = 4
   FUTURE_WRITE = 5
+  TASK_CANCELLED = 6
 
 EventTuple = tuple[EventCode, int, int]
 ```
@@ -639,44 +642,56 @@ threaded through all core function calls as the "[current task]".
 Tasks are parameterized by the caller with 3 callbacks of the following types:
 ```python
 OnStart = Callable[[], list[any]]
-OnReturn = Callable[[list[any]], None]
-OnBlock = Callable[[Awaitable], Awaitable]
+OnResolve = Callable[[Optional[list[any]]], None]
+OnBlock = Callable[[Awaitable], Awaitable[bool]]
 ```
 and with the following meanings:
 * The `OnStart` callback is called by the task when the task is ready to start
   running. `OnStart` returns the list of lifted argument values which the task
   must then lower into its core wasm state. `OnStart` must be called exactly
   once.
-* The `OnReturn` callback is called by the task when the task is ready to pass
-  a (possibly empty) return value back to the caller. `OnReturn` takes a list
-  of either `0` or `1` values that have been lifted from the task's core wasm
-  state. `OnReturn` must be called exactly once and only after `OnStart`.
+* The `OnResolve` callback is called by the task when the task is ready to
+  report to its caller that it is either returning (0 or 1) values or has been
+  successfully cancelled (by passing `None`). `OnResolve` must be called
+  exactly once and only after `OnStart` and may only pass `None` if `OnBlock`
+  has previously requested cancellation.
 * The `OnBlock` callback is called by the task whenever the task needs to block
   on a Python [awaitable]. `OnBlock` allows a transitive (async) supertask to
   take control flow while its subtask is blocked. During a call to `OnBlock`,
   any other `asyncio.Task`s can be scheduled or new `asyncio.Task`s can be
-  started in response to new export calls.
+  started in response to new export calls. `OnBlock` may return `True` at most
+  once before a task is resolved to signal that the caller is requesting
+  cancellation; in this case, the given awaitable may not be resolved, and the
+  cancelled task should call `OnResolve` ASAP (potentially passing `None`).
 
 Tasks are represented by objects of the `Task` class which are created by the
 `canon_lift` function (defined below). `Task` is introduced in chunks, starting
 with fields and initialization:
 ```python
 class Task:
+  class State(IntEnum):
+    INITIAL = 1
+    PENDING_CANCEL = 2
+    CANCEL_DELIVERED = 3
+    RESOLVED = 4
+
+  state: State
   opts: CanonicalOptions
   inst: ComponentInstance
   ft: FuncType
   supertask: Optional[Task]
-  on_return: Optional[OnReturn]
+  on_resolve: OnResolve
   on_block: OnBlock
   num_borrows: int
   context: ContextLocalStorage
 
-  def __init__(self, opts, inst, ft, supertask, on_return, on_block):
+  def __init__(self, opts, inst, ft, supertask, on_resolve, on_block):
+    self.state = Task.State.INITIAL
     self.opts = opts
     self.inst = inst
     self.ft = ft
     self.supertask = supertask
-    self.on_return = on_return
+    self.on_resolve = on_resolve
     self.on_block = on_block
     self.num_borrows = 0
     self.context = ContextLocalStorage()
@@ -695,11 +710,16 @@ called:
     if not self.may_enter(self) or self.inst.pending_tasks:
       f = asyncio.Future()
       self.inst.pending_tasks.append((self, f))
-      await self.on_block(f)
+      if await self.on_block(f):
+        [i] = [i for i,(t,_) in enumerate(self.inst.pending_tasks) if t == self]
+        self.inst.pending_tasks.pop(i)
+        self.on_resolve(None)
+        return False
       assert(self.may_enter(self) and self.inst.starting_pending_task)
       self.inst.starting_pending_task = False
     if self.opts.sync:
       self.inst.calling_sync_export = True
+    return True
 ```
 The `trap_if_on_the_stack` method (defined next) prevents unexpected
 reentrance, enforcing a [component invariant].
@@ -709,7 +729,10 @@ If `may_enter` (defined below) is not `True`, this indicates that
 puts itself into a per-`ComponentInstance` `pending_tasks` queue and blocks
 until released by `maybe_start_pending_task` (also defined below). The
 additional `or self.inst.pending_tasks` condition ensures fairness, preventing
-continual new tasks from starving pending tasks.
+continual new tasks from starving pending tasks. If the `OnBlock` callback
+returns `True`, the caller has requested that the pending task be cancelled. In
+this case, since core wasm hasn't started running in the callee's component
+instance yet, the task can be immediately, safely aborted by the runtime.
 
 The `calling_sync_export` flag set by `enter` (and cleared by `exit`) is used
 by `may_enter` to prevent sync-lifted export calls from overlapping.
@@ -797,20 +820,26 @@ start even when there is a blocked pending sync task ahead of them in the
 The `Task.wait_on` method defines how to block the current task on a given
 Python [awaitable] using the `OnBlock` callback described above:
 ```python
-  async def wait_on(self, awaitable, sync):
+  async def wait_on(self, awaitable, sync, cancellable = False) -> bool:
     awaitable = asyncio.ensure_future(awaitable)
     assert(not self.inst.calling_sync_import)
     if sync:
       self.inst.calling_sync_import = True
     else:
       self.maybe_start_pending_task()
-    await self.on_block(awaitable)
+    cancelled = await self.on_block(awaitable)
+    if cancelled and not cancellable:
+      assert(self.state == Task.State.INITIAL)
+      self.state = Task.State.PENDING_CANCEL
+      cancelled = await self.on_block(awaitable)
+      assert(not cancelled)
     if sync:
       self.inst.calling_sync_import = False
       self.inst.async_waiting_tasks.notify_all()
     else:
       while self.inst.calling_sync_import:
         await self.inst.async_waiting_tasks.wait()
+    return cancelled
 ```
 If `wait_on` is called with `sync` set to `True`, only tasks in *other*
 component instances may execute; no code in the current component instance may
@@ -819,18 +848,32 @@ execute. This is achieved by setting and waiting on `calling_sync_import`
 is also checked by `may_enter` (to prevent reentrance by a new task) and set by
 `call_sync` (defined next).
 
+If `wait_on` is called with `cancellable` set to `True`, then the caller
+expects and propagates the case where the supertask requests cancellation
+(when `True` is returned). But if `cancellable` is `False`, then `wait_on` must
+handle the cancellation request itself by setting the task's `state` to
+`PENDING_CANCEL` (to be picked up by `wait_for_event`, `poll_for_event` or
+`yield` in the future) and calling `OnBlock` a second time (noting that
+`OnBlock` can only request cancellation *once*).
+
 The `Task.call_sync` method defines how a task makes a synchronous call to an
 imported `callee`. `call_sync` works just like `wait_on` when `sync` is `True`
-except that `call_sync` avoids unconditionally blocking. Instead, the caller
-task passes its `on_block` callback to the callee task, so that the caller
-blocks iff the callee blocks. This means that N-deep synchronous callstacks
-avoid the overhead of async calls if none of the calls in the stack actually
-block on external I/O.
+and `cancellable` is `False` except that `call_sync` avoids unconditionally
+blocking and instead only blocks if `callee` transitively blocks. This means
+that N-deep synchronous callstacks avoid the overhead of async calls if none of
+the calls in the stack actually block on external I/O.
 ```python
   async def call_sync(self, callee, on_start, on_return):
+    async def sync_on_block(awaitable):
+      if await self.on_block(awaitable):
+        assert(self.state == Task.State.INITIAL)
+        self.state = Task.State.PENDING_CANCEL
+        assert(not await self.on_block(awaitable))
+      return False
+
     assert(not self.inst.calling_sync_import)
     self.inst.calling_sync_import = True
-    await callee(self, on_start, on_return, self.on_block)
+    await callee(self, on_start, on_return, sync_on_block)
     self.inst.calling_sync_import = False
     self.inst.async_waiting_tasks.notify_all()
 ```
@@ -841,12 +884,20 @@ loop. `wait_for_event` waits until a `Waitable` in a given `WaitableSet` makes
 progress:
 ```python
   async def wait_for_event(self, waitable_set, sync) -> EventTuple:
-    waitable_set.num_waiting += 1
-    e = None
-    while not e:
-      await self.wait_on(waitable_set.maybe_has_pending_event.wait(), sync)
-      e = waitable_set.poll()
-    waitable_set.num_waiting -= 1
+    if self.state == Task.State.PENDING_CANCEL:
+      self.state = Task.State.CANCEL_DELIVERED
+      return (EventCode.TASK_CANCELLED, 0, 0)
+    else:
+      waitable_set.num_waiting += 1
+      e = None
+      while not e:
+        maybe_event = waitable_set.maybe_has_pending_event.wait()
+        if await self.wait_on(maybe_event, sync, cancellable = True):
+          assert(self.state == Task.State.INITIAL)
+          self.state = Task.State.CANCEL_DELIVERED
+          return (EventCode.TASK_CANCELLED, 0, 0)
+        e = waitable_set.poll()
+      waitable_set.num_waiting -= 1
     return e
 ```
 As mentioned above with `WaitableSet`, `maybe_has_pending_event` is allowed to
@@ -855,6 +906,13 @@ there is actually an event. This looping as well as the number of iterations is
 not semantically observable by the wasm code and so the host implementation can
 loop or not using its own event delivery scheme.
 
+If there is already a pending cancellation request (from a previous
+non-cancellable `wait_on` or a `call_sync`), the cancellation request is
+delivered to core wasm via the `TASK_CANCELLED` event code and task's `state`
+is transitioned to `CANCEL_DELIVERED` so that `canon_task_cancel` can be called
+without trapping. If cancellation is requested *during* `wait_for_event`, there
+is a direct transition to the `CANCEL_DELIVERED` state.
+
 The `Task.yield_` method is called by `canon_yield` or, when a `callback` is
 used, when the `callback` returns `YIELD` to the event loop. Yielding allows
 the runtime to switch execution to another task without having to wait for any
@@ -862,9 +920,20 @@ external I/O. This is emulated in the Python code below by waiting on an
 immediately-resolved future, which calls the `OnBlock` callback, which allows
 control flow to switch to other `asyncio.Task`s.
 ```python
-  async def yield_(self, sync):
-    await self.wait_on(asyncio.sleep(0), sync)
+  async def yield_(self, sync) -> bool:
+    if self.state == Task.State.PENDING_CANCEL:
+      self.state = Task.State.CANCEL_DELIVERED
+      return (EventCode.TASK_CANCELLED, 0, 0)
+    elif await self.wait_on(asyncio.sleep(0), sync, cancellable = True):
+      assert(self.state == Task.State.INITIAL)
+      self.state = Task.State.CANCEL_DELIVERED
+      return (EventCode.TASK_CANCELLED, 0, 0)
+    else:
+      return (EventCode.NONE, 0, 0)
 ```
+Handling of cancellation requests in `yield_` mirrors `wait_for_event` above,
+handling both the cases of pending cancellation and cancellation while
+yielding.
 
 The `Task.poll_for_event` method is called by `canon_waitable_set_poll` or,
 when a `callback` is used, when the `callback` returns `POLL` to the event
@@ -872,8 +941,10 @@ loop. Polling returns the `NONE` event code instead of blocking when there are
 no pending events.
 ```python
   async def poll_for_event(self, waitable_set, sync) -> Optional[EventTuple]:
-    await self.yield_(sync)
-    if (e := waitable_set.poll()):
+    event_code,_,_ = e = await self.yield_(sync)
+    if event_code == EventCode.TASK_CANCELLED:
+      return e
+    elif (e := waitable_set.poll()):
       return e
     else:
       return (EventCode.NONE, 0, 0)
@@ -884,17 +955,31 @@ preventing starvation in various common polling use cases.
 
 The `Task.return_` method is called by either `canon_task_return` or
 `canon_lift` to return a list of `0` or `1` lifted values to the task's caller
-via the `OnReturn` callback. There is a dynamic error if the callee has not
+via the `OnResolve` callback. There is a dynamic error if the callee has not
 dropped all borrowed handles by the time `task.return` is called which means
 that the caller can assume that all its lent handles have been returned to it
 when it receives the `SUBTASK` `RETURNED` event.
 ```python
   def return_(self, results):
-    trap_if(not self.on_return)
+    trap_if(self.state == Task.State.RESOLVED)
     trap_if(self.num_borrows > 0)
-    self.on_return(results)
-    self.on_return = None
+    assert(results is not None)
+    self.on_resolve(results)
+    self.state = Task.State.RESOLVED
 ```
+
+The `Task.cancel` method is called by `canon_task_cancel` and enforces the same
+`num_borrows` condition as `return_`, ensuring that when the caller's
+`OnResolve` callback is called, the caller knows all borrows have been returned.
+```python
+  def cancel(self):
+    trap_if(self.state != Task.State.CANCEL_DELIVERED)
+    trap_if(self.num_borrows > 0)
+    self.on_resolve(None)
+    self.state = Task.State.RESOLVED
+```
+As guarded here, the `task.cancel` built-in can only be called after the
+`TASK_CANCELLED` event code has been delivered to core wasm.
 
 Lastly, the `Task.exit` method is called when the task has signalled that it is
 finished executing. This method guards that the various obligations of the
@@ -906,7 +991,7 @@ in particular, may be a synchronous task unblocked by the clearing of
 ```python
   def exit(self):
     assert(scheduler.locked())
-    trap_if(self.on_return)
+    trap_if(self.state != Task.State.RESOLVED)
     assert(self.num_borrows == 0)
     if self.opts.sync:
       assert(self.inst.calling_sync_export)
@@ -929,49 +1014,86 @@ class Subtask(Waitable):
     STARTING = 0
     STARTED = 1
     RETURNED = 2
+    CANCELLED_BEFORE_STARTED = 3
+    CANCELLED_BEFORE_RETURNED = 4
 
   state: State
   supertask: Optional[Task]
   lenders: Optional[list[ResourceHandle]]
+  request_cancel_begin: asyncio.Future
+  request_cancel_end: asyncio.Future
 
   def __init__(self, supertask):
     Waitable.__init__(self)
     self.state = Subtask.State.STARTING
     self.supertask = supertask
     self.lenders = []
+    self.request_cancel_begin = asyncio.Future()
+    self.request_cancel_end = asyncio.Future()
 ```
-The `state` field of `Subtask` holds a `Subtask.State` enum value that
-describes the callee's current state along the linear progression from
-[`STARTING`](Async.md#backpressure) to `STARTED` to
-[`RETURNED`](Async.md#returning). The `state` field is updated immediately when
-the callee calls the `OnStart` and `OnResolve` callbacks (which are implemented
-by the `{sync,async}_on_{start,return}` functions nested in the
+The `state` field of `Subtask` tracks the callee's progression from the initial
+[`STARTING`](Async.md#backpressure) state along the [subtask state machine].
+The `state` field is updated immediately when the callee calls the `OnStart`
+and `OnResolve` callbacks (which are implemented by the
+`{sync,async}_on_{start,resolve}` functions nested in the
 `Subtask.call_{sync,async}` methods defined next.
 
 The `Subtask.call_sync` method wraps the `Task.call_sync` method, intercepting
-the `OnStart` and `OnReturn` calls from `callee` in order to track `state`
+the `OnStart` and `OnResolve` calls from `callee` in order to track `state`
 transitions:
 ```python
-  async def call_sync(self, callee, on_start, on_return):
+  async def call_sync(self, callee, on_start, on_resolve):
     def sync_on_start():
       assert(self.state == Subtask.State.STARTING)
       self.state = Subtask.State.STARTED
       return on_start()
 
-    def sync_on_return(results):
+    def sync_on_resolve(results):
+      assert(results is not None)
       assert(self.state == Subtask.State.STARTED)
       self.state = Subtask.State.RETURNED
-      on_return(results)
+      on_resolve(results)
 
-    await Task.call_sync(self.supertask, callee, sync_on_start, sync_on_return)
+    await Task.call_sync(self.supertask, callee, sync_on_start, sync_on_resolve)
 ```
 
-The `Subtask.call_async` method calls `callee`, intercepting `OnBlock` in order
-to prevent the caller from blocking if `callee` blocks:
+The following three methods are used to implement subtask cancellation in
+conjunction with `call_async` (next). The Canonical ABI specifies that
+`subtask.cancel` can only be called once for a given subtask before it has been
+resolved. This is implemented by `canon_subtask_cancel` using the following
+`Subtask.cancelled` and `Subtask.resolved` methods. After guarding,
+`canon_subtask_cancel` will then call `Subtask.request_cancel` to actually
+initiate the cancellation.
 ```python
-  async def call_async(self, callee, on_start, on_return):
+  def cancelled(self):
+    return self.request_cancel_begin.done()
+
+  def resolved(self):
+    match self.state:
+      case (Subtask.State.STARTING |
+            Subtask.State.STARTED):
+        return False
+      case (Subtask.State.RETURNED |
+            Subtask.State.CANCELLED_BEFORE_STARTED |
+            Subtask.State.CANCELLED_BEFORE_RETURNED):
+        return True
+
+  async def request_cancel(self):
+    assert(not self.cancelled() and not self.resolved())
+    self.request_cancel_begin.set_result(None)
+    await self.request_cancel_end
+```
+As implemented here in conjunction with `call_async`, control flow is
+transferred to the subtask by resolving `request_cancel_begin` and transferred
+back by having the subtask resolve `request_cancel_end`.
+
+The `Subtask.call_async` method calls `callee`, intercepting `OnBlock` in order
+to prevent the caller from blocking if `callee` blocks and to request
+cancellation:
+```python
+  async def call_async(self, callee, on_start, on_resolve):
     async def do_call():
-      await callee(self.supertask, async_on_start, async_on_return, async_on_block)
+      await callee(self.supertask, async_on_start, async_on_resolve, async_on_block)
       relinquish_control()
 
     def async_on_start():
@@ -979,19 +1101,36 @@ to prevent the caller from blocking if `callee` blocks:
       self.state = Subtask.State.STARTED
       return on_start()
 
-    def async_on_return(results):
-      assert(self.state == Subtask.State.STARTED)
-      self.state = Subtask.State.RETURNED
-      on_return(results)
+    def async_on_resolve(results):
+      if results is None:
+        if self.state == Subtask.State.STARTING:
+          self.state = Subtask.State.CANCELLED_BEFORE_STARTED
+        else:
+          assert(self.state == Subtask.State.STARTED)
+          self.state = Subtask.State.CANCELLED_BEFORE_RETURNED
+      else:
+        assert(self.state == Subtask.State.STARTED)
+        self.state = Subtask.State.RETURNED
+      on_resolve(results)
 
     async def async_on_block(awaitable):
       relinquish_control()
-      await awaitable
+      if not self.request_cancel_end.done():
+        await asyncio.wait([awaitable, self.request_cancel_begin],
+                           return_when = asyncio.FIRST_COMPLETED)
+        if self.request_cancel_begin.done():
+          return True
+      else:
+        await awaitable
+      assert(awaitable.done())
       await scheduler.acquire()
+      return False
 
     def relinquish_control():
       if not ret.done():
         ret.set_result(None)
+      elif self.request_cancel_begin.done() and not self.request_cancel_end.done():
+        self.request_cancel_end.set_result(None)
       else:
         scheduler.release()
 
@@ -1017,6 +1156,16 @@ Explaining what's going on here:
   `scheduler.acquire()`, run, `scheduler.release()`. The net effect is that the
   asynchronous call now executes until completion like a cooperative thread
   with non-deterministic (implementation-defined) interleaving.
+* To support cancellation, `async_on_block` waits on a race between the given
+  `awaitable` and `request_cancel_begin`. If `request_cancel_begin` is resolved,
+  `async_on_block` returns `True` to request cancellation (per `OnBlock` rules)
+  without waiting on the `scheduler` lock so that control flow switches to the
+  subtask (being careful to only do so once per subtask, per `OnBlock` rules).
+  Once the subtask blocks or resolves, `relinquish_control` will then resolve
+  `request_cancel_end` without releasing the `scheduler` lock so that control
+  flow switches back to `request_cancel`. The net effect is that subtask
+  cancellation works just like an asychronous import call: it runs
+  synchronously up until the subtask blocks or resolves.
 
 As a side note: this whole idiosyncratic use of `asyncio` is emulating
 algebraic effects as realized by the Core WebAssembly [stack-switching]
@@ -1034,25 +1183,25 @@ caller will deterministically regain control without blocking.
 
 The `Subtask.add_lender` method is called by `lift_borrow` (below). This method
 increments the `num_lends` counter on the handle being lifted, which is guarded
-to be zero by `canon_resource_drop` (below). The `Subtask.deliver_return`
+to be zero by `canon_resource_drop` (below). The `Subtask.deliver_resolve`
 method is called right before the `SUBTASK` `RETURNED` event is delivered to
 wasm, at which point all the borrowed handles are logically returned to the
 caller by decrementing all the `num_lend` counts that were initially
 incremented.
 ```python
   def add_lender(self, lending_handle):
-    assert(not self.return_delivered() and self.state != Subtask.State.RETURNED)
+    assert(not self.resolve_delivered() and not self.resolved())
     lending_handle.num_lends += 1
     self.lenders.append(lending_handle)
 
-  def deliver_return(self):
-    assert(not self.return_delivered() and self.state == Subtask.State.RETURNED)
+  def deliver_resolve(self):
+    assert(not self.resolve_delivered() and self.resolved())
     for h in self.lenders:
       h.num_lends -= 1
     self.lenders = None
 
-  def return_delivered(self):
-    assert(self.lenders is not None or self.state == Subtask.State.RETURNED)
+  def resolve_delivered(self):
+    assert(self.lenders is not None or self.resolved())
     return self.lenders is None
 ```
 Note, the `lenders` list usually has a fixed size (in all cases except when a
@@ -1060,11 +1209,11 @@ function signature has `borrow`s in `list`s or `stream`s) and thus can be
 stored inline in the native stack frame.
 
 The `Subtask.drop` method is only called for `Subtask`s that have been
-`add_to_waitables()`ed and checks that the callee has been allowed to return
-its value to the caller.
+`add_to_waitables()`ed and checks that the callee has been allowed to resolve
+and explicitly relinquish any borrowed handles.
 ```python
   def drop(self):
-    trap_if(not self.return_delivered())
+    trap_if(not self.resolve_delivered())
     Waitable.drop(self)
 ```
 
@@ -2751,12 +2900,12 @@ When instantiating component instance `$inst`:
 The resulting bound function `$f` takes 4 runtime arguments:
 * `caller`, which is either the `Task` of the caller or, when the caller is the
   host, `None`
-* the caller's `OnStart`, `OnReturn` and `OnBlock` callbacks, whose meaning is
+* the caller's `OnStart`, `OnResolve` and `OnBlock` callbacks, whose meaning is
   described [above](#task-state)
 
 If `$f` is called by the host, the host is responsible for producing the lifted
 values returned by the `OnStart` callback and consuming the lifted values passed
-to the `OnReturn` callback. For example, if the host is a native JS runtime, the
+to the `OnResolve` callback. For example, if the host is a native JS runtime, the
 [JavaScript embedding] would specify how native JavaScript values are mapped to
 and from lifted values. Alternatively, if the host is a POSIX CLI that invokes
 component exports directly from the command line, the host might parse `argv`
@@ -2765,9 +2914,10 @@ return value into text printed to `stdout`.
 
 Based on this, `canon_lift` is defined in chunks as follows:
 ```python
-async def canon_lift(opts, inst, ft, callee, caller, on_start, on_return, on_block):
-  task = Task(opts, inst, ft, caller, on_return, on_block)
-  await task.enter()
+async def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve, on_block):
+  task = Task(opts, inst, ft, caller, on_resolve, on_block)
+  if not await task.enter():
+    return
 
   cx = LiftLowerContext(opts, inst, task)
   args = on_start()
@@ -2829,8 +2979,7 @@ repeatedly until the `EXIT` code is returned:
         task.exit()
         return
       case CallbackCode.YIELD:
-        await task.yield_(sync = False)
-        e = (EventCode.NONE, 0, 0)
+        e = await task.yield_(sync = False)
       case CallbackCode.WAIT:
         trap_if(not s)
         e = await task.wait_for_event(s, sync = False)
@@ -2930,13 +3079,13 @@ In the synchronous case, `Subtask.call_sync` ensures a fully-synchronous call to
       return lift_flat_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
     flat_results = None
-    def on_return(results):
+    def on_resolve(results):
       nonlocal flat_results
       flat_results = lower_flat_values(cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
 
-    await subtask.call_sync(callee, on_start, on_return)
+    await subtask.call_sync(callee, on_start, on_resolve)
     assert(types_match_values(flat_ft.results, flat_results))
-    subtask.deliver_return()
+    subtask.deliver_resolve()
     return flat_results
 ```
 
@@ -2947,22 +3096,23 @@ always returns control flow back to the caller without blocking:
     on_progress()
     return lift_flat_values(cx, 1, flat_args, ft.param_types())
 
-  def on_return(results):
+  def on_resolve(results):
     on_progress()
-    [] = lower_flat_values(cx, 0, results, ft.result_types(), flat_args)
+    if results is not None:
+      [] = lower_flat_values(cx, 0, results, ft.result_types(), flat_args)
 
   subtaski = None
   def on_progress():
     if subtaski is not None:
       def subtask_event():
-        if subtask.state == Subtask.State.RETURNED:
-          subtask.deliver_return()
+        if subtask.resolved():
+          subtask.deliver_resolve()
         return (EventCode.SUBTASK, subtaski, subtask.state)
       subtask.set_event(subtask_event)
 
-  await subtask.call_async(callee, on_start, on_return)
-  if subtask.state == Subtask.State.RETURNED:
-    subtask.deliver_return()
+  await subtask.call_async(callee, on_start, on_resolve)
+  if subtask.resolved():
+    subtask.deliver_resolve()
     return [0]
 
   subtaski = task.inst.waitables.add(subtask)
@@ -2971,13 +3121,13 @@ always returns control flow back to the caller without blocking:
   return [int(subtask.state) | (subtaski << 4)]
 ```
 When `callee` blocks before returning, the `on_progress` function called by
-`on_start` and `on_return` uses `Waitable.set_event` to asynchronously notify
+`on_start` and `on_resolve` uses `Waitable.set_event` to asynchronously notify
 the supertask when the subtask makes progress. A set event can take arbitrarily
 long to deliver and thus events are represented as *functions* that are called
 (by `Waitable.get_event`) right before the event is actually delivered to core
-wasm. Thus, the `Subtask.deliver_return` call in `subtask_event` (that releases
-borrowed handles back to the caller) is defined to happen only when `RETURNED`
-is *delivered* to core wasm, not when `on_return` is first called.
+wasm. Thus, the `Subtask.deliver_resolve` call in `subtask_event` (that
+releases borrowed handles back to the caller) is defined to happen only when
+`RETURNED` is *delivered* to core wasm, not when `on_resolve` is first called.
 
 
 ### `canon resource.new`
@@ -3192,6 +3342,30 @@ equality of the [`memaddr`] values stored in the instance's [`memaddrs` table]
 which is indexed by the static [`memidx`].
 
 
+### 🔀 `canon task.cancel`
+
+For a canonical definition:
+```wat
+(canon task.cancel (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func)`
+
+Calling `$f` cancels the [current task], confirming a previous `subtask.cancel`
+request made by a supertask and claiming that all `borrow` handles lent to the
+current task have already been dropped (and trapping in `Task.cancel` if not).
+```python
+async def canon_task_cancel(task):
+  trap_if(not task.inst.may_leave)
+  trap_if(task.opts.sync and not task.opts.always_task_return)
+  task.cancel()
+  return []
+```
+`Task.cancel` also traps if there has been no cancellation request (in which
+case the callee expects to receive a return value) or if the task has already
+returned a value or already called `task.cancel`.
+
+
 ### 🔀 `canon yield`
 
 For a canonical definition:
@@ -3199,7 +3373,7 @@ For a canonical definition:
 (canon yield $async? (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func)`
+* `$f` is given type `(func (result i32))`
 * 🚟 - `async` is allowed (otherwise it must be `false`)
 
 Calling `$f` calls `Task.yield_` to allow other tasks to execute:
@@ -3207,13 +3381,22 @@ Calling `$f` calls `Task.yield_` to allow other tasks to execute:
 async def canon_yield(sync, task):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback and not sync)
-  await task.yield_(sync)
-  return []
+  event_code,_,_ = await task.yield_(sync)
+  match event_code:
+    case EventCode.NONE:
+      return [0]
+    case EventCode.TASK_CANCELLED:
+      return [1]
 ```
 If `async` is not set, no other tasks *in the same component instance* can
 execute, however tasks in *other* component instances may execute. This allows
 a long-running task in one component to avoid starving other components without
 needing support full reentrancy.
+
+Because other tasks can execute, a subtask can be cancelled while executing
+`yield`, in which case `yield` returns `1`. The language runtime and bindings
+generators should handle cancellation the same way as when receiving the
+`TASK_CANCELLED` event from `waitable-set.wait`.
 
 The guard preventing `async` use of `task.poll` when a `callback` has
 been used preserves the invariant that producer toolchains using
@@ -3357,6 +3540,70 @@ Note that tables do not allow elements at index `0`, so `0` is a valid sentinel
 that tells `join` to remove the given waitable from any set that it is
 currently a part of. Waitables can be a member of at most one set, so if the
 given waitable is already in one set, it will be transferred.
+
+
+### 🔀 `canon subtask.cancel`
+
+For a canonical definition:
+```wat
+(canon subtask.cancel (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param i32))`
+
+Calling `$f` sends a request to the subtask at the given index to cancel its
+execution ASAP. This request is cooperative and the subtask may take arbitrarily
+long to receive and confirm the request. If the subtask doesn't immediately
+confirm the cancellation request, `subtask.cancel` returns `BLOCKED` and the
+caller must wait for a `SUBTASK` progress update using `waitable-set` methods
+as usual.
+
+When cancellation is confirmed the supertask will receive the final state of
+the subtask which is one of:
+* `RETURNED`, if the subtask successfully returned a value via `task.return`;
+* `CANCELLED_BEFORE_STARTED`, if the subtask was cancelled before receiving its
+  arguments (and thus no `own` handles were transferred); or
+* `CANCELLED_BEFORE_RETURNED`, if the subtask called `task.cancel` instead of
+  `task.return`.
+
+This state is either returned by `subtask.cancel`, if the subtask resolved
+without blocking, or, if `subtask.cancel` returns `BLOCKED`, then as part of
+the event payload of a future `SUBTASK` event.
+```python
+BLOCKED = 0xffff_fffff
+
+async def canon_subtask_cancel(sync, task, i):
+  trap_if(not task.inst.may_leave)
+  subtask = task.inst.waitables.get(i)
+  trap_if(not isinstance(subtask, Subtask))
+  trap_if(subtask.resolve_delivered() or subtask.cancelled())
+  if subtask.resolved():
+    assert(subtask.has_pending_event())
+  else:
+    await subtask.request_cancel()
+    if sync:
+      while not subtask.resolved():
+        if subtask.has_pending_event():
+          _ = subtask.get_event()
+        await task.wait_on(subtask.wait_for_pending_event(), sync = True)
+    else:
+      if not subtask.resolved():
+        return [BLOCKED]
+  code,index,payload = subtask.get_event()
+  assert(code == EventCode.SUBTASK and index == i and payload == subtask.state)
+  assert(subtask.resolve_delivered())
+  return [subtask.state]
+```
+The initial trapping conditions disallow calling `subtask.cancel` twice for the
+same subtask or after the supertask has already been notified that the subtask
+has returned.
+
+A race condition handled by the above code is that it's possible for a subtask
+to have already resolved (by calling `task.return` or `task.cancel`) and
+updated the `state` stored in the `Subtask` (such that `Subtask.resolved()` is
+`True`) but this fact has not yet been *delivered* to the supertask by the
+supertask calling `get_event` on the `Subtask` in its `waitables` table. This
+distinction is captured by `Subtask.resolved` vs. `Subtask.resolve_delivered`.
 
 
 ### 🔀 `canon subtask.drop`
@@ -3881,6 +4128,7 @@ def canon_thread_available_parallelism():
 [Current Task]: Async.md#current-task
 [Readable and Writable Ends]: Async.md#streams-and-futures
 [Context-Local Storage]: Async.md#context-local-storage
+[Subtask State Machine]: Async.md#cancellation
 [Lazy Lowering]: https://github.com/WebAssembly/component-model/issues/383
 
 [Administrative Instructions]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-instr-admin
