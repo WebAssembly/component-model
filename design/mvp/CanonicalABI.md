@@ -1915,7 +1915,7 @@ original encoding and number of source [code units]. From this hint data,
 
 We start with a case analysis to enumerate all the meaningful encoding
 combinations, subdividing the `latin1+utf16` encoding into either `latin1` or
-`utf16` based on the `UTF16_BIT` flag set by `load_string`:
+`utf16` based on the `UTF16_TAG` flag set by `load_string`:
 ```python
 def store_string(cx, v: String, ptr):
   begin, tagged_code_units = store_string_into_range(cx, v)
@@ -1975,7 +1975,7 @@ def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment
   return (ptr, src_code_units)
 ```
 The choice of `MAX_STRING_BYTE_LENGTH` constant ensures that the high bit of a
-string's number of code units is never set, keeping it clear for `UTF16_BIT`.
+string's number of code units is never set, keeping it clear for `UTF16_TAG`.
 
 The 2 cases of transcoding into UTF-8 share an algorithm that starts by
 optimistically assuming that each code unit of the source string fits in a
