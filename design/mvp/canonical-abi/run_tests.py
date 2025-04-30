@@ -1503,7 +1503,18 @@ async def test_wasm_to_wasm_stream():
     result,n = unpack_result(mem1[retp+4])
     assert(n == 4 and result == definitions.COMPLETED)
 
+    [ret] = await canon_stream_write(U8Type(), opts1, task, wsi, 12345, 0)
+    assert(ret == definitions.BLOCKED)
+
     fut4.set_result(None)
+
+    [event] = await canon_waitable_set_wait(False, mem1, task, seti, retp)
+    assert(event == EventCode.STREAM_WRITE)
+    assert(mem1[retp+0] == wsi)
+    assert(mem1[retp+4] == 0)
+
+    [ret] = await canon_stream_write(U8Type(), opts1, task, wsi, 12345, 0)
+    assert(ret == 0)
 
     [errctxi] = await canon_error_context_new(opts1, task, 0, 0)
     [] = await canon_stream_close_writable(U8Type(), task, wsi)
@@ -1545,6 +1556,9 @@ async def test_wasm_to_wasm_stream():
     fut2.set_result(None)
     await task.on_block(fut3)
 
+    [ret] = await canon_stream_read(U8Type(), opts2, task, rsi, 12345, 0)
+    assert(ret == 0)
+
     mem2[0:8] = bytes(8)
     [ret] = await canon_stream_read(U8Type(), opts2, task, rsi, 0, 2)
     result,n = unpack_result(ret)
@@ -1557,9 +1571,16 @@ async def test_wasm_to_wasm_stream():
 
     await task.on_block(fut4)
 
-    [ret] = await canon_stream_read(U8Type(), opts2, task, rsi, 0, 2)
-    result,n = unpack_result(ret)
-    assert(n == 0 and result == definitions.CLOSED)
+    [ret] = await canon_stream_read(U8Type(), opts2, task, rsi, 12345, 0)
+    assert(ret == definitions.BLOCKED)
+
+    [event] = await canon_waitable_set_wait(False, mem2, task, seti, retp)
+    assert(event == EventCode.STREAM_READ)
+    assert(mem2[retp+0] == rsi)
+    p2 = int.from_bytes(mem2[retp+4 : retp+8], 'little', signed=False)
+    errctxi = 1
+    assert(p2 == (definitions.CLOSED | errctxi))
+
     [] = await canon_stream_close_readable(U8Type(), task, rsi)
     [] = await canon_waitable_set_drop(task, seti)
     return []
