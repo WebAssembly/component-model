@@ -218,10 +218,7 @@ scheduler = asyncio.Lock()
 #### Component Instance State
 
 class ComponentInstance:
-  resources: Table[ResourceHandle]
-  waitables: Table[Waitable]
-  waitable_sets: Table[WaitableSet]
-  error_contexts: Table[ErrorContext]
+  table: Table
   may_leave: bool
   backpressure: bool
   calling_sync_export: bool
@@ -231,10 +228,7 @@ class ComponentInstance:
   async_waiting_tasks: asyncio.Condition
 
   def __init__(self):
-    self.resources = Table[ResourceHandle]()
-    self.waitables = Table[Waitable]()
-    self.waitable_sets = Table[WaitableSet]()
-    self.error_contexts = Table[ErrorContext]()
+    self.table = Table()
     self.may_leave = True
     self.backpressure = False
     self.calling_sync_export = False
@@ -245,9 +239,8 @@ class ComponentInstance:
 
 #### Table State
 
-ElemT = TypeVar('ElemT')
-class Table(Generic[ElemT]):
-  array: list[Optional[ElemT]]
+class Table:
+  array: list[any]
   free: list[int]
 
   MAX_LENGTH = 2**28 - 1
@@ -1134,7 +1127,9 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   return (s, cx.opts.string_encoding, tagged_code_units)
 
 def lift_error_context(cx, i):
-  return cx.inst.error_contexts.get(i)
+  errctx = cx.inst.table.get(i)
+  trap_if(not isinstance(errctx, ErrorContext))
+  return errctx
 
 def load_list(cx, ptr, elem_type, maybe_length):
   if maybe_length is not None:
@@ -1185,7 +1180,8 @@ def unpack_flags_from_int(i, labels):
   return record
 
 def lift_own(cx, i, t):
-  h = cx.inst.resources.remove(i)
+  h = cx.inst.table.remove(i)
+  trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not t.rt)
   trap_if(h.num_lends != 0)
   trap_if(not h.own)
@@ -1193,7 +1189,8 @@ def lift_own(cx, i, t):
 
 def lift_borrow(cx, i, t):
   assert(isinstance(cx.borrow_scope, Subtask))
-  h = cx.inst.resources.get(i)
+  h = cx.inst.table.get(i)
+  trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not t.rt)
   cx.borrow_scope.add_lender(h)
   return h.rep
@@ -1208,7 +1205,7 @@ def lift_future(cx, i, t):
 
 def lift_async_value(ReadableEndT, cx, i, t):
   assert(not contains_borrow(t))
-  e = cx.inst.waitables.remove(i)
+  e = cx.inst.table.remove(i)
   trap_if(not isinstance(e, ReadableEndT))
   trap_if(e.stream.t != t)
   trap_if(e.copying)
@@ -1434,7 +1431,7 @@ def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   return (ptr, latin1_size)
 
 def lower_error_context(cx, v):
-  return cx.inst.error_contexts.add(v)
+  return cx.inst.table.add(v)
 
 def store_list(cx, v, ptr, elem_type, maybe_length):
   if maybe_length is not None:
@@ -1494,7 +1491,7 @@ def pack_flags_into_int(v, labels):
 
 def lower_own(cx, rep, t):
   h = ResourceHandle(t.rt, rep, own = True)
-  return cx.inst.resources.add(h)
+  return cx.inst.table.add(h)
 
 def lower_borrow(cx, rep, t):
   assert(isinstance(cx.borrow_scope, Task))
@@ -1502,7 +1499,7 @@ def lower_borrow(cx, rep, t):
     return rep
   h = ResourceHandle(t.rt, rep, own = False, borrow_scope = cx.borrow_scope)
   h.borrow_scope.num_borrows += 1
-  return cx.inst.resources.add(h)
+  return cx.inst.table.add(h)
 
 def lower_stream(cx, v, t):
   return lower_async_value(ReadableStreamEnd, cx, v, t)
@@ -1514,7 +1511,7 @@ def lower_future(cx, v, t):
 def lower_async_value(ReadableEndT, cx, v, t):
   assert(isinstance(v, ReadableStream))
   assert(not contains_borrow(t))
-  return cx.inst.waitables.add(ReadableEndT(v))
+  return cx.inst.table.add(ReadableEndT(v))
 
 ### Flattening
 
@@ -1868,7 +1865,8 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve, on_bl
   while True:
     code,si = unpack_callback_result(packed)
     if si != 0:
-      s = task.inst.waitable_sets.get(si)
+      s = task.inst.table.get(si)
+      trap_if(not isinstance(s, WaitableSet))
     match code:
       case CallbackCode.EXIT:
         task.exit()
@@ -1952,7 +1950,7 @@ async def canon_lower(opts, ft, callee, task, flat_args):
     subtask.deliver_resolve()
     return [0]
 
-  subtaski = task.inst.waitables.add(subtask)
+  subtaski = task.inst.table.add(subtask)
   assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
   assert(0 <= int(subtask.state) < 2**4)
   return [int(subtask.state) | (subtaski << 4)]
@@ -1962,7 +1960,7 @@ async def canon_lower(opts, ft, callee, task, flat_args):
 async def canon_resource_new(rt, task, rep):
   trap_if(not task.inst.may_leave)
   h = ResourceHandle(rt, rep, own = True)
-  i = task.inst.resources.add(h)
+  i = task.inst.table.add(h)
   return [i]
 
 ### `canon resource.drop`
@@ -1970,7 +1968,8 @@ async def canon_resource_new(rt, task, rep):
 async def canon_resource_drop(rt, sync, task, i):
   trap_if(not task.inst.may_leave)
   inst = task.inst
-  h = inst.resources.remove(i)
+  h = inst.table.remove(i)
+  trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not rt)
   trap_if(h.num_lends != 0)
   flat_results = [] if sync else [0]
@@ -1995,7 +1994,8 @@ async def canon_resource_drop(rt, sync, task, i):
 ### `canon resource.rep`
 
 async def canon_resource_rep(rt, task, i):
-  h = task.inst.resources.get(i)
+  h = task.inst.table.get(i)
+  trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not rt)
   return [h.rep]
 
@@ -2057,14 +2057,15 @@ async def canon_yield(sync, task):
 
 async def canon_waitable_set_new(task):
   trap_if(not task.inst.may_leave)
-  return [ task.inst.waitable_sets.add(WaitableSet()) ]
+  return [ task.inst.table.add(WaitableSet()) ]
 
 ### 🔀 `canon waitable-set.wait`
 
 async def canon_waitable_set_wait(sync, mem, task, si, ptr):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback and not sync)
-  s = task.inst.waitable_sets.get(si)
+  s = task.inst.table.get(si)
+  trap_if(not isinstance(s, WaitableSet))
   e = await task.wait_for_event(s, sync)
   return unpack_event(mem, task, ptr, e)
 
@@ -2080,7 +2081,8 @@ def unpack_event(mem, task, ptr, e: EventTuple):
 async def canon_waitable_set_poll(sync, mem, task, si, ptr):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.callback and not sync)
-  s = task.inst.waitable_sets.get(si)
+  s = task.inst.table.get(si)
+  trap_if(not isinstance(s, WaitableSet))
   e = await task.poll_for_event(s, sync)
   return unpack_event(mem, task, ptr, e)
 
@@ -2088,7 +2090,8 @@ async def canon_waitable_set_poll(sync, mem, task, si, ptr):
 
 async def canon_waitable_set_drop(task, i):
   trap_if(not task.inst.may_leave)
-  s = task.inst.waitable_sets.remove(i)
+  s = task.inst.table.remove(i)
+  trap_if(not isinstance(s, WaitableSet))
   s.drop()
   return []
 
@@ -2096,11 +2099,14 @@ async def canon_waitable_set_drop(task, i):
 
 async def canon_waitable_join(task, wi, si):
   trap_if(not task.inst.may_leave)
-  w = task.inst.waitables.get(wi)
+  w = task.inst.table.get(wi)
+  trap_if(not isinstance(w, Waitable))
   if si == 0:
     w.join(None)
   else:
-    w.join(task.inst.waitable_sets.get(si))
+    s = task.inst.table.get(si)
+    trap_if(not isinstance(s, WaitableSet))
+    w.join(s)
   return []
 
 ### 🔀 `canon subtask.cancel`
@@ -2109,7 +2115,7 @@ BLOCKED = 0xffff_fffff
 
 async def canon_subtask_cancel(sync, task, i):
   trap_if(not task.inst.may_leave)
-  subtask = task.inst.waitables.get(i)
+  subtask = task.inst.table.get(i)
   trap_if(not isinstance(subtask, Subtask))
   trap_if(subtask.resolve_delivered() or subtask.cancelled())
   if subtask.resolved():
@@ -2133,7 +2139,7 @@ async def canon_subtask_cancel(sync, task, i):
 
 async def canon_subtask_drop(task, i):
   trap_if(not task.inst.may_leave)
-  s = task.inst.waitables.remove(i)
+  s = task.inst.table.remove(i)
   trap_if(not isinstance(s, Subtask))
   s.drop()
   return []
@@ -2143,15 +2149,15 @@ async def canon_subtask_drop(task, i):
 async def canon_stream_new(stream_t, task):
   trap_if(not task.inst.may_leave)
   stream = ReadableStreamGuestImpl(stream_t.t)
-  ri = task.inst.waitables.add(ReadableStreamEnd(stream))
-  wi = task.inst.waitables.add(WritableStreamEnd(stream))
+  ri = task.inst.table.add(ReadableStreamEnd(stream))
+  wi = task.inst.table.add(WritableStreamEnd(stream))
   return [ ri | (wi << 32) ]
 
 async def canon_future_new(future_t, task):
   trap_if(not task.inst.may_leave)
   future = ReadableStreamGuestImpl(future_t.t)
-  ri = task.inst.waitables.add(ReadableFutureEnd(future))
-  wi = task.inst.waitables.add(WritableFutureEnd(future))
+  ri = task.inst.table.add(ReadableFutureEnd(future))
+  wi = task.inst.table.add(WritableFutureEnd(future))
   return [ ri | (wi << 32) ]
 
 ### 🔀 `canon {stream,future}.{read,write}`
@@ -2174,7 +2180,7 @@ async def canon_future_write(future_t, opts, task, i, ptr):
 
 async def copy(EndT, BufferT, event_code, stream_or_future_t, opts, task, i, ptr, n):
   trap_if(not task.inst.may_leave)
-  e = task.inst.waitables.get(i)
+  e = task.inst.table.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.stream.t != stream_or_future_t.t)
   trap_if(e.copying)
@@ -2243,7 +2249,7 @@ async def canon_future_cancel_write(future_t, sync, task, i):
 
 async def cancel_copy(EndT, event_code, stream_or_future_t, sync, task, i):
   trap_if(not task.inst.may_leave)
-  e = task.inst.waitables.get(i)
+  e = task.inst.table.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.stream.t != stream_or_future_t.t)
   trap_if(not e.copying)
@@ -2274,7 +2280,7 @@ async def canon_future_close_writable(future_t, task, hi):
 
 async def close(EndT, stream_or_future_t, task, hi):
   trap_if(not task.inst.may_leave)
-  e = task.inst.waitables.remove(hi)
+  e = task.inst.table.remove(hi)
   trap_if(not isinstance(e, EndT))
   trap_if(e.stream.t != stream_or_future_t.t)
   e.drop()
@@ -2294,14 +2300,15 @@ async def canon_error_context_new(opts, task, ptr, tagged_code_units):
     cx = LiftLowerContext(opts, task.inst)
     s = load_string_from_range(cx, ptr, tagged_code_units)
     s = host_defined_transformation(s)
-  i = task.inst.error_contexts.add(ErrorContext(s))
+  i = task.inst.table.add(ErrorContext(s))
   return [i]
 
 ### 📝 `canon error-context.debug-message`
 
 async def canon_error_context_debug_message(opts, task, i, ptr):
   trap_if(not task.inst.may_leave)
-  errctx = task.inst.error_contexts.get(i)
+  errctx = task.inst.table.get(i)
+  trap_if(not isinstance(errctx, ErrorContext))
   cx = LiftLowerContext(opts, task.inst)
   store_string(cx, errctx.debug_message, ptr)
   return []
@@ -2310,5 +2317,6 @@ async def canon_error_context_debug_message(opts, task, i, ptr):
 
 async def canon_error_context_drop(task, i):
   trap_if(not task.inst.may_leave)
-  task.inst.error_contexts.remove(i)
+  errctx = task.inst.table.remove(i)
+  trap_if(not isinstance(errctx, ErrorContext))
   return []

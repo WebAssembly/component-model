@@ -450,8 +450,8 @@ async def test_handles():
     nonlocal dtor_value
 
     assert(len(args) == 4)
-    assert(len(inst.resources.array) == 4)
-    assert(inst.resources.array[0] is None)
+    assert(len(inst.table.array) == 4)
+    assert(inst.table.array[0] is None)
     assert(args[0] == 1)
     assert(args[1] == 2)
     assert(args[2] == 3)
@@ -478,22 +478,22 @@ async def test_handles():
     dtor_value = None
     await canon_resource_drop(rt, True, task, 1)
     assert(dtor_value == 42)
-    assert(len(inst.resources.array) == 5)
-    assert(inst.resources.array[1] is None)
-    assert(len(inst.resources.free) == 1)
+    assert(len(inst.table.array) == 5)
+    assert(inst.table.array[1] is None)
+    assert(len(inst.table.free) == 1)
 
     h = (await canon_resource_new(rt, task, 46))[0]
     assert(h == 1)
-    assert(len(inst.resources.array) == 5)
-    assert(inst.resources.array[1] is not None)
-    assert(len(inst.resources.free) == 0)
+    assert(len(inst.table.array) == 5)
+    assert(inst.table.array[1] is not None)
+    assert(len(inst.table.free) == 0)
 
     dtor_value = None
     await canon_resource_drop(rt, True, task, 3)
     assert(dtor_value is None)
-    assert(len(inst.resources.array) == 5)
-    assert(inst.resources.array[3] is None)
-    assert(len(inst.resources.free) == 1)
+    assert(len(inst.table.array) == 5)
+    assert(inst.table.array[3] is None)
+    assert(len(inst.table.free) == 1)
 
     return [1, 2, 4]
 
@@ -522,9 +522,9 @@ async def test_handles():
   assert(got[0] == 46)
   assert(got[1] == 43)
   assert(got[2] == 45)
-  assert(len(inst.resources.array) == 5)
-  assert(all(inst.resources.array[i] is None for i in range(4)))
-  assert(len(inst.resources.free) == 4)
+  assert(len(inst.table.array) == 5)
+  assert(all(inst.table.array[i] is None for i in range(4)))
+  assert(len(inst.table.free) == 4)
   definitions.MAX_FLAT_RESULTS = before
 
 
@@ -579,14 +579,14 @@ async def test_async_to_async():
     assert(u8 == 43)
     [ret] = await canon_lower(consumer_opts, toggle_ft, toggle_callee, task, [])
     state,subi1 = unpack_result(ret)
-    assert(subi1 == 1)
+    assert(subi1 == 2)
     assert(state == Subtask.State.STARTED)
     [] = await canon_waitable_join(task, subi1, seti)
     retp = ptr
     consumer_heap.memory[retp] = 13
     [ret] = await canon_lower(consumer_opts, blocking_ft, blocking_callee, task, [83, retp])
     state,subi2 = unpack_result(ret)
-    assert(subi2 == 2)
+    assert(subi2 == 3)
     assert(state == Subtask.State.STARTING)
     assert(consumer_heap.memory[retp] == 13)
     [] = await canon_waitable_join(task, subi2, seti)
@@ -626,12 +626,12 @@ async def test_async_to_async():
       return []
     rt = ResourceType(producer_inst, dtor)
 
-    [i] = await canon_resource_new(rt, task, 50)
-    assert(i == 1)
+    [resi] = await canon_resource_new(rt, task, 50)
+    assert(resi == 3)
     assert(dtor_value is None)
-    [ret] = await canon_resource_drop(rt, False, task, 1)
+    [ret] = await canon_resource_drop(rt, False, task, resi)
     state,dtorsubi = unpack_result(ret)
-    assert(dtorsubi == 2)
+    assert(dtorsubi == 3)
     assert(state == Subtask.State.STARTED)
     assert(dtor_value is None)
     dtor_fut.set_result(None)
@@ -697,7 +697,7 @@ async def test_async_callback():
     assert(state == Subtask.State.STARTED)
 
     [seti] = await canon_waitable_set_new(task)
-    assert(seti == 1)
+    assert(seti == 3)
     [] = await canon_waitable_join(task, subi1, seti)
     [] = await canon_waitable_join(task, subi2, seti)
 
@@ -1268,7 +1268,7 @@ async def test_async_stream_ops():
     [ret] = await canon_lower(opts, ft, host_import, task, [rsi3, retp])
     assert(ret == 0)
     rsi4 = mem[16]
-    assert(rsi4 == 2)
+    assert(rsi4 == 4)
     [ret] = await canon_stream_write(StreamType(U8Type()), opts, task, wsi3, 0, 4)
     assert(ret == definitions.BLOCKED)
     host_import_incoming.set_remain(100)
@@ -1434,7 +1434,7 @@ async def test_host_partial_reads_writes():
     [packed] = await canon_stream_new(StreamType(U8Type()), task)
     rsi,wsi = unpack_new_ends(packed)
     assert(rsi == 1)
-    assert(wsi == 2)
+    assert(wsi == 3)
     [ret] = await canon_lower(opts, sink_ft, host_sink, task, [rsi])
     assert(ret == 0)
     mem[0:6] = b'\x01\x02\x03\x04\x05\x06'
@@ -1909,7 +1909,7 @@ async def test_futures():
     result,n = unpack_result(ret)
     assert(n == 1 and result == definitions.CLOSED)
 
-    while not task.inst.waitables.get(rfi).stream.closed():
+    while not task.inst.table.get(rfi).stream.closed():
       await task.yield_(sync = False)
 
     [ret] = await canon_future_cancel_read(FutureType(U8Type()), True, task, rfi)
@@ -2183,16 +2183,16 @@ async def test_self_empty():
   async def core_func(task, args):
     [seti] = await canon_waitable_set_new(task)
 
-    [packed] = await canon_future_new(None, task)
+    [packed] = await canon_future_new(FutureType(None), task)
     rfi,wfi = unpack_new_ends(packed)
 
-    [ret] = await canon_future_write(None, async_opts, task, wfi, 10000)
+    [ret] = await canon_future_write(FutureType(None), async_opts, task, wfi, 10000)
     assert(ret == definitions.BLOCKED)
 
-    [ret] = await canon_future_read(None, async_opts, task, rfi, 20000)
+    [ret] = await canon_future_read(FutureType(None), async_opts, task, rfi, 20000)
     result,n = unpack_result(ret)
     assert(n == 1 and result == definitions.CLOSED)
-    [] = await canon_future_close_readable(None, task, rfi)
+    [] = await canon_future_close_readable(FutureType(None), task, rfi)
 
     [] = await canon_waitable_join(task, wfi, seti)
     [event] = await canon_waitable_set_wait(True, mem, task, seti, 0)
@@ -2201,20 +2201,20 @@ async def test_self_empty():
     result,n = unpack_result(mem[4])
     assert(result == definitions.CLOSED)
     assert(n == 1)
-    [] = await canon_future_close_writable(None, task, wfi)
+    [] = await canon_future_close_writable(FutureType(None), task, wfi)
 
-    [packed] = await canon_stream_new(None, task)
+    [packed] = await canon_stream_new(StreamType(None), task)
     rsi,wsi = unpack_new_ends(packed)
-    [ret] = await canon_stream_write(None, async_opts, task, wsi, 10000, 3)
+    [ret] = await canon_stream_write(StreamType(None), async_opts, task, wsi, 10000, 3)
     assert(ret == definitions.BLOCKED)
 
-    [ret] = await canon_stream_read(None, async_opts, task, rsi, 2000, 1)
+    [ret] = await canon_stream_read(StreamType(None), async_opts, task, rsi, 2000, 1)
     result,n = unpack_result(ret)
     assert(n == 1 and result == definitions.COMPLETED)
-    [ret] = await canon_stream_read(None, async_opts, task, rsi, 2000, 4)
+    [ret] = await canon_stream_read(StreamType(None), async_opts, task, rsi, 2000, 4)
     result,n = unpack_result(ret)
     assert(n == 2 and result == definitions.COMPLETED)
-    [] = await canon_stream_close_readable(None, task, rsi)
+    [] = await canon_stream_close_readable(StreamType(None), task, rsi)
 
     [] = await canon_waitable_join(task, wsi, seti)
     [event] = await canon_waitable_set_wait(True, mem, task, seti, 0)
@@ -2223,7 +2223,7 @@ async def test_self_empty():
     result,n = unpack_result(mem[4])
     assert(result == definitions.CLOSED)
     assert(n == 3)
-    [] = await canon_stream_close_writable(None, task, wsi)
+    [] = await canon_stream_close_writable(StreamType(None), task, wsi)
 
     [] = await canon_waitable_set_drop(task, seti)
     return []

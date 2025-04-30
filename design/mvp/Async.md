@@ -502,10 +502,10 @@ incremented so that the correct counter can be decremented.
 
 ### Cancellation
 
-Once an async call has started, blocked and been added to the caller's table of
-waitables, the caller may decide that it no longer needs the results or effects
-of the subtask. In this case, the caller may **cancel** the subtask by calling
-the [`subtask.cancel`] built-in.
+Once an async call has started, blocked and been added to the caller's table,
+the caller may decide that it no longer needs the results or effects of the
+subtask. In this case, the caller may **cancel** the subtask by calling the
+[`subtask.cancel`] built-in.
 
 Once cancellation is requested, since the subtask may have already racily
 returned a value, the caller may still receive a return value. However, the
@@ -593,8 +593,8 @@ possibilities indicated by the `(result i32)` value:
 * If the returned `i32` is `0`, then the call completed synchronously without
   blocking and so `$in` has been read and `$out` has been written.
 * Otherwise, the high 28 bits of the `i32` are the index of a new `Subtask`
-  in the current component instance's `waitables` table. The low 4 bits
-  indicate how far the callee made it before blocking:
+  in the current component instance's table. The low 4 bits indicate how far
+  the callee made it before blocking:
   * If `1`, the callee didn't even start (due to backpressure), and thus
     neither `$in` nor `$out` have been accessed yet.
   * If `2`, the callee started by reading `$in`, but blocked before writing
@@ -624,7 +624,7 @@ func(s1: stream<future<string>>, s2: list<stream<string>>) -> result<stream<stri
 ```
 In *both* the sync and async ABIs, a `future` or `stream` in the WIT-level type
 translates to a single `i32` in the ABI.  This `i32` is an index into the
-component instance's `waitables` table. For example, for the WIT function type:
+current component instance's table. For example, for the WIT function type:
 ```wit
 func(f: future<string>) -> future<u32>
 ```
@@ -637,8 +637,8 @@ and the asynchronous ABI has the signature:
 (func (param $in i32) (param $out i32) (result i32))
 ```
 where, according to the above rules, `$in` is the index of a future in the
-`waitables` table (not a pointer to one) while `$out` is a pointer to a linear
-memory location that will receive an `i32` index.
+current component instance's table (not a pointer to one) while `$out` is a
+pointer to a linear memory location that will receive an `i32` index.
 
 For the runtime semantics of this `i32` index, see `lift_stream`,
 `lift_future`, `lower_stream` and `lower_future` in the [Canonical ABI
