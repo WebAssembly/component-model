@@ -1362,7 +1362,8 @@ but in the opposite direction. Both are implemented by a single underlying
       self.set_pending(inst, buffer, on_partial_copy, on_copy_done)
       return 'blocked'
     else:
-      trap_if(inst is self.pending_inst) # temporary
+      assert(self.t == src.t == dst.t)
+      trap_if(inst is self.pending_inst and self.t is not None) # temporary
       if self.pending_buffer.remain() > 0:
         if buffer.remain() > 0:
           dst.write(src.read(min(src.remain(), dst.remain())))
@@ -1379,6 +1380,13 @@ but in the opposite direction. Both are implemented by a single underlying
         else:
           return 'done'
 ```
+Currently, there is a trap when both the `read` and `write` come from the same
+component instance and there is a non-empty element type. This trap will be
+removed in a subsequent release; the reason for the trap is that when lifting
+and lowering can alias the same memory, interleavings can be complex and must
+be handled carefully. Future improvements to the Canonical ABI ([lazy lowering])
+can greatly simplify this interleaving and be more practical to implement.
+
 The meaning of a `read` or `write` when the length is `0` is that the caller is
 querying the "readiness" of the other side. When a `0`-length read/write
 rendezvous with a non-`0`-length read/write, only the `0`-length read/write

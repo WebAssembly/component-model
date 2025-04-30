@@ -1062,6 +1062,7 @@ class HostSource(ReadableStream):
 
 class HostSink:
   stream: ReadableStream
+  t: ValType
   received: list[int]
   chunk: int
   write_remain: int
@@ -1070,6 +1071,7 @@ class HostSink:
 
   def __init__(self, stream, chunk, remain = 2**64):
     self.stream = stream
+    self.t = stream.t
     self.received = []
     self.chunk = chunk
     self.write_remain = remain
@@ -1781,10 +1783,12 @@ async def test_cancel_copy():
 
 
 class HostFutureSink:
+  t: ValType
   v: Optional[any]
   has_v: asyncio.Event
 
-  def __init__(self):
+  def __init__(self, t):
+    self.t = t
     self.v = None
     self.has_v = asyncio.Event()
 
@@ -1849,7 +1853,7 @@ async def test_futures():
     [future] = on_start()
     outgoing = HostFutureSource(U8Type())
     on_resolve([outgoing])
-    incoming = HostFutureSink()
+    incoming = HostFutureSink(U8Type())
     future.read(None, incoming, lambda:(), lambda why:())
     wait = asyncio.create_task(incoming.has_v.wait())
     await on_block(wait)
@@ -2169,6 +2173,63 @@ async def test_cancel_subtask():
   assert(len(got) == 1)
   assert(got[0] == 42)
 
+async def test_self_empty():
+  inst = ComponentInstance()
+  mem = bytearray(24)
+  sync_opts = mk_opts(memory=mem, sync=True)
+  async_opts = mk_opts(memory=mem, sync=False)
+
+  ft = FuncType([],[])
+  async def core_func(task, args):
+    [seti] = await canon_waitable_set_new(task)
+
+    [packed] = await canon_future_new(None, task)
+    rfi,wfi = unpack_new_ends(packed)
+
+    [ret] = await canon_future_write(None, async_opts, task, wfi, 10000)
+    assert(ret == definitions.BLOCKED)
+
+    [ret] = await canon_future_read(None, async_opts, task, rfi, 20000)
+    result,n = unpack_result(ret)
+    assert(n == 1 and result == definitions.CLOSED)
+    [] = await canon_future_close_readable(None, task, rfi)
+
+    [] = await canon_waitable_join(task, wfi, seti)
+    [event] = await canon_waitable_set_wait(True, mem, task, seti, 0)
+    assert(event == EventCode.FUTURE_WRITE)
+    assert(mem[0] == wfi)
+    result,n = unpack_result(mem[4])
+    assert(result == definitions.CLOSED)
+    assert(n == 1)
+    [] = await canon_future_close_writable(None, task, wfi)
+
+    [packed] = await canon_stream_new(None, task)
+    rsi,wsi = unpack_new_ends(packed)
+    [ret] = await canon_stream_write(None, async_opts, task, wsi, 10000, 3)
+    assert(ret == definitions.BLOCKED)
+
+    [ret] = await canon_stream_read(None, async_opts, task, rsi, 2000, 1)
+    result,n = unpack_result(ret)
+    assert(n == 1 and result == definitions.COMPLETED)
+    [ret] = await canon_stream_read(None, async_opts, task, rsi, 2000, 4)
+    result,n = unpack_result(ret)
+    assert(n == 2 and result == definitions.COMPLETED)
+    [] = await canon_stream_close_readable(None, task, rsi)
+
+    [] = await canon_waitable_join(task, wsi, seti)
+    [event] = await canon_waitable_set_wait(True, mem, task, seti, 0)
+    assert(event == EventCode.STREAM_WRITE)
+    assert(mem[0] == wsi)
+    result,n = unpack_result(mem[4])
+    assert(result == definitions.CLOSED)
+    assert(n == 3)
+    [] = await canon_stream_close_writable(None, task, wsi)
+
+    [] = await canon_waitable_set_drop(task, seti)
+    return []
+
+  await canon_lift(sync_opts, inst, ft, core_func, None, lambda:[], lambda _:(), host_on_block)
+
 async def run_async_tests():
   await test_roundtrips()
   await test_handles()
@@ -2187,6 +2248,7 @@ async def run_async_tests():
   await test_cancel_copy()
   await test_futures()
   await test_cancel_subtask()
+  await test_self_empty()
 
 asyncio.run(run_async_tests())
 

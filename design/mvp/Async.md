@@ -363,8 +363,8 @@ signalled by performing a `0`-length read or write (see the [Stream State]
 section in the Canonical ABI explainer for details).
 
 As a temporary limitation, if a `read` and `write` for a single stream or
-future occur from within the same component, there is a trap. In the future
-this limitation will be removed.
+future occur from within the same component and the element type is non-empty,
+there is a trap. In the future this limitation will be removed.
 
 The `T` element type of streams and futures is optional, such that `future` and
 `stream` can be written in WIT without a trailing `<T>`. In this case, the
