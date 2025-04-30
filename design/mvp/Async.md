@@ -772,9 +772,15 @@ Canonical ABI Explainer.
 
 ## Examples
 
-With that background, we can sketch the shape of an async component that lifts
-and lowers its imports and exports with `async`. The meat of this component is
-replaced with `...` to focus on the overall flow of function calls.
+For a list of working examples expressed as executable WebAssembly Test (WAST)
+files, see [this directory](../../test/async).
+
+This rest of this section sketches the shape of a component that uses `async`
+to lift and lower its imports and exports with both the stackful and stackless
+ABI options.
+
+Starting with the stackless ABI, the meat of this example component is replaced
+with `...` to focus on the overall flow of function calls:
 ```wat
 (component
   (import "fetch" (func $fetch (param "url" string) (result (list u8))))
