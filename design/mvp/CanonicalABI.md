@@ -821,24 +821,27 @@ The `Task.wait_on` method defines how to block the current task on a given
 Python [awaitable] using the `OnBlock` callback described above:
 ```python
   async def wait_on(self, awaitable, sync, cancellable = False) -> bool:
-    awaitable = asyncio.ensure_future(awaitable)
-    assert(not self.inst.calling_sync_import)
     if sync:
+      assert(not self.inst.calling_sync_import)
       self.inst.calling_sync_import = True
     else:
       self.maybe_start_pending_task()
+
+    awaitable = asyncio.ensure_future(awaitable)
     cancelled = await self.on_block(awaitable)
     if cancelled and not cancellable:
       assert(self.state == Task.State.INITIAL)
       self.state = Task.State.PENDING_CANCEL
       cancelled = await self.on_block(awaitable)
       assert(not cancelled)
+
     if sync:
       self.inst.calling_sync_import = False
       self.inst.async_waiting_tasks.notify_all()
     else:
       while self.inst.calling_sync_import:
         await self.inst.async_waiting_tasks.wait()
+
     return cancelled
 ```
 If `wait_on` is called with `sync` set to `True`, only tasks in *other*
