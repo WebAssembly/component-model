@@ -538,12 +538,15 @@ class Task:
       self.maybe_start_pending_task()
 
     awaitable = asyncio.ensure_future(awaitable)
-    cancelled = await self.on_block(awaitable)
-    if cancelled and not cancellable:
-      assert(self.state == Task.State.INITIAL)
-      self.state = Task.State.PENDING_CANCEL
+    if awaitable.done() and not DETERMINISTIC_PROFILE and random.randint(0,1):
+      cancelled = False
+    else:
       cancelled = await self.on_block(awaitable)
-      assert(not cancelled)
+      if cancelled and not cancellable:
+        assert(self.state == Task.State.INITIAL)
+        self.state = Task.State.PENDING_CANCEL
+        cancelled = await self.on_block(awaitable)
+        assert(not cancelled)
 
     if sync:
       self.inst.calling_sync_import = False
