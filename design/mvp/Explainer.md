@@ -684,11 +684,11 @@ only be used indirectly by untrusted user-mode processes via their integer
 index in the table.
 
 In the Component Model, handles are lifted-from and lowered-into `i32` values
-that index an encapsulated per-component-instance *handle table* that is
-maintained by the canonical function definitions described
-[below](#canonical-definitions). In the future, handles could be
-backwards-compatibly lifted and lowered from [reference types]  (via the
-addition of a new `canonopt`, as introduced [below](#canonical-abi)).
+that index an encapsulated per-component-instance table that is maintained by
+the canonical function definitions described [below](#canonical-definitions).
+In the future, handles could be backwards-compatibly lifted and lowered from
+[reference types]  (via the addition of a new `canonopt`, as introduced
+[below](#canonical-abi)).
 
 The uniqueness and dropping conditions mentioned above are enforced at runtime
 by the Component Model through these canonical definitions. The `typeidx`
@@ -1540,8 +1540,8 @@ allowing it to create and return new resources to its client:
   )
 )
 ```
-Here, the `i32` returned by `resource.new`, which is an index into the
-component's handle-table, is immediately returned by `make_R`, thereby
+Here, the `i32` returned by `resource.new`, which is an index into the current
+component instance's table, is immediately returned by `make_R`, thereby
 transferring ownership of the newly-created resource to the export's caller.
 (See also [`canon_resource_rep`] in the Canonical ABI explainer.)
 
@@ -1723,8 +1723,8 @@ The Canonical ABI of `waitable-set.poll` is the same as `waitable-set.wait`
 | Canonical ABI signature    | `[s:i32] -> []`    |
 
 The `waitable-set.drop` built-in removes the indicated [waitable set] from the
-current instance's table of waitable sets, trapping if the waitable set is not
-empty or if another task is concurrently `wait`ing on it. (See also
+current component instance's table, trapping if the waitable set is not empty
+or if another task is concurrently `wait`ing on it. (See also
 [`canon_waitable_set_drop`] in the Canonical ABI explainer for details.)
 
 ###### 🔀 `waitable.join`
@@ -1741,7 +1741,7 @@ Thus, `join` can be used to arbitrarily add, change and remove waitables from
 waitable sets in the same component instance, preserving the invariant that a
 waitable can be in at most one set.
 
-In the Canonical ABI, `w` is an index into the component instance's [waitables]
+In the Canonical ABI, `w` is an index into the current component instance's
 table and can be any type of waitable (`subtask` or
 `{readable,writable}-{stream,future}-end`). A value of `0` represents a `none`
 `maybe_set`, since `0` is not a valid table index. (See also
@@ -1770,7 +1770,7 @@ Canonical ABI explainer for details.)
 | Canonical ABI signature    | `[subtask:i32] -> []`    |
 
 The `subtask.drop` built-in removes the indicated [subtask] from the current
-instance's table of [waitables], trapping if the subtask hasn't returned. (See
+component instance's table, trapping if the subtask hasn't returned. (See
 [`canon_subtask_drop`] in the Canonical ABI explainer for details.)
 
 ###### 🔀 `stream.new` and `future.new`
@@ -1781,12 +1781,12 @@ instance's table of [waitables], trapping if the subtask hasn't returned. (See
 | Approximate WIT signature for `future.new` | `func<future<T?>>() -> tuple<readable-future-end<T?>, writable-future-end<T?>>` |
 | Canonical ABI signature                    | `[] -> [packed-ends:i64]`                                                       |
 
-The `stream.new` and `future.new` built-ins return the [readable and writable ends]
-of a new `stream<T?>` or `future<T?>`. The readable and writable ends are added to
-the current instance's table of [waitables] and then the two `i32` indices of the
-two ends are packed into a single `i64` return value (with the readable end in the low
-32 bits). (See also [`canon_stream_new`] in the Canonical ABI explainer for
-details.)
+The `stream.new` and `future.new` built-ins return the [readable and writable
+ends] of a new `stream<T?>` or `future<T?>`. The readable and writable ends are
+added to the current component instance's table and then the two `i32` indices
+of the two ends are packed into a single `i64` return value (with the readable
+end in the low 32 bits). (See also [`canon_stream_new`] in the Canonical ABI
+explainer for details.)
 
 The types `readable-stream-end<T?>` and `writable-stream-end<T?>` are not WIT
 types; they are the conceptual lower-level types that describe how the
@@ -1913,9 +1913,9 @@ returned `i32` in the same way as `{stream,future}.{read,write}`. (See
 | Canonical ABI signature                               | `[end:i32 err:i32] -> []`                      |
 
 The `{stream,future}.close-{readable,writable}` built-ins remove the indicated
-[stream or future] from the current component instance's table of [waitables],
-trapping if the stream or future has a mismatched direction or type or are in
-the middle of a `read` or `write`.
+[stream or future] from the current component instance's table, trapping if the
+stream or future has a mismatched direction or type or are in the middle of a
+`read` or `write`.
 
 ##### 📝 Error Context built-ins
 
@@ -1930,9 +1930,9 @@ The `error-context.new` built-in returns a new `error-context` value. The given
 string is non-deterministically transformed to produce the `error-context`'s
 internal [debug message](#error-context-type).
 
-In the Canonical ABI, the returned value is an index into a
-per-component-instance table. (See also [`canon_error_context_new`] in the
-Canonical ABI explainer.)
+In the Canonical ABI, the returned value is an index into the current component
+instance's table of a new error context value. (See also
+[`canon_error_context_new`] in the Canonical ABI explainer.)
 
 ###### 📝 `error-context.debug-message`
 
@@ -1959,8 +1959,9 @@ the Canonical ABI explainer.)
 The `error-context.drop` built-in drops the given `error-context` value from
 the component instance.
 
-In the Canonical ABI, `errctxi` is an index into a per-component-instance
-table. (See also [`canon_error_context_drop`] in the Canonical ABI explainer.)
+In the Canonical ABI, `errctxi` is an index into the current component
+instance's table. (See also [`canon_error_context_drop`] in the Canonical ABI
+explainer.)
 
 ##### 🧵 Threading built-ins
 
