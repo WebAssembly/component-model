@@ -1775,33 +1775,33 @@ instance's table of [waitables], trapping if the subtask hasn't returned. (See
 
 ###### 🔀 `stream.new` and `future.new`
 
-| Synopsis                                   |                                                                      |
-| ------------------------------------------ | -------------------------------------------------------------------- |
-| Approximate WIT signature for `stream.new` | `func<T>() -> tuple<readable-stream-end<T>, writable-stream-end<T>>` |
-| Approximate WIT signature for `future.new` | `func<T>() -> tuple<readable-future-end<T>, writable-future-end<T>>` |
-| Canonical ABI signature                    | `[] -> [packed-ends:i64]`                                            |
+| Synopsis                                   |                                                                                 |
+| ------------------------------------------ | ------------------------------------------------------------------------------- |
+| Approximate WIT signature for `stream.new` | `func<stream<T?>>() -> tuple<readable-stream-end<T?>, writable-stream-end<T?>>` |
+| Approximate WIT signature for `future.new` | `func<future<T?>>() -> tuple<readable-future-end<T?>, writable-future-end<T?>>` |
+| Canonical ABI signature                    | `[] -> [packed-ends:i64]`                                                       |
 
 The `stream.new` and `future.new` built-ins return the [readable and writable ends]
-of a new `stream<T>` or `future<T>`. The readable and writable ends are added to
+of a new `stream<T?>` or `future<T?>`. The readable and writable ends are added to
 the current instance's table of [waitables] and then the two `i32` indices of the
 two ends are packed into a single `i64` return value (with the readable end in the low
 32 bits). (See also [`canon_stream_new`] in the Canonical ABI explainer for
 details.)
 
-The types `readable-stream-end<T>` and `writable-stream-end<T>` are not WIT
+The types `readable-stream-end<T?>` and `writable-stream-end<T?>` are not WIT
 types; they are the conceptual lower-level types that describe how the
-canonical built-ins use the readable and writable ends of a `stream<T>`.
+canonical built-ins use the readable and writable ends of a `stream<T?>`.
 
-An analogous relationship exists among `readable-future-end<T>`,
-`writable-future-end<T>`, and the WIT `future<T>`.
+An analogous relationship exists among `readable-future-end<T?>`,
+`writable-future-end<T?>`, and the WIT `future<T?>`.
 
 ###### 🔀 `stream.read` and `stream.write`
 
-| Synopsis                                     |                                                                                    |
-| -------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Approximate WIT signature for `stream.read`  | `func<T>(e: readable-stream-end<T>, b: writable-buffer<T>) -> option<copy-result>` |
-| Approximate WIT signature for `stream.write` | `func<T>(e: writable-stream-end<T>, b: readable-buffer<T>) -> option<copy-result>` |
-| Canonical ABI signature                      | `[stream-end:i32 ptr:i32 num:i32] -> [i32]`                                        |
+| Synopsis                                     |                                                                                               |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Approximate WIT signature for `stream.read`  | `func<stream<T?>>(e: readable-stream-end<T?>, b: writable-buffer<T>?) -> option<copy-result>` |
+| Approximate WIT signature for `stream.write` | `func<stream<T?>>(e: writable-stream-end<T?>, b: readable-buffer<T>?) -> option<copy-result>` |
+| Canonical ABI signature                      | `[stream-end:i32 ptr:i32 num:i32] -> [i32]`                                                   |
 
 where `copy-result` is defined in WIT as:
 ```wit
@@ -1823,8 +1823,9 @@ enum copy-status {
 ```
 
 The `stream.read` and `stream.write` built-ins take the matching [readable or
-writable end] of a stream as the first parameter and a buffer for the `T`
-values to be read from or written to.
+writable end] of a stream as the first parameter and, if `T` is present, a
+buffer for the `T` values to be read from or written to. If `T` is not present,
+the buffer parameter is ignored.
 
 If the return value is a `copy-result`, then the `progress` field indicates how
 many `T` elements were read or written from the given buffer before the stream
@@ -1852,20 +1853,22 @@ value where:
 
 ###### 🔀 `future.read` and `future.write`
 
-| Synopsis                                     |                                                                                       |
-| -------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Approximate WIT signature for `future.read`  | `func<T>(e: readable-future-end<T>, b: writable-buffer<T; 1>) -> option<copy-result>` |
-| Approximate WIT signature for `future.write` | `func<T>(e: writable-future-end<T>, b: readable-buffer<T; 1>) -> option<copy-result>` |
-| Canonical ABI signature                      | `[future-end:i32 ptr:i32] -> [i32]`                                                   |
+| Synopsis                                     |                                                                                                  |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Approximate WIT signature for `future.read`  | `func<future<T?>>(e: readable-future-end<T?>, b: writable-buffer<T; 1>?) -> option<copy-result>` |
+| Approximate WIT signature for `future.write` | `func<future<T?>>(e: writable-future-end<T?>, b: readable-buffer<T; 1>?) -> option<copy-result>` |
+| Canonical ABI signature                      | `[future-end:i32 ptr:i32] -> [i32]`                                                              |
 
 where `copy-result` is defined as in [`stream.read` and
 `stream.write`](#-streamread-and-streamwrite). The `<T; 1>` in the buffer types
 indicates that these buffers may hold at most one `T` element.
 
 The `future.{read,write}` built-ins take the matching [readable or writable
-end] of a future as the first parameter, and a buffer for a single `T` value to
-read into or write from. The return value has the same meaning as with
-`stream.{read,write}`, where the buffer-size has been fixed to `1`.
+end] of a future as the first parameter, and, if `T` is present, a buffer for a
+single `T` value to read into or write from as the second parameter. If `T` is
+not present, the second parameter is ignored. The return value has the same
+meaning as with `stream.{read,write}`, where the buffer-size has been fixed to
+`1`.
 
 The Canonical ABI is the same as `stream.{read,write}` except for the removal
 of the `num` `i32` parameter. (See [`canon_future_read`] in the Canonical ABI
@@ -1873,13 +1876,13 @@ explainer for details.)
 
 ###### 🔀 `stream.cancel-read`, `stream.cancel-write`, `future.cancel-read`, and `future.cancel-write`
 
-| Synopsis                                            |                                                             |
-| --------------------------------------------------- | ----------------------------------------------------------- |
-| Approximate WIT signature for `stream.cancel-read`  | `func<T>(e: readable-stream-end<T>) -> option<copy-result>` |
-| Approximate WIT signature for `stream.cancel-write` | `func<T>(e: writable-stream-end<T>) -> option<copy-result>` |
-| Approximate WIT signature for `future.cancel-read`  | `func<T>(e: readable-future-end<T>) -> option<copy-result>` |
-| Approximate WIT signature for `future.cancel-write` | `func<T>(e: writable-future-end<T>) -> option<copy-result>` |
-| Canonical ABI signature                             | `[e: i32] -> [i32]`                                         |
+| Synopsis                                            |                                                                       |
+| --------------------------------------------------- | --------------------------------------------------------------------- |
+| Approximate WIT signature for `stream.cancel-read`  | `func<stream<T?>>(e: readable-stream-end<T?>) -> option<copy-result>` |
+| Approximate WIT signature for `stream.cancel-write` | `func<stream<T?>>(e: writable-stream-end<T?>) -> option<copy-result>` |
+| Approximate WIT signature for `future.cancel-read`  | `func<future<T?>>(e: readable-future-end<T?>) -> option<copy-result>` |
+| Approximate WIT signature for `future.cancel-write` | `func<future<T?>>(e: writable-future-end<T?>) -> option<copy-result>` |
+| Canonical ABI signature                             | `[e: i32] -> [i32]`                                                   |
 
 where `copy-result` is defined as in [`stream.read` and
 `stream.write`](#-streamread-and-streamwrite).
@@ -1901,13 +1904,13 @@ returned `i32` in the same way as `{stream,future}.{read,write}`. (See
 
 ###### 🔀 `stream.close-readable`, `stream.close-writable`, `future.close-readable`, and `future.close-writable`
 
-| Synopsis                                              |                                                                  |
-| ----------------------------------------------------- | ---------------------------------------------------------------- |
-| Approximate WIT signature for `stream.close-readable` | `func<T>(e: readable-stream-end<T>)` |
-| Approximate WIT signature for `stream.close-writable` | `func<T>(e: writable-stream-end<T>)` |
-| Approximate WIT signature for `future.close-readable` | `func<T>(e: readable-future-end<T>)` |
-| Approximate WIT signature for `future.close-writable` | `func<T>(e: writable-future-end<T>)` |
-| Canonical ABI signature                               | `[end:i32 err:i32] -> []`                                        |
+| Synopsis                                              |                                                |
+| ----------------------------------------------------- | ---------------------------------------------- |
+| Approximate WIT signature for `stream.close-readable` | `func<stream<T?>>(e: readable-stream-end<T?>)` |
+| Approximate WIT signature for `stream.close-writable` | `func<stream<T?>>(e: writable-stream-end<T?>)` |
+| Approximate WIT signature for `future.close-readable` | `func<future<T?>>(e: readable-future-end<T?>)` |
+| Approximate WIT signature for `future.close-writable` | `func<future<T?>>(e: writable-future-end<T?>)` |
+| Canonical ABI signature                               | `[end:i32 err:i32] -> []`                      |
 
 The `{stream,future}.close-{readable,writable}` built-ins remove the indicated
 [stream or future] from the current component instance's table of [waitables],

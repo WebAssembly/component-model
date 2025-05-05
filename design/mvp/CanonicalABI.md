@@ -3664,11 +3664,12 @@ async def canon_subtask_drop(task, i):
 
 For canonical definitions:
 ```wat
-(canon stream.new $t (core func $f))
-(canon future.new $t (core func $f))
+(canon stream.new $stream_t (core func $f))
+(canon future.new $future_t (core func $f))
 ```
 validation specifies:
 * `$f` is given type `(func (result i64))`
+* `$stream_t`/`$future_t` is a type of the form `(stream $t?)`/`(future $t?)`
 
 Calling `$f` calls `canon_{stream,future}_new` which adds two elements to the
 current component instance's `waitables` table and returns the indices packed
@@ -3679,16 +3680,16 @@ the readable end is subsequently transferred to another component (or the host)
 via `stream` or `future` parameter/result type (see `lift_{stream,future}`
 above).
 ```python
-async def canon_stream_new(elem_type, task):
+async def canon_stream_new(stream_t, task):
   trap_if(not task.inst.may_leave)
-  stream = ReadableStreamGuestImpl(elem_type)
+  stream = ReadableStreamGuestImpl(stream_t.t)
   ri = task.inst.waitables.add(ReadableStreamEnd(stream))
   wi = task.inst.waitables.add(WritableStreamEnd(stream))
   return [ ri | (wi << 32) ]
 
-async def canon_future_new(t, task):
+async def canon_future_new(future_t, task):
   trap_if(not task.inst.may_leave)
-  future = ReadableStreamGuestImpl(t)
+  future = ReadableStreamGuestImpl(future_t.t)
   ri = task.inst.waitables.add(ReadableFutureEnd(future))
   wi = task.inst.waitables.add(WritableFutureEnd(future))
   return [ ri | (wi << 32) ]
@@ -3703,45 +3704,49 @@ the future built-ins below.
 
 For canonical definitions:
 ```wat
-(canon stream.read $t $opts (core func $f))
-(canon stream.write $t $opts (core func $f))
+(canon stream.read $stream_t $opts (core func $f))
+(canon stream.write $stream_t $opts (core func $f))
 ```
 In addition to [general validation of `$opts`](#canonopt-validation) validation
 specifies:
 * `$f` is given type `(func (param i32 i32 i32) (result i32))`
-* [`lower($t)` above](#canonopt-validation) defines required options for `stream.write`
-* [`lift($t)` above](#canonopt-validation) defines required options for `stream.read`
-* `memory` is required to be present
+* `$stream_t` is a type of the form `(stream $t?)`
+* If `$t` is present:
+  * [`lower($t)` above](#canonopt-validation) defines required options for `stream.write`
+  * [`lift($t)` above](#canonopt-validation) defines required options for `stream.read`
+  * `memory` is required to be present
 
 For canonical definitions:
 ```wat
-(canon future.read $t $opts (core func $f))
-(canon future.write $t $opts (core func $f))
+(canon future.read $future_t $opts (core func $f))
+(canon future.write $future_t $opts (core func $f))
 ```
 validation specifies:
 * `$f` is given type `(func (param i32 i32) (result i32))`
-* [`lower($t)` above](#canonopt-validation) defines required options for `future.write`
-* [`lift($t)` above](#canonopt-validation) defines required options for `future.read`
-* `memory` is required to be present
+* `$future_t` is a type of the form `(future $t?)`
+* If `$t` is present:
+  * [`lower($t)` above](#canonopt-validation) defines required options for `future.write`
+  * [`lift($t)` above](#canonopt-validation) defines required options for `future.read`
+  * `memory` is required to be present
 
 The implementation of these four built-ins all funnel down to a single
 parameterized `copy` function:
 ```python
-async def canon_stream_read(t, opts, task, i, ptr, n):
+async def canon_stream_read(stream_t, opts, task, i, ptr, n):
   return await copy(ReadableStreamEnd, WritableBufferGuestImpl, EventCode.STREAM_READ,
-                    t, opts, task, i, ptr, n)
+                    stream_t, opts, task, i, ptr, n)
 
-async def canon_stream_write(t, opts, task, i, ptr, n):
+async def canon_stream_write(stream_t, opts, task, i, ptr, n):
   return await copy(WritableStreamEnd, ReadableBufferGuestImpl, EventCode.STREAM_WRITE,
-                    t, opts, task, i, ptr, n)
+                    stream_t, opts, task, i, ptr, n)
 
-async def canon_future_read(t, opts, task, i, ptr):
+async def canon_future_read(future_t, opts, task, i, ptr):
   return await copy(ReadableFutureEnd, WritableBufferGuestImpl, EventCode.FUTURE_READ,
-                    t, opts, task, i, ptr, 1)
+                    future_t, opts, task, i, ptr, 1)
 
-async def canon_future_write(t, opts, task, i, ptr):
+async def canon_future_write(future_t, opts, task, i, ptr):
   return await copy(WritableFutureEnd, ReadableBufferGuestImpl, EventCode.FUTURE_WRITE,
-                    t, opts, task, i, ptr, 1)
+                    future_t, opts, task, i, ptr, 1)
 ```
 
 Introducing the `copy` function in chunks, `copy` first checks that the
@@ -3751,15 +3756,15 @@ finite number of pipelined reads or writes.) Then a readable or writable buffer
 is created which (in `Buffer`'s constructor) eagerly checks the alignment and
 bounds of (`i`, `n`).
 ```python
-async def copy(EndT, BufferT, event_code, t, opts, task, i, ptr, n):
+async def copy(EndT, BufferT, event_code, stream_or_future_t, opts, task, i, ptr, n):
   trap_if(not task.inst.may_leave)
   e = task.inst.waitables.get(i)
   trap_if(not isinstance(e, EndT))
-  trap_if(e.stream.t != t)
+  trap_if(e.stream.t != stream_or_future_t.t)
   trap_if(e.copying)
-  assert(not contains_borrow(t))
+  assert(not contains_borrow(stream_or_future_t))
   cx = LiftLowerContext(opts, task.inst, borrow_scope = None)
-  buffer = BufferT(t, cx, ptr, n)
+  buffer = BufferT(stream_or_future_t.t, cx, ptr, n)
 ```
 
 Next, in the synchronous case, `Task.wait_on` is used to synchronously and
@@ -3841,35 +3846,36 @@ the `read` or `write` and so this number is packed into the `i32` result.
 
 For canonical definitions:
 ```wat
-(canon stream.cancel-read $t $async? (core func $f))
-(canon stream.cancel-write $t $async? (core func $f))
-(canon future.cancel-read $t $async? (core func $f))
-(canon future.cancel-write $t $async? (core func $f))
+(canon stream.cancel-read $stream_t $async? (core func $f))
+(canon stream.cancel-write $stream_t $async? (core func $f))
+(canon future.cancel-read $future_t $async? (core func $f))
+(canon future.cancel-write $future_t $async? (core func $f))
 ```
 validation specifies:
 * `$f` is given type `(func (param i32) (result i32))`
+* `$stream_t`/`$future_t` is a type of the form `(stream $t?)`/`(future $t?)`
 * 🚝 - `async` is allowed (otherwise it must be `false`)
 
 The implementation of these four built-ins all funnel down to a single
 parameterized `cancel_copy` function:
 ```python
-async def canon_stream_cancel_read(t, sync, task, i):
-  return await cancel_copy(ReadableStreamEnd, EventCode.STREAM_READ, t, sync, task, i)
+async def canon_stream_cancel_read(stream_t, sync, task, i):
+  return await cancel_copy(ReadableStreamEnd, EventCode.STREAM_READ, stream_t, sync, task, i)
 
-async def canon_stream_cancel_write(t, sync, task, i):
-  return await cancel_copy(WritableStreamEnd, EventCode.STREAM_WRITE, t, sync, task, i)
+async def canon_stream_cancel_write(stream_t, sync, task, i):
+  return await cancel_copy(WritableStreamEnd, EventCode.STREAM_WRITE, stream_t, sync, task, i)
 
-async def canon_future_cancel_read(t, sync, task, i):
-  return await cancel_copy(ReadableFutureEnd, EventCode.FUTURE_READ, t, sync, task, i)
+async def canon_future_cancel_read(future_t, sync, task, i):
+  return await cancel_copy(ReadableFutureEnd, EventCode.FUTURE_READ, future_t, sync, task, i)
 
-async def canon_future_cancel_write(t, sync, task, i):
-  return await cancel_copy(WritableFutureEnd, EventCode.FUTURE_WRITE, t, sync, task, i)
+async def canon_future_cancel_write(future_t, sync, task, i):
+  return await cancel_copy(WritableFutureEnd, EventCode.FUTURE_WRITE, future_t, sync, task, i)
 
-async def cancel_copy(EndT, event_code, t, sync, task, i):
+async def cancel_copy(EndT, event_code, stream_or_future_t, sync, task, i):
   trap_if(not task.inst.may_leave)
   e = task.inst.waitables.get(i)
   trap_if(not isinstance(e, EndT))
-  trap_if(e.stream.t != t)
+  trap_if(e.stream.t != stream_or_future_t.t)
   trap_if(not e.copying)
   if not e.has_pending_event():
     e.stream.cancel()
@@ -3908,36 +3914,37 @@ caller can assume that ownership of the buffer has been returned.
 
 For canonical definitions:
 ```wat
-(canon stream.close-readable $t (core func $f))
-(canon stream.close-writable $t (core func $f))
-(canon future.close-readable $t (core func $f))
-(canon future.close-writable $t (core func $f))
+(canon stream.close-readable $stream_t (core func $f))
+(canon stream.close-writable $stream_t (core func $f))
+(canon future.close-readable $future_t (core func $f))
+(canon future.close-writable $future_t (core func $f))
 ```
 validation specifies:
 * `$f` is given type `(func (param i32 i32))`
+* `$stream_t`/`$future_t` is a type of the form `(stream $t?)`/`(future $t?)`
 
 Calling `$f` removes the readable or writable end of the stream or future at
 the given index from the current component instance's `waitable` table,
 performing the guards and bookkeeping defined by
 `{Readable,Writable}{Stream,Future}End.drop()` above.
 ```python
-async def canon_stream_close_readable(t, task, i):
-  return await close(ReadableStreamEnd, t, task, i)
+async def canon_stream_close_readable(stream_t, task, i):
+  return await close(ReadableStreamEnd, stream_t, task, i)
 
-async def canon_stream_close_writable(t, task, hi):
-  return await close(WritableStreamEnd, t, task, hi)
+async def canon_stream_close_writable(stream_t, task, hi):
+  return await close(WritableStreamEnd, stream_t, task, hi)
 
-async def canon_future_close_readable(t, task, i):
-  return await close(ReadableFutureEnd, t, task, i)
+async def canon_future_close_readable(future_t, task, i):
+  return await close(ReadableFutureEnd, future_t, task, i)
 
-async def canon_future_close_writable(t, task, hi):
-  return await close(WritableFutureEnd, t, task, hi)
+async def canon_future_close_writable(future_t, task, hi):
+  return await close(WritableFutureEnd, future_t, task, hi)
 
-async def close(EndT, t, task, hi):
+async def close(EndT, stream_or_future_t, task, hi):
   trap_if(not task.inst.may_leave)
   e = task.inst.waitables.remove(hi)
   trap_if(not isinstance(e, EndT))
-  trap_if(e.stream.t != t)
+  trap_if(e.stream.t != stream_or_future_t.t)
   e.drop()
   return []
 ```
