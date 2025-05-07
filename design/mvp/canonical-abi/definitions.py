@@ -176,6 +176,8 @@ class StreamType(ValType):
 class FutureType(ValType):
   t: Optional[ValType]
 
+# START
+
 ### Lifting and Lowering Context
 
 class LiftLowerContext:
