@@ -822,12 +822,15 @@ Python [awaitable] using the `OnBlock` callback described above:
       self.maybe_start_pending_task()
 
     awaitable = asyncio.ensure_future(awaitable)
-    cancelled = await self.on_block(awaitable)
-    if cancelled and not cancellable:
-      assert(self.state == Task.State.INITIAL)
-      self.state = Task.State.PENDING_CANCEL
+    if awaitable.done() and not DETERMINISTIC_PROFILE and random.randint(0,1):
+      cancelled = False
+    else:
       cancelled = await self.on_block(awaitable)
-      assert(not cancelled)
+      if cancelled and not cancellable:
+        assert(self.state == Task.State.INITIAL)
+        self.state = Task.State.PENDING_CANCEL
+        cancelled = await self.on_block(awaitable)
+        assert(not cancelled)
 
     if sync:
       self.inst.calling_sync_import = False
@@ -838,6 +841,12 @@ Python [awaitable] using the `OnBlock` callback described above:
 
     return cancelled
 ```
+If the given `awaitable` is already resolved (e.g., if between making an async
+import call that blocked and calling `waitable-set.wait` the I/O operation
+completed), the Component Model allows the runtime to nondeterministically
+avoid calling `OnBlock` which, in component-to-component async calls, means
+that control flow does not need to transfer to the calling component.
+
 If `wait_on` is called with `sync` set to `True`, only tasks in *other*
 component instances may execute; no code in the current component instance may
 execute. This is achieved by setting and waiting on `calling_sync_import`

@@ -23,6 +23,7 @@ summary of the motivation and animated sketch of the design in action.
   * [Returning](#returning)
   * [Borrows](#borrows)
   * [Cancellation](#cancellation)
+  * [Nondeterminism](#nondeterminism)
 * [Async ABI](#async-abi)
   * [Async Import ABI](#async-import-abi)
   * [Async Export ABI](#async-export-abi)
@@ -550,6 +551,60 @@ a callee can continue executing before exiting the task.
 See the [`canon_subtask_cancel`] and [`canon_task_cancel`] functions in the
 Canonical ABI explainer for more details.
 
+### Nondeterminism
+
+Given the general goal of supporting concurrency, Component Model async
+necessarily introduces a degree of nondeterminism. Async concurrency is however
+[cooperative], meaning that nondeterministic behavior can only be observed at
+well-defined points in the program. This contrasts with non-cooperative
+[multithreading] in which nondeterminism can be observed at every core wasm
+instruction.
+
+One inherent source of potential nondeterminism that is independent of async is
+the behavior of host-defined import and export calls. Async extends this
+host-dependent nondeterminism to the behavior of the `read` and `write`
+built-ins called on `stream`s and `future`s that have been passed to and from
+the host via host-defined import and export calls. However, just as with import
+and export calls, it is possible for a host to define a deterministic ordering
+of `stream` and `future` `read` and `write` behavior such that overall
+component execution is deterministic.
+
+In addition to the inherent host-dependent nondeterminism, the Component Model
+adds several internal sources of nondeterministic behavior that are described
+next. However, each of these sources of nondeterminism can be removed by a host
+implementing the WebAssembly [Determinsic Profile], maintaining the ability for
+a host to provide spec-defined deterministic component execution for components
+even when they use async.
+
+The following sources of nondeterminism arise via internal built-in operations
+defined by the Component Model:
+* If there are multiple waitables with a pending event in a waitable set that
+  is being waited on or polled, there is a nondeterministic choice of which
+  waitable's event is delivered first.
+* If multiple tasks wait on or poll the same waitable set at the same time,
+  the distribution of events to tasks is nondeterministic.
+* If multiple tasks that previously blocked are unblocked at the same time, the
+  sequential order in which they are executed is nondeterministic.
+* Whenever a task yields or waits on (or polls) a waitable set with an already
+  pending event, whether the task "blocks" and transfers execution to its async
+  caller is nondeterministic.
+
+Despite the above, the following scenarios do behave deterministically:
+* If a component `a` asynchronously calls the export of another component `b`,
+  control flow deterministically transfers to `b` and then back to `a` when
+  `b` returns or blocks.
+* If a component `a` asynchronously cancels a subtask in another component `b`,
+  control flow deterministically transfers to `b` and then back to `a` when `b`
+  resolves or blocks.
+* If a component `a` asynchronously cancels a subtask in another component `b`
+  that was blocked before starting due to backpressure, cancellation completes
+  deterministically and immediately.
+* When both ends of a stream or future are owned by wasm components, the
+  behavior of all read, write, cancel and close operations is deterministic
+  (modulo any nondeterminitic execution that determines the ordering in which
+  the operations are performed).
+
+
 ## Async ABI
 
 At an ABI level, native async in the Component Model defines for every WIT
@@ -1001,6 +1056,8 @@ comes after:
 [Unit]: https://en.wikipedia.org/wiki/Unit_type
 [Thread-local Storage]: https://en.wikipedia.org/wiki/Thread-local_storage
 [FS or GS Segment Base Address]: https://docs.kernel.org/arch/x86/x86_64/fsgs.html
+[Cooperative]: https://en.wikipedia.org/wiki/Cooperative_multitasking
+[Multithreading]: https://en.wikipedia.org/wiki/Multithreading_(computer_architecture)
 
 [AST Explainer]: Explainer.md
 [Lift and Lower Definitions]: Explainer.md#canonical-definitions
@@ -1046,6 +1103,9 @@ comes after:
 [Blast Zone]: FutureFeatures.md#blast-zones
 [Reentrance]: Explainer.md#component-invariants
 [`start`]: Explainer.md#start-definitions
+
+[Store]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-store
+[Deterministic Profile]: https://webassembly.github.io/spec/versions/core/WebAssembly-3.0-draft.pdf#subsubsection*.798
 
 [stack-switching]: https://github.com/WebAssembly/stack-switching/
 [JSPI]: https://github.com/WebAssembly/js-promise-integration/
