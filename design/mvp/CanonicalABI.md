@@ -1618,8 +1618,7 @@ def max_case_alignment(cases):
 ```
 
 As an optimization, `flags` are represented as packed bit-vectors. Like variant
-discriminants, `flags` use the smallest integer that fits all the bits, falling
-back to sequences of `i32`s when there are more than 32 flags.
+discriminants, `flags` use the smallest integer that fits all the bits.
 ```python
 def alignment_flags(labels):
   n = len(labels)
