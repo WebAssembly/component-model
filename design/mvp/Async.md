@@ -645,7 +645,7 @@ the same as in the synchronous case. What's different, however, is *when* `$in`
 and `$out` are read or written. In a synchronous call, they are always read or
 written before the call returns. In an asynchronous call, there is a set of
 possibilities indicated by the `(result i32)` value:
-* If the returned `i32` is `0`, then the call completed synchronously without
+* If the returned `i32` is `2`, then the call returned eagerly without
   blocking and so `$in` has been read and `$out` has been written.
 * Otherwise, the high 28 bits of the `i32` are the index of a new `Subtask`
   in the current component instance's table. The low 4 bits indicate how far
