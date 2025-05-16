@@ -1866,12 +1866,8 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve, on_bl
     return
 
   [packed] = await call_and_trap_on_throw(callee, task, flat_args)
-  s = None
   while True:
     code,si = unpack_callback_result(packed)
-    if si != 0:
-      s = task.inst.table.get(si)
-      trap_if(not isinstance(s, WaitableSet))
     match code:
       case CallbackCode.EXIT:
         task.exit()
@@ -1879,10 +1875,12 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve, on_bl
       case CallbackCode.YIELD:
         e = await task.yield_(sync = False)
       case CallbackCode.WAIT:
-        trap_if(not s)
+        s = task.inst.table.get(si)
+        trap_if(not isinstance(s, WaitableSet))
         e = await task.wait_for_event(s, sync = False)
       case CallbackCode.POLL:
-        trap_if(not s)
+        s = task.inst.table.get(si)
+        trap_if(not isinstance(s, WaitableSet))
         e = await task.poll_for_event(s, sync = False)
     event_code, p1, p2 = e
     [packed] = await call_and_trap_on_throw(opts.callback, task, [event_code, p1, p2])

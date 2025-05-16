@@ -3004,12 +3004,8 @@ returning to an event loop in `canon_lift`, with the `callback` called
 repeatedly until the `EXIT` code is returned:
 ```python
   [packed] = await call_and_trap_on_throw(callee, task, flat_args)
-  s = None
   while True:
     code,si = unpack_callback_result(packed)
-    if si != 0:
-      s = task.inst.table.get(si)
-      trap_if(not isinstance(s, WaitableSet))
     match code:
       case CallbackCode.EXIT:
         task.exit()
@@ -3017,18 +3013,16 @@ repeatedly until the `EXIT` code is returned:
       case CallbackCode.YIELD:
         e = await task.yield_(sync = False)
       case CallbackCode.WAIT:
-        trap_if(not s)
+        s = task.inst.table.get(si)
+        trap_if(not isinstance(s, WaitableSet))
         e = await task.wait_for_event(s, sync = False)
       case CallbackCode.POLL:
-        trap_if(not s)
+        s = task.inst.table.get(si)
+        trap_if(not isinstance(s, WaitableSet))
         e = await task.poll_for_event(s, sync = False)
     event_code, p1, p2 = e
     [packed] = await call_and_trap_on_throw(opts.callback, task, [event_code, p1, p2])
 ```
-One detail worth noting here is that the index of the waitable set does not need
-to be returned every time; as an optimization to avoid a table access on every
-turn of the event loop, if the returned waitable set index is `0` (which is an
-invalid table index), the previous waitable set will be used.
 
 The bit-packing scheme used for the `i32` `packed` return value is defined as
 follows:

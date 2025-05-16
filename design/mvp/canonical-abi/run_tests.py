@@ -683,6 +683,7 @@ async def test_async_callback():
   producer2 = partial(canon_lift, producer_opts, producer_inst, producer_ft, core_producer2)
 
   consumer_ft = FuncType([],[U32Type()])
+  seti = 0
   async def consumer(task, args):
     assert(len(args) == 0)
 
@@ -696,6 +697,7 @@ async def test_async_callback():
     assert(subi2 == 2)
     assert(state == Subtask.State.STARTED)
 
+    nonlocal seti
     [seti] = await canon_waitable_set_new(task)
     assert(seti == 3)
     [] = await canon_waitable_join(task, subi1, seti)
@@ -707,7 +709,6 @@ async def test_async_callback():
 
   async def callback(task, args):
     assert(len(args) == 3)
-    seti = 1
     [ctx] = await canon_context_get('i32', 0, task)
     match ctx:
       case 42:
@@ -723,7 +724,7 @@ async def test_async_callback():
         assert(args[2] == 0)
         fut2.set_result(None)
         [] = await canon_context_set('i32', 0, task, 62)
-        return [definitions.CallbackCode.WAIT]
+        return [definitions.CallbackCode.WAIT | (seti << 4)]
       case 62:
         assert(args[0] == EventCode.SUBTASK)
         assert(args[1] == 2)

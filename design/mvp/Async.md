@@ -906,7 +906,11 @@ not externally-visible behavior.
     (func (export "cb") (param $event i32) (param $p1 i32) (param $p2 i32)
       ...
       if (result i32)         ;; if subtasks remain:
-        i32.const 2           ;; return WAIT
+        (i32.or               ;; return (WAIT | ($wsi << 4))
+          (i32.const 2)
+          (i32.shl
+            (global.get $wsi)
+            (i32.const 4)))
       else                    ;; if no subtasks remain:
         ...
         call $task_return     ;; return the string result (pointer,length)
