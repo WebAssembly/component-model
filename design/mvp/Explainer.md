@@ -869,7 +869,7 @@ declarators to be used by subsequent declarators in the type:
 ```wat
 (component
   (import "fancy-fs" (instance $fancy-fs
-    (export $fs "fs" (instance
+    (export "fs" (instance $fs
       (export "file" (type (sub resource)))
       ;; ...
     ))
