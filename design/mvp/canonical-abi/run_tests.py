@@ -1815,7 +1815,7 @@ class HostFutureSource(ReadableStream):
     self.pending_on_copy_done = None
   def closed(self):
     return self.is_closed
-  def read(self, inst, dst, on_partial_copy, on_copy_done):
+  def read(self, inst, dst, on_copy_done):
     if self.is_closed:
       return 'done'
     elif self.v:
@@ -1855,7 +1855,7 @@ async def test_futures():
     outgoing = HostFutureSource(U8Type())
     on_resolve([outgoing])
     incoming = HostFutureSink(U8Type())
-    future.read(None, incoming, lambda:(), lambda why:())
+    future.read(None, incoming, lambda why:())
     wait = asyncio.create_task(incoming.has_v.wait())
     await on_block(wait)
     assert(incoming.v == 42)
@@ -1910,7 +1910,7 @@ async def test_futures():
     result,n = unpack_result(ret)
     assert(n == 1 and result == definitions.CLOSED)
 
-    while not task.inst.table.get(rfi).stream.closed():
+    while not task.inst.table.get(rfi).shared.closed():
       await task.yield_(sync = False)
 
     [ret] = await canon_future_cancel_read(FutureType(U8Type()), True, task, rfi)
