@@ -1951,7 +1951,7 @@ async def canon_lower(opts, ft, callee, task, flat_args):
   await subtask.call_async(callee, on_start, on_resolve)
   if subtask.resolved():
     subtask.deliver_resolve()
-    return [0]
+    return [int(Subtask.State.RETURNED)]
 
   subtaski = task.inst.table.add(subtask)
   assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
