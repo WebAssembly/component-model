@@ -1521,6 +1521,7 @@ def lower_async_value(ReadableEndT, cx, v, t):
 ### Flattening
 
 MAX_FLAT_PARAMS = 16
+MAX_FLAT_ASYNC_PARAMS = 4
 MAX_FLAT_RESULTS = 1
 
 def flatten_functype(opts, ft, context):
@@ -1545,7 +1546,7 @@ def flatten_functype(opts, ft, context):
         else:
           flat_results = []
       case 'lower':
-        if len(flat_params) > 1:
+        if len(flat_params) > MAX_FLAT_ASYNC_PARAMS:
           flat_params = ['i32']
         if len(flat_results) > 0:
           flat_params += ['i32']
@@ -1932,7 +1933,7 @@ async def canon_lower(opts, ft, callee, task, flat_args):
 
   def on_start():
     on_progress()
-    return lift_flat_values(cx, 1, flat_args, ft.param_types())
+    return lift_flat_values(cx, MAX_FLAT_ASYNC_PARAMS, flat_args, ft.param_types())
 
   def on_resolve(results):
     on_progress()

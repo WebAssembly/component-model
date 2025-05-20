@@ -2231,6 +2231,44 @@ async def test_self_empty():
 
   await canon_lift(sync_opts, inst, ft, core_func, None, lambda:[], lambda _:(), host_on_block)
 
+async def test_async_flat_params():
+  heap = Heap(1000)
+  opts = mk_opts(heap.memory, 'utf8', heap.realloc, sync = False)
+  inst = ComponentInstance()
+  caller = Task(opts, inst, FuncType([],[]), None, None, None)
+
+  ft1 = FuncType([F32Type(), F64Type(), U32Type(), S64Type()],[])
+  async def f1(task, on_start, on_resolve, on_block):
+    args = on_start()
+    assert(len(args) == 4)
+    assert(args[0] == 1.1)
+    assert(args[1] == 2.2)
+    assert(args[2] == 3)
+    assert(args[3] == 4)
+    on_resolve([])
+  [ret] = await canon_lower(opts, ft1, f1, caller, [1.1, 2.2, 3, 4])
+  assert(ret == Subtask.State.RETURNED)
+
+  ft2 = FuncType([U32Type(),U8Type(),U8Type(),U8Type()],[])
+  async def f2(task, on_start, on_resolve, on_block):
+    args = on_start()
+    assert(len(args) == 4)
+    assert(args == [1,2,3,4])
+    on_resolve([])
+  [ret] = await canon_lower(opts, ft2, f2, caller, [1,2,3,4])
+  assert(ret == Subtask.State.RETURNED)
+
+  ft3 = FuncType([U32Type(),U8Type(),U8Type(),U8Type(),U8Type()],[])
+  async def f3(task, on_start, on_resolve, on_block):
+    args = on_start()
+    assert(len(args) == 5)
+    assert(args == [1,2,3,4,5])
+    on_resolve([])
+  heap.memory[12:20] = b'\x01\x00\x00\x00\x02\x03\x04\x05'
+  [ret] = await canon_lower(opts, ft3, f3, caller, [12])
+  assert(ret == Subtask.State.RETURNED)
+
+
 async def run_async_tests():
   await test_roundtrips()
   await test_handles()
@@ -2250,6 +2288,7 @@ async def run_async_tests():
   await test_futures()
   await test_cancel_subtask()
   await test_self_empty()
+  await test_async_flat_params()
 
 asyncio.run(run_async_tests())
 
