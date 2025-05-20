@@ -24,12 +24,12 @@
     (core instance $memory (instantiate $Memory))
 
     (core module $CoreChild
-      (import "" "a" (func $a (param i32 i32) (result i32)))
+      (import "" "a" (func $a (result i32)))
       (func (export "b") (result i32)
         (i32.const 1 (; YIELD ;))
       )
       (func (export "b-cb") (param i32 i32 i32) (result i32)
-        (call $a (i32.const 0xdeadbeef) (i32.const 0xdeadbeef))
+        (call $a)
         unreachable
       )
     )
@@ -45,12 +45,12 @@
   (instance $child (instantiate $Child (with "a" (func $a))))
 
   (core module $CoreOuter
-    (import "" "b" (func $b (param i32 i32) (result i32)))
+    (import "" "b" (func $b (result i32)))
     (func $c (export "c") (result i32)
       (i32.const 1 (; YIELD ;))
     )
     (func $c-cb (export "c-cb") (param i32 i32 i32) (result i32)
-      (call $b (i32.const 0xdeadbeef) (i32.const 0xdeadbeef))
+      (call $b)
     )
   )
   (canon lower (func $child "b") async (memory $core_inner "mem") (core func $b))

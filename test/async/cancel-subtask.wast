@@ -59,7 +59,7 @@
       (import "" "mem" (memory 1))
       (import "" "subtask.cancel" (func $subtask.cancel (param i32) (result i32)))
       (import "" "subtask.drop" (func $subtask.drop (param i32)))
-      (import "" "f" (func $f (param i32 i32) (result i32)))
+      (import "" "f" (func $f (param i32) (result i32)))
 
       (func $run (export "run") (result i32)
         (local $ret i32) (local $retp i32)
@@ -69,7 +69,7 @@
         ;; call 'f'; it should block
         (local.set $retp (i32.const 4))
         (i32.store (local.get $retp) (i32.const 0xbad0bad0))
-        (local.set $ret (call $f (i32.const 0xdeadbeef) (local.get $retp)))
+        (local.set $ret (call $f (local.get $retp)))
         (if (i32.ne (i32.const 1 (; STARTED ;)) (i32.and (local.get $ret) (i32.const 0xf)))
           (then unreachable))
         (local.set $subtask (i32.shr_u (local.get $ret) (i32.const 4)))

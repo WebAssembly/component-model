@@ -126,8 +126,8 @@
       (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
       (import "" "waitable-set.wait" (func $waitable-set.wait (param i32 i32) (result i32)))
       (import "" "subtask.drop" (func $subtask.drop (param i32)))
-      (import "" "blocker" (func $blocker (param i32 i32) (result i32)))
-      (import "" "unblocker" (func $unblocker (param i32 i32) (result i32)))
+      (import "" "blocker" (func $blocker (param i32) (result i32)))
+      (import "" "unblocker" (func $unblocker (param i32) (result i32)))
 
       (global $ws (mut i32) (i32.const 0))
       (func $start (global.set $ws (call $waitable-set.new)))
@@ -140,7 +140,7 @@
 
         ;; call 'blocker'; it should block
         (local.set $retp1 (i32.const 4))
-        (local.set $ret (call $blocker (i32.const 0xdeadbeef) (local.get $retp1)))
+        (local.set $ret (call $blocker (local.get $retp1)))
         (if (i32.ne (i32.const 1 (; STARTED ;)) (i32.and (local.get $ret) (i32.const 0xf)))
           (then unreachable))
         (local.set $subtask (i32.shr_u (local.get $ret) (i32.const 4)))
@@ -149,7 +149,7 @@
 
         ;; call 'unblocker' to unblock 'blocker'; it should complete eagerly
         (local.set $retp2 (i32.const 8))
-        (local.set $ret (call $unblocker (i32.const 0xbeefdead) (local.get $retp2)))
+        (local.set $ret (call $unblocker (local.get $retp2)))
         (if (i32.ne (i32.const 2 (; RETURNED ;)) (local.get $ret))
           (then unreachable))
         (if (i32.ne (i32.const 43) (i32.load (local.get $retp2)))

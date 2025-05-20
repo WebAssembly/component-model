@@ -620,58 +620,68 @@ which to use by default.
 
 ### Async Import ABI
 
-Given an imported WIT function:
+Given these imported WIT functions (using the fixed-length-list feature 🔧):
 ```wit
 world w {
-  import foo: func(s: string) -> string;
+  import foo: func(s: string) -> u32;
+  import bar: func(s: string) -> string;
+  import baz: func(t: tuple<u64; 5>) -> string;
+  import quux: func(t: tuple<u32; 17>) -> string;
 }
 ```
-the default sync import function signature is:
+the default/synchronous lowered import function signatures are:
 ```wat
 ;; sync
-(func (param $s-ptr i32) (param $s-len i32) (param $out i32))
+(func $foo (param $s-ptr i32) (param $s-len i32) (result i32))
+(func $bar (param $s-ptr i32) (param $s-len i32) (param $out-ptr i32))
+(func $baz (param i64 i64 i64 i64 i64) (param $out-ptr i32))
+(func $quux (param $in-ptr i32) (param $out-ptr i32))
 ```
-where `$out` must be a 4-byte-aligned pointer into linear memory into which the
-8-byte (pointer, length) of the returned string will be stored.
+Here: `foo`, `bar` and `baz` pass their parameters as "flattened" core value
+types while `quux` passes its parameters via the `$in-ptr` linear memory
+pointer (due to the Canonical ABI limitation of 16 maximum flattened
+parameters). Similarly, `foo` returns its result as a single core value while
+`bar`, `baz` and `quux` return their results via the `$out-ptr` linear memory
+pointer (due to the current Canonical ABI limitation of 1 maximum flattened
+result).
 
-The new async import function signature is:
+The corresponding asynchronous lowered import function signatures are:
 ```wat
 ;; async
-(func (param $in i32) (param $out i32) (result i32))
+(func $foo (param $s-ptr i32) (param $s-len i32) (param $out-ptr i32) (result i32))
+(func $bar (param $s-ptr i32) (param $s-len i32) (param $out-ptr i32) (result i32))
+(func $baz (param $in-ptr i32) (param $out-ptr i32) (result i32))
+(func $quux (param $in-ptr i32) (param $out-ptr i32) (result i32))
 ```
-where `$in` must be a 4-byte-aligned pointer into linear memory from which the
-8-byte (pointer, length) of the string argument will be loaded and `$out` works
-the same as in the synchronous case. What's different, however, is *when* `$in`
-and `$out` are read or written. In a synchronous call, they are always read or
-written before the call returns. In an asynchronous call, there is a set of
-possibilities indicated by the `(result i32)` value:
-* If the returned `i32` is `2`, then the call returned eagerly without
-  blocking and so `$in` has been read and `$out` has been written.
-* Otherwise, the high 28 bits of the `i32` are the index of a new `Subtask`
-  in the current component instance's table. The low 4 bits indicate how far
-  the callee made it before blocking:
-  * If `1`, the callee didn't even start (due to backpressure), and thus
-    neither `$in` nor `$out` have been accessed yet.
-  * If `2`, the callee started by reading `$in`, but blocked before writing
-    `$out`.
+Comparing signatures, the differences are:
+* Async-lowered functions have a maximum of 4 flat parameters (not 16).
+* Async-lowered functions always return their value via linear memory pointer.
+* Async-lowered functions always have a single `i32` "status" code.
 
-The async signature `(func (param i32 i32) (result i32))` is the same for
-almost all WIT function types since the ABI stores everything in linear memory.
-However, there are three special cases:
-* If the WIT parameter list is empty, `$in` is removed.
-* If the WIT parameter list flattens to exactly 1 core value type (`i32` or
-  otherwise), `$in` uses that core value type and the argument is passed
-  by value.
-* If the WIT result is empty, `$out` is removed.
+Additionally, *when* the parameter and result pointers are read/written depends
+on the status code:
+* If the low 4 bits of the status are `0`, the call didn't even start and so
+  `$in-ptr` hasn't been read and `$out-ptr` hasn't been written and the high
+  28 bits are the index of a new async subtask to wait on.
+* If the low 4 bits of the status are `1`, the call started, `$in-ptr` was
+  read, but `$out-ptr` hasn't been written and the high 28 bits are the index
+  of a new async subtask to wait on.
+* If the low 4 bits of the status are `2`, the call returned and so `$in-ptr`
+  and `$out-ptr` have been read/written and the high 28 bits are `0` because
+  there is no async subtask to wait on.
 
-For example:
+When a parameter/result pointer hasn't yet been read/written, the async caller
+must take care to keep the region of memory allocated to the call until
+receiving an event indicating that the async subtask has started/returned.
+
+Other example asynchronous lowered signatures:
+
 | WIT function type                         | Async ABI             |
 | ----------------------------------------- | --------------------- |
 | `func()`                                  | `(func (result i32))` |
-| `func() -> string`                        | `(func (param $out i32) (result i32))` |
-| `func(s: string)`                         | `(func (param $in i32) (result i32))` |
-| `func(x: f32) -> f32`                     | `(func (param $in f32) (param $out i32) (result i32))` |
-| `func(x: list<list<u8>>) -> list<string>` | `(func (param $in i32) (param $out i32) (result i32))` |
+| `func() -> string`                        | `(func (param $out-ptr i32) (result i32))` |
+| `func(x: f32) -> f32`                     | `(func (param $x f32) (param $out-ptr i32) (result i32))` |
+| `func(s: string, t: string)`              | `(func (param $s-ptr i32) (param $s-len i32) (result $t-ptr i32) (param $t-len i32) (result i32))` |
 
 `future` and `stream` can appear anywhere in the parameter or result types. For example:
 ```wit
@@ -689,11 +699,11 @@ the synchronous ABI has signature:
 ```
 and the asynchronous ABI has the signature:
 ```wat
-(func (param $in i32) (param $out i32) (result i32))
+(func (param $f i32) (param $out-ptr i32) (result i32))
 ```
-where, according to the above rules, `$in` is the index of a future in the
-current component instance's table (not a pointer to one) while `$out` is a
-pointer to a linear memory location that will receive an `i32` index.
+where `$f` is the index of a future (not a pointer to one) while while
+`$out-ptr` is a pointer to a linear memory location that will receive an `i32`
+index.
 
 For the runtime semantics of this `i32` index, see `lift_stream`,
 `lift_future`, `lower_stream` and `lower_future` in the [Canonical ABI
@@ -792,7 +802,7 @@ with `...` to focus on the overall flow of function calls:
   (core module $Main
     (import "libc" "mem" (memory 1))
     (import "libc" "realloc" (func (param i32 i32 i32 i32) (result i32)))
-    (import "" "fetch" (func $fetch (param i32 i32) (result i32)))
+    (import "" "fetch" (func $fetch (param i32 i32 i32) (result i32)))
     (import "" "waitable-set.new" (func $new_waitable_set (result i32)))
     (import "" "waitable-set.wait" (func $wait (param i32 i32) (result i32)))
     (import "" "waitable.join" (func $join (param i32 i32)))
@@ -806,7 +816,7 @@ with `...` to focus on the overall flow of function calls:
       ...
       loop
         ...
-        call $fetch      ;; pass a pointer-to-string and pointer-to-list-of-bytes outparam
+        call $fetch      ;; pass a string pointer, string length and pointer-to-list-of-bytes outparam
         ...              ;; ... and receive the index of a new async subtask
         global.get $wsi
         call $join       ;; ... and add it to the waitable set
@@ -884,7 +894,7 @@ not externally-visible behavior.
   (core module $Main
     (import "libc" "mem" (memory 1))
     (import "libc" "realloc" (func (param i32 i32 i32 i32) (result i32)))
-    (import "" "fetch" (func $fetch (param i32 i32) (result i32)))
+    (import "" "fetch" (func $fetch (param i32 i32 i32) (result i32)))
     (import "" "waitable-set.new" (func $new_waitable_set (result i32)))
     (import "" "waitable.join" (func $join (param i32 i32)))
     (import "" "task.return" (func $task_return (param i32 i32)))
@@ -897,7 +907,7 @@ not externally-visible behavior.
       ...
       loop
         ...
-        call $fetch           ;; pass a pointer-to-string and pointer-to-list-of-bytes outparam
+        call $fetch           ;; pass a string pointer, string length and pointer-to-list-of-bytes outparam
         ...                   ;; ... and receive the index of a new async subtask
         global.get $wsi
         call $join            ;; ... and add it to the waitable set

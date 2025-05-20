@@ -62,14 +62,14 @@
       (import "" "waitable.join" (func $waitable.join (param i32 i32)))
       (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
       (import "" "waitable-set.wait" (func $waitable-set.wait (param i32 i32) (result i32)))
-      (import "" "loop" (func $loop (param i32 i32) (result i32)))
+      (import "" "loop" (func $loop (result i32)))
       (import "" "return" (func $return))
 
       (func $drop-after-return (export "drop-after-return") (result i32)
         (local $ret i32) (local $ws i32) (local $subtask i32)
 
         ;; start 'loop'
-        (local.set $ret (call $loop (i32.const 0xdead) (i32.const 0xbeef)))
+        (local.set $ret (call $loop))
         (if (i32.ne (i32.const 1 (; STARTED ;)) (i32.and (local.get $ret) (i32.const 0xf)))
           (then unreachable))
         (local.set $subtask (i32.shr_u (local.get $ret) (i32.const 4)))

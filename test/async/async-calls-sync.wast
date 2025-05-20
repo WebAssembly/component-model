@@ -119,8 +119,8 @@
       (import "" "waitable.join" (func $waitable.join (param i32 i32)))
       (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
       (import "" "unblock" (func $unblock))
-      (import "" "sync-func1" (func $sync-func1 (param i32 i32) (result i32)))
-      (import "" "sync-func2" (func $sync-func2 (param i32 i32) (result i32)))
+      (import "" "sync-func1" (func $sync-func1 (param i32) (result i32)))
+      (import "" "sync-func2" (func $sync-func2 (param i32) (result i32)))
 
       (global $ws (mut i32) (i32.const 0))
       (func $start (global.set $ws (call $waitable-set.new)))
@@ -134,22 +134,22 @@
         ;; call 'sync-func1' and 'sync-func2' asynchronously, both of which will block
         ;; (on $AsyncInner.blocking-call). because 'sync-func1/2' are in different instances,
         ;; both calls will reach the STARTED state.
-        (local.set $ret (call $sync-func1 (i32.const 0xdeadbeef) (i32.const 8)))
+        (local.set $ret (call $sync-func1 (i32.const 8)))
         (if (i32.ne (i32.const 0x21 (; STARTED=1 | (subtask=2 << 4) ;)) (local.get $ret))
           (then unreachable))
         (call $waitable.join (i32.const 2) (global.get $ws))
-        (local.set $ret (call $sync-func2 (i32.const 0xdeadbeef) (i32.const 12)))
+        (local.set $ret (call $sync-func2 (i32.const 12)))
         (if (i32.ne (i32.const 0x31 (; STARTED=1 | (subtask=3 << 4) ;)) (local.get $ret))
           (then unreachable))
         (call $waitable.join (i32.const 3) (global.get $ws))
 
         ;; now start another pair of 'sync-func1/2' calls, both of which should see auto
         ;; backpressure and get stuck in the STARTING state.
-        (local.set $ret (call $sync-func1 (i32.const 0xdeadbeef) (i32.const 16)))
+        (local.set $ret (call $sync-func1 (i32.const 16)))
         (if (i32.ne (i32.const 0x40 (; STARTING=0 | (subtask=4 << 4) ;)) (local.get $ret))
           (then unreachable))
         (call $waitable.join (i32.const 4) (global.get $ws))
-        (local.set $ret (call $sync-func2 (i32.const 0xdeadbeef) (i32.const 20)))
+        (local.set $ret (call $sync-func2 (i32.const 20)))
         (if (i32.ne (i32.const 0x50 (; STARTING=0 | (subtask=5 << 4) ;)) (local.get $ret))
           (then unreachable))
         (call $waitable.join (i32.const 5) (global.get $ws))
