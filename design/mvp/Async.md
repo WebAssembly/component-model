@@ -625,8 +625,8 @@ Given these imported WIT functions (using the fixed-length-list feature 🔧):
 world w {
   import foo: func(s: string) -> u32;
   import bar: func(s: string) -> string;
-  import baz: func(t: tuple<u64; 5>) -> string;
-  import quux: func(t: tuple<u32; 17>) -> string;
+  import baz: func(t: list<u64; 5>) -> string;
+  import quux: func(t: list<u32; 17>) -> string;
 }
 ```
 the default/synchronous lowered import function signatures are:
