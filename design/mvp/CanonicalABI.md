@@ -2466,6 +2466,8 @@ def flatten_functype(opts, ft, context):
   else:
     match context:
       case 'lift':
+        if len(flat_params) > MAX_FLAT_PARAMS:
+          flat_params = ['i32']
         if opts.callback:
           flat_results = ['i32']
         else:
