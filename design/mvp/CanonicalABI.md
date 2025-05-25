@@ -1287,12 +1287,12 @@ calling core wasm code receives the `STREAM_READ` progress event (in which case
 `RevokeBuffer` is called). This reduces the number of task-switches required
 by the spec, particularly when streaming between two components.
 
-The `ReadableStreamGuestImpl` class implements `ReadableStream` for streams
-created by wasm (via `stream.new`) and tracks the common state shared by both
-the readable and writable ends of streams (defined below). Introducing the
-class in chunks, starting with the fields and initialization:
+The `SharedStreamImpl` class implements `ReadableStream` for streams created by
+wasm (via `stream.new`) and tracks the common state shared by both the readable
+and writable ends of streams (defined below). Introducing the class in chunks,
+starting with the fields and initialization:
 ```python
-class ReadableStreamGuestImpl(ReadableStream):
+class SharedStreamImpl(ReadableStream):
   closed_: bool
   pending_inst: Optional[ComponentInstance]
   pending_buffer: Optional[Buffer]
@@ -1420,30 +1420,30 @@ entirely symmetric, with the only difference being whether the polymorphic
 whether there is an asynchronous read or write in progress and is maintained by
 the definitions of `stream.{read,write}` below. Importantly, `copying` and the
 inherited fields of `Waitable` are per-*end*, not per-*stream* (unlike the
-fields of `ReadableStreamGuestImpl` shown above, which are per-stream and
-shared by both ends via their common `stream` field).
+fields of `SharedStreamImpl` shown above, which are per-stream and shared by
+both ends via their `shared` field).
 ```python
 class StreamEnd(Waitable):
-  stream: ReadableStream
+  shared: ReadableStream
   copying: bool
 
-  def __init__(self, stream):
+  def __init__(self, shared):
     Waitable.__init__(self)
-    self.stream = stream
+    self.shared = shared
     self.copying = False
 
   def drop(self):
     trap_if(self.copying)
-    self.stream.close()
+    self.shared.close()
     Waitable.drop(self)
 
 class ReadableStreamEnd(StreamEnd):
   def copy(self, inst, dst, on_partial_copy, on_copy_done):
-    return self.stream.read(inst, dst, on_partial_copy, on_copy_done)
+    return self.shared.read(inst, dst, on_partial_copy, on_copy_done)
 
 class WritableStreamEnd(StreamEnd):
   def copy(self, inst, src, on_partial_copy, on_copy_done):
-    return self.stream.write(inst, src, on_partial_copy, on_copy_done)
+    return self.shared.write(inst, src, on_partial_copy, on_copy_done)
 ```
 Dropping a stream end while an asynchronous read or write is in progress traps
 since the async read or write cannot be cancelled without blocking and `drop`
@@ -1453,8 +1453,8 @@ finish before closing.
 
 The `{Readable,Writable}StreamEnd.copy` method is called polymorphically by the
 shared definition of `stream.{read,write}` below. While the static type of
-`StreamEnd.stream` is `ReadableStream`, a `WritableStreamEnd` always points to
-a `ReadableStreamGuestImpl` object which is why `WritableStreamEnd.copy` can
+`StreamEnd.shared` is `ReadableStream`, a `WritableStreamEnd` always points to
+a `SharedStreamImpl` object which is why `WritableStreamEnd.copy` can
 unconditionally call `stream.write`.
 
 
@@ -1470,20 +1470,20 @@ class FutureEnd(StreamEnd):
     assert(buffer.remain() == 1)
     def on_copy_done_wrapper(why):
       if buffer.remain() == 0:
-        self.stream.close()
+        self.shared.close()
       on_copy_done(why)
     ret = copy_op(inst, buffer, on_partial_copy = None, on_copy_done = on_copy_done_wrapper)
     if ret == 'done' and buffer.remain() == 0:
-      self.stream.close()
+      self.shared.close()
     return ret
 
 class ReadableFutureEnd(FutureEnd):
   def copy(self, inst, dst, on_partial_copy, on_copy_done):
-    return self.close_after_copy(self.stream.read, inst, dst, on_copy_done)
+    return self.close_after_copy(self.shared.read, inst, dst, on_copy_done)
 
 class WritableFutureEnd(FutureEnd):
   def copy(self, inst, src, on_partial_copy, on_copy_done):
-    return self.close_after_copy(self.stream.write, inst, src, on_copy_done)
+    return self.close_after_copy(self.shared.write, inst, src, on_copy_done)
   def drop(self):
     FutureEnd.drop(self)
 ```
@@ -1971,9 +1971,9 @@ def lift_async_value(ReadableEndT, cx, i, t):
   assert(not contains_borrow(t))
   e = cx.inst.table.remove(i)
   trap_if(not isinstance(e, ReadableEndT))
-  trap_if(e.stream.t != t)
+  trap_if(e.shared.t != t)
   trap_if(e.copying)
-  return e.stream
+  return e.shared
 ```
 Lifting transfers ownership of the readable end and traps if a read was in
 progress (which would now be dangling).
@@ -3689,20 +3689,20 @@ readable end is subsequently transferred to another component (or the host) via
 ```python
 async def canon_stream_new(stream_t, task):
   trap_if(not task.inst.may_leave)
-  stream = ReadableStreamGuestImpl(stream_t.t)
-  ri = task.inst.table.add(ReadableStreamEnd(stream))
-  wi = task.inst.table.add(WritableStreamEnd(stream))
+  shared = SharedStreamImpl(stream_t.t)
+  ri = task.inst.table.add(ReadableStreamEnd(shared))
+  wi = task.inst.table.add(WritableStreamEnd(shared))
   return [ ri | (wi << 32) ]
 
 async def canon_future_new(future_t, task):
   trap_if(not task.inst.may_leave)
-  future = ReadableStreamGuestImpl(future_t.t)
-  ri = task.inst.table.add(ReadableFutureEnd(future))
-  wi = task.inst.table.add(WritableFutureEnd(future))
+  shared = SharedStreamImpl(future_t.t)
+  ri = task.inst.table.add(ReadableFutureEnd(shared))
+  wi = task.inst.table.add(WritableFutureEnd(shared))
   return [ ri | (wi << 32) ]
 ```
 Because futures are just streams with extra limitations, here we see that a
-`WritableFutureEnd` shares the same `ReadableStreamGuestImpl` type as
+`WritableFutureEnd` shares the same `SharedStreamImpl` type as
 `WritableStreamEnd`; the extra limitations are added by `WritableFutureEnd` and
 the future built-ins below.
 
@@ -3756,72 +3756,79 @@ async def canon_future_write(future_t, opts, task, i, ptr):
                     future_t, opts, task, i, ptr, 1)
 ```
 
-Introducing the `copy` function in chunks, `copy` first checks that the element
-at index `i` is of the right type and that there is not already a copy in
-progress. (In the future, this restriction could be relaxed, allowing a finite
-number of pipelined reads or writes.) Then a readable or writable buffer is
-created which (in `Buffer`'s constructor) eagerly checks the alignment and
-bounds of (`i`, `n`).
+Introducing the `copy` function in chunks, `copy` first checks that the
+element at index `i` is of the right type and that there is not already a
+copy in progress. (In the future, this restriction could be relaxed, allowing
+a finite number of pipelined reads or writes.)
 ```python
 async def copy(EndT, BufferT, event_code, stream_or_future_t, opts, task, i, ptr, n):
   trap_if(not task.inst.may_leave)
   e = task.inst.table.get(i)
   trap_if(not isinstance(e, EndT))
-  trap_if(e.stream.t != stream_or_future_t.t)
+  trap_if(e.shared.t != stream_or_future_t.t)
   trap_if(e.copying)
+```
+Then a readable or writable buffer is created which (in `Buffer`'s
+constructor) eagerly checks the alignment and bounds of (`i`, `n`).
+(In the future, the restriction on futures/streams containing `borrow`s could
+be relaxed by maintaining sufficient bookkeeping state to ensure that
+borrowed handles *or streams/futures of borrowed handles* could not outlive
+their originating call.)
+```python
   assert(not contains_borrow(stream_or_future_t))
   cx = LiftLowerContext(opts, task.inst, borrow_scope = None)
   buffer = BufferT(stream_or_future_t.t, cx, ptr, n)
 ```
-
-Next, in the synchronous case, `Task.wait_on` is used to synchronously and
-uninterruptibly wait for the `on_*` callbacks to indicate that the copy has made
-progress. In the case of `on_partial_copy`, this code carefully delays the call
-to `revoke_buffer` until right before control flow is returned back to the
-calling core wasm code. This enables another task to potentially complete
-multiple partial copies before having to context-switch back.
+Next, the `copy` method of `{Readable,Writable}{Stream,Future}End` is called
+to attempt to perform the actual `read` or `write`. The `on_partial_copy`
+callback passed to `copy` is called zero or more times each time values are
+copied to/from `buffer` without filling it up. Aftewards, the `on_copy_done`
+callback passed to `copy` is called at most once when: the `buffer` if full,
+the other end closed, or this end cancelled the copy via
+`{stream,future}.cancel-{read,write}`.
 ```python
-  if opts.sync:
-    final_revoke_buffer = None
-    def on_partial_copy(revoke_buffer, why = 'completed'):
-      assert(why == 'completed')
-      nonlocal final_revoke_buffer
-      final_revoke_buffer = revoke_buffer
-      if not async_copy.done():
-        async_copy.set_result(None)
-    on_copy_done = partial(on_partial_copy, lambda:())
-    if e.copy(task.inst, buffer, on_partial_copy, on_copy_done) != 'done':
-      async_copy = asyncio.Future()
-      await task.wait_on(async_copy, sync = True)
-      final_revoke_buffer()
-```
-(When non-cooperative threads are added, the assertion that synchronous copies
-can only be `completed`, and not `cancelled`, will no longer hold.)
+  def copy_event(why, revoke_buffer):
+    revoke_buffer()
+    e.copying = False
+    return (event_code, i, pack_copy_result(task, e, buffer, why))
 
-In the asynchronous case, the `on_*` callbacks set a pending event on the
-`Waitable` which will be delivered to core wasm when core wasm calls
-`task.{wait,poll}` or, if using `callback`, returns to the event loop.
-Symmetric to the synchronous case, this code carefully delays calling
-`revoke_buffer` until the copy event is actually delivered to core wasm,
-allowing multiple partial copies to complete in the interim, reducing overall
-context-switching overhead.
+  def on_partial_copy(revoke_buffer):
+    e.set_event(partial(copy_event, 'completed', revoke_buffer))
+
+  def on_copy_done(why):
+    e.set_event(partial(copy_event, why, revoke_buffer = lambda:()))
+
+  if e.copy(task.inst, buffer, on_partial_copy, on_copy_done) == 'done':
+    return [pack_copy_result(task, e, buffer, 'completed')]
+```
+If the stream/future is already closed or at least 1 element could be
+immediately copied, `copy` returns `'done'` and `{stream,future}.{read,write}`
+synchronously returns how much was copied and how the operation ended to the
+caller. Otherwise, the built-in blocks:
 ```python
   else:
-    def copy_event(why, revoke_buffer):
-      revoke_buffer()
-      e.copying = False
-      return (event_code, i, pack_copy_result(task, e, buffer, why))
-    def on_partial_copy(revoke_buffer):
-      e.set_event(partial(copy_event, 'completed', revoke_buffer))
-    def on_copy_done(why):
-      e.set_event(partial(copy_event, why, revoke_buffer = lambda:()))
-    if e.copy(task.inst, buffer, on_partial_copy, on_copy_done) != 'done':
+    if opts.sync:
+      await task.wait_on(e.wait_for_pending_event(), sync = True)
+      code,index,payload = e.get_event()
+      assert(code == event_code and index == i)
+      return [payload]
+    else:
       e.copying = True
       return [BLOCKED]
-  return [pack_copy_result(task, e, buffer, 'completed')]
 ```
-However the copy completes, the results are reported to the caller via
-`pack_copy_result`:
+In the synchronous case, the caller synchronously waits for progress
+(blocking all execution in the calling component instance, but allowing other
+tasks in other component instances to make progress). Note that `get_event()`
+necessarily calls a `copy_event` closure created by either `on_partial_copy`
+or `on_copy_done`. In the asynchronous case, the built-in immeditely returns
+the `BLOCKED` code and the caller must asynchronously wait for progress using
+`waitable-set.{wait,poll}` or, if using a `callback`, by returning to the event
+loop. Setting `copying` prevents any more reads/writes from starting and also
+prevents the stream/future from being closed.
+
+Regardless of whether the `{stream,future}.{read,write}` completes
+synchronously or asynchronously, the results passed to core wasm are
+bit-packed into a single `i32` according to the following scheme:
 ```python
 BLOCKED   = 0xffff_ffff
 COMPLETED = 0x0
@@ -3829,7 +3836,7 @@ CLOSED    = 0x1
 CANCELLED = 0x2
 
 def pack_copy_result(task, e, buffer, why):
-  if e.stream.closed():
+  if e.shared.closed():
     result = CLOSED
   elif why == 'cancelled':
     result = CANCELLED
@@ -3882,10 +3889,10 @@ async def cancel_copy(EndT, event_code, stream_or_future_t, sync, task, i):
   trap_if(not task.inst.may_leave)
   e = task.inst.table.get(i)
   trap_if(not isinstance(e, EndT))
-  trap_if(e.stream.t != stream_or_future_t.t)
+  trap_if(e.shared.t != stream_or_future_t.t)
   trap_if(not e.copying)
   if not e.has_pending_event():
-    e.stream.cancel()
+    e.shared.cancel()
     if not e.has_pending_event():
       if sync:
         await task.wait_on(e.wait_for_pending_event(), sync = True)
@@ -3896,10 +3903,10 @@ async def cancel_copy(EndT, event_code, stream_or_future_t, sync, task, i):
   return [payload]
 ```
 The *first* check for `e.has_pending_event()` catches the case where the copy has
-already racily finished, in which case we must *not* call `stream.cancel()`.
-Calling `stream.cancel()` may, but is not required to, recursively call one of
-the `on_*` callbacks (passed by `canon_{stream,future}_{read,write}` above)
-which will set a pending event that is caught by the *second* check for
+already racily finished, in which case we must *not* call `cancel()`. Calling
+`cancel()` may, but is not required to, recursively call one of the `on_*`
+callbacks (passed by `canon_{stream,future}_{read,write}` above) which will set
+a pending event that is caught by the *second* check for
 `e.has_pending_event()`.
 
 If the copy hasn't been cancelled, the synchronous case uses `Task.wait_on` to
@@ -3951,7 +3958,7 @@ async def close(EndT, stream_or_future_t, task, hi):
   trap_if(not task.inst.may_leave)
   e = task.inst.table.remove(hi)
   trap_if(not isinstance(e, EndT))
-  trap_if(e.stream.t != stream_or_future_t.t)
+  trap_if(e.shared.t != stream_or_future_t.t)
   e.drop()
   return []
 ```

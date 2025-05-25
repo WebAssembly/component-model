@@ -1062,7 +1062,7 @@ class HostSource(ReadableStream):
         self.reset_pending()
 
 class HostSink:
-  stream: ReadableStream
+  shared: ReadableStream
   t: ValType
   received: list[int]
   chunk: int
@@ -1070,9 +1070,9 @@ class HostSink:
   write_event: asyncio.Event
   ready_to_consume: asyncio.Event
 
-  def __init__(self, stream, chunk, remain = 2**64):
-    self.stream = stream
-    self.t = stream.t
+  def __init__(self, shared, chunk, remain = 2**64):
+    self.shared = shared
+    self.t = shared.t
     self.received = []
     self.chunk = chunk
     self.write_remain = remain
@@ -1081,9 +1081,9 @@ class HostSink:
       self.write_event.set()
     self.ready_to_consume = asyncio.Event()
     async def read_all():
-      while not self.stream.closed():
+      while not self.shared.closed():
         await self.write_event.wait()
-        if self.stream.closed():
+        if self.shared.closed():
           break
         def on_partial_copy(revoke_buffer):
           revoke_buffer()
@@ -1092,7 +1092,7 @@ class HostSink:
         def on_copy_done(why):
           if not f.done():
             f.set_result(None)
-        if self.stream.read(None, self, on_partial_copy, on_copy_done) != 'done':
+        if self.shared.read(None, self, on_partial_copy, on_copy_done) != 'done':
           f = asyncio.Future()
           await f
       self.ready_to_consume.set()
@@ -1115,7 +1115,7 @@ class HostSink:
 
   async def consume(self, n):
     while n > len(self.received):
-      if self.stream.closed():
+      if self.shared.closed():
         return None
       self.ready_to_consume.clear()
       await self.ready_to_consume.wait()
@@ -1910,7 +1910,7 @@ async def test_futures():
     result,n = unpack_result(ret)
     assert(n == 1 and result == definitions.CLOSED)
 
-    while not task.inst.table.get(rfi).stream.closed():
+    while not task.inst.table.get(rfi).shared.closed():
       await task.yield_(sync = False)
 
     [ret] = await canon_future_cancel_read(FutureType(U8Type()), True, task, rfi)
