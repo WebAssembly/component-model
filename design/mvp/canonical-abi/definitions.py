@@ -2197,6 +2197,7 @@ async def copy(EndT, BufferT, event_code, stream_or_future_t, opts, task, i, ptr
 
   def copy_event(why, revoke_buffer):
     revoke_buffer()
+    assert(e.copying)
     e.copying = False
     return (event_code, i, pack_copy_result(task, e, buffer, why))
 
@@ -2209,13 +2210,13 @@ async def copy(EndT, BufferT, event_code, stream_or_future_t, opts, task, i, ptr
   if e.copy(task.inst, buffer, on_partial_copy, on_copy_done) == 'done':
     return [pack_copy_result(task, e, buffer, 'completed')]
   else:
+    e.copying = True
     if opts.sync:
       await task.wait_on(e.wait_for_pending_event(), sync = True)
       code,index,payload = e.get_event()
       assert(code == event_code and index == i)
       return [payload]
     else:
-      e.copying = True
       return [BLOCKED]
 
 BLOCKED   = 0xffff_ffff

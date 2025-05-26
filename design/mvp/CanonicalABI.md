@@ -3792,6 +3792,7 @@ the other end closed, or this end cancelled the copy via
 ```python
   def copy_event(why, revoke_buffer):
     revoke_buffer()
+    assert(e.copying)
     e.copying = False
     return (event_code, i, pack_copy_result(task, e, buffer, why))
 
@@ -3810,13 +3811,13 @@ synchronously returns how much was copied and how the operation ended to the
 caller. Otherwise, the built-in blocks:
 ```python
   else:
+    e.copying = True
     if opts.sync:
       await task.wait_on(e.wait_for_pending_event(), sync = True)
       code,index,payload = e.get_event()
       assert(code == event_code and index == i)
       return [payload]
     else:
-      e.copying = True
       return [BLOCKED]
 ```
 In the synchronous case, the caller synchronously waits for progress
