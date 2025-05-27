@@ -1485,14 +1485,15 @@ class WritableFutureEnd(FutureEnd):
   def copy(self, inst, src, on_partial_copy, on_copy_done):
     return self.close_after_copy(self.shared.write, inst, src, on_copy_done)
   def drop(self):
+    trap_if(not self.shared.closed())
     FutureEnd.drop(self)
 ```
 The `future.{read,write}` built-ins fix the buffer length to `1`, ensuring the
 `assert(buffer.remain() == 1)` holds. Because of this, there are no partial
 copies and `on_partial_copy` is never called.
 
-The additional `trap_if` in `WritableFutureEnd.drop` ensures that the only
-valid way close a future without writing its value is to close it in error.
+The additional `trap_if` in `WritableFutureEnd.drop` ensures that a future
+must have written a value before closing.
 
 
 ### Despecialization

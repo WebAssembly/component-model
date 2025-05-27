@@ -1921,6 +1921,15 @@ async def test_futures():
     [] = await canon_future_close_writable(FutureType(U8Type()), task, wfi)
     [] = await canon_future_close_readable(FutureType(U8Type()), task, rfi)
 
+    [packed] = await canon_future_new(FutureType(U8Type()), task)
+    rfi,wfi = unpack_new_ends(packed)
+    trapped = False
+    try:
+      await canon_future_close_writable(FutureType(U8Type()), task, wfi)
+    except Trap:
+      trapped = True
+    assert(trapped)
+
     return []
 
   await canon_lift(lift_opts, inst, FuncType([],[]), core_func, None, lambda:[], lambda _:(), host_on_block)
