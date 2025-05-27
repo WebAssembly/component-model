@@ -198,7 +198,7 @@
           (then unreachable))
         (if (i32.ne (local.get $index) (local.get $insw))
           (then unreachable))
-        (if (i32.ne (local.get $payload) (i32.const 0xc1 (; CLOSED=1 | (12 << 4) ;) (; TODO: currently returns 0xc0 ;)))
+        (if (i32.ne (local.get $payload) (i32.const 0xc1 (; CLOSED=1 | (12 << 4) ;)))
           (then unreachable))
 
         (call $stream.close-writable (local.get $insw))

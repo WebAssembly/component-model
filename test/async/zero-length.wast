@@ -78,7 +78,7 @@
         ;; the second call to produce_cb:
         (if (i32.eq (global.get $state) (i32.const 1)) (then
           ;; confirm we're seeing the non-zero-length write complete
-          (if (i32.ne (local.get $payload) (i32.const 0x40 (; COMPLETED=0 | (4 << 4) ;)))
+          (if (i32.ne (local.get $payload) (i32.const 0x41 (; CLOSED=1 | (4 << 4) ;)))
             (then unreachable))
 
           (call $stream.close-writable (global.get $outsw))
