@@ -40,11 +40,11 @@
       (import "" "waitable.join" (func $waitable.join (param i32 i32)))
       (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
       (import "" "waitable-set.wait" (func $waitable-set.wait (param i32 i32) (result i32)))
-      (import "" "f" (func $f (param i32 i32) (result i32)))
+      (import "" "f" (func $f (param i32) (result i32)))
 
       (func (export "g") (result i32)
         (local $ws i32) (local $ret i32) (local $subtaski i32)
-        (local.set $ret (call $f (i32.const 0) (i32.const 0)))
+        (local.set $ret (call $f (i32.const 0)))
         (local.set $subtaski (i32.shr_u (local.get $ret) (i32.const 4)))
         (local.set $ws (call $waitable-set.new))
         (call $waitable.join (local.get $subtaski) (local.get $ws))
