@@ -15,7 +15,7 @@
       (import "" "stream.new" (func $stream.new (result i64)))
       (import "" "stream.write" (func $stream.write (param i32 i32 i32) (result i32)))
       (import "" "stream.cancel-write" (func $stream.cancel-write (param i32) (result i32)))
-      (import "" "stream.close-writable" (func $stream.close-writable (param i32)))
+      (import "" "stream.drop-writable" (func $stream.drop-writable (param i32)))
 
       (global $ws (mut i32) (i32.const 0))
       (global $res1 (mut i32) (i32.const 0))
@@ -55,14 +55,14 @@
 
         ;; cancel the write, confirming that the first element was transferred
         (local.set $ret (call $stream.cancel-write (global.get $ws)))
-        (if (i32.ne (i32.const 0x11 (; CLOSED=1 | (1 << 4) ;)) (local.get $ret))
+        (if (i32.ne (i32.const 0x11 (; DROPPED=1 | (1 << 4) ;)) (local.get $ret))
           (then unreachable))
 
         ;; we still own $res2
         (if (i32.ne (i32.const 51) (call $resource.rep (global.get $res2)))
           (then unreachable))
 
-        (call $stream.close-writable (global.get $ws))
+        (call $stream.drop-writable (global.get $ws))
       )
       (func $R.foo (export "R.foo") (param $rep i32) (result i32)
         (i32.add (local.get $rep) (i32.const 50))
@@ -80,7 +80,7 @@
     (canon stream.new $ST (core func $stream.new))
     (canon stream.write $ST async (memory $memory "mem") (core func $stream.write))
     (canon stream.cancel-write $ST (core func $stream.cancel-write))
-    (canon stream.close-writable $ST (core func $stream.close-writable))
+    (canon stream.drop-writable $ST (core func $stream.drop-writable))
     (core instance $core (instantiate $Core (with "" (instance
       (export "mem" (memory $memory "mem"))
       (export "resource.new" (func $resource.new))
@@ -88,7 +88,7 @@
       (export "stream.new" (func $stream.new))
       (export "stream.write" (func $stream.write))
       (export "stream.cancel-write" (func $stream.cancel-write))
-      (export "stream.close-writable" (func $stream.close-writable))
+      (export "stream.drop-writable" (func $stream.drop-writable))
     ))))
     (export $R' "R" (type $R))
     (func (export "[method]R.foo") (param "self" (borrow $R')) (result u32) (canon lift (core func $core "R.foo")))
@@ -110,7 +110,7 @@
     (core module $Core
       (import "" "mem" (memory 1))
       (import "" "stream.read" (func $stream.read (param i32 i32 i32) (result i32)))
-      (import "" "stream.close-readable" (func $stream.close-readable (param i32)))
+      (import "" "stream.drop-readable" (func $stream.drop-readable (param i32)))
       (import "" "R.foo" (func $R.foo (param i32) (result i32)))
       (import "" "start-stream" (func $start-stream (result i32)))
       (import "" "cancel-write" (func $cancel-write))
@@ -140,8 +140,8 @@
         (if (i32.ne (i32.const 100) (local.get $ret))
           (then unreachable))
 
-        ;; close the stream and then let $C run and assert stuff
-        (call $stream.close-readable (local.get $rs))
+        ;; drop the stream and then let $C run and assert stuff
+        (call $stream.drop-readable (local.get $rs))
         (call $cancel-write)
         
         (i32.const 42)
@@ -150,14 +150,14 @@
     (alias export $producer "R" (type $R))
     (type $ST (stream (own $R)))
     (canon stream.read $ST async (memory $memory "mem") (core func $stream.read))
-    (canon stream.close-readable $ST (core func $stream.close-readable))
+    (canon stream.drop-readable $ST (core func $stream.drop-readable))
     (canon lower (func $producer "[method]R.foo") (core func $R.foo'))
     (canon lower (func $producer "start-stream") (core func $start-stream'))
     (canon lower (func $producer "cancel-write") (core func $cancel-write'))
     (core instance $core (instantiate $Core (with "" (instance
       (export "mem" (memory $memory "mem"))
       (export "stream.read" (func $stream.read))
-      (export "stream.close-readable" (func $stream.close-readable))
+      (export "stream.drop-readable" (func $stream.drop-readable))
       (export "R.foo" (func $R.foo'))
       (export "start-stream" (func $start-stream'))
       (export "cancel-write" (func $cancel-write'))

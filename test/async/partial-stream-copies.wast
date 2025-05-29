@@ -16,8 +16,8 @@
       (import "" "stream.new" (func $stream.new (result i64)))
       (import "" "stream.read" (func $stream.read (param i32 i32 i32) (result i32)))
       (import "" "stream.write" (func $stream.write (param i32 i32 i32) (result i32)))
-      (import "" "stream.close-readable" (func $stream.close-readable (param i32)))
-      (import "" "stream.close-writable" (func $stream.close-writable (param i32)))
+      (import "" "stream.drop-readable" (func $stream.drop-readable (param i32)))
+      (import "" "stream.drop-writable" (func $stream.drop-writable (param i32)))
 
       ;; $ws is waited on by 'transform'
       (global $ws (mut i32) (i32.const 0))
@@ -96,8 +96,8 @@
         (if (i32.ne (i32.const 0x7654) (i32.load16_u offset=4 (global.get $inbufp)))
           (then unreachable))
 
-        (call $stream.close-readable (global.get $insr))
-        (call $stream.close-writable (global.get $outsw))
+        (call $stream.drop-readable (global.get $insr))
+        (call $stream.drop-writable (global.get $outsw))
         (return (i32.const 0 (; EXIT ;)))
       )
     )
@@ -108,8 +108,8 @@
     (canon stream.new $ST (core func $stream.new))
     (canon stream.read $ST async (memory $memory "mem") (core func $stream.read))
     (canon stream.write $ST async (memory $memory "mem") (core func $stream.write))
-    (canon stream.close-readable $ST (core func $stream.close-readable))
-    (canon stream.close-writable $ST (core func $stream.close-writable))
+    (canon stream.drop-readable $ST (core func $stream.drop-readable))
+    (canon stream.drop-writable $ST (core func $stream.drop-writable))
     (core instance $cm (instantiate $CM (with "" (instance
       (export "mem" (memory $memory "mem"))
       (export "task.return" (func $task.return))
@@ -118,8 +118,8 @@
       (export "stream.new" (func $stream.new))
       (export "stream.read" (func $stream.read))
       (export "stream.write" (func $stream.write))
-      (export "stream.close-readable" (func $stream.close-readable))
-      (export "stream.close-writable" (func $stream.close-writable))
+      (export "stream.drop-readable" (func $stream.drop-readable))
+      (export "stream.drop-writable" (func $stream.drop-writable))
     ))))
     (func (export "transform") (param "in" (stream u8)) (result (stream u8)) (canon lift
       (core func $cm "transform")
@@ -140,8 +140,8 @@
       (import "" "stream.new" (func $stream.new (result i64)))
       (import "" "stream.read" (func $stream.read (param i32 i32 i32) (result i32)))
       (import "" "stream.write" (func $stream.write (param i32 i32 i32) (result i32)))
-      (import "" "stream.close-readable" (func $stream.close-readable (param i32)))
-      (import "" "stream.close-writable" (func $stream.close-writable (param i32)))
+      (import "" "stream.drop-readable" (func $stream.drop-readable (param i32)))
+      (import "" "stream.drop-writable" (func $stream.drop-writable (param i32)))
       (import "" "transform" (func $transform (param i32 i32) (result i32)))
 
       (func $run (export "run") (result i32)
@@ -184,23 +184,23 @@
         (if (i32.ne (i32.const -1 (; BLOCKED ;)) (local.get $ret))
           (then unreachable))
         
-        ;; wait for transform to read our write and close all the streams
+        ;; wait for transform to read our write and drop all the streams
         (local.set $ws (call $waitable-set.new))
         (call $waitable.join (local.get $insw) (local.get $ws))
         (local.set $event_code (call $waitable-set.wait (local.get $ws) (i32.const 0)))
         (local.set $index (i32.load (i32.const 0)))
         (local.set $payload (i32.load (i32.const 4)))
 
-        ;; confirm the write and the closed stream
+        ;; confirm the write and the dropped stream
         (if (i32.ne (local.get $event_code) (i32.const 3 (; STREAM_WRITE ;)))
           (then unreachable))
         (if (i32.ne (local.get $index) (local.get $insw))
           (then unreachable))
-        (if (i32.ne (local.get $payload) (i32.const 0xc1 (; CLOSED=1 | (12 << 4) ;)))
+        (if (i32.ne (local.get $payload) (i32.const 0xc1 (; DROPPED=1 | (12 << 4) ;)))
           (then unreachable))
 
-        (call $stream.close-writable (local.get $insw))
-        (call $stream.close-readable (local.get $outsr))
+        (call $stream.drop-writable (local.get $insw))
+        (call $stream.drop-readable (local.get $outsr))
 
         ;; return 42 to the top-level test harness
         (i32.const 42)
@@ -213,8 +213,8 @@
     (canon stream.new $ST (core func $stream.new))
     (canon stream.read $ST async (memory $memory "mem") (core func $stream.read))
     (canon stream.write $ST async (memory $memory "mem") (core func $stream.write))
-    (canon stream.close-readable $ST (core func $stream.close-readable))
-    (canon stream.close-writable $ST (core func $stream.close-writable))
+    (canon stream.drop-readable $ST (core func $stream.drop-readable))
+    (canon stream.drop-writable $ST (core func $stream.drop-writable))
     (canon lower (func $transform) async (memory $memory "mem") (core func $transform'))
     (core instance $dm (instantiate $DM (with "" (instance
       (export "mem" (memory $memory "mem"))
@@ -224,8 +224,8 @@
       (export "stream.new" (func $stream.new))
       (export "stream.read" (func $stream.read))
       (export "stream.write" (func $stream.write))
-      (export "stream.close-readable" (func $stream.close-readable))
-      (export "stream.close-writable" (func $stream.close-writable))
+      (export "stream.drop-readable" (func $stream.drop-readable))
+      (export "stream.drop-writable" (func $stream.drop-writable))
       (export "transform" (func $transform'))
     ))))
     (func (export "run") (result u32) (canon lift (core func $dm "run")))
