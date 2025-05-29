@@ -873,6 +873,7 @@ class WritableFutureEnd(FutureEnd):
   def copy(self, inst, src, on_partial_copy, on_copy_done):
     return self.close_after_copy(self.shared.write, inst, src, on_copy_done)
   def drop(self):
+    trap_if(not self.shared.closed())
     FutureEnd.drop(self)
 
 ### Despecialization
