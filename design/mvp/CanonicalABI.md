@@ -3613,7 +3613,7 @@ This state is either returned by `subtask.cancel`, if the subtask resolved
 without blocking, or, if `subtask.cancel` returns `BLOCKED`, then as part of
 the event payload of a future `SUBTASK` event.
 ```python
-BLOCKED = 0xffff_fffff
+BLOCKED = 0xffff_ffff
 
 async def canon_subtask_cancel(sync, task, i):
   trap_if(not task.inst.may_leave)

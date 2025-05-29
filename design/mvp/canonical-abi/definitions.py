@@ -2117,7 +2117,7 @@ async def canon_waitable_join(task, wi, si):
 
 ### 🔀 `canon subtask.cancel`
 
-BLOCKED = 0xffff_fffff
+BLOCKED = 0xffff_ffff
 
 async def canon_subtask_cancel(sync, task, i):
   trap_if(not task.inst.may_leave)
