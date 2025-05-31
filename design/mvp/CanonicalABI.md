@@ -2827,16 +2827,13 @@ of component-level values with types `ts`.
 def lift_flat_values(cx, max_flat, vi, ts):
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
-    return lift_heap_values(cx, vi, ts)
+    ptr = vi.next('i32')
+    tuple_type = TupleType(ts)
+    trap_if(ptr != align_to(ptr, alignment(tuple_type)))
+    trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
+    return list(load(cx, ptr, tuple_type).values())
   else:
     return [ lift_flat(cx, vi, t) for t in ts ]
-
-def lift_heap_values(cx, vi, ts):
-  ptr = vi.next('i32')
-  tuple_type = TupleType(ts)
-  trap_if(ptr != align_to(ptr, alignment(tuple_type)))
-  trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
-  return list(load(cx, ptr, tuple_type).values())
 ```
 
 Symmetrically, the `lower_flat_values` function defines how to lower a
@@ -2850,26 +2847,22 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
   cx.inst.may_leave = False
   flat_types = flatten_types(ts)
   if len(flat_types) > max_flat:
-    flat_vals = lower_heap_values(cx, vs, ts, out_param)
+    tuple_type = TupleType(ts)
+    tuple_value = {str(i): v for i,v in enumerate(vs)}
+    if out_param is None:
+      ptr = cx.opts.realloc(0, 0, alignment(tuple_type), elem_size(tuple_type))
+      flat_vals = [ptr]
+    else:
+      ptr = out_param.next('i32')
+      flat_vals = []
+    trap_if(ptr != align_to(ptr, alignment(tuple_type)))
+    trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
+    store(cx, tuple_value, tuple_type, ptr)
   else:
     flat_vals = []
     for i in range(len(vs)):
       flat_vals += lower_flat(cx, vs[i], ts[i])
   cx.inst.may_leave = True
-  return flat_vals
-
-def lower_heap_values(cx, vs, ts, out_param):
-  tuple_type = TupleType(ts)
-  tuple_value = {str(i): v for i,v in enumerate(vs)}
-  if out_param is None:
-    ptr = cx.opts.realloc(0, 0, alignment(tuple_type), elem_size(tuple_type))
-    flat_vals = [ptr]
-  else:
-    ptr = out_param.next('i32')
-    flat_vals = []
-  trap_if(ptr != align_to(ptr, alignment(tuple_type)))
-  trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
-  store(cx, tuple_value, tuple_type, ptr)
   return flat_vals
 ```
 The `may_leave` flag is guarded by `canon_lower` below to prevent a component
