@@ -364,17 +364,21 @@ built-ins such as `stream.read`. However, in the
 explicit component-level buffer types and canonical built-ins may be added to
 allow explicitly creating buffers and passing them between components.)
 
-All buffers have an associated component-level value type `t` and a `remain`
-method that returns how many `t` values may still be read or written. Thus
-buffers hide their original/complete size. A "readable buffer" allows reading
-`t` values *from* the buffer's memory. A "writable buffer" allows writing `t`
-values *into* the buffer's memory. Buffers are represented by the following 3
+A "readable buffer" allows reading `t` values *from* the buffer's memory. A
+"writable buffer" allows writing `t` values *into* the buffer's memory. All
+buffers have an associated component-level value type `t` and a `remain` method
+that returns how many `t` values may still be read or written. Buffers mostly
+hide their original/complete size. However, zero-length buffers need to be
+treated specially (particularly when a zero-length read rendezvous with a
+zero-length write), so there is a special query for detecting whether a buffer
+is zero-length. Based on this, buffers are represented by the following 3
 abstract Python classes:
 ```python
 class Buffer:
   MAX_LENGTH = 2**28 - 1
   t: ValType
   remain: Callable[[], int]
+  is_zero_length: Callable[[], bool]
 
 class ReadableBuffer(Buffer):
   read: Callable[[int], list[any]]
@@ -420,6 +424,9 @@ class BufferGuestImpl(Buffer):
 
   def remain(self):
     return self.length - self.progress
+
+  def is_zero_length(self):
+    return self.length == 0
 
 class ReadableBufferGuestImpl(BufferGuestImpl):
   def read(self, n):
@@ -1238,6 +1245,22 @@ design avoids the need for an intermediate buffer and copy (unlike, e.g., a
 Unix pipe; a Unix pipe would instead be implemented as a resource type owning
 the buffer memory and *two* streams; on going in and one coming out).
 
+The result of a `{stream,future}.{read,write}` is communicated to the wasm
+guest via a `CopyResult` code:
+```python
+class CopyResult(IntEnum):
+  COMPLETED = 0
+  CLOSED = 1
+  CANCELLED = 2
+```
+The `CLOSED` code indicates that the *other* end has since closed their end and
+thus no more reads/writes are possible. The `CANCELLED` code is only possible
+after *this* end has performed a `{stream,future}.{read,write}` followed by a
+`{stream,future}.cancel-{read,write}`; `CANCELLED` notifies the wasm code
+that the cancellation finished and so ownership of the memory buffer has been
+returned to the wasm code. Lastly, `COMPLETED` indicates that at least one
+value has been copied and neither `CLOSED` nor `CANCELLED` apply.
+
 As with functions and buffers, native host code can be on either side of a
 stream. Thus, streams are defined in terms of an abstract interface that can be
 implemented and consumed by wasm or host code (with all {wasm,host} pairings
@@ -1250,28 +1273,27 @@ that there is no Component Model type for passing the writable end of a
 stream.)
 ```python
 RevokeBuffer = Callable[[], None]
-OnPartialCopy = Callable[[RevokeBuffer], None]
-OnCopyDone = Callable[[Literal['completed','cancelled']], None]
+OnCopy = Callable[[RevokeBuffer], None]
+OnCopyDone = Callable[[CopyResult], None]
 
 class ReadableStream:
   t: ValType
-  read: Callable[[ComponentInstance, WritableBuffer, OnPartialCopy, OnCopyDone], Literal['done','blocked']]
+  read: Callable[[ComponentInstance, WritableBuffer, OnCopy, OnCopyDone], Optional[CopyResult]]
   cancel: Callable[[], None]
   close: Callable[[]]
   closed: Callable[[], bool]
 ```
 The key operation is `read` which works as follows:
-* `read` is non-blocking, returning `'blocked'` if it would have blocked.
-* The `On*` callbacks are only called *after* `read` returns `'blocked'`.
-* `OnCopyDone` is called to indicate that the caller has regained ownership of
-  the buffer and whether this was due to the read/write completing or
-  being cancelled.
-* `OnPartialCopy` is called to indicate a partial write has been made to the
-  buffer, but there may be further writes made in the future, so the caller
-  has *not* regained ownership of the buffer.
-* The `RevokeBuffer` callback passed to `OnPartialCopy` allows the caller
-  of `read` to *synchronously* regain ownership of the buffer.
-* `cancel` is also non-blocking, but does **not** guarantee that ownership of
+* `read` is non-blocking, returning `None` if it would have blocked.
+* The `On*` callbacks are only called if `read` returns `None`.
+* `OnCopyDone` is called to indicate that the `read` is finished copying and
+  that the caller has regained ownership of the buffer.
+* `OnCopy` is called to indicate a potentially-partial write has been made into
+  the buffer. However, there may be further writes made in the future, so the
+  caller has *not* regained ownership of the buffer.
+* The `RevokeBuffer` callback passed to `OnCopy` allows the caller of `read` to
+  immediately regain ownership of the buffer once the first copy has completed.
+* `cancel` is non-blocking, but does **not** guarantee that ownership of
   the buffer has been returned; `cancel` only lets the caller *request* that
   `read` call one of the `On*` callbacks ASAP (which may or may not happen
   during `cancel`).
@@ -1282,10 +1304,10 @@ The `On*` callbacks are a spec-internal detail used to specify the allowed
 concurrent behaviors of `stream.{read,write}` and not exposed directly to core
 wasm code. Specifically, the point of the `On*` callbacks is to specify that
 *multiple* writes are allowed into the same `WritableBuffer` up until the point
-where either the buffer is full (at which point `OnCopyDone` is called) or the
-calling core wasm code receives the `STREAM_READ` progress event (in which case
-`RevokeBuffer` is called). This reduces the number of task-switches required
-by the spec, particularly when streaming between two components.
+where either the buffer is full (at which point `OnCopyDone` is called) or
+the calling core wasm code receives the `STREAM_READ` progress event (in which
+case `RevokeBuffer` is called). This reduces the number of task-switches
+required by the spec, particularly when streaming between two components.
 
 The `SharedStreamImpl` class implements `ReadableStream` for streams created by
 wasm (via `stream.new`) and tracks the common state shared by both the readable
@@ -1296,7 +1318,7 @@ class SharedStreamImpl(ReadableStream):
   closed_: bool
   pending_inst: Optional[ComponentInstance]
   pending_buffer: Optional[Buffer]
-  pending_on_partial_copy: Optional[OnPartialCopy]
+  pending_on_copy: Optional[OnCopy]
   pending_on_copy_done: Optional[OnCopyDone]
 
   def __init__(self, t):
@@ -1307,32 +1329,31 @@ class SharedStreamImpl(ReadableStream):
   def reset_pending(self):
     self.set_pending(None, None, None, None)
 
-  def set_pending(self, inst, buffer, on_partial_copy, on_copy_done):
+  def set_pending(self, inst, buffer, on_copy, on_copy_done):
     self.pending_inst = inst
     self.pending_buffer = buffer
-    self.pending_on_partial_copy = on_partial_copy
+    self.pending_on_copy = on_copy
     self.pending_on_copy_done = on_copy_done
 ```
 If set, the `pending_*` fields record the `Buffer` and `On*` callbacks of a
 `read` or `write` that is waiting to rendezvous with a complementary `write` or
 `read`. Closing the readable or writable end of a stream or cancelling a `read`
 or `write` notifies any pending `read` or `write` via its `OnCopyDone`
-callback, which lets the other side know that ownership of the `Buffer` has
-been returned and why:
+callback:
 ```python
-  def reset_and_notify_pending(self, why):
+  def reset_and_notify_pending(self, result):
     pending_on_copy_done = self.pending_on_copy_done
     self.reset_pending()
-    pending_on_copy_done(why)
+    pending_on_copy_done(result)
 
   def cancel(self):
-    self.reset_and_notify_pending('cancelled')
+    self.reset_and_notify_pending(CopyResult.CANCELLED)
 
   def close(self):
     if not self.closed_:
       self.closed_ = True
       if self.pending_buffer:
-        self.reset_and_notify_pending('completed')
+        self.reset_and_notify_pending(CopyResult.CLOSED)
 
   def closed(self):
     return self.closed_
@@ -1355,36 +1376,32 @@ is also a symmetric `write` method that follows the same rules as `read`,
 but in the opposite direction. Both are implemented by a single underlying
 `copy` method parameterized by the direction of the copy:
 ```python
-  def read(self, inst, dst, on_partial_copy, on_copy_done):
-    return self.copy(inst, dst, on_partial_copy, on_copy_done, self.pending_buffer, dst)
+  def read(self, inst, dst, on_copy, on_copy_done):
+    return self.copy(inst, dst, on_copy, on_copy_done, self.pending_buffer, dst)
 
-  def write(self, inst, src, on_partial_copy, on_copy_done):
-    return self.copy(inst, src, on_partial_copy, on_copy_done, src, self.pending_buffer)
+  def write(self, inst, src, on_copy, on_copy_done):
+    return self.copy(inst, src, on_copy, on_copy_done, src, self.pending_buffer)
 
-  def copy(self, inst, buffer, on_partial_copy, on_copy_done, src, dst):
+  def copy(self, inst, buffer, on_copy, on_copy_done, src, dst):
     if self.closed_:
-      return 'done'
+      return CopyResult.CLOSED
     elif not self.pending_buffer:
-      self.set_pending(inst, buffer, on_partial_copy, on_copy_done)
-      return 'blocked'
+      self.set_pending(inst, buffer, on_copy, on_copy_done)
+      return None
     else:
       assert(self.t == src.t == dst.t)
       trap_if(inst is self.pending_inst and self.t is not None) # temporary
       if self.pending_buffer.remain() > 0:
         if buffer.remain() > 0:
           dst.write(src.read(min(src.remain(), dst.remain())))
-          if self.pending_buffer.remain() > 0:
-            self.pending_on_partial_copy(self.reset_pending)
-          else:
-            self.reset_and_notify_pending('completed')
-        return 'done'
+          self.pending_on_copy(self.reset_pending)
+        return CopyResult.COMPLETED
+      elif buffer is src and buffer.remain() == 0 and self.pending_buffer.is_zero_length():
+        return CopyResult.COMPLETED
       else:
-        if buffer.remain() > 0 or buffer is dst:
-          self.reset_and_notify_pending('completed')
-          self.set_pending(inst, buffer, on_partial_copy, on_copy_done)
-          return 'blocked'
-        else:
-          return 'done'
+        self.reset_and_notify_pending(CopyResult.COMPLETED)
+        self.set_pending(inst, buffer, on_copy, on_copy_done)
+        return None
 ```
 Currently, there is a trap when both the `read` and `write` come from the same
 component instance and there is a non-empty element type. This trap will be
@@ -1438,12 +1455,12 @@ class StreamEnd(Waitable):
     Waitable.drop(self)
 
 class ReadableStreamEnd(StreamEnd):
-  def copy(self, inst, dst, on_partial_copy, on_copy_done):
-    return self.shared.read(inst, dst, on_partial_copy, on_copy_done)
+  def copy(self, inst, dst, on_copy, on_copy_done):
+    return self.shared.read(inst, dst, on_copy, on_copy_done)
 
 class WritableStreamEnd(StreamEnd):
-  def copy(self, inst, src, on_partial_copy, on_copy_done):
-    return self.shared.write(inst, src, on_partial_copy, on_copy_done)
+  def copy(self, inst, src, on_copy, on_copy_done):
+    return self.shared.write(inst, src, on_copy, on_copy_done)
 ```
 Dropping a stream end while an asynchronous read or write is in progress traps
 since the async read or write cannot be cancelled without blocking and `drop`
@@ -1462,35 +1479,41 @@ unconditionally call `stream.write`.
 
 Given the above definitions for `stream`, `future` can be simply defined as a
 `stream` that transmits only 1 value before automatically closing itself. This
-can be achieved by simply wrapping the `on_copy_done` callback (defined above)
-and closing once a value has been read-from or written-to the given buffer:
+can be achieved by wrapping the `On*` callbacks and closing once a value has
+been read-from or written-to the given buffer:
 ```python
 class FutureEnd(StreamEnd):
-  def close_after_copy(self, copy_op, inst, buffer, on_copy_done):
+  def close_after_copy(self, copy_op, inst, buffer, on_copy, on_copy_done):
     assert(buffer.remain() == 1)
-    def on_copy_done_wrapper(why):
+
+    def on_copy_wrapper(revoke_buffer):
+      assert(buffer.remain() == 0)
+      self.shared.close()
+
+    def on_copy_done_wrapper(result):
       if buffer.remain() == 0:
         self.shared.close()
-      on_copy_done(why)
-    ret = copy_op(inst, buffer, on_partial_copy = None, on_copy_done = on_copy_done_wrapper)
-    if ret == 'done' and buffer.remain() == 0:
+      on_copy_done(result)
+
+    ret = copy_op(inst, buffer, on_copy_wrapper, on_copy_done_wrapper)
+    if ret is not None and buffer.remain() == 0:
       self.shared.close()
+      return CopyResult.CLOSED
     return ret
 
 class ReadableFutureEnd(FutureEnd):
-  def copy(self, inst, dst, on_partial_copy, on_copy_done):
-    return self.close_after_copy(self.shared.read, inst, dst, on_copy_done)
+  def copy(self, inst, dst, on_copy, on_copy_done):
+    return self.close_after_copy(self.shared.read, inst, dst, on_copy, on_copy_done)
 
 class WritableFutureEnd(FutureEnd):
-  def copy(self, inst, src, on_partial_copy, on_copy_done):
-    return self.close_after_copy(self.shared.write, inst, src, on_copy_done)
+  def copy(self, inst, src, on_copy, on_copy_done):
+    return self.close_after_copy(self.shared.write, inst, src, on_copy, on_copy_done)
   def drop(self):
     trap_if(not self.shared.closed())
     FutureEnd.drop(self)
 ```
 The `future.{read,write}` built-ins fix the buffer length to `1`, ensuring the
-`assert(buffer.remain() == 1)` holds. Because of this, there are no partial
-copies and `on_partial_copy` is never called.
+`assert(buffer.remain() == 1)` holds.
 
 The additional `trap_if` in `WritableFutureEnd.drop` ensures that a future
 must have written a value before closing.
@@ -3776,33 +3799,32 @@ their originating call.)
   cx = LiftLowerContext(opts, task.inst, borrow_scope = None)
   buffer = BufferT(stream_or_future_t.t, cx, ptr, n)
 ```
-Next, the `copy` method of `{Readable,Writable}{Stream,Future}End` is called
-to attempt to perform the actual `read` or `write`. The `on_partial_copy`
-callback passed to `copy` is called zero or more times each time values are
-copied to/from `buffer` without filling it up. Aftewards, the `on_copy_done`
-callback passed to `copy` is called at most once when: the `buffer` if full,
-the other end closed, or this end cancelled the copy via
-`{stream,future}.cancel-{read,write}`.
+Next, the `copy` method of `{Readable,Writable}{Stream,Future}End` is called to
+attempt to perform the actual `read` or `write`. The `on_copy` callback passed
+to `copy` is called zero or more times each time values are copied to/from
+`buffer`. The `on_copy_done` callback passed to `copy` is called at most once
+when the read/write is definitely finished.
 ```python
-  def copy_event(why, revoke_buffer):
+  def copy_event(result, revoke_buffer):
     revoke_buffer()
     assert(e.copying)
     e.copying = False
-    return (event_code, i, pack_copy_result(task, e, buffer, why))
+    return (event_code, i, pack_copy_result(result, buffer))
 
-  def on_partial_copy(revoke_buffer):
-    e.set_event(partial(copy_event, 'completed', revoke_buffer))
+  def on_copy(revoke_buffer):
+    e.set_event(partial(copy_event, CopyResult.COMPLETED, revoke_buffer))
 
-  def on_copy_done(why):
-    e.set_event(partial(copy_event, why, revoke_buffer = lambda:()))
+  def on_copy_done(result):
+    e.set_event(partial(copy_event, result, revoke_buffer = lambda:()))
 
-  if e.copy(task.inst, buffer, on_partial_copy, on_copy_done) == 'done':
-    return [pack_copy_result(task, e, buffer, 'completed')]
+  result = e.copy(task.inst, buffer, on_copy, on_copy_done)
+  if result is not None:
+    return [pack_copy_result(result, buffer)]
 ```
 If the stream/future is already closed or at least 1 element could be
-immediately copied, `copy` returns `'done'` and `{stream,future}.{read,write}`
-synchronously returns how much was copied and how the operation ended to the
-caller. Otherwise, the built-in blocks:
+immediately copied, `copy` returns a `CopyResult` in which case the whole
+`{stream,future}.{read,write}` built-in call returns the `CopyResult` packed
+with the number of elements copied. Otherwise, the built-in blocks:
 ```python
   else:
     e.copying = True
@@ -3817,9 +3839,9 @@ caller. Otherwise, the built-in blocks:
 In the synchronous case, the caller synchronously waits for progress
 (blocking all execution in the calling component instance, but allowing other
 tasks in other component instances to make progress). Note that `get_event()`
-necessarily calls a `copy_event` closure created by either `on_partial_copy`
-or `on_copy_done`. In the asynchronous case, the built-in immeditely returns
-the `BLOCKED` code and the caller must asynchronously wait for progress using
+necessarily calls a `copy_event` closure created by either `on_copy` or
+`on_copy_done`. In the asynchronous case, the built-in immediately returns the
+`BLOCKED` code and the caller must asynchronously wait for progress using
 `waitable-set.{wait,poll}` or, if using a `callback`, by returning to the event
 loop. Setting `copying` prevents any more reads/writes from starting and also
 prevents the stream/future from being closed.
@@ -3828,30 +3850,15 @@ Regardless of whether the `{stream,future}.{read,write}` completes
 synchronously or asynchronously, the results passed to core wasm are
 bit-packed into a single `i32` according to the following scheme:
 ```python
-BLOCKED   = 0xffff_ffff
-COMPLETED = 0x0
-CLOSED    = 0x1
-CANCELLED = 0x2
-
-def pack_copy_result(task, e, buffer, why):
-  if e.shared.closed():
-    result = CLOSED
-  elif why == 'cancelled':
-    result = CANCELLED
-  else:
-    assert(why == 'completed')
-    assert(not isinstance(e, FutureEnd))
-    result = COMPLETED
+def pack_copy_result(result, buffer):
+  assert(0 <= result < 2**4)
   assert(buffer.progress <= Buffer.MAX_LENGTH < 2**28)
   packed = result | (buffer.progress << 4)
   assert(packed != BLOCKED)
   return packed
 ```
-The `result` indicates whether the stream was closed by the other end, the
-copy was cancelled by this end (via `{stream,future}.cancel-{read,write}`) or,
-otherwise, completed successfully. In all cases, any number of elements (from
-`0` to `n`) may have *first* been copied into or out of the buffer passed to
-the `read` or `write` and so this number is packed into the `i32` result.
+Note that, regardless of the final `CopyResult`, any number of elements may
+have been copied and so the high 28 bits always contains this number.
 
 
 ### 🔀 `canon {stream,future}.cancel-{read,write}`
