@@ -307,6 +307,7 @@ class Buffer:
   MAX_LENGTH = 2**28 - 1
   t: ValType
   remain: Callable[[], int]
+  is_zero_length: Callable[[], bool]
 
 class ReadableBuffer(Buffer):
   read: Callable[[int], list[any]]
@@ -334,6 +335,9 @@ class BufferGuestImpl(Buffer):
 
   def remain(self):
     return self.length - self.progress
+
+  def is_zero_length(self):
+    return self.length == 0
 
 class ReadableBufferGuestImpl(BufferGuestImpl):
   def read(self, n):
@@ -749,22 +753,27 @@ class Subtask(Waitable):
 
 #### Stream State
 
+class CopyResult(IntEnum):
+  COMPLETED = 0
+  CLOSED = 1
+  CANCELLED = 2
+
 RevokeBuffer = Callable[[], None]
-OnPartialCopy = Callable[[RevokeBuffer], None]
-OnCopyDone = Callable[[Literal['completed','cancelled']], None]
+OnCopy = Callable[[RevokeBuffer], None]
+OnCopyDone = Callable[[CopyResult], None]
 
 class ReadableStream:
   t: ValType
-  read: Callable[[ComponentInstance, WritableBuffer, OnPartialCopy, OnCopyDone], Literal['done','blocked']]
+  read: Callable[[ComponentInstance, WritableBuffer, OnCopy, OnCopyDone], None]
   cancel: Callable[[], None]
-  close: Callable[[]]
+  close: Callable[[], None]
   closed: Callable[[], bool]
 
 class SharedStreamImpl(ReadableStream):
   closed_: bool
   pending_inst: Optional[ComponentInstance]
   pending_buffer: Optional[Buffer]
-  pending_on_partial_copy: Optional[OnPartialCopy]
+  pending_on_copy: Optional[OnCopy]
   pending_on_copy_done: Optional[OnCopyDone]
 
   def __init__(self, t):
@@ -775,59 +784,53 @@ class SharedStreamImpl(ReadableStream):
   def reset_pending(self):
     self.set_pending(None, None, None, None)
 
-  def set_pending(self, inst, buffer, on_partial_copy, on_copy_done):
+  def set_pending(self, inst, buffer, on_copy, on_copy_done):
     self.pending_inst = inst
     self.pending_buffer = buffer
-    self.pending_on_partial_copy = on_partial_copy
+    self.pending_on_copy = on_copy
     self.pending_on_copy_done = on_copy_done
 
-  def reset_and_notify_pending(self, why):
+  def reset_and_notify_pending(self, result):
     pending_on_copy_done = self.pending_on_copy_done
     self.reset_pending()
-    pending_on_copy_done(why)
+    pending_on_copy_done(result)
 
   def cancel(self):
-    self.reset_and_notify_pending('cancelled')
+    self.reset_and_notify_pending(CopyResult.CANCELLED)
 
   def close(self):
     if not self.closed_:
       self.closed_ = True
       if self.pending_buffer:
-        self.reset_and_notify_pending('completed')
+        self.reset_and_notify_pending(CopyResult.CLOSED)
 
   def closed(self):
     return self.closed_
 
-  def read(self, inst, dst, on_partial_copy, on_copy_done):
-    return self.copy(inst, dst, on_partial_copy, on_copy_done, self.pending_buffer, dst)
+  def read(self, inst, dst, on_copy, on_copy_done):
+    self.copy(inst, dst, on_copy, on_copy_done, self.pending_buffer, dst)
 
-  def write(self, inst, src, on_partial_copy, on_copy_done):
-    return self.copy(inst, src, on_partial_copy, on_copy_done, src, self.pending_buffer)
+  def write(self, inst, src, on_copy, on_copy_done):
+    self.copy(inst, src, on_copy, on_copy_done, src, self.pending_buffer)
 
-  def copy(self, inst, buffer, on_partial_copy, on_copy_done, src, dst):
+  def copy(self, inst, buffer, on_copy, on_copy_done, src, dst):
     if self.closed_:
-      return 'done'
+      on_copy_done(CopyResult.CLOSED)
     elif not self.pending_buffer:
-      self.set_pending(inst, buffer, on_partial_copy, on_copy_done)
-      return 'blocked'
+      self.set_pending(inst, buffer, on_copy, on_copy_done)
     else:
       assert(self.t == src.t == dst.t)
       trap_if(inst is self.pending_inst and self.t is not None) # temporary
       if self.pending_buffer.remain() > 0:
         if buffer.remain() > 0:
           dst.write(src.read(min(src.remain(), dst.remain())))
-          if self.pending_buffer.remain() > 0:
-            self.pending_on_partial_copy(self.reset_pending)
-          else:
-            self.reset_and_notify_pending('completed')
-        return 'done'
+          self.pending_on_copy(self.reset_pending)
+        on_copy_done(CopyResult.COMPLETED)
+      elif buffer is src and buffer.remain() == 0 and self.pending_buffer.is_zero_length():
+        on_copy_done(CopyResult.COMPLETED)
       else:
-        if buffer.remain() > 0 or buffer is dst:
-          self.reset_and_notify_pending('completed')
-          self.set_pending(inst, buffer, on_partial_copy, on_copy_done)
-          return 'blocked'
-        else:
-          return 'done'
+        self.reset_and_notify_pending(CopyResult.COMPLETED)
+        self.set_pending(inst, buffer, on_copy, on_copy_done)
 
 class StreamEnd(Waitable):
   shared: ReadableStream
@@ -844,34 +847,36 @@ class StreamEnd(Waitable):
     Waitable.drop(self)
 
 class ReadableStreamEnd(StreamEnd):
-  def copy(self, inst, dst, on_partial_copy, on_copy_done):
-    return self.shared.read(inst, dst, on_partial_copy, on_copy_done)
+  def copy(self, inst, dst, on_copy, on_copy_done):
+    self.shared.read(inst, dst, on_copy, on_copy_done)
 
 class WritableStreamEnd(StreamEnd):
-  def copy(self, inst, src, on_partial_copy, on_copy_done):
-    return self.shared.write(inst, src, on_partial_copy, on_copy_done)
+  def copy(self, inst, src, on_copy, on_copy_done):
+    self.shared.write(inst, src, on_copy, on_copy_done)
 
 #### Future State
 
 class FutureEnd(StreamEnd):
-  def close_after_copy(self, copy_op, inst, buffer, on_copy_done):
+  def close_after_copy(self, copy, inst, buffer, on_copy, on_copy_done):
     assert(buffer.remain() == 1)
-    def on_copy_done_wrapper(why):
+    def on_copy_wrapper(revoke_buffer):
+      assert(buffer.remain() == 0)
+      self.shared.close()
+    def on_copy_done_wrapper(result):
       if buffer.remain() == 0:
         self.shared.close()
-      on_copy_done(why)
-    ret = copy_op(inst, buffer, on_partial_copy = None, on_copy_done = on_copy_done_wrapper)
-    if ret == 'done' and buffer.remain() == 0:
-      self.shared.close()
-    return ret
+        on_copy_done(CopyResult.CLOSED)
+      else:
+        on_copy_done(result)
+    copy(inst, buffer, on_copy_wrapper, on_copy_done_wrapper)
 
 class ReadableFutureEnd(FutureEnd):
-  def copy(self, inst, dst, on_partial_copy, on_copy_done):
-    return self.close_after_copy(self.shared.read, inst, dst, on_copy_done)
+  def copy(self, inst, dst, on_copy, on_copy_done):
+    return self.close_after_copy(self.shared.read, inst, dst, on_copy, on_copy_done)
 
 class WritableFutureEnd(FutureEnd):
-  def copy(self, inst, src, on_partial_copy, on_copy_done):
-    return self.close_after_copy(self.shared.write, inst, src, on_copy_done)
+  def copy(self, inst, src, on_copy, on_copy_done):
+    return self.close_after_copy(self.shared.write, inst, src, on_copy, on_copy_done)
   def drop(self):
     trap_if(not self.shared.closed())
     FutureEnd.drop(self)
@@ -2189,48 +2194,33 @@ async def copy(EndT, BufferT, event_code, stream_or_future_t, opts, task, i, ptr
   cx = LiftLowerContext(opts, task.inst, borrow_scope = None)
   buffer = BufferT(stream_or_future_t.t, cx, ptr, n)
 
-  def copy_event(why, revoke_buffer):
+  def copy_event(result, revoke_buffer):
     revoke_buffer()
     assert(e.copying)
     e.copying = False
-    return (event_code, i, pack_copy_result(task, e, buffer, why))
+    assert(0 <= result < 2**4)
+    assert(buffer.progress <= Buffer.MAX_LENGTH < 2**28)
+    packed_result = result | (buffer.progress << 4)
+    return (event_code, i, packed_result)
 
-  def on_partial_copy(revoke_buffer):
-    e.set_event(partial(copy_event, 'completed', revoke_buffer))
+  def on_copy(revoke_buffer):
+    e.set_event(partial(copy_event, CopyResult.COMPLETED, revoke_buffer))
 
-  def on_copy_done(why):
-    e.set_event(partial(copy_event, why, revoke_buffer = lambda:()))
+  def on_copy_done(result):
+    e.set_event(partial(copy_event, result, revoke_buffer = lambda:()))
 
-  if e.copy(task.inst, buffer, on_partial_copy, on_copy_done) == 'done':
-    return [pack_copy_result(task, e, buffer, 'completed')]
+  e.copying = True
+  e.copy(task.inst, buffer, on_copy, on_copy_done)
+
+  if opts.sync and not e.has_pending_event():
+    await task.wait_on(e.wait_for_pending_event(), sync = True)
+
+  if e.has_pending_event():
+    code,index,payload = e.get_event()
+    assert(code == event_code and index == i and payload != BLOCKED)
+    return [payload]
   else:
-    e.copying = True
-    if opts.sync:
-      await task.wait_on(e.wait_for_pending_event(), sync = True)
-      code,index,payload = e.get_event()
-      assert(code == event_code and index == i)
-      return [payload]
-    else:
-      return [BLOCKED]
-
-BLOCKED   = 0xffff_ffff
-COMPLETED = 0x0
-CLOSED    = 0x1
-CANCELLED = 0x2
-
-def pack_copy_result(task, e, buffer, why):
-  if e.shared.closed():
-    result = CLOSED
-  elif why == 'cancelled':
-    result = CANCELLED
-  else:
-    assert(why == 'completed')
-    assert(not isinstance(e, FutureEnd))
-    result = COMPLETED
-  assert(buffer.progress <= Buffer.MAX_LENGTH < 2**28)
-  packed = result | (buffer.progress << 4)
-  assert(packed != BLOCKED)
-  return packed
+    return [BLOCKED]
 
 ### 🔀 `canon {stream,future}.cancel-{read,write}`
 
