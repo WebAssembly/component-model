@@ -729,8 +729,11 @@ the core wasm toolchain) `$retp` must be a 4-byte-aligned pointer into linear
 memory from which the 8-byte (pointer, length) of the string result can be
 loaded.
 
-The async export ABI provides two flavors: stackful and stackless. The stackful
-ABI is currently gated by the 🚟 feature.
+The async export ABI provides two flavors: stackful and stackless.
+
+##### Stackful Async Exports
+
+The stackful ABI is currently gated by the 🚟 feature.
 
 The async stackful export function signature is:
 ```wat
@@ -748,6 +751,8 @@ The parameters of `task.return` work the same as if the WIT return type was the
 WIT parameter type of a synchronous function. For example, if more than 16
 core parameters would be needed, a single `i32` pointer into linear memory is
 used.
+
+##### Stackless Async Exports
 
 The async stackless export function signature is:
 ```wat
@@ -789,7 +794,9 @@ This rest of this section sketches the shape of a component that uses `async`
 to lift and lower its imports and exports with both the stackful and stackless
 ABI options.
 
-Starting with the stackless ABI, the meat of this example component is replaced
+### Stackful ABI example
+
+Starting with the stackful ABI, the meat of this example component is replaced
 with `...` to focus on the overall flow of function calls:
 ```wat
 (component
@@ -800,8 +807,8 @@ with `...` to focus on the overall flow of function calls:
     ...
   )
   (core module $Main
-    (import "libc" "mem" (memory 1))
-    (import "libc" "realloc" (func (param i32 i32 i32 i32) (result i32)))
+    (import "" "mem" (memory 1))
+    (import "" "realloc" (func (param i32 i32 i32 i32) (result i32)))
     (import "" "fetch" (func $fetch (param i32 i32 i32) (result i32)))
     (import "" "waitable-set.new" (func $new_waitable_set (result i32)))
     (import "" "waitable-set.wait" (func $wait (param i32 i32) (result i32)))
@@ -876,13 +883,19 @@ call to `waitable-set.wait` blocks, the runtime will suspend its callstack
 entry point and store it in context-local storage (via `context.set`) instead
 of simply using a `global`, as in a synchronous function.
 
-This same example can be re-written to use the `callback` immediate (thereby
-avoiding the need for fibers) as follows. Note that the internal structure of
-this component is almost the same as the previous one (other than that
-`summarize` is now lifted from *two* core wasm functions instead of one) and
-the public signature of this component is the exact same. Thus, the difference
-is just about whether the stack is cleared by the core wasm code between events,
-not externally-visible behavior.
+### Stackless ABI example
+
+The stackful example can be re-written to use the `callback` immediate (thereby
+avoiding the need for fibers) as follows.
+
+Note that the internal structure of this component is almost the same as the
+previous one (other than that `summarize` is now lifted from *two* core wasm
+functions instead of one) and the public signature of this component is
+the exact same.
+
+Thus, the difference is just about whether the stack is cleared by the
+core wasm code between events, not externally-visible behavior.
+
 ```wat
 (component
   (import "fetch" (func $fetch (param "url" string) (result (list u8))))
