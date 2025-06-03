@@ -723,7 +723,8 @@ world w {
   export foo: func(s: string) -> string;
 }
 ```
-the default sync export function signature is:
+
+The default sync export function signature for export `foo` is:
 ```wat
 ;; sync
 (func (param $s-ptr i32) (param $s-len i32) (result $retp i32))
@@ -739,18 +740,24 @@ The async export ABI provides two flavors: stackful and stackless.
 
 The stackful ABI is currently gated by the 🚟 feature.
 
-The async stackful export function signature is:
+The async stackful export function signature for export `foo` (defined above
+in world `w`) is:
+
 ```wat
 ;; async, no callback
 (func (param $s-ptr i32) (param $s-len i32))
 ```
-The parameters work just like synchronous parameters. There is no core function
-result because a callee [returns](#returning) their value by *calling* the
-*imported* `task.return` function which has signature:
+
+The parameters work just like synchronous parameters.
+
+There is no core function result because a callee [returns](#returning) their
+value by *calling* the *imported* `task.return` function which has signature:
+
 ```wat
 ;; task.return
 (func (param $ret-ptr i32) (result $ret-len i32))
 ```
+
 The parameters of `task.return` work the same as if the WIT return type was the
 WIT parameter type of a synchronous function. For example, if more than 16
 core parameters would be needed, a single `i32` pointer into linear memory is
@@ -758,14 +765,18 @@ used.
 
 ##### Stackless Async Exports
 
-The async stackless export function signature is:
+The async stackless export function signature for export `foo` (defined above
+in world `w`) is:
+
 ```wat
 ;; async, callback
 (func (param $s-ptr i32) (param $s-len i32) (result i32))
 ```
+
 The parameters also work just like synchronous parameters. The callee returns
-their value by calling `task.return` just like the stackful case. The `(result
-i32)` lets the core function return what it wants the runtime to do next:
+their value by calling `task.return` just like the stackful case.
+
+The `(result i32)` lets the core function return what it wants the runtime to do next:
 * If the low 4 bits are `0`, the callee completed (and called `task.return`)
   without blocking.
 * If the low 4 bits are `1`, the callee wants to yield, allowing other code
@@ -777,9 +788,11 @@ i32)` lets the core function return what it wants the runtime to do next:
 
 When an async stackless function is exported, a companion "callback" function
 must also be exported with signature:
+
 ```wat
 (func (param i32 i32 i32) (result i32))
 ```
+
 The `(result i32)` has the same interpretation as the stackless export function
 and the runtime will repeatedly call the callback until a value of `0` is
 returned. The `i32` parameters describe what happened that caused the callback
