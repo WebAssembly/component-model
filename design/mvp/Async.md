@@ -269,16 +269,19 @@ in the Canonical ABI explainer.
 ### Structured concurrency
 
 Calling *into* a component creates a `Task` to track ABI state related to the
-*callee* (like "number of outstanding borrows"). Calling *out* of a component
-creates a `Subtask` to track ABI state related to the *caller* (like "which
-handles have been lent"). When one component calls another, there is thus a
-`Subtask`+`Task` pair that collectively maintains the overall state of the call
-and enforces that both components uphold their end of the ABI contract. But
-when the host calls into a component, there is only a `Task` and,
-symmetrically, when a component calls into the host, there is only a `Subtask`.
+*callee* (like "number of outstanding borrows").
 
-Based on this, the call stack at any point in time when a component calls a
-host-defined import will have a callstack of the general form:
+Calling *out* of a component creates a `Subtask` to track ABI state related to
+the *caller* (like "which handles have been lent").
+
+When one component calls another, there is thus a `Subtask`+`Task` pair that
+collectively maintains the overall state of the call and enforces that both
+components uphold their end of the ABI contract. But when the host calls into
+a component, there is only a `Task` and, symmetrically, when a component calls
+into the host, there is only a `Subtask`.
+
+Based on this, the call stack for a component to host-defined import will be of
+the general form:
 ```
 [Host caller] <- [Task] <- [Subtask+Task]* <- [Subtask] <- [Host callee]
 ```
