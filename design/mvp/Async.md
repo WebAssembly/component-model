@@ -186,22 +186,23 @@ interface filesystem {
   }
 }
 ```
-a bindings generator in a language with `async` would only emit `async`
-functions for `read` and `fetch`. Since in many languages `new` expressions
-cannot be async, there is no `async constructor`. Use cases requiring
-asynchronous construction can instead use `static async` functions, similar to
-`from-stream` in this example.
+A bindings generator processing the above WIT for a language with `async` would
+only emit `async` functions for `read` and `from-stream`.
 
+Since in many languages `new` expressions cannot be async, there is no
+`async constructor`. Use cases requiring asynchronous construction can instead
+use `static async` functions, similar to `from-stream` in this example.
 
 ### Task
 
 Every time a lifted function is called (e.g., when a component's export is
 called by the outside world), a new **task** is created that logically contains
 all the transitive control-flow state of the export call and will be destroyed
-when the export call finishes. When all of a component's exports are lifted
-synchronously, there will be at most one task alive at any one time. However,
-when a component exports asynchronously-lifted functions, there can be multiple
-tasks alive at once.
+when the export call finishes.
+
+When all of a component's exports are lifted synchronously, there will be at most one
+task alive at any one time. However, when a component exports asynchronously-lifted
+ functions, there can be multiple tasks alive at once.
 
 In the Canonical ABI explainer, a "task" is represented with the Python
 [`Task`] class. A new `Task` object is created (by [`canon_lift`]) each time
