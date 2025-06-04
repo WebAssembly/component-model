@@ -1479,8 +1479,11 @@ unconditionally call `stream.write`.
 #### Future State
 
 Futures are similar to streams, except that instead of passing 0..N values via
-the `Buffer` abstraction, at most one value is passed from the writer end to
-the reader end:
+the `Buffer` abstraction, exactly one value is passed from the writer end to
+the reader end unless the reader end is explicitly dropped first.
+
+Like streams, futures are defined in terms of an abstract `ReadableFuture`
+interface that can be implemented by the host or wasm:
 ```python
 Lift = Callable[[], any]
 Lower = Callable[[any], None]
