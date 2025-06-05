@@ -280,8 +280,8 @@ components uphold their end of the ABI contract. But when the host calls into
 a component, there is only a `Task` and, symmetrically, when a component calls
 into the host, there is only a `Subtask`.
 
-Based on this, the call stack for a component to host-defined import will be of
-the general form:
+Based on this, the call stack when a component calls a host-defined import will 
+be a call stack of the general form:
 ```
 [Host caller] <- [Task] <- [Subtask+Task]* <- [Subtask] <- [Host callee]
 ```
