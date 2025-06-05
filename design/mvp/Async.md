@@ -283,7 +283,13 @@ into the host, there is only a `Subtask`.
 Based on this, the call stack when a component calls a host-defined import will 
 be a call stack of the general form:
 ```
-[Host caller] <- [Task] <- [Subtask+Task]* <- [Subtask] <- [Host callee]
+[Host]
+  ↓ host calls component export
+[Component Task]
+  ↓ component calls import implemented by another component's export 0..N times
+[Component Subtask <> Component Task]*
+  ↓ component calls import implemented by the host
+[Component Subtask <> Host task]
 ```
 Here, the `<-` arrow represents the `supertask` relationship that is immutably
 established when first making the call. A paired `Subtask` and `Task` have the
@@ -742,7 +748,6 @@ The stackful ABI is currently gated by the 🚟 feature.
 
 The async stackful export function signature for export `foo` (defined above
 in world `w`) is:
-
 ```wat
 ;; async, no callback
 (func (param $s-ptr i32) (param $s-len i32))
@@ -752,7 +757,6 @@ The parameters work just like synchronous parameters.
 
 There is no core function result because a callee [returns](#returning) their
 value by *calling* the *imported* `task.return` function which has signature:
-
 ```wat
 ;; task.return
 (func (param $ret-ptr i32) (result $ret-len i32))
@@ -767,7 +771,6 @@ used.
 
 The async stackless export function signature for export `foo` (defined above
 in world `w`) is:
-
 ```wat
 ;; async, callback
 (func (param $s-ptr i32) (param $s-len i32) (result i32))
@@ -788,7 +791,6 @@ The `(result i32)` lets the core function return what it wants the runtime to do
 
 When an async stackless function is exported, a companion "callback" function
 must also be exported with signature:
-
 ```wat
 (func (param i32 i32 i32) (result i32))
 ```
