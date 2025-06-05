@@ -281,7 +281,7 @@ a component, there is only a `Task` and, symmetrically, when a component calls
 into the host, there is only a `Subtask`.
 
 Based on this, the call stack when a component calls a host-defined import will 
-be a call stack of the general form:
+have the general form:
 ```
 [Host]
   ↓ host calls component export
