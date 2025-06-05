@@ -202,7 +202,7 @@ when the export call finishes.
 
 When all of a component's exports are lifted synchronously, there will be at most one
 task alive at any one time. However, when a component exports asynchronously-lifted
- functions, there can be multiple tasks alive at once.
+functions, there can be multiple tasks alive at once.
 
 In the Canonical ABI explainer, a "task" is represented with the Python
 [`Task`] class. A new `Task` object is created (by [`canon_lift`]) each time
