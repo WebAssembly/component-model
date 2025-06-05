@@ -186,22 +186,23 @@ interface filesystem {
   }
 }
 ```
-a bindings generator in a language with `async` would only emit `async`
-functions for `read` and `fetch`. Since in many languages `new` expressions
-cannot be async, there is no `async constructor`. Use cases requiring
-asynchronous construction can instead use `static async` functions, similar to
-`from-stream` in this example.
+A bindings generator processing the above WIT for a language with `async` would
+only emit `async` functions for `read` and `from-stream`.
 
+Since in many languages `new` expressions cannot be async, there is no
+`async constructor`. Use cases requiring asynchronous construction can instead
+use `static async` functions, similar to `from-stream` in this example.
 
 ### Task
 
 Every time a lifted function is called (e.g., when a component's export is
 called by the outside world), a new **task** is created that logically contains
 all the transitive control-flow state of the export call and will be destroyed
-when the export call finishes. When all of a component's exports are lifted
-synchronously, there will be at most one task alive at any one time. However,
-when a component exports asynchronously-lifted functions, there can be multiple
-tasks alive at once.
+when the export call finishes.
+
+When all of a component's exports are lifted synchronously, there will be at most one
+task alive at any one time. However, when a component exports asynchronously-lifted
+functions, there can be multiple tasks alive at once.
 
 In the Canonical ABI explainer, a "task" is represented with the Python
 [`Task`] class. A new `Task` object is created (by [`canon_lift`]) each time
@@ -268,18 +269,27 @@ in the Canonical ABI explainer.
 ### Structured concurrency
 
 Calling *into* a component creates a `Task` to track ABI state related to the
-*callee* (like "number of outstanding borrows"). Calling *out* of a component
-creates a `Subtask` to track ABI state related to the *caller* (like "which
-handles have been lent"). When one component calls another, there is thus a
-`Subtask`+`Task` pair that collectively maintains the overall state of the call
-and enforces that both components uphold their end of the ABI contract. But
-when the host calls into a component, there is only a `Task` and,
-symmetrically, when a component calls into the host, there is only a `Subtask`.
+*callee* (like "number of outstanding borrows").
 
-Based on this, the call stack at any point in time when a component calls a
-host-defined import will have a callstack of the general form:
+Calling *out* of a component creates a `Subtask` to track ABI state related to
+the *caller* (like "which handles have been lent").
+
+When one component calls another, there is thus a `Subtask`+`Task` pair that
+collectively maintains the overall state of the call and enforces that both
+components uphold their end of the ABI contract. But when the host calls into
+a component, there is only a `Task` and, symmetrically, when a component calls
+into the host, there is only a `Subtask`.
+
+Based on this, the call stack when a component calls a host-defined import will 
+have the general form:
 ```
-[Host caller] <- [Task] <- [Subtask+Task]* <- [Subtask] <- [Host callee]
+[Host]
+  ↓ host calls component export
+[Component Task]
+  ↓ component calls import implemented by another component's export 0..N times
+[Component Subtask <> Component Task]*
+  ↓ component calls import implemented by the host
+[Component Subtask <> Host task]
 ```
 Here, the `<-` arrow represents the `supertask` relationship that is immutably
 established when first making the call. A paired `Subtask` and `Task` have the
@@ -719,7 +729,8 @@ world w {
   export foo: func(s: string) -> string;
 }
 ```
-the default sync export function signature is:
+
+The default sync export function signature for export `foo` is:
 ```wat
 ;; sync
 (func (param $s-ptr i32) (param $s-len i32) (result $retp i32))
@@ -735,18 +746,22 @@ The async export ABI provides two flavors: stackful and stackless.
 
 The stackful ABI is currently gated by the 🚟 feature.
 
-The async stackful export function signature is:
+The async stackful export function signature for export `foo` (defined above
+in world `w`) is:
 ```wat
 ;; async, no callback
 (func (param $s-ptr i32) (param $s-len i32))
 ```
-The parameters work just like synchronous parameters. There is no core function
-result because a callee [returns](#returning) their value by *calling* the
-*imported* `task.return` function which has signature:
+
+The parameters work just like synchronous parameters.
+
+There is no core function result because a callee [returns](#returning) their
+value by *calling* the *imported* `task.return` function which has signature:
 ```wat
 ;; task.return
 (func (param $ret-ptr i32) (result $ret-len i32))
 ```
+
 The parameters of `task.return` work the same as if the WIT return type was the
 WIT parameter type of a synchronous function. For example, if more than 16
 core parameters would be needed, a single `i32` pointer into linear memory is
@@ -754,14 +769,17 @@ used.
 
 ##### Stackless Async Exports
 
-The async stackless export function signature is:
+The async stackless export function signature for export `foo` (defined above
+in world `w`) is:
 ```wat
 ;; async, callback
 (func (param $s-ptr i32) (param $s-len i32) (result i32))
 ```
+
 The parameters also work just like synchronous parameters. The callee returns
-their value by calling `task.return` just like the stackful case. The `(result
-i32)` lets the core function return what it wants the runtime to do next:
+their value by calling `task.return` just like the stackful case.
+
+The `(result i32)` lets the core function return what it wants the runtime to do next:
 * If the low 4 bits are `0`, the callee completed (and called `task.return`)
   without blocking.
 * If the low 4 bits are `1`, the callee wants to yield, allowing other code
@@ -776,6 +794,7 @@ must also be exported with signature:
 ```wat
 (func (param i32 i32 i32) (result i32))
 ```
+
 The `(result i32)` has the same interpretation as the stackless export function
 and the runtime will repeatedly call the callback until a value of `0` is
 returned. The `i32` parameters describe what happened that caused the callback
