@@ -3424,10 +3424,10 @@ validation specifies:
 
 Calling `$f` calls `Task.yield_` to allow other tasks to execute:
 ```python
-async def canon_yield(sync, task):
+async def canon_yield(async_, task):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.callback and not sync)
-  event_code,_,_ = await task.yield_(sync)
+  trap_if(task.opts.callback and not async_)
+  event_code,_,_ = await task.yield_(async_)
   match event_code:
     case EventCode.NONE:
       return [0]
