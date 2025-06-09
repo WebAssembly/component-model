@@ -1371,36 +1371,34 @@ Note that `cancel` and `close` notify in opposite directions:
 * `close` *must not* be called on a readable or writable end with an operation
   pending, and thus `close` notifies the opposite end.
 
-Finally, the meat of the class is the `read` method that is called through the
-abstract `ReadableStream` interface (by the host or another component). There
-is also a symmetric `write` method that follows the same rules as `read`,
-but in the opposite direction. Both are implemented by a single underlying
-`copy` method parameterized by the direction of the copy:
+The `read` method implements the `ReadableStream.read` interface described
+above and is called by either `stream.read` or the host, depending on who is
+passed the readable end of the stream. If the reader is first to rendezvous,
+then all the parameters are stored in the `pending_*` fields, requiring the
+reader to wait for the writer to rendezvous. If the writer was first to
+rendezvous, then there is already a pending `ReadableBuffer` to read from, and
+so the reader copies as much as it can (which may be less than a full buffer's
+worth) and eagerly completes the copy without blocking. In the final special
+case where both the reader and pending writer have zero-length buffers, the
+writer is notified, but the reader remains blocked:
 ```python
-  def read(self, inst, dst, on_copy, on_copy_done):
-    self.copy(inst, dst, on_copy, on_copy_done, self.pending_buffer, dst)
-
-  def write(self, inst, src, on_copy, on_copy_done):
-    self.copy(inst, src, on_copy, on_copy_done, src, self.pending_buffer)
-
-  def copy(self, inst, buffer, on_copy, on_copy_done, src, dst):
+  def read(self, inst, dst_buffer, on_copy, on_copy_done):
     if self.closed_:
       on_copy_done(CopyResult.CLOSED)
     elif not self.pending_buffer:
-      self.set_pending(inst, buffer, on_copy, on_copy_done)
+      self.set_pending(inst, dst_buffer, on_copy, on_copy_done)
     else:
-      assert(self.t == src.t == dst.t)
+      assert(self.t == dst_buffer.t == self.pending_buffer.t)
       trap_if(inst is self.pending_inst and self.t is not None) # temporary
       if self.pending_buffer.remain() > 0:
-        if buffer.remain() > 0:
-          dst.write(src.read(min(src.remain(), dst.remain())))
+        if dst_buffer.remain() > 0:
+          n = min(dst_buffer.remain(), self.pending_buffer.remain())
+          dst_buffer.write(self.pending_buffer.read(n))
           self.pending_on_copy(self.reset_pending)
-        on_copy_done(CopyResult.COMPLETED)
-      elif buffer is src and buffer.remain() == 0 and self.pending_buffer.is_zero_length():
         on_copy_done(CopyResult.COMPLETED)
       else:
         self.reset_and_notify_pending(CopyResult.COMPLETED)
-        self.set_pending(inst, buffer, on_copy, on_copy_done)
+        self.set_pending(inst, dst_buffer, on_copy, on_copy_done)
 ```
 Currently, there is a trap when both the `read` and `write` come from the same
 component instance and there is a non-empty element type. This trap will be
@@ -1409,25 +1407,52 @@ and lowering can alias the same memory, interleavings can be complex and must
 be handled carefully. Future improvements to the Canonical ABI ([lazy lowering])
 can greatly simplify this interleaving and be more practical to implement.
 
-The meaning of a `read` or `write` when the length is `0` is that the caller is
-querying the "readiness" of the other side. When a `0`-length read/write
-rendezvous with a non-`0`-length read/write, only the `0`-length read/write
-completes; the non-`0`-length read/write is kept pending (and ready for a
-subsequent rendezvous).
-
-In the corner case where a `0`-length read *and* write rendezvous, only the
-*writer* is notified of readiness. To avoid livelock, the Canonical ABI
-requires that a writer *must* (eventually) follow a completed `0`-length write
-with a non-`0`-length write that is allowed to block (allowing the reader end
-to run and rendezvous with its own non-`0`-length read). To implement a
-traditional `O_NONBLOCK` `write()` or `sendmsg()` API, a writer can use a
-buffering scheme in which, after `select()` (or a similar API) signals a file
-descriptor is ready to write, the next `O_NONBLOCK` `write()`/`sendmsg()` on
-that file descriptor copies to an internal buffer and suceeds, issuing an
-`async` `stream.write` in the background and waiting for completion before
-signalling readiness again. Note that buffering only occurs when streaming
-between two components using non-blocking I/O; if either side is the host or a
-component using blocking or completion-based I/O, no buffering is necessary.
+The `write` method is symmetric to `read` (being given a `ReadableBuffer`
+instead of a `WritableBuffer`) and is called by the `stream.write` built-in.
+(noting that the host cannot be passed the writable end of a stream but may
+instead *implement* the `ReadableStream` interface and pass the readable end
+into a component). The steps for `write` are the same as `read` except for
+when a zero-length `write` rendezvous with a zero-length `read`, in which case
+the `write` eagerly completes, leaving the `read` pending:
+```python
+  def write(self, inst, src_buffer, on_copy, on_copy_done):
+    if self.closed_:
+      on_copy_done(CopyResult.CLOSED)
+    elif not self.pending_buffer:
+      self.set_pending(inst, src_buffer, on_copy, on_copy_done)
+    else:
+      assert(self.t == src_buffer.t == self.pending_buffer.t)
+      trap_if(inst is self.pending_inst and self.t is not None) # temporary
+      if self.pending_buffer.remain() > 0:
+        if src_buffer.remain() > 0:
+          n = min(src_buffer.remain(), self.pending_buffer.remain())
+          self.pending_buffer.write(src_buffer.read(n))
+          self.pending_on_copy(self.reset_pending)
+        on_copy_done(CopyResult.COMPLETED)
+      elif src_buffer.is_zero_length() and self.pending_buffer.is_zero_length():
+        on_copy_done(CopyResult.COMPLETED)
+      else:
+        self.reset_and_notify_pending(CopyResult.COMPLETED)
+        self.set_pending(inst, src_buffer, on_copy, on_copy_done)
+```
+Putting together the behavior of zero-length `read` and `write` above, we can
+see that, when *both* the reader and writer are zero-length, regardless of who
+was first, the zero-length `write` always completes, leaving the zero-length
+`read` pending. To avoid livelock, the Canonical ABI requires that a writer
+*must* (eventually) follow a completed zero-length `write` with a
+non-zero-length `write` that is allowed to block. This will break the loop,
+notifying the reader end and allowing it to rendezvous with a non-zero-length
+`read` and make progress. Based on this rule, to implement a traditional
+`O_NONBLOCK` `write()` or `sendmsg()` API, a writer can use a buffering scheme
+in which, after `select()` (or a similar API) signals a file descriptor is
+ready to write, the next `O_NONBLOCK` `write()`/`sendmsg()` on that file
+descriptor copies to an internal buffer and suceeds, issuing an `async`
+`stream.write` in the background and waiting for completion before signalling
+readiness again. Note that buffering only occurs when streaming between two
+components using non-blocking I/O; if either side is the host or a component
+using blocking or completion-based I/O, no buffering is necessary. This
+buffering is analogous to the buffering performed in kernel memory by a
+`pipe()`.
 
 Given the above, we can define the `{Readable,Writable}StreamEnd` classes that
 are actually stored in the component instance table. The classes are almost

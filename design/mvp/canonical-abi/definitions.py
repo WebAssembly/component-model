@@ -807,30 +807,43 @@ class SharedStreamImpl(ReadableStream):
   def closed(self):
     return self.closed_
 
-  def read(self, inst, dst, on_copy, on_copy_done):
-    self.copy(inst, dst, on_copy, on_copy_done, self.pending_buffer, dst)
-
-  def write(self, inst, src, on_copy, on_copy_done):
-    self.copy(inst, src, on_copy, on_copy_done, src, self.pending_buffer)
-
-  def copy(self, inst, buffer, on_copy, on_copy_done, src, dst):
+  def read(self, inst, dst_buffer, on_copy, on_copy_done):
     if self.closed_:
       on_copy_done(CopyResult.CLOSED)
     elif not self.pending_buffer:
-      self.set_pending(inst, buffer, on_copy, on_copy_done)
+      self.set_pending(inst, dst_buffer, on_copy, on_copy_done)
     else:
-      assert(self.t == src.t == dst.t)
+      assert(self.t == dst_buffer.t == self.pending_buffer.t)
       trap_if(inst is self.pending_inst and self.t is not None) # temporary
       if self.pending_buffer.remain() > 0:
-        if buffer.remain() > 0:
-          dst.write(src.read(min(src.remain(), dst.remain())))
+        if dst_buffer.remain() > 0:
+          n = min(dst_buffer.remain(), self.pending_buffer.remain())
+          dst_buffer.write(self.pending_buffer.read(n))
           self.pending_on_copy(self.reset_pending)
-        on_copy_done(CopyResult.COMPLETED)
-      elif buffer is src and buffer.remain() == 0 and self.pending_buffer.is_zero_length():
         on_copy_done(CopyResult.COMPLETED)
       else:
         self.reset_and_notify_pending(CopyResult.COMPLETED)
-        self.set_pending(inst, buffer, on_copy, on_copy_done)
+        self.set_pending(inst, dst_buffer, on_copy, on_copy_done)
+
+  def write(self, inst, src_buffer, on_copy, on_copy_done):
+    if self.closed_:
+      on_copy_done(CopyResult.CLOSED)
+    elif not self.pending_buffer:
+      self.set_pending(inst, src_buffer, on_copy, on_copy_done)
+    else:
+      assert(self.t == src_buffer.t == self.pending_buffer.t)
+      trap_if(inst is self.pending_inst and self.t is not None) # temporary
+      if self.pending_buffer.remain() > 0:
+        if src_buffer.remain() > 0:
+          n = min(src_buffer.remain(), self.pending_buffer.remain())
+          self.pending_buffer.write(src_buffer.read(n))
+          self.pending_on_copy(self.reset_pending)
+        on_copy_done(CopyResult.COMPLETED)
+      elif src_buffer.is_zero_length() and self.pending_buffer.is_zero_length():
+        on_copy_done(CopyResult.COMPLETED)
+      else:
+        self.reset_and_notify_pending(CopyResult.COMPLETED)
+        self.set_pending(inst, src_buffer, on_copy, on_copy_done)
 
 class StreamEnd(Waitable):
   shared: ReadableStream
