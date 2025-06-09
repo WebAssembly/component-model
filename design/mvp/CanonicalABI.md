@@ -933,7 +933,7 @@ external I/O. This is emulated in the Python code below by waiting on an
 immediately-resolved future, which calls the `OnBlock` callback, which allows
 control flow to switch to other `asyncio.Task`s.
 ```python
-  async def yield_(self, sync) -> bool:
+  async def yield_(self, sync) -> EventTuple:
     if self.state == Task.State.PENDING_CANCEL:
       self.state = Task.State.CANCEL_DELIVERED
       return (EventCode.TASK_CANCELLED, 0, 0)

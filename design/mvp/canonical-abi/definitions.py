@@ -587,7 +587,7 @@ class Task:
       waitable_set.num_waiting -= 1
     return e
 
-  async def yield_(self, sync) -> bool:
+  async def yield_(self, sync) -> EventTuple:
     if self.state == Task.State.PENDING_CANCEL:
       self.state = Task.State.CANCEL_DELIVERED
       return (EventCode.TASK_CANCELLED, 0, 0)
