@@ -83,8 +83,8 @@
 
   (component $D
     (import "c" (instance $c
-      (export $R1 "R1" (type (; $R1 ;) (sub resource)))
-      (export $R2 "R2" (type (; $R1 ;) (sub resource)))
+      (export "R1" (type $R1 (sub resource)))
+      (export "R2" (type $R2 (sub resource)))
       (export "make-R1" (func (result (own $R1))))
       (export "make-R2" (func (result (own $R2))))
       (export "get-rep-R1" (func (param "r" (borrow $R1)) (result u32)))

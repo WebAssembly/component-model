@@ -99,7 +99,7 @@
 
   (component $Consumer
     (import "producer" (instance $producer
-      (export $R "R" (type (sub resource)))
+      (export "R" (type $R (sub resource)))
       (export "[method]R.foo" (func (param "self" (borrow $R)) (result u32)))
       (export "start-stream" (func (result (stream (own $R)))))
       (export "cancel-write" (func))
