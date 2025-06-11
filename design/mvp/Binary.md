@@ -333,7 +333,6 @@ canonopt ::= 0x00                                                => string-encod
            | 0x05 f:<core:funcidx>                               => (post-return f)
            | 0x06                                                => async 🔀
            | 0x07 f:<core:funcidx>                               => (callback f) 🔀
-           | 0x08                                                => always-task-return 🔀
 ```
 Notes:
 * The second `0x00` byte in `canon` stands for the `func` sort and thus the
