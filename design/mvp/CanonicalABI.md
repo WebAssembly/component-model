@@ -166,7 +166,6 @@ class CanonicalOptions(LiftLowerOptions):
   post_return: Optional[Callable] = None
   sync: bool = True # = !canonopt.async
   callback: Optional[Callable] = None
-  always_task_return: bool = False
 ```
 (Note that the `async` `canonopt` is inverted to `sync` here for the practical
 reason that `async` is a keyword and most branches below want to start with the
@@ -3003,27 +3002,30 @@ Each call to `canon lift` creates a new `Task` and waits to enter the component
 instance, allowing the component instance to express backpressure before
 lowering the arguments into the callee's memory.
 
-In the synchronous case, if `always-task-return` ABI option is set, the lifted
-core wasm code must call `canon_task_return` to return a value before returning
-to `canon_lift` (or else there will be a trap in `Task.exit`), which allows the
-core wasm to do cleanup and finalization before returning. Otherwise, if
-`always-task-return` is *not* set, `canon_lift` will implicitly call
-`canon_task_return` when core wasm returns and then make a second call into the
-`post-return` function to let core wasm do cleanup and finalization. In the
-future, `post-return` and the option to not set `always-task-return` may be
-deprecated and removed.
+In the synchronous case, `canon_lift` first calls into the lifted core
+function, passing the lowered core flat parameters and receiving the core flat
+results to be lifted. Once the core results are lifted, `canon_lift` optionally
+makes a second call into any supplied `post-return` function, passing the flat
+results as arguments so that the guest code and free any allocations associated
+with compound return values.
 ```python
   if opts.sync:
     flat_results = await call_and_trap_on_throw(callee, task, flat_args)
-    if not opts.always_task_return:
-      assert(types_match_values(flat_ft.results, flat_results))
-      results = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types())
-      task.return_(results)
-      if opts.post_return is not None:
-        [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
+    assert(types_match_values(flat_ft.results, flat_results))
+    results = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types())
+    task.return_(results)
+    if opts.post_return is not None:
+      task.inst.may_leave = False
+      [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
+      task.inst.may_leave = True
     task.exit()
     return
 ```
+By clearing `may_leave` for the duration of the `post-return` call, the
+Canonical ABI ensures that synchronously-lowered calls to synchronously-lifted
+functions can always be implemented by a plain synchronous function call
+without the need for fibers which would otherwise be necessary if the
+`post-return` function performed a blocking operation.
 
 In both of the asynchronous cases below (`callback` and non-`callback`),
 `canon_task_return` must be called (as checked by `Task.exit`).
@@ -3386,7 +3388,7 @@ wasm state and passes them to the caller via `Task.return_`:
 ```python
 async def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.sync and not task.opts.always_task_return)
+  trap_if(task.opts.sync)
   trap_if(result_type != task.ft.results)
   trap_if(not LiftOptions.equal(opts, task.opts))
   cx = LiftLowerContext(opts, task.inst, task)
@@ -3394,6 +3396,10 @@ async def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
   task.return_(results)
   return []
 ```
+The `trap_if(task.opts.sync)` prevents `task.return` from being called by
+synchronously-lifted functions (which return their value by returning from the
+lifted core function).
+
 The `trap_if(result_type != task.ft.results)` guard ensures that, in a
 component with multiple exported functions of different types, `task.return` is
 not called with a mismatched result type (which, due to indirect control flow,
@@ -3428,10 +3434,14 @@ current task have already been dropped (and trapping in `Task.cancel` if not).
 ```python
 async def canon_task_cancel(task):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.sync and not task.opts.always_task_return)
+  trap_if(task.opts.sync)
   task.cancel()
   return []
 ```
+The `trap_if(task.opts.sync)` prevents `task.cancel` from being called by
+synchronously-lifted functions (which must always return a value by returning
+from the lifted core function).
+
 `Task.cancel` also traps if there has been no cancellation request (in which
 case the callee expects to receive a return value) or if the task has already
 returned a value or already called `task.cancel`.
@@ -3451,7 +3461,6 @@ Calling `$f` calls `Task.yield_` to allow other tasks to execute:
 ```python
 async def canon_yield(sync, task):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.callback and not sync)
   event_code,_,_ = await task.yield_(sync)
   match event_code:
     case EventCode.NONE:
@@ -3468,11 +3477,6 @@ Because other tasks can execute, a subtask can be cancelled while executing
 `yield`, in which case `yield` returns `1`. The language runtime and bindings
 generators should handle cancellation the same way as when receiving the
 `TASK_CANCELLED` event from `waitable-set.wait`.
-
-The guard preventing `async` use of `task.poll` when a `callback` has
-been used preserves the invariant that producer toolchains using
-`callback` never need to handle multiple overlapping callback
-activations.
 
 
 ### 🔀 `canon waitable-set.new`
@@ -3509,7 +3513,6 @@ returning its `EventCode` and writing the payload values into linear memory:
 ```python
 async def canon_waitable_set_wait(sync, mem, task, si, ptr):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.callback and not sync)
   s = task.inst.table.get(si)
   trap_if(not isinstance(s, WaitableSet))
   e = await task.wait_for_event(s, sync)
@@ -3533,10 +3536,6 @@ though, the automatic backpressure (applied by `Task.enter`) will ensure there
 is only ever at most once synchronously-lifted task executing in a component
 instance at a time.
 
-The guard preventing `async` use of `wait` when a `callback` has been used
-preserves the invariant that producer toolchains using `callback` never need to
-handle multiple overlapping callback activations.
-
 
 ### 🔀 `canon waitable-set.poll`
 
@@ -3554,7 +3553,6 @@ same way as `wait`.
 ```python
 async def canon_waitable_set_poll(sync, mem, task, si, ptr):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.callback and not sync)
   s = task.inst.table.get(si)
   trap_if(not isinstance(s, WaitableSet))
   e = await task.poll_for_event(s, sync)
@@ -3562,10 +3560,6 @@ async def canon_waitable_set_poll(sync, mem, task, si, ptr):
 ```
 When `async` is set, `poll_for_event` can yield to other tasks (in this or other
 components) as part of polling for an event.
-
-The guard preventing `async` use of `poll_for_event` when a `callback` has been
-used preserves the invariant that producer toolchains using `callback` never
-need to handle multiple overlapping callback activations.
 
 
 ### 🔀 `canon waitable-set.drop`

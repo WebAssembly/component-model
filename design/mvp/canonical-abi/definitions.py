@@ -211,7 +211,6 @@ class CanonicalOptions(LiftLowerOptions):
   post_return: Optional[Callable] = None
   sync: bool = True # = !canonopt.async
   callback: Optional[Callable] = None
-  always_task_return: bool = False
 
 ### Runtime State
 
@@ -1865,12 +1864,13 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve, on_bl
 
   if opts.sync:
     flat_results = await call_and_trap_on_throw(callee, task, flat_args)
-    if not opts.always_task_return:
-      assert(types_match_values(flat_ft.results, flat_results))
-      results = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types())
-      task.return_(results)
-      if opts.post_return is not None:
-        [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
+    assert(types_match_values(flat_ft.results, flat_results))
+    results = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types())
+    task.return_(results)
+    if opts.post_return is not None:
+      task.inst.may_leave = False
+      [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
+      task.inst.may_leave = True
     task.exit()
     return
 
@@ -2043,7 +2043,7 @@ async def canon_backpressure_set(task, flat_args):
 
 async def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.sync and not task.opts.always_task_return)
+  trap_if(task.opts.sync)
   trap_if(result_type != task.ft.results)
   trap_if(not LiftOptions.equal(opts, task.opts))
   cx = LiftLowerContext(opts, task.inst, task)
@@ -2055,7 +2055,7 @@ async def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
 
 async def canon_task_cancel(task):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.sync and not task.opts.always_task_return)
+  trap_if(task.opts.sync)
   task.cancel()
   return []
 
@@ -2063,7 +2063,6 @@ async def canon_task_cancel(task):
 
 async def canon_yield(sync, task):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.callback and not sync)
   event_code,_,_ = await task.yield_(sync)
   match event_code:
     case EventCode.NONE:
@@ -2081,7 +2080,6 @@ async def canon_waitable_set_new(task):
 
 async def canon_waitable_set_wait(sync, mem, task, si, ptr):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.callback and not sync)
   s = task.inst.table.get(si)
   trap_if(not isinstance(s, WaitableSet))
   e = await task.wait_for_event(s, sync)
@@ -2098,7 +2096,6 @@ def unpack_event(mem, task, ptr, e: EventTuple):
 
 async def canon_waitable_set_poll(sync, mem, task, si, ptr):
   trap_if(not task.inst.may_leave)
-  trap_if(task.opts.callback and not sync)
   s = task.inst.table.get(si)
   trap_if(not isinstance(s, WaitableSet))
   e = await task.poll_for_event(s, sync)

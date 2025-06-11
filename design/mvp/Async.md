@@ -67,12 +67,10 @@ by allowing components to import and export "async" functions which abstract
 over, and can be implemented by, idiomatic concurrency in a variety of
 programming languages:
 * `async` functions in languages like C#, JS, Python, Rust and Swift
-  (implemented using [`callback` functions](#waiting))
 * stackful coroutines in languages like Kotlin, Perl, PHP and (recently) C++
 * green threads as-if running on a single OS thread in languages like Go and
   (initially and recently again) Java
 * callbacks, in languages with no explicit async support
-  (also implemented using [`callback` functions](#waiting))
 
 The Component Model supports this wide variety of language features by
 specifying a common low-level "async" ABI which the different languages'
@@ -84,10 +82,9 @@ Model "just another OS" from the language toolchains' perspective).
 
 Moreover, this async ABI does not require components to use preemptive
 multi-threading ([`thread.spawn*`]) in order to achieve concurrency. Instead,
-concurrency can be achieved by cooperatively switching between different logical
-tasks running on a single thread. This switching may require the use of [fibers]
-or a [CPS transform], but may also be avoided entirely when a component's
-producer toolchain is engineered to always return to an [event loop].
+concurrency can be achieved by cooperatively switching between different
+logical tasks running on a single thread using [fibers] or a [CPS transform] in
+the wasm runtime as necessary.
 
 To avoid partitioning the world along sync/async lines as mentioned in the
 Goals section, the Component Model allows *every* component-level function type
@@ -97,6 +94,22 @@ combinations of {sync, async} x {caller, callee} are supported and given a
 well-defined behavior. Specifically, the caller and callee can independently
 specify `async` as an immediate flags on the [lift and lower definitions] used
 to define their imports and exports.
+
+To provide wasm runtimes with additional optimization opportunities for
+languages with "stackless" concurrency (e.g. languages using `async`/`await`),
+two `async` ABI sub-options are provided: a "stackless" ABI selected by
+providing a `callback` function and a "stackful" ABI selected by *not*
+providing a `callback` function. The stackless ABI allows core wasm to
+repeatedly return to an [event loop] to receive events concerning a selected
+set of "waitables", thereby clearing the native stack when waiting for events
+and allowing the runtime to reuse stack segments between events. In the
+[future](#TODO), a `strict-callback` option may be added to require (via
+runtime traps) *all* waiting to happen via the event loop, thereby giving the
+engine more up-front information that the engine can use to avoid allocating
+[fibers] in more cases. In the meantime, to support complex applications with
+mixed dependencies and concurrency models, the `callback` immediate allows
+*both* returning to the event loop *and* making blocking calls to wait for
+event.
 
 To propagate backpressure, it's necessary for a component to be able to say
 "there are too many async export calls already in progress, don't start any
@@ -280,7 +293,7 @@ components uphold their end of the ABI contract. But when the host calls into
 a component, there is only a `Task` and, symmetrically, when a component calls
 into the host, there is only a `Subtask`.
 
-Based on this, the call stack when a component calls a host-defined import will 
+Based on this, the call stack when a component calls a host-defined import will
 have the general form:
 ```
 [Host]
@@ -421,12 +434,11 @@ The Canonical ABI provides two ways for a task to wait on a waitable set:
   the waitable set as a return value to the event loop, which will block and
   then pass the event that occurred as a parameter to the `callback`.
 
-While the two approaches have significant runtime implementation differences
-(the former requires [fibers] or a [CPS transform] while the latter only
-requires storing fixed-size context-local storage and [`Task`] state),
+While the two approaches have significant runtime implementation differences,
 semantically they do the same thing which, in the Canonical ABI Python code, is
-factored out into the [`Task.wait_on`] method. Thus, the difference between
-`callback` and non-`callback` is one of optimization, not expressivity.
+factored out into the [`Task.wait_for_event`] method. Thus, the difference between
+`callback` and non-`callback` is one of optimization (as described
+[above](#high-level-approach)), not expressivity.
 
 In addition to waiting for an event to occur, a task can also **poll** for
 whether an event has already occurred. Polling does not block, but does allow
@@ -469,10 +481,7 @@ the "started" state.
 ### Returning
 
 The way an async function returns its value is by calling [`task.return`],
-passing the core values that are to be lifted as *parameters*. Additionally,
-when the `always-task-return` `canonopt` is set, synchronous functions also
-return their values by calling `task.return` (as a more expressive and
-general alternative to `post-return`).
+passing the core values that are to be lifted as *parameters*.
 
 Returning values by calling `task.return` allows a task to continue executing
 even after it has passed its initial results to the caller. This can be useful
@@ -1090,6 +1099,9 @@ comes after:
 * `recursive` function type attribute: allow a function to opt in to
   recursive [reentrance], extending the ABI to link the inner and
   outer activations
+* add a `strict-callback` option that adds extra trapping conditions to
+  provide the semantic guarantees needed for engines to statically avoid
+  fiber creation at component-to-component `async` call boundaries
 * add `stringstream` specialization of `stream<char>` (just like `string` is
   a specialization of `list<char>`)
 * allow pipelining multiple `stream.read`/`write` calls
@@ -1140,7 +1152,7 @@ comes after:
 [`canon_subtask_cancel`]: CanonicalABI.md#-canon-subtaskcancel
 [`Task`]: CanonicalABI.md#task-state
 [`Task.enter`]: CanonicalABI.md#task-state
-[`Task.wait_on`]: CanonicalABI.md#task-state
+[`Task.wait_for_event`]: CanonicalABI.md#task-state
 [`Waitable`]: CanonicalABI.md#waitable-state
 [`TASK_CANCELLED`]: CanonicalABI.md#waitable-state
 [`Task`]: CanonicalABI.md#task-state
