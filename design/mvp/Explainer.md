@@ -1268,7 +1268,6 @@ canonopt ::= string-encoding=utf8
            | (post-return <core:funcidx>)
            | async 🔀
            | (callback <core:funcidx>) 🔀
-           | always-task-return 🔀
 ```
 While the production `externdesc` accepts any `sort`, the validation rules
 for `canon lift` would only allow the `func` sort. In the future, other sorts
@@ -1325,13 +1324,6 @@ validated to have the following core function type:
       (result $done i32))
 ```
 Again, see the [async explainer] for more details.
-
-🔀 The `always-task-return` option may only be present in `canon lift` when
-`post-return` is not set and specifies that even synchronously-lifted functions
-will call `canon task.return` to return their results instead of returning
-them as core function results. This is a simpler alternative to `post-return`
-for freeing memory after lifting and thus `post-return` may be deprecated in
-the future.
 
 Based on this description of the AST, the [Canonical ABI explainer] gives a
 detailed walkthrough of the static and dynamic semantics of `lift` and `lower`.
