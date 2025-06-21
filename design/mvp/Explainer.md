@@ -729,13 +729,13 @@ are useful for:
   as a `list<T>`;
 * long-running or infinite streams of events.
 
-A `future` is a special case of `stream` and (in non-error scenarios) delivers
-exactly one value before being automatically closed. Because all imports can
-be [called asynchronously](Async.md), futures are not necessary to express a
-traditional `async` function -- all functions are effectively `async`. Instead
-futures are useful in more advanced scenarios where a parameter or result
-value may not be ready at the same time as the other synchronous parameters or
-results.
+A `future<T>` asynchronously delivers exactly one `T` value from a source to a
+destination, unless the destination signals that it doesn't want the `T` value
+any more. Because all imports can be [called asynchronously](Async.md), futures
+are not necessary to express a traditional `async` function -- all functions
+are effectively `async`. Instead futures are useful in more advanced scenarios
+where a parameter or result value may not be ready at the same time as the
+other synchronous parameters or results.
 
 The `T` element type of `stream` and `future` is an optional `valtype`. As with
 variant-case payloads and function results, when `T` is absent, the "value(s)"
@@ -1424,15 +1424,15 @@ canon ::= ...
         | (canon stream.write <typeidx> <canonopt>* (core func <id>?)) 🔀
         | (canon stream.cancel-read <typeidx> async? (core func <id>?)) 🔀
         | (canon stream.cancel-write <typeidx> async? (core func <id>?)) 🔀
-        | (canon stream.close-readable <typeidx> (core func <id>?)) 🔀
-        | (canon stream.close-writable <typeidx> (core func <id>?)) 🔀
+        | (canon stream.drop-readable <typeidx> (core func <id>?)) 🔀
+        | (canon stream.drop-writable <typeidx> (core func <id>?)) 🔀
         | (canon future.new <typeidx> (core func <id>?)) 🔀
         | (canon future.read <typeidx> <canonopt>* (core func <id>?)) 🔀
         | (canon future.write <typeidx> <canonopt>* (core func <id>?)) 🔀
         | (canon future.cancel-read <typeidx> async? (core func <id>?)) 🔀
         | (canon future.cancel-write <typeidx> async? (core func <id>?)) 🔀
-        | (canon future.close-readable <typeidx> (core func <id>?)) 🔀
-        | (canon future.close-writable <typeidx> (core func <id>?)) 🔀
+        | (canon future.drop-readable <typeidx> (core func <id>?)) 🔀
+        | (canon future.drop-writable <typeidx> (core func <id>?)) 🔀
         | (canon error-context.new <canonopt>* (core func <id>?)) 📝
         | (canon error-context.debug-message <canonopt>* (core func <id>?)) 📝
         | (canon error-context.drop (core func <id>?)) 📝
@@ -1649,10 +1649,10 @@ where `event` is defined in WIT as:
 variant event {
     none,
     subtask(subtask-index, subtask-state),
-    stream-read(stream-index, copy-result),
-    stream-write(stream-index, copy-result),
-    future-read(future-index, copy-result),
-    future-write(future-index, copy-result),
+    stream-read(stream-index, stream-result),
+    stream-write(stream-index, stream-result),
+    future-read(future-index, future-read-result),
+    future-write(future-index, future-write-result),
     task-cancelled,
 }
 
@@ -1679,9 +1679,9 @@ code in the interim).
 A `subtask` event notifies the supertask that its subtask is now in the given
 state (the meanings of which are described by the [async explainer]).
 
-The meanings of the `{stream,future}-{read,write}` events as well as the
-definition of `copy-result` is given as part [`stream.read` and
-`stream.write`](#-streamread-and-streamwrite) below.
+The meanings of the `{stream,future}-{read,write}` events/payloads are given as
+part [`stream.read` and `stream.write`](#-streamread-and-streamwrite) and
+[`future.read` and `future.write`](#-futureread-and-futurewrite) below.
 
 In the Canonical ABI, the `event-code` return value provides the `event`
 discriminant and the case payloads are stored as two contiguous `i32`s at the
@@ -1789,27 +1789,27 @@ An analogous relationship exists among `readable-future-end<T?>`,
 
 ###### 🔀 `stream.read` and `stream.write`
 
-| Synopsis                                     |                                                                                               |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Approximate WIT signature for `stream.read`  | `func<stream<T?>>(e: readable-stream-end<T?>, b: writable-buffer<T>?) -> option<copy-result>` |
-| Approximate WIT signature for `stream.write` | `func<stream<T?>>(e: writable-stream-end<T?>, b: readable-buffer<T>?) -> option<copy-result>` |
-| Canonical ABI signature                      | `[stream-end:i32 ptr:i32 num:i32] -> [i32]`                                                   |
+| Synopsis                                     |                                                                                                 |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Approximate WIT signature for `stream.read`  | `func<stream<T?>>(e: readable-stream-end<T?>, b: writable-buffer<T>?) -> option<stream-result>` |
+| Approximate WIT signature for `stream.write` | `func<stream<T?>>(e: writable-stream-end<T?>, b: readable-buffer<T>?) -> option<stream-result>` |
+| Canonical ABI signature                      | `[stream-end:i32 ptr:i32 num:i32] -> [i32]`                                                     |
 
-where `copy-result` is defined in WIT as:
+where `stream-result` is defined in WIT as:
 ```wit
-record copy-result {
+record stream-result {
   progress: u32,
-  status: copy-status
+  result: copy-result
 }
 
-enum copy-status {
+enum copy-result {
     // The read/write completed successfully and is ready for more.
     completed,
 
-    // The other end closed and so there will be no more copies.
-    closed,
+    // The other end was dropped and so this end must now be dropped.
+    dropped,
 
-    // The read/write was cancelled by {stream,future}.cancel-{read,write}.
+    // The read/write was cancelled by stream.cancel-{read,write}; future reads/writes are possible.
     cancelled
 }
 ```
@@ -1819,95 +1819,133 @@ writable end] of a stream as the first parameter and, if `T` is present, a
 buffer for the `T` values to be read from or written to. If `T` is not present,
 the buffer parameter is ignored.
 
-If the return value is a `copy-result`, then the `progress` field indicates how
-many `T` elements were read or written from the given buffer before the stream
-or future reached the status indicated in the `status` field. For example, a
-return value of `{progress:4, status:closed}` from a `stream<u32>.read` means
-that 32 bytes were copied into the given buffer before the writer end closed
-the stream. The `cancelled` case can only arise as the result of a
-`{stream,future}.cancel-{read,write}` operation (defined below) and is included
-in `copy-status` because the `copy-result` type is shared.
+If the return value is a `stream-result`, then the `progress` field indicates how
+many `T` elements were read or written from the given buffer before the
+`copy-result` was reached. For example, a return value of `{progress: 4,
+result: dropped}` from a `stream<u32>.read` means that 32 bytes were copied
+into the given buffer before the writer end dropped the stream. The `cancelled`
+case can only arise as the result of a call to `stream.cancel-{read,write}`
+and is included in `copy-result` because it is reused below.
 
 If the return value is `none`, then the operation blocked and the caller needs
 to [wait](Async.md#waiting) for progress (via `waitable-set.{wait,poll}` or, if
 using a `callback`, by returning to the event loop) which will asynchronously
-produce an `event` containing a `copy-result`.
+produce an `event` containing a `stream-result`.
 
-In the Canonical ABI, the buffer is passed as an `i32` offset into linear
-memory and the `i32` size in elements of the buffer and the
-`option<copy-result>` return value is bit-packed into the single `i32` return
-value where:
+In the Canonical ABI, the `{readable,writable}-stream-end` is passed as an
+`i32` index into the component instance's table followed by a pair of `i32`s
+describing the linear memory offset and size-in-elements of the
+`{readable,writable}-buffer<T>`. The `option<stream-result>` return value is
+bit-packed into a single `i32` where:
 * `0xffff_ffff` represents `none`.
-* Otherwise, the `status` is in the low 4 bits and the `progress` is in the
+* Otherwise, the `result` is in the low 4 bits and the `progress` is in the
   high 28 bits.
 
 (See [`canon_stream_read`] in the Canonical ABI explainer for details.)
 
 ###### 🔀 `future.read` and `future.write`
 
-| Synopsis                                     |                                                                                                  |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| Approximate WIT signature for `future.read`  | `func<future<T?>>(e: readable-future-end<T?>, b: writable-buffer<T; 1>?) -> option<copy-result>` |
-| Approximate WIT signature for `future.write` | `func<future<T?>>(e: writable-future-end<T?>, b: readable-buffer<T; 1>?) -> option<copy-result>` |
-| Canonical ABI signature                      | `[future-end:i32 ptr:i32] -> [i32]`                                                              |
+| Synopsis                                     |                                                                                                          |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Approximate WIT signature for `future.read`  | `func<future<T?>>(e: readable-future-end<T?>, b: writable-buffer<T; 1>?) -> option<future-read-result>`  |
+| Approximate WIT signature for `future.write` | `func<future<T?>>(e: writable-future-end<T?>, v: readable-buffer<T; 1>?) -> option<future-write-result>` |
+| Canonical ABI signature                      | `[readable-future-end:i32 ptr:i32] -> [i32]`                                                             |
 
-where `copy-result` is defined as in [`stream.read` and
-`stream.write`](#-streamread-and-streamwrite). The `<T; 1>` in the buffer types
-indicates that these buffers may hold at most one `T` element.
+where `future-{read,write}-result` are defined in WIT as:
+```wit
+enum future-read-result {
+    // The read completed and this readable end must now be dropped.
+    completed,
 
-The `future.{read,write}` built-ins take the matching [readable or writable
-end] of a future as the first parameter, and, if `T` is present, a buffer for a
-single `T` value to read into or write from as the second parameter. If `T` is
-not present, the second parameter is ignored. The return value has the same
-meaning as with `stream.{read,write}`, where the buffer-size has been fixed to
-`1`.
+    // The read was cancelled by future.cancel-read; future reads are possible.
+    cancelled
+}
+enum future-write-result {
+    // The write completed successfully and this writable end must now be dropped.
+    completed,
 
-The Canonical ABI is the same as `stream.{read,write}` except for the removal
-of the `num` `i32` parameter. (See [`canon_future_read`] in the Canonical ABI
-explainer for details.)
+    // The readable end was dropped and so the writable end must now be dropped.
+    dropped,
+
+    // The write was cancelled by future.cancel-write; future writes are possible.
+    cancelled
+}
+```
+`future-read-result` is the same as the `copy-result` enum used in
+`stream-result` minus the `dropped` case (since futures do not allow the writer
+to drop their end before writing a value). `future-write-result` is the same as
+`copy-result`, including the `dropped` case (since the writer can be notified
+that the reader signalled loss of interest by dropping their end).
+
+The `future.{read,write}` built-ins takes the [readable or writable end] of a
+future as the first parameter and, if `T` is present, a length-1 buffer that
+can be used to write or read a single `T` value.
+
+If the return value is `none`, then the call blocked and the caller needs
+to [wait](Async.md#waiting) for progress (via `waitable-set.{wait,poll}` or, if
+using a `callback`, by returning to the event loop) which will asynchronously
+produce an `event` containing a `future-{read,write}-result`.
+
+If `future.{read,write}` return `completed` or `dropped` (synchronously or
+asynchronously), the only valid next operation is
+`future.drop-{readable,writable}`.
+
+A component *may* call `future.drop-readable` *before* successfully reading a
+value to indicate a loss of interest. `future.drop-writable` will trap if
+called before successfully writing a value.
+
+In the Canonical ABI, the `{readable,writable}-future-end` is passed as an
+`i32` index into the component instance's table followed by a single
+`i32` describing the linear memory offset of the
+`{readable,writable}-buffer<T; 1>`. The `option<future-{read,write}-result>`
+return value is bit-packed into the single `i32` return value where
+`0xffff_ffff` represents `none`.
+
+(See [`canon_future_read`] in the Canonical ABI explainer for details.)
+
 
 ###### 🔀 `stream.cancel-read`, `stream.cancel-write`, `future.cancel-read`, and `future.cancel-write`
 
-| Synopsis                                            |                                                                       |
-| --------------------------------------------------- | --------------------------------------------------------------------- |
-| Approximate WIT signature for `stream.cancel-read`  | `func<stream<T?>>(e: readable-stream-end<T?>) -> option<copy-result>` |
-| Approximate WIT signature for `stream.cancel-write` | `func<stream<T?>>(e: writable-stream-end<T?>) -> option<copy-result>` |
-| Approximate WIT signature for `future.cancel-read`  | `func<future<T?>>(e: readable-future-end<T?>) -> option<copy-result>` |
-| Approximate WIT signature for `future.cancel-write` | `func<future<T?>>(e: writable-future-end<T?>) -> option<copy-result>` |
-| Canonical ABI signature                             | `[e: i32] -> [i32]`                                                   |
-
-where `copy-result` is defined as in [`stream.read` and
-`stream.write`](#-streamread-and-streamwrite).
+| Synopsis                                            |                                                                               |
+| --------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Approximate WIT signature for `stream.cancel-read`  | `func<stream<T?>>(e: readable-stream-end<T?>) -> option<stream-result>`       |
+| Approximate WIT signature for `stream.cancel-write` | `func<stream<T?>>(e: writable-stream-end<T?>) -> option<stream-result>`       |
+| Approximate WIT signature for `future.cancel-read`  | `func<future<T?>>(e: readable-future-end<T?>) -> option<future-read-result>`  |
+| Approximate WIT signature for `future.cancel-write` | `func<future<T?>>(e: writable-future-end<T?>) -> option<future-write-result>` |
+| Canonical ABI signature                             | `[e: i32] -> [i32]`                                                           |
 
 The `{stream,future}.cancel-{read,write}` built-ins take the matching [readable
 or writable end] of a stream or future that has a pending
 `{stream,future}.{read,write}`.
 
-If cancellation finishes eagerly, the return value is a `copy-result`. If
-cancellation blocks, the return value is `none` and the caller must wait for a
-corresponding `{stream,future}-{read,write}` event via
-`waitable-set.{wait,poll}` or, when using a `callback`, returning to the event
-loop. In either case, the `status` of the `copy-result` may be `cancelled` but
-may also be `completed` or `closed`, if one of these racily happened first.
+If cancellation finishes without blocking, the return value is a
+`stream-result` or `future-{read,write}-result`. If cancellation blocks, the
+return value is `none` and the caller must wait for a corresponding
+`{stream,future}-{read,write}` event via `waitable-set.{wait,poll}` or, when
+using a `callback`, returning to the event loop. In either case, the result may
+be `cancelled` but may also be `completed` or `dropped`, if one of these racily
+happened first.
 
-In the Canonical ABI, the `option<copy-result>` is bit-packed into the single
-returned `i32` in the same way as `{stream,future}.{read,write}`. (See
+In the Canonical ABI, the optional result value is bit-packed into the single
+`i32` result in the same way as `{stream,future}.{read,write}`. (See
 [`canon_stream_cancel_read`] in the Canonical ABI explainer for details.)
 
-###### 🔀 `stream.close-readable`, `stream.close-writable`, `future.close-readable`, and `future.close-writable`
+###### 🔀 `stream.drop-readable`, `stream.drop-writable`, `future.drop-readable`, and `future.drop-writable`
 
-| Synopsis                                              |                                                |
-| ----------------------------------------------------- | ---------------------------------------------- |
-| Approximate WIT signature for `stream.close-readable` | `func<stream<T?>>(e: readable-stream-end<T?>)` |
-| Approximate WIT signature for `stream.close-writable` | `func<stream<T?>>(e: writable-stream-end<T?>)` |
-| Approximate WIT signature for `future.close-readable` | `func<future<T?>>(e: readable-future-end<T?>)` |
-| Approximate WIT signature for `future.close-writable` | `func<future<T?>>(e: writable-future-end<T?>)` |
-| Canonical ABI signature                               | `[end:i32 err:i32] -> []`                      |
+| Synopsis                                             |                                                |
+| ---------------------------------------------------- | ---------------------------------------------- |
+| Approximate WIT signature for `stream.drop-readable` | `func<stream<T?>>(e: readable-stream-end<T?>)` |
+| Approximate WIT signature for `stream.drop-writable` | `func<stream<T?>>(e: writable-stream-end<T?>)` |
+| Approximate WIT signature for `future.drop-readable` | `func<future<T?>>(e: readable-future-end<T?>)` |
+| Approximate WIT signature for `future.drop-writable` | `func<future<T?>>(e: writable-future-end<T?>)` |
+| Canonical ABI signature                              | `[end:i32 err:i32] -> []`                      |
 
-The `{stream,future}.close-{readable,writable}` built-ins remove the indicated
+The `{stream,future}.drop-{readable,writable}` built-ins remove the indicated
 [stream or future] from the current component instance's table, trapping if the
 stream or future has a mismatched direction or type or are in the middle of a
-`read` or `write`.
+`read` or `write` or, in the special case of `future.drop-writable`, if a
+value has not already been written. (See [`canon_stream_drop_readable`] in the
+Canonical ABI explainer for details.)
 
 ##### 📝 Error Context built-ins
 
@@ -2874,9 +2912,11 @@ For some use-case-focused, worked examples, see:
 [`canon_waitable_set_drop`]: CanonicalABI.md#-canon-waitable-setdrop
 [`canon_waitable_join`]: CanonicalABI.md#-canon-waitablejoin
 [`canon_stream_new`]: CanonicalABI.md#-canon-streamfuturenew
-[`canon_stream_read`]: CanonicalABI.md#-canon-streamfuturereadwrite
-[`canon_future_read`]: CanonicalABI.md#-canon-streamfuturereadwrite
+[`canon_stream_read`]: CanonicalABI.md#-canon-streamreadwrite
+[`canon_future_read`]: CanonicalABI.md#-canon-futurereadwrite
+[`canon_future_write`]: CanonicalABI.md#-canon-futurereadwrite
 [`canon_stream_cancel_read`]: CanonicalABI.md#-canon-streamfuturecancel-readwrite
+[`canon_stream_drop_readable`]: CanonicalABI.md#-canon-streamfuturedrop-readablewritable
 [`canon_subtask_cancel`]: CanonicalABI.md#-canon-subtaskcancel
 [`canon_subtask_drop`]: CanonicalABI.md#-canon-subtaskdrop
 [`canon_resource_new`]: CanonicalABI.md#canon-resourcenew
@@ -2888,7 +2928,6 @@ For some use-case-focused, worked examples, see:
 [`canon_thread_spawn_ref`]: CanonicalABI.md#-canon-threadspawn_ref
 [`canon_thread_spawn_indirect`]: CanonicalABI.md#-canon-threadspawn_indirect
 [`canon_thread_available_parallelism`]: CanonicalABI.md#-canon-threadavailable_parallelism
-[the `close` built-ins]: CanonicalABI.md#-canon-streamfutureclose-readablewritable
 [Shared-Nothing]: ../high-level/Choices.md
 [Use Cases]: ../high-level/UseCases.md
 [Host Embeddings]: ../high-level/UseCases.md#hosts-embedding-components
@@ -2901,7 +2940,6 @@ For some use-case-focused, worked examples, see:
 [Stream or Future]: Async.md#streams-and-futures
 [Readable and Writable Ends]: Async.md#streams-and-futures
 [Readable or Writable End]: Async.md#streams-and-futures
-[Writable End]: Async.md#streams-and-futures
 [Waiting]: Async.md#waiting
 [Waitables]: Async.md#waiting
 [Waitable Set]: Async.md#waiting

@@ -15,7 +15,7 @@
       (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
       (import "" "stream.new" (func $stream.new (result i64)))
       (import "" "stream.write" (func $stream.write (param i32 i32 i32) (result i32)))
-      (import "" "stream.close-writable" (func $stream.close-writable (param i32)))
+      (import "" "stream.drop-writable" (func $stream.drop-writable (param i32)))
 
       ;; $ws is waited on by 'produce'
       (global $ws (mut i32) (i32.const 0))
@@ -78,10 +78,10 @@
         ;; the second call to produce_cb:
         (if (i32.eq (global.get $state) (i32.const 1)) (then
           ;; confirm we're seeing the non-zero-length write complete
-          (if (i32.ne (local.get $payload) (i32.const 0x41 (; CLOSED=1 | (4 << 4) ;)))
+          (if (i32.ne (local.get $payload) (i32.const 0x41 (; DROPPED=1 | (4 << 4) ;)))
             (then unreachable))
 
-          (call $stream.close-writable (global.get $outsw))
+          (call $stream.drop-writable (global.get $outsw))
           (return (i32.const 0 (; EXIT ;)))
         ))
 
@@ -94,7 +94,7 @@
     (canon waitable-set.new (core func $waitable-set.new))
     (canon stream.new $ST (core func $stream.new))
     (canon stream.write $ST async (memory $memory "mem") (core func $stream.write))
-    (canon stream.close-writable $ST (core func $stream.close-writable))
+    (canon stream.drop-writable $ST (core func $stream.drop-writable))
     (core instance $core_producer (instantiate $CoreProducer (with "" (instance
       (export "mem" (memory $memory "mem"))
       (export "task.return" (func $task.return))
@@ -102,7 +102,7 @@
       (export "waitable-set.new" (func $waitable-set.new))
       (export "stream.new" (func $stream.new))
       (export "stream.write" (func $stream.write))
-      (export "stream.close-writable" (func $stream.close-writable))
+      (export "stream.drop-writable" (func $stream.drop-writable))
     ))))
     (func (export "produce") (result (stream u8)) (canon lift
       (core func $core_producer "produce")
@@ -119,7 +119,7 @@
       (import "" "waitable.join" (func $waitable.join (param i32 i32)))
       (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
       (import "" "stream.read" (func $stream.read (param i32 i32 i32) (result i32)))
-      (import "" "stream.close-readable" (func $stream.close-readable (param i32)))
+      (import "" "stream.drop-readable" (func $stream.drop-readable (param i32)))
 
       ;; $ws is waited on by 'consume'
       (global $ws (mut i32) (i32.const 0))
@@ -163,7 +163,7 @@
         (if (i32.ne (i32.const 0x12345678) (local.get $ret))
           (then unreachable))
 
-        (call $stream.close-readable (global.get $insr))
+        (call $stream.drop-readable (global.get $insr))
 
         ;; return 42 to the top-level assert_return
         (call $task.return (i32.const 42))
@@ -175,14 +175,14 @@
     (canon waitable.join (core func $waitable.join))
     (canon waitable-set.new (core func $waitable-set.new))
     (canon stream.read $ST async (memory $memory "mem") (core func $stream.read))
-    (canon stream.close-readable $ST (core func $stream.close-readable))
+    (canon stream.drop-readable $ST (core func $stream.drop-readable))
     (core instance $core_consumer (instantiate $CoreConsumer (with "" (instance
       (export "mem" (memory $memory "mem"))
       (export "task.return" (func $task.return))
       (export "waitable.join" (func $waitable.join))
       (export "waitable-set.new" (func $waitable-set.new))
       (export "stream.read" (func $stream.read))
-      (export "stream.close-readable" (func $stream.close-readable))
+      (export "stream.drop-readable" (func $stream.drop-readable))
     ))))
     (func (export "consume") (param "in" (stream u8)) (result u32) (canon lift
       (core func $core_consumer "consume")

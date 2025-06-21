@@ -619,7 +619,7 @@ Despite the above, the following scenarios do behave deterministically:
   that was blocked before starting due to backpressure, cancellation completes
   deterministically and immediately.
 * When both ends of a stream or future are owned by wasm components, the
-  behavior of all read, write, cancel and close operations is deterministic
+  behavior of all read, write, cancel and drop operations is deterministic
   (modulo any nondeterminitic execution that determines the ordering in which
   the operations are performed).
 
