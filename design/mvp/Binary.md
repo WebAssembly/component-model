@@ -371,10 +371,13 @@ flags are set.
 (See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
 in the explainer.)
 ```ebnf
-import      ::= in:<importname'> ed:<externdesc>                     => (import in ed)
-export      ::= en:<exportname'> si:<sortidx> ed?:<externdesc>?      => (export en si ed?)
-importname' ::= 0x00 len:<u32> in:<importname>                       => in  (if len = |in|)
-exportname' ::= 0x00 len:<u32> en:<exportname>                       => en  (if len = |en|)
+import         ::= in:<importname'> ed:<externdesc>                     => (import in ed)
+export         ::= en:<exportname'> si:<sortidx> ed?:<externdesc>?      => (export en si ed?)
+importname'    ::= 0x00 len:<u32> in:<importname>                       => in     (if len = |in|)
+                 | 0x01 len:<u32> in:<importname> vs:<versionsuffix'>   => in vs  (if len = |in|)
+exportname'    ::= 0x00 len:<u32> en:<exportname>                       => en     (if len = |en|)
+                 | 0x01 len:<u32> en:<exportname> vs:<versionsuffix'>   => in vs  (if len = |in|)
+versionsuffix' ::= len:<u32> vs:<semversuffix>                          => (versionsuffix vs)  (if len = |vs|)
 ```
 
 Notes:
@@ -399,7 +402,11 @@ Notes:
   `(result (own $R))`, where `$R` is the resource labeled `r`.
 * Validation of `[method]` names requires the first parameter of the function
   to be `(param "self" (borrow $R))`, where `$R` is the resource labeled `r`.
-* `<valid semver>` is as defined by [https://semver.org](https://semver.org/)
+* Validation requires that `versionsuffix` is preceded by an `interfaceversion`
+  matching `canonversion` and that the concatenation of the `canonversion` and
+  the `versionsuffix` results in a `valid semver` as defined by
+  [https://semver.org](https://semver.org/). A `versionsuffix` is otherwise
+  ignored for validation except to improve diagnostic messages.
 * `<integrity-metadata>` is as defined by the
   [SRI](https://www.w3.org/TR/SRI/#dfn-integrity-metadata) spec.
 
@@ -494,7 +501,9 @@ named once.
 
 * The opcodes (for types, canon built-ins, etc) should be re-sorted
 * The two `list` type codes should be merged into one with an optional immediate.
-* The `0x00` prefix byte of `importname'` and `exportname'` will be removed or repurposed.
+* The `0x00` variant of `importname'` and `exportname'` will be removed. Any
+  remaining variant(s) will be renumbered or the prefix byte will be removed or
+  repurposed.
 
 
 [`core:byte`]: https://webassembly.github.io/spec/core/binary/values.html#binary-byte
