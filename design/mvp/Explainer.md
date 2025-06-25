@@ -294,7 +294,7 @@ sort           ::= core <core:sort>
                  | type
                  | component
                  | instance
-inlineexport   ::= (export <exportname> <sortidx>)
+inlineexport   ::= (export <exportname> <fullversion>? <sortidx>)
 ```
 Because component-level function, type and instance definitions are different
 than core-level function, type and instance definitions, they are put into
@@ -574,8 +574,8 @@ instancedecl  ::= core-prefix(<core:type>)
                 | <alias>
                 | <exportdecl>
                 | <value> 🪙
-importdecl    ::= (import <importname> bind-id(<externdesc>))
-exportdecl    ::= (export <exportname> bind-id(<externdesc>))
+importdecl    ::= (import <importname> <fullversion>? bind-id(<externdesc>))
+exportdecl    ::= (export <exportname> <fullversion>? bind-id(<externdesc>))
 externdesc    ::= (<sort> (type <u32>) )
                 | core-prefix(<core:moduletype>)
                 | <functype>
@@ -2242,8 +2242,9 @@ the identifier `$x`). In the case of exports, the `<id>?` right after the
 preceding definition being exported (e.g., `(export $x "x" (func $f))` binds a
 new identifier `$x`).
 ```ebnf
-import ::= (import "<importname>" bind-id(<externdesc>))
-export ::= (export <id>? "<exportname>" <sortidx> <externdesc>?)
+import      ::= (import "<importname>" <fullversion>? bind-id(<externdesc>))
+export      ::= (export <id>? "<exportname>" <fullversion>? <sortidx> <externdesc>?)
+fullversion ::= (fullversion <valid semver>)
 ```
 All import names are required to be [strongly-unique]. Separately, all export
 names are also required to be [strongly-unique]. The rest of the grammar for
@@ -2283,10 +2284,13 @@ words         ::= <word>
                 | <words> '-' <word>
 projection    ::= '/' <label>
 version       ::= '@' <valid semver>
+                | '@' [1-9] [0-9]*
+                | '@0.' [1-9] [0-9]*
 depname       ::= 'unlocked-dep=<' <pkgnamequery> '>'
                 | 'locked-dep=<' <pkgname> '>' ( ',' <hashname> )?
 pkgnamequery  ::= <pkgpath> <verrange>?
-pkgname       ::= <pkgpath> <version>?
+pkgname       ::= <pkgpath> <pkgversion>?
+pkgversion    ::= '@' <valid semver>
 pkgpath       ::= <namespace> <words>
                 | <namespace>+ <words> <projection>* 🪺
 verrange      ::= '@*'
@@ -2378,6 +2382,33 @@ found in common package managers like `npm` and `cargo` and is meant to be
 interpreted with the same [semantics][SemVerRange]. (Mostly this
 interpretation is the usual SemVer-spec-defined ordering, but note the
 particular behavior of pre-release tags.)
+
+The `version` production used in `interfacename`s accepts both `valid semver`
+and "canonicalized interface versions" which can be constructed from a `valid
+semver` as follows:
+
+- An input version is split into `<major>.<minor>.<patch>`, with any trailing
+  `-<prerelease>` or `+<build>` field discarded.
+- The canonicalized interface version is:
+  - if `major` and `minor` are `0`:
+    - `0.0.<patch>`
+  - otherwise, if `major` is `0`:
+    - `0.<minor>`
+  - otherwise:
+    - `<major>`
+
+This canonicalization, when used in conjunction with interface consumers and
+implementations that follow SemVer compatibility, allows the matching of
+compatible imports and exports that differ only in "insignificant" (from a
+SemVer semantics perspective) parts of their version numbers. For example, an
+implementation of `a:b/c@0.2.5` should be compatible with a consumer of
+`a:b/c@0.2.3`; version canonicalization would produce the identical interface
+name `a:b/c@0.2` for both of these versions.
+
+When a component producer canonicalizes an interface version the original
+version should be preserved in imports / exports in the `fullversion` field.
+This gives component runtimes and other tools access to the original version for
+error messages, documentation, and other development purposes.
 
 The `plainname` production captures several language-neutral syntactic hints
 that allow bindings generators to produce more idiomatic bindings in their
