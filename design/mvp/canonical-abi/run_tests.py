@@ -1088,8 +1088,8 @@ class HostSink:
     async def read_all():
       while True:
         await self.write_event.wait()
-        def on_copy(revoke_buffer):
-          revoke_buffer()
+        def on_copy(reclaim_buffer):
+          reclaim_buffer()
           if not f.done():
             f.set_result(None)
         def on_copy_done(result):
