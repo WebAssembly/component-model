@@ -1279,11 +1279,12 @@ OnCopyDone = Callable[[CopyResult], None]
 class ReadableStream:
   t: ValType
   read: Callable[[ComponentInstance, WritableBuffer, OnCopy, OnCopyDone], None]
+  write: Callable[[ComponentInstance, WritableBuffer, OnCopy, OnCopyDone], None]
   cancel: Callable[[], None]
   drop: Callable[[], None]
 ```
 The key operation is `read` which works as follows:
-* `read` never blocks and returns its values by either synchronously or
+* `read` and `write` never block and return values by either synchronously or
   asynchronously writing to the given `WritableBuffer` and then calling the
   given `OnCopy*` callbacks to notify the caller of progress.
 * `OnCopyDone` is called to indicate that the `read` is finished copying and

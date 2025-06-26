@@ -764,6 +764,7 @@ OnCopyDone = Callable[[CopyResult], None]
 class ReadableStream:
   t: ValType
   read: Callable[[ComponentInstance, WritableBuffer, OnCopy, OnCopyDone], None]
+  write: Callable[[ComponentInstance, WritableBuffer, OnCopy, OnCopyDone], None]
   cancel: Callable[[], None]
   drop: Callable[[], None]
 
