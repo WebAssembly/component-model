@@ -2281,7 +2281,6 @@ async def stream_copy(EndT, BufferT, event_code, stream_t, opts, task, i, ptr, n
     assert(buffer.progress <= Buffer.MAX_LENGTH < 2**28)
     packed_result = result | (buffer.progress << 4)
     return (event_code, i, packed_result)
-    return (event_code, i, pack_stream_result(result, buffer))
 
   def on_copy(reclaim_buffer):
     e.set_event(partial(stream_event, CopyResult.COMPLETED, reclaim_buffer))
