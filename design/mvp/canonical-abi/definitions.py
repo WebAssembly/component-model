@@ -767,7 +767,13 @@ class ReadableStream:
   cancel: Callable[[], None]
   drop: Callable[[], None]
 
-class SharedStreamImpl(ReadableStream):
+class WritableStream:
+  t: ValType
+  write: Callable[[ComponentInstance, ReadableBuffer, OnCopy, OnCopyDone], None]
+  cancel: Callable[[], None]
+  drop: Callable[[], None]
+
+class SharedStreamImpl(ReadableStream, WritableStream):
   dropped: bool
   pending_inst: Optional[ComponentInstance]
   pending_buffer: Optional[Buffer]
@@ -841,7 +847,7 @@ class SharedStreamImpl(ReadableStream):
         self.set_pending(inst, src_buffer, on_copy, on_copy_done)
 
 class StreamEnd(Waitable):
-  shared: ReadableStream
+  shared: ReadableStream|WritableStream
   copying: bool
   done: bool
 
@@ -872,7 +878,13 @@ class ReadableFuture:
   cancel: Callable[[], None]
   drop: Callable[[], None]
 
-class SharedFutureImpl(ReadableFuture):
+class WritableFuture:
+  t: ValType
+  write: Callable[[ComponentInstance, ReadableBuffer, OnCopyDone], None]
+  cancel: Callable[[], None]
+  drop: Callable[[], None]
+
+class SharedFutureImpl(ReadableFuture, WritableFuture):
   dropped: bool
   pending_inst: Optional[ComponentInstance]
   pending_buffer: Optional[Buffer]
@@ -929,7 +941,7 @@ class SharedFutureImpl(ReadableFuture):
       on_copy_done(CopyResult.COMPLETED)
 
 class FutureEnd(Waitable):
-  shared: ReadableFuture
+  shared: ReadableFuture|WritableFuture
   copying: bool
   done: bool
 
