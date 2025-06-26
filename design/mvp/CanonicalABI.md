@@ -1321,8 +1321,9 @@ particularly when streaming between two components.
 The `SharedStreamImpl` class implements both `ReadableStream` and
 `WritableStream` for streams created by wasm (via `stream.new`) and tracks the
 common state shared by both the readable and writable ends of streams (defined
-below). Introducing the class in chunks, starting with the fields and
-initialization:
+below). 
+
+Introducing `SharedStreamImpl` in chunks, starting with the fields and initialization:
 ```python
 class SharedStreamImpl(ReadableStream, WritableStream):
   dropped: bool
