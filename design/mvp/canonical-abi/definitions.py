@@ -757,8 +757,8 @@ class CopyResult(IntEnum):
   DROPPED = 1
   CANCELLED = 2
 
-RevokeBuffer = Callable[[], None]
-OnCopy = Callable[[RevokeBuffer], None]
+ReclaimBuffer = Callable[[], None]
+OnCopy = Callable[[ReclaimBuffer], None]
 OnCopyDone = Callable[[CopyResult], None]
 
 class ReadableStream:
@@ -2259,8 +2259,8 @@ async def stream_copy(EndT, BufferT, event_code, stream_t, opts, task, i, ptr, n
   cx = LiftLowerContext(opts, task.inst, borrow_scope = None)
   buffer = BufferT(stream_t.t, cx, ptr, n)
 
-  def stream_event(result, revoke_buffer):
-    revoke_buffer()
+  def stream_event(result, reclaim_buffer):
+    reclaim_buffer()
     assert(e.copying)
     e.copying = False
     if result == CopyResult.DROPPED:
@@ -2271,11 +2271,11 @@ async def stream_copy(EndT, BufferT, event_code, stream_t, opts, task, i, ptr, n
     return (event_code, i, packed_result)
     return (event_code, i, pack_stream_result(result, buffer))
 
-  def on_copy(revoke_buffer):
-    e.set_event(partial(stream_event, CopyResult.COMPLETED, revoke_buffer))
+  def on_copy(reclaim_buffer):
+    e.set_event(partial(stream_event, CopyResult.COMPLETED, reclaim_buffer))
 
   def on_copy_done(result):
-    e.set_event(partial(stream_event, result, revoke_buffer = lambda:()))
+    e.set_event(partial(stream_event, result, reclaim_buffer = lambda:()))
 
   e.copying = True
   e.copy(task.inst, buffer, on_copy, on_copy_done)

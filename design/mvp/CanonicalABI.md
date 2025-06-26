@@ -1272,8 +1272,8 @@ client to asynchronously read multiple values from a (wasm or host) producer.
 that there is no Component Model type for passing the writable end of a
 stream.)
 ```python
-RevokeBuffer = Callable[[], None]
-OnCopy = Callable[[RevokeBuffer], None]
+ReclaimBuffer = Callable[[], None]
+OnCopy = Callable[[ReclaimBuffer], None]
 OnCopyDone = Callable[[CopyResult], None]
 
 class ReadableStream:
@@ -1291,7 +1291,7 @@ The key operation is `read` which works as follows:
 * `OnCopy` is called to indicate a write has been made into the buffer.
   However, there may be further writes made in the future, so the caller has
   *not* regained ownership of the buffer.
-* The `RevokeBuffer` callback passed to `OnCopy` allows the caller of `read` to
+* The `ReclaimBuffer` callback passed to `OnCopy` allows the caller of `read` to
   immediately regain ownership of the buffer once the first copy has completed.
 * `cancel` is non-blocking, but does **not** guarantee that ownership of
   the buffer has been returned; `cancel` only lets the caller *request* that
@@ -1305,7 +1305,7 @@ concurrent behaviors of `stream.{read,write}` and not exposed directly to core
 wasm code. Specifically, the point of the `OnCopy*` callbacks is to specify that
 *multiple* writes are allowed into the same `WritableBuffer` up until the point
 where either the buffer is full or the calling core wasm code receives the
-`STREAM_READ` progress event (in which case `RevokeBuffer` is called). This
+`STREAM_READ` progress event (in which case `ReclaimBuffer` is called). This
 reduces the number of task-switches required by the spec, particularly when
 streaming between two components.
 
@@ -3880,7 +3880,7 @@ Next, the `copy` method of `{Readable,Writable}{Stream,Future}End` is called to
 perform the actual read/write. The `on_copy*` callbacks passed to `copy` bind
 and store a `stream_event` closure on the readable/writable end (via the
 inherited `Waitable.set_event`) which will be called right before the event is
-delivered to core wasm. `stream_event` first calls `revoke_buffer` to regain
+delivered to core wasm. `stream_event` first calls `reclaim_buffer` to regain
 ownership of `buffer` and prevent any further partial reads/writes. Thus, up
 until event delivery, the other end of the stream is free to repeatedly
 read/write from/to `buffer`, ideally filling it up and minimizing context
@@ -3890,8 +3890,8 @@ all future use of this stream end. Lastly, `stream_event` packs the
 `CopyResult` and number of elements copied up until this point into a single
 `i32` payload for core wasm.
 ```python
-  def stream_event(result, revoke_buffer):
-    revoke_buffer()
+  def stream_event(result, reclaim_buffer):
+    reclaim_buffer()
     assert(e.copying)
     e.copying = False
     if result == CopyResult.DROPPED:
@@ -3902,11 +3902,11 @@ all future use of this stream end. Lastly, `stream_event` packs the
     return (event_code, i, packed_result)
     return (event_code, i, pack_stream_result(result, buffer))
 
-  def on_copy(revoke_buffer):
-    e.set_event(partial(stream_event, CopyResult.COMPLETED, revoke_buffer))
+  def on_copy(reclaim_buffer):
+    e.set_event(partial(stream_event, CopyResult.COMPLETED, reclaim_buffer))
 
   def on_copy_done(result):
-    e.set_event(partial(stream_event, result, revoke_buffer = lambda:()))
+    e.set_event(partial(stream_event, result, reclaim_buffer = lambda:()))
 
   e.copying = True
   e.copy(task.inst, buffer, on_copy, on_copy_done)
