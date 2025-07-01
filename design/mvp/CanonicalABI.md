@@ -670,7 +670,7 @@ Tasks are represented by objects of the `Task` class which are created by the
 with fields and initialization:
 ```python
 class Task:
-  class State(IntEnum):
+  class State(Enum):
     INITIAL = 1
     PENDING_CANCEL = 2
     CANCEL_DELIVERED = 3
@@ -3286,12 +3286,12 @@ always returns control flow back to the caller without blocking:
   await subtask.call_async(callee, on_start, on_resolve)
   if subtask.resolved():
     subtask.deliver_resolve()
-    return [int(Subtask.State.RETURNED)]
+    return [Subtask.State.RETURNED]
 
   subtaski = task.inst.table.add(subtask)
   assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
-  assert(0 <= int(subtask.state) < 2**4)
-  return [int(subtask.state) | (subtaski << 4)]
+  assert(0 <= subtask.state < 2**4)
+  return [subtask.state | (subtaski << 4)]
 ```
 When `callee` blocks before returning, the `on_progress` function called by
 `on_start` and `on_resolve` uses `Waitable.set_event` to asynchronously notify
@@ -4005,7 +4005,7 @@ in the high 28 bits; they're always zero.
     e.copying = False
     if result == CopyResult.DROPPED or result == CopyResult.COMPLETED:
       e.done = True
-    return (event_code, i, int(result))
+    return (event_code, i, result)
 
   def on_copy_done(result):
     assert(result != CopyResult.DROPPED or event_code == EventCode.FUTURE_WRITE)

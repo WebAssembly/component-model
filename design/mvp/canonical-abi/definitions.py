@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Optional, Callable, Awaitable, TypeVar, Generic, Literal
-from enum import IntEnum
+from enum import Enum, IntEnum
 import math
 import struct
 import random
@@ -463,7 +463,7 @@ OnResolve = Callable[[Optional[list[any]]], None]
 OnBlock = Callable[[Awaitable], Awaitable[bool]]
 
 class Task:
-  class State(IntEnum):
+  class State(Enum):
     INITIAL = 1
     PENDING_CANCEL = 2
     CANCEL_DELIVERED = 3
@@ -2041,12 +2041,12 @@ async def canon_lower(opts, ft, callee, task, flat_args):
   await subtask.call_async(callee, on_start, on_resolve)
   if subtask.resolved():
     subtask.deliver_resolve()
-    return [int(Subtask.State.RETURNED)]
+    return [Subtask.State.RETURNED]
 
   subtaski = task.inst.table.add(subtask)
   assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
-  assert(0 <= int(subtask.state) < 2**4)
-  return [int(subtask.state) | (subtaski << 4)]
+  assert(0 <= subtask.state < 2**4)
+  return [subtask.state | (subtaski << 4)]
 
 ### `canon resource.new`
 
@@ -2328,7 +2328,7 @@ async def future_copy(EndT, BufferT, event_code, future_t, opts, task, i, ptr):
     e.copying = False
     if result == CopyResult.DROPPED or result == CopyResult.COMPLETED:
       e.done = True
-    return (event_code, i, int(result))
+    return (event_code, i, result)
 
   def on_copy_done(result):
     assert(result != CopyResult.DROPPED or event_code == EventCode.FUTURE_WRITE)
