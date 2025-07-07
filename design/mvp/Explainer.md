@@ -1899,8 +1899,8 @@ In the Canonical ABI, the `{readable,writable}-future-end` is passed as an
 `i32` describing the linear memory offset of the
 `{readable,writable}-buffer<T; 1>`. The `option<future-{read,write}-result>`
 return value is bit-packed into the single `i32` return value where
-`0xffff_ffff` represents `none`. And, `future-read-result.canceled` is encoded
-as the value of `future-write-result.canceled`, rather than the value implied
+`0xffff_ffff` represents `none`. And, `future-read-result.cancelled` is encoded
+as the value of `future-write-result.cancelled`, rather than the value implied
 by the `enum` definition above.
 
 (See [`canon_future_read`] in the Canonical ABI explainer for details.)
