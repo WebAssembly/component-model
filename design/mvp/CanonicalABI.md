@@ -3897,7 +3897,7 @@ ownership of `buffer` and prevent any further partial reads/writes. Thus, up
 until event delivery, the other end of the stream is free to repeatedly
 read/write from/to `buffer`, ideally filling it up and minimizing context
 switches. Next, `copying` is cleared to reenable future `stream.{read,write}`
-calls. However, if the `CopyResult` is `DROPPED`, `dropped` is set to disallow
+calls. However, if the `CopyResult` is `DROPPED`, `done` is set to disallow
 all future use of this stream end. Lastly, `stream_event` packs the
 `CopyResult` and number of elements copied up until this point into a single
 `i32` payload for core wasm.
