@@ -1798,18 +1798,31 @@ An analogous relationship exists among `readable-future-end<T?>`,
 where `stream-result` is defined in WIT as:
 ```wit
 record stream-result {
-  progress: u32,
-  result: copy-result
+    /// The number of elements read/written.
+    progress: u32,
+
+    /// The status of the read/write operation.
+    result: copy-result
 }
 
 enum copy-result {
-    // The read/write completed successfully and is ready for more.
+    /// The read/write completed successfully.
+    ///
+    /// The stream remains open for new reads/writes.
     completed,
 
-    // The other end was dropped and so this end must now be dropped.
+    /// The other end was dropped and so this end must now be dropped.
+    ///
+    /// For `stream.read`, this means that the end of the stream was reached.
+    ///
+    /// For `stream.write`, this means that the consumer has no need for further
+    /// data from this stream. This doesn't signify an error; it just instructs
+    /// the producer to stop sending data.
     dropped,
 
-    // The read/write was cancelled by stream.cancel-{read,write}; future reads/writes are possible.
+    /// The read/write was cancelled by `stream.cancel-{read,write}`.
+    ///
+    /// The stream remains open for new reads/writes.
     cancelled
 }
 ```
@@ -1824,13 +1837,16 @@ many `T` elements were read or written from the given buffer before the
 `copy-result` was reached. For example, a return value of `{progress: 4,
 result: dropped}` from a `stream<u32>.read` means that 32 bytes were copied
 into the given buffer before the writer end dropped the stream. The `cancelled`
-case can only arise as the result of a call to `stream.cancel-{read,write}`
-and is included in `copy-result` because it is reused below.
+case can only arise as the result of a call to `stream.cancel-{read,write}`.
 
 If the return value is `none`, then the operation blocked and the caller needs
 to [wait](Async.md#waiting) for progress (via `waitable-set.{wait,poll}` or, if
 using a `callback`, by returning to the event loop) which will asynchronously
 produce an `event` containing a `stream-result`.
+
+If `stream.{read,write}` return `dropped` (synchronously or asynchronously),
+any subsequent operation on the stream other than `stream.drop-{readable,writable}`
+traps.
 
 In the Canonical ABI, the `{readable,writable}-stream-end` is passed as an
 `i32` index into the component instance's table followed by a pair of `i32`s
@@ -1854,20 +1870,24 @@ bit-packed into a single `i32` where:
 where `future-{read,write}-result` are defined in WIT as:
 ```wit
 enum future-read-result {
-    // The read completed and this readable end must now be dropped.
+    /// The read completed and this readable end must now be dropped.
     completed,
 
-    // The read was cancelled by future.cancel-read; future reads are possible.
+    /// The read was cancelled by `future.cancel-read`.
+    ///
+    /// The future remains open for a new `future.read`.
     cancelled
 }
 enum future-write-result {
-    // The write completed successfully and this writable end must now be dropped.
+    /// The write completed successfully and this writable end must now be dropped.
     completed,
 
-    // The readable end was dropped and so the writable end must now be dropped.
+    /// The readable end was dropped and so the writable end must now be dropped.
     dropped,
 
-    // The write was cancelled by future.cancel-write; future writes are possible.
+    /// The write was cancelled by `future.cancel-write`.
+    ///
+    /// The future remains open for a new `future.write`.
     cancelled
 }
 ```
@@ -1878,8 +1898,8 @@ to drop their end before writing a value). `future-write-result` is the same as
 that the reader signalled loss of interest by dropping their end).
 
 The `future.{read,write}` built-ins takes the [readable or writable end] of a
-future as the first parameter and, if `T` is present, a length-1 buffer that
-can be used to write or read a single `T` value.
+future as the first parameter and, if `T` is present, a single-element buffer
+that can be used to write or read a single `T` value.
 
 If the return value is `none`, then the call blocked and the caller needs
 to [wait](Async.md#waiting) for progress (via `waitable-set.{wait,poll}` or, if
@@ -1887,8 +1907,8 @@ using a `callback`, by returning to the event loop) which will asynchronously
 produce an `event` containing a `future-{read,write}-result`.
 
 If `future.{read,write}` return `completed` or `dropped` (synchronously or
-asynchronously), the only valid next operation is
-`future.drop-{readable,writable}`.
+asynchronously), any subsequent operation on the future other than
+`future.drop-{readable,writable}` traps.
 
 A component *may* call `future.drop-readable` *before* successfully reading a
 value to indicate a loss of interest. `future.drop-writable` will trap if
