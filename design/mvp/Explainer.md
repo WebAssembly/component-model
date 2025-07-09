@@ -1615,14 +1615,17 @@ expecting a return value. (See also "[Cancellation]" in the async explainer and
 | Canonical ABI signature    | `[] -> [i32]`            |
 
 The `yield` built-in allows the runtime to switch to other tasks, enabling a
-long-running computation to cooperatively interleave execution. `yield` returns
-`true` (`1`) if the caller has requested [cancellation] of the [current task].
+long-running computation to cooperatively interleave execution. If the `async`
+immediate is present, the runtime can switch to other tasks in the *same*
+component instance, which the calling core wasm must be prepared to handle. If
+`async` is not present, only tasks in *other* component instances may be
+switched to.
 
-If the `async` immediate is present, the runtime can switch to other tasks in
-the *same* component instance, which the calling core wasm must be prepared to
-handle. If `async` is not present, only tasks in *other* component instances
-may be switched to. (See also [`canon_yield`] in the Canonical ABI explainer
-for details.)
+If `async` is set, `yield` can return `true` (`1`) if the caller has
+requested [cancellation] of the [current task]. If `async` is not set,
+`yield` will always return `false` (`0`).
+
+(See also [`canon_yield`] in the Canonical ABI explainer for details.)
 
 ###### 🔀 `waitable-set.new`
 
@@ -1682,6 +1685,11 @@ state (the meanings of which are described by the [async explainer]).
 The meanings of the `{stream,future}-{read,write}` events/payloads are given as
 part [`stream.read` and `stream.write`](#-streamread-and-streamwrite) and
 [`future.read` and `future.write`](#-futureread-and-futurewrite) below.
+
+If the `async` immediate is set, `waitable-set.wait` can return the
+`task-cancelled` event to indicate that the caller requested [cancellation] of
+the [current task]. If `async` is not set, `task-cancelled` will never be
+delivered.
 
 In the Canonical ABI, the `event-code` return value provides the `event`
 discriminant and the case payloads are stored as two contiguous `i32`s at the
