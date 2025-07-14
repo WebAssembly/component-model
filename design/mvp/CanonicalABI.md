@@ -3491,7 +3491,7 @@ wasm state and passes them to the caller via `Task.return_`:
 async def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync)
-  trap_if(result_type != task.ft.results)
+  trap_if(result_type != task.ft.result)
   trap_if(not LiftOptions.equal(opts, task.opts))
   cx = LiftLowerContext(opts, task.inst, task)
   result = lift_flat_values(cx, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_type())
@@ -3502,7 +3502,7 @@ The `trap_if(task.opts.sync)` prevents `task.return` from being called by
 synchronously-lifted functions (which return their value by returning from the
 lifted core function).
 
-The `trap_if(result_type != task.ft.results)` guard ensures that, in a
+The `trap_if(result_type != task.ft.result)` guard ensures that, in a
 component with multiple exported functions of different types, `task.return` is
 not called with a mismatched result type (which, due to indirect control flow,
 can in general only be caught dynamically).

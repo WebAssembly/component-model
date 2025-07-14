@@ -85,11 +85,11 @@ class InstanceType(ExternType):
 @dataclass
 class FuncType(ExternType):
   params: list[tuple[str,ValType]]
-  results: list[ValType|tuple[str,ValType]]
+  result: list[ValType|tuple[str,ValType]]
   def param_types(self):
     return self.extract_types(self.params)
   def result_type(self):
-    return self.extract_types(self.results)
+    return self.extract_types(self.result)
   def extract_types(self, vec):
     if len(vec) == 0:
       return []
@@ -2119,7 +2119,7 @@ async def canon_backpressure_set(task, flat_args):
 async def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync)
-  trap_if(result_type != task.ft.results)
+  trap_if(result_type != task.ft.result)
   trap_if(not LiftOptions.equal(opts, task.opts))
   cx = LiftLowerContext(opts, task.inst, task)
   result = lift_flat_values(cx, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_type())
