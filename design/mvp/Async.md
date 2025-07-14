@@ -233,10 +233,9 @@ by Core WebAssembly code, it is meaningful for the built-in to work in terms
 
 The "current task" is modelled in the Canonical ABI's Python code
 by implicitly threading the `Task` object created by [`canon_lift`] through all
-the `async def` Python functions transitively called by `canon_lift`. Thus,
-although there can be multiple live `Task` objects in a component instance,
-"the current one" is always clear: it's the one passed to the current function
-as a parameter.
+the Python functions transitively called by `canon_lift`. Thus, although there
+can be multiple live `Task` objects in a component instance, "the current one"
+is always clear: it's the one passed to the current function as a parameter.
 
 ### Context-Local Storage
 

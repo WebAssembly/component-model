@@ -7,12 +7,12 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Optional, Callable, Awaitable, TypeVar, Generic, Literal
+from typing import Any, Optional, Callable, TypeVar, Generic, Literal
 from enum import Enum, IntEnum
 import math
 import struct
 import random
-import asyncio
+import threading
 
 class Trap(BaseException): pass
 class CoreWebAssemblyException(BaseException): pass
@@ -178,6 +178,37 @@ class FutureType(ValType):
 
 # START
 
+### Embedding API
+
+class Store:
+  pending: list[Thread]
+
+  def __init__(self):
+    self.pending = []
+
+  def invoke(self, f: FuncInst, caller, on_start, on_resolve) -> Call:
+    return f(caller, on_start, on_resolve)
+
+  def tick(self):
+    random.shuffle(self.pending)
+    for thread in self.pending:
+      if thread.ready():
+        thread.resume()
+        return
+
+FuncInst: Callable[[Optional[Supertask], OnStart, OnResolve], Call]
+
+OnStart = Callable[[], list[any]]
+OnResolve = Callable[[Optional[list[any]]], None]
+
+class Supertask:
+  inst: ComponentInstance
+  supertask: Optional[Supertask]
+
+class Call:
+  request_cancellation: Callable[[], None]
+
+
 ### Lifting and Lowering Context
 
 class LiftLowerContext:
@@ -214,24 +245,23 @@ class CanonicalOptions(LiftLowerOptions):
 
 ### Runtime State
 
-scheduler = asyncio.Lock()
-
 #### Component Instance State
 
 class ComponentInstance:
+  store: Store
   table: Table
   may_leave: bool
-  no_backpressure: asyncio.Event
-  exclusive: asyncio.Lock
-  pending_tasks: int
+  backpressure: bool
+  exclusive: bool
+  num_waiting_to_enter: int
 
-  def __init__(self):
+  def __init__(self, store):
+    self.store = store
     self.table = Table()
     self.may_leave = True
-    self.no_backpressure = asyncio.Event()
-    self.no_backpressure.set()
-    self.exclusive = asyncio.Lock()
-    self.pending_tasks = 0
+    self.backpressure = False
+    self.exclusive = False
+    self.num_waiting_to_enter = 0
 
 #### Table State
 
@@ -311,6 +341,87 @@ class ContextLocalStorage:
   def get(self, i):
     return self.array[i]
 
+#### Thread State
+
+class Thread:
+  task: Task
+  fiber: threading.Thread
+  fiber_lock: threading.Lock
+  parent_lock: Optional[threading.Lock]
+  ready_func: Optional[Callable[[], bool]]
+  cancellable: bool
+  cancelled: bool
+  in_event_loop: bool
+
+  def running(self):
+    return self.parent_lock is not None
+
+  def suspended(self):
+    return not self.running() and self.ready_func is None
+
+  def pending(self):
+    return not self.running() and self.ready_func is not None
+
+  def ready(self):
+    assert(self.pending())
+    return self.ready_func()
+
+  def __init__(self, task, thread_func):
+    self.task = task
+    self.fiber_lock = threading.Lock()
+    self.fiber_lock.acquire()
+    self.parent_lock = None
+    self.ready_func = None
+    self.cancellable = False
+    self.cancelled = False
+    self.in_event_loop = False
+    def fiber_func():
+      self.fiber_lock.acquire()
+      assert(self.running())
+      thread_func()
+      assert(self.running())
+      self.task.thread_stop(self)
+      self.parent_lock.release()
+    self.fiber = threading.Thread(target = fiber_func)
+    self.fiber.start()
+    self.task.thread_start(self)
+    assert(self.suspended())
+
+  def resume(self, cancel = False):
+    assert(not self.running() and not self.cancelled)
+    assert(self.cancellable or not cancel)
+    self.cancelled = cancel
+    self.parent_lock = threading.Lock()
+    self.parent_lock.acquire()
+    self.fiber_lock.release()
+    self.parent_lock.acquire()
+    self.parent_lock = None
+    assert(not self.running())
+
+  def suspend(self, cancellable) -> bool:
+    assert(self.running() and not self.cancellable and not self.cancelled)
+    self.cancellable = cancellable
+    self.parent_lock.release()
+    self.fiber_lock.acquire()
+    assert(self.running())
+    self.cancellable = False
+    completed = not self.cancelled
+    self.cancelled = False
+    assert(cancellable or completed)
+    return completed
+
+  def suspend_until(self, ready_func, cancellable = False) -> bool:
+    assert(self.running())
+    if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):
+      return True
+    self.ready_func = ready_func
+    self.task.inst.store.pending.append(self)
+    completed = self.suspend(cancellable)
+    assert(cancellable or ready_func())
+    self.ready_func = None
+    self.task.inst.store.pending.remove(self)
+    return completed
+
 #### Waitable State
 
 class EventCode(IntEnum):
@@ -326,42 +437,29 @@ EventTuple = tuple[EventCode, int, int]
 
 class Waitable:
   pending_event: Optional[Callable[[], EventTuple]]
-  has_pending_event_: asyncio.Event
-  maybe_waitable_set: Optional[WaitableSet]
+  wset: Optional[WaitableSet]
 
   def __init__(self):
     self.pending_event = None
-    self.has_pending_event_ = asyncio.Event()
-    self.maybe_waitable_set = None
+    self.wset = None
 
-  def set_event(self, pending_event):
+  def set_pending_event(self, pending_event):
     self.pending_event = pending_event
-    self.has_pending_event_.set()
-    if self.maybe_waitable_set:
-      self.maybe_waitable_set.maybe_has_pending_event.set()
 
   def has_pending_event(self):
-    assert(self.has_pending_event_.is_set() == bool(self.pending_event))
-    return self.has_pending_event_.is_set()
+    return bool(self.pending_event)
 
-  async def wait_for_pending_event(self):
-    return await self.has_pending_event_.wait()
-
-  def get_event(self) -> EventTuple:
-    assert(self.has_pending_event())
+  def get_pending_event(self) -> EventTuple:
     pending_event = self.pending_event
     self.pending_event = None
-    self.has_pending_event_.clear()
     return pending_event()
 
-  def join(self, maybe_waitable_set):
-    if self.maybe_waitable_set:
-      self.maybe_waitable_set.elems.remove(self)
-    self.maybe_waitable_set = maybe_waitable_set
-    if maybe_waitable_set:
-      maybe_waitable_set.elems.append(self)
-      if self.has_pending_event():
-        maybe_waitable_set.maybe_has_pending_event.set()
+  def join(self, wset):
+    if self.wset:
+      self.wset.elems.remove(self)
+    self.wset = wset
+    if wset:
+      wset.elems.append(self)
 
   def drop(self):
     assert(not self.has_pending_event())
@@ -369,24 +467,22 @@ class Waitable:
 
 class WaitableSet:
   elems: list[Waitable]
-  maybe_has_pending_event: asyncio.Event
   num_waiting: int
 
   def __init__(self):
     self.elems = []
-    self.maybe_has_pending_event = asyncio.Event()
     self.num_waiting = 0
 
-  def poll(self) -> Optional[EventTuple]:
-    if not DETERMINISTIC_PROFILE:
-      random.shuffle(self.elems)
+  def has_pending_event(self):
+    return any(w.has_pending_event() for w in self.elems)
+
+  def get_pending_event(self) -> EventTuple:
+    assert(self.has_pending_event())
+    random.shuffle(self.elems)
     for w in self.elems:
-      assert(self is w.maybe_waitable_set)
+      assert(self is w.wset)
       if w.has_pending_event():
-        assert(self.maybe_has_pending_event.is_set())
-        return w.get_event()
-    self.maybe_has_pending_event.clear()
-    return None
+        return w.get_pending_event()
 
   def drop(self):
     trap_if(len(self.elems) > 0)
@@ -394,15 +490,7 @@ class WaitableSet:
 
 #### Task State
 
-class Cancelled(IntEnum):
-  FALSE = 0
-  TRUE = 1
-
-OnStart = Callable[[], list[any]]
-OnResolve = Callable[[Optional[list[any]]], None]
-OnBlock = Callable[[Awaitable], Awaitable[Cancelled]]
-
-class Task:
+class Task(Call, Supertask):
   class State(Enum):
     INITIAL = 1
     PENDING_CANCEL = 2
@@ -415,19 +503,19 @@ class Task:
   ft: FuncType
   supertask: Optional[Task]
   on_resolve: OnResolve
-  on_block: OnBlock
   num_borrows: int
+  thread: Optional[Thread]
   context: ContextLocalStorage
 
-  def __init__(self, opts, inst, ft, supertask, on_resolve, on_block):
+  def __init__(self, opts, inst, ft, supertask, on_resolve):
     self.state = Task.State.INITIAL
     self.opts = opts
     self.inst = inst
     self.ft = ft
     self.supertask = supertask
     self.on_resolve = on_resolve
-    self.on_block = on_block
     self.num_borrows = 0
+    self.thread = None
     self.context = ContextLocalStorage()
 
   def trap_if_on_the_stack(self, inst):
@@ -439,109 +527,60 @@ class Task:
   def needs_exclusive(self):
     return self.opts.sync or self.opts.callback
 
-  async def enter(self):
-    if (self.inst.no_backpressure.is_set() and
-        self.inst.pending_tasks == 0 and
-        (not self.needs_exclusive() or not self.inst.exclusive.locked())):
-      if self.needs_exclusive():
-        await self.inst.exclusive.acquire()
-      return True
+  def enter(self):
+    def has_backpressure():
+      return self.inst.backpressure or (self.needs_exclusive() and self.inst.exclusive)
+    if has_backpressure() or self.inst.num_waiting_to_enter > 0:
+      self.inst.num_waiting_to_enter += 1
+      completed = self.thread.suspend_until(lambda: not has_backpressure(), cancellable = True)
+      self.inst.num_waiting_to_enter -= 1
+      if not completed:
+        self.cancel()
+        return False
+    if self.needs_exclusive():
+      assert(not self.inst.exclusive)
+      self.inst.exclusive = True
+    return True
+
+  def request_cancellation(self):
+    assert(self.state == Task.State.INITIAL)
+    if self.thread.cancellable and not (self.thread.in_event_loop and self.inst.exclusive):
+      self.state = Task.State.CANCEL_DELIVERED
+      self.thread.resume(cancel = True)
     else:
-      while True:
-        self.inst.pending_tasks += 1
-        no_backpressure = asyncio.create_task(self.inst.no_backpressure.wait())
-        cancelled = await self.on_block(no_backpressure)
-        self.inst.pending_tasks -= 1
-        if cancelled:
-          self.on_resolve(None)
-          return False
-        if not self.inst.no_backpressure.is_set():
-          continue
-        if self.needs_exclusive():
-          acquired = asyncio.create_task(self.inst.exclusive.acquire())
-          if await self.on_block(acquired) == Cancelled.TRUE:
-            if acquired.done():
-              self.inst.exclusive.release()
-            else:
-              acquired.cancel()
-            self.on_resolve(None)
-            return False
-          if not self.inst.no_backpressure.is_set():
-            self.inst.exclusive.release()
-            continue
-        return True
+      self.state = Task.State.PENDING_CANCEL
 
-  async def block_on(self, awaitable, cancellable = False, for_callback = False) -> Cancelled:
-    f = asyncio.ensure_future(awaitable)
-    if f.done() and not DETERMINISTIC_PROFILE and random.randint(0,1):
-      return Cancelled.FALSE
-
-    if for_callback:
-      self.inst.exclusive.release()
-
-    cancelled = await self.on_block(f)
-    if cancelled and not cancellable:
-      assert(await self.on_block(f) == Cancelled.FALSE)
-
-    if for_callback:
-      acquired = asyncio.create_task(self.inst.exclusive.acquire())
-      if await self.on_block(acquired) == Cancelled.TRUE:
-        assert(self.on_block(acquired) == Cancelled.FALSE)
-        cancelled = Cancelled.TRUE
-
-    if cancelled:
-      assert(self.state == Task.State.INITIAL)
-      if not cancellable:
-        self.state = Task.State.PENDING_CANCEL
-        return Cancelled.FALSE
-      else:
-        self.state = Task.State.CANCEL_DELIVERED
-        return Cancelled.TRUE
-    else:
-      return Cancelled.FALSE
-
-  async def call_sync(self, callee, on_start, on_return):
-    async def sync_on_block(awaitable):
-      if await self.on_block(awaitable) == Cancelled.TRUE:
-        assert(self.state == Task.State.INITIAL)
-        self.state = Task.State.PENDING_CANCEL
-        assert(await self.on_block(awaitable) == Cancelled.FALSE)
-      return Cancelled.FALSE
-
-    await callee(self, on_start, on_return, sync_on_block)
-
-  async def wait_for_event(self, waitable_set, cancellable, for_callback) -> EventTuple:
+  def suspend_until(self, ready_func, cancellable) -> bool:
     if cancellable and self.state == Task.State.PENDING_CANCEL:
       self.state = Task.State.CANCEL_DELIVERED
-      return (EventCode.TASK_CANCELLED, 0, 0)
-    else:
-      waitable_set.num_waiting += 1
-      e = None
-      while not e:
-        maybe_event = waitable_set.maybe_has_pending_event.wait()
-        if await self.block_on(maybe_event, cancellable, for_callback) == Cancelled.TRUE:
-          return (EventCode.TASK_CANCELLED, 0, 0)
-        e = waitable_set.poll()
-      waitable_set.num_waiting -= 1
-    return e
+      return False
+    return self.thread.suspend_until(ready_func, cancellable)
 
-  async def yield_(self, cancellable, for_callback) -> EventTuple:
-    if cancellable and self.state == Task.State.PENDING_CANCEL:
-      self.state = Task.State.CANCEL_DELIVERED
-      return (EventCode.TASK_CANCELLED, 0, 0)
-    elif await self.block_on(asyncio.sleep(0), cancellable, for_callback) == Cancelled.TRUE:
-      return (EventCode.TASK_CANCELLED, 0, 0)
+  def wait_until(self, ready_func, wset, cancellable) -> EventTuple:
+    wset.num_waiting += 1
+    def ready_and_has_event():
+      return ready_func() and wset.has_pending_event()
+    if not self.suspend_until(ready_and_has_event, cancellable):
+      event = (EventCode.TASK_CANCELLED, 0, 0)
     else:
-      return (EventCode.NONE, 0, 0)
+      event = wset.get_pending_event()
+    wset.num_waiting -= 1
+    return event
 
-  async def poll_for_event(self, waitable_set, cancellable, for_callback) -> Optional[EventTuple]:
-    waitable_set.num_waiting += 1
-    event_code,_,_ = e = await self.yield_(cancellable, for_callback)
-    waitable_set.num_waiting -= 1
-    if event_code == EventCode.TASK_CANCELLED:
-      return e
-    elif (e := waitable_set.poll()):
-      return e
+  def poll_until(self, ready_func, wset, cancellable) -> Optional[EventTuple]:
+    wset.num_waiting += 1
+    if not self.suspend_until(ready_func, cancellable):
+      event = (EventCode.TASK_CANCELLED, 0, 0)
+    elif wset.has_pending_event():
+      event = wset.get_pending_event()
+    else:
+      event = (EventCode.NONE, 0, 0)
+    wset.num_waiting -= 1
+    return event
+
+  def yield_until(self, ready_func, cancellable) -> EventTuple:
+    if not self.suspend_until(ready_func, cancellable):
+      return (EventCode.TASK_CANCELLED, 0, 0)
     else:
       return (EventCode.NONE, 0, 0)
 
@@ -559,10 +598,20 @@ class Task:
     self.state = Task.State.RESOLVED
 
   def exit(self):
+    assert(self.thread is not None)
+    if self.needs_exclusive():
+      assert(self.inst.exclusive)
+      self.inst.exclusive = False
+
+  def thread_start(self, thread):
+    assert(self.thread is None and thread.task is self)
+    self.thread = thread
+
+  def thread_stop(self, thread):
+    assert(thread is self.thread and thread.task is self)
+    self.thread = None
     trap_if(self.state != Task.State.RESOLVED)
     assert(self.num_borrows == 0)
-    if self.needs_exclusive():
-      self.inst.exclusive.release()
 
 #### Subtask State
 
@@ -575,35 +624,16 @@ class Subtask(Waitable):
     CANCELLED_BEFORE_RETURNED = 4
 
   state: State
-  supertask: Optional[Task]
+  callee: Optional[Call]
   lenders: Optional[list[ResourceHandle]]
-  request_cancel_begin: asyncio.Future
-  request_cancel_end: asyncio.Future
+  cancellation_requested: bool
 
-  def __init__(self, supertask):
+  def __init__(self):
     Waitable.__init__(self)
     self.state = Subtask.State.STARTING
-    self.supertask = supertask
+    self.callee = None
     self.lenders = []
-    self.request_cancel_begin = asyncio.Future()
-    self.request_cancel_end = asyncio.Future()
-
-  async def call_sync(self, callee, on_start, on_resolve):
-    def sync_on_start():
-      assert(self.state == Subtask.State.STARTING)
-      self.state = Subtask.State.STARTED
-      return on_start()
-
-    def sync_on_resolve(result):
-      assert(result is not None)
-      assert(self.state == Subtask.State.STARTED)
-      self.state = Subtask.State.RETURNED
-      on_resolve(result)
-
-    await Task.call_sync(self.supertask, callee, sync_on_start, sync_on_resolve)
-
-  def cancelled(self):
-    return self.request_cancel_begin.done()
+    self.cancellation_requested = False
 
   def resolved(self):
     match self.state:
@@ -614,58 +644,6 @@ class Subtask(Waitable):
             Subtask.State.CANCELLED_BEFORE_STARTED |
             Subtask.State.CANCELLED_BEFORE_RETURNED):
         return True
-
-  async def request_cancel(self):
-    assert(not self.cancelled() and not self.resolved())
-    self.request_cancel_begin.set_result(None)
-    await self.request_cancel_end
-
-  async def call_async(self, callee, on_start, on_resolve):
-    async def do_call():
-      await callee(self.supertask, async_on_start, async_on_resolve, async_on_block)
-      relinquish_control()
-
-    def async_on_start():
-      assert(self.state == Subtask.State.STARTING)
-      self.state = Subtask.State.STARTED
-      return on_start()
-
-    def async_on_resolve(result):
-      if result is None:
-        if self.state == Subtask.State.STARTING:
-          self.state = Subtask.State.CANCELLED_BEFORE_STARTED
-        else:
-          assert(self.state == Subtask.State.STARTED)
-          self.state = Subtask.State.CANCELLED_BEFORE_RETURNED
-      else:
-        assert(self.state == Subtask.State.STARTED)
-        self.state = Subtask.State.RETURNED
-      on_resolve(result)
-
-    async def async_on_block(awaitable):
-      relinquish_control()
-      if not self.request_cancel_end.done():
-        await asyncio.wait([awaitable, self.request_cancel_begin],
-                           return_when = asyncio.FIRST_COMPLETED)
-        if self.request_cancel_begin.done():
-          return Cancelled.TRUE
-      else:
-        await awaitable
-      assert(awaitable.done())
-      await scheduler.acquire()
-      return Cancelled.FALSE
-
-    def relinquish_control():
-      if not ret.done():
-        ret.set_result(None)
-      elif self.request_cancel_begin.done() and not self.request_cancel_end.done():
-        self.request_cancel_end.set_result(None)
-      else:
-        scheduler.release()
-
-    ret = asyncio.Future()
-    asyncio.create_task(do_call())
-    await ret
 
   def add_lender(self, lending_handle):
     assert(not self.resolve_delivered() and not self.resolved())
@@ -1921,55 +1899,64 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
 
 ### `canon lift`
 
-async def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve, on_block):
-  task = Task(opts, inst, ft, caller, on_resolve, on_block)
+def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
+  task = Task(opts, inst, ft, caller, on_resolve)
   task.trap_if_on_the_stack(inst)
-  if not await task.enter():
-    return
+  def thread_func():
+    if not task.enter():
+      return
 
-  cx = LiftLowerContext(opts, inst, task)
-  args = on_start()
-  flat_args = lower_flat_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
-  flat_ft = flatten_functype(opts, ft, 'lift')
-  assert(types_match_values(flat_ft.params, flat_args))
+    cx = LiftLowerContext(opts, inst, task)
+    args = on_start()
+    flat_args = lower_flat_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
+    flat_ft = flatten_functype(opts, ft, 'lift')
+    assert(types_match_values(flat_ft.params, flat_args))
 
-  if opts.sync:
-    flat_results = await call_and_trap_on_throw(callee, task, flat_args)
-    assert(types_match_values(flat_ft.results, flat_results))
-    result = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_type())
-    task.return_(result)
-    if opts.post_return is not None:
-      task.inst.may_leave = False
-      [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
-      task.inst.may_leave = True
-    task.exit()
-    return
+    if opts.sync:
+      flat_results = call_and_trap_on_throw(callee, task, flat_args)
+      assert(types_match_values(flat_ft.results, flat_results))
+      result = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_type())
+      task.return_(result)
+      if opts.post_return is not None:
+        inst.may_leave = False
+        [] = call_and_trap_on_throw(opts.post_return, task, flat_results)
+        inst.may_leave = True
+      task.exit()
+      return
 
-  if not opts.callback:
-    [] = await call_and_trap_on_throw(callee, task, flat_args)
-    assert(types_match_values(flat_ft.results, []))
-    task.exit()
-    return
+    if not opts.callback:
+      [] = call_and_trap_on_throw(callee, task, flat_args)
+      assert(types_match_values(flat_ft.results, []))
+      task.exit()
+      return
 
-  [packed] = await call_and_trap_on_throw(callee, task, flat_args)
-  while True:
+    [packed] = call_and_trap_on_throw(callee, task, flat_args)
     code,si = unpack_callback_result(packed)
-    match code:
-      case CallbackCode.EXIT:
-        task.exit()
-        return
-      case CallbackCode.YIELD:
-        e = await task.yield_(cancellable = True, for_callback = True)
-      case CallbackCode.WAIT:
-        s = task.inst.table.get(si)
-        trap_if(not isinstance(s, WaitableSet))
-        e = await task.wait_for_event(s, cancellable = True, for_callback = True)
-      case CallbackCode.POLL:
-        s = task.inst.table.get(si)
-        trap_if(not isinstance(s, WaitableSet))
-        e = await task.poll_for_event(s, cancellable = True, for_callback = True)
-    event_code, p1, p2 = e
-    [packed] = await call_and_trap_on_throw(opts.callback, task, [event_code, p1, p2])
+    while code != CallbackCode.EXIT:
+      thread.in_event_loop = True
+      inst.exclusive = False
+      match code:
+        case CallbackCode.YIELD:
+          event = task.yield_until(lambda: not inst.exclusive, cancellable = True)
+        case CallbackCode.WAIT:
+          wset = inst.table.get(si)
+          trap_if(not isinstance(wset, WaitableSet))
+          event = task.wait_until(lambda: not inst.exclusive, wset, cancellable = True)
+        case CallbackCode.POLL:
+          wset = inst.table.get(si)
+          trap_if(not isinstance(wset, WaitableSet))
+          event = task.poll_until(lambda: not inst.exclusive, wset, cancellable = True)
+      thread.in_event_loop = False
+      inst.exclusive = True
+      event_code, p1, p2 = event
+      [packed] = call_and_trap_on_throw(opts.callback, task, [event_code, p1, p2])
+      code,si = unpack_callback_result(packed)
+    task.exit()
+    return
+
+  thread = Thread(task, thread_func)
+  thread.resume()
+  return task
 
 class CallbackCode(IntEnum):
   EXIT = 0
@@ -1986,67 +1973,82 @@ def unpack_callback_result(packed):
   waitable_set_index = packed >> 4
   return (CallbackCode(code), waitable_set_index)
 
-async def call_and_trap_on_throw(callee, task, args):
+def call_and_trap_on_throw(callee, task, args):
   try:
-    return await callee(task, args)
+    return callee(task, args)
   except CoreWebAssemblyException:
     trap()
 
 ### `canon lower`
 
-async def canon_lower(opts, ft, callee, task, flat_args):
+def canon_lower(opts, ft, callee: FuncInst, task, flat_args):
   trap_if(not task.inst.may_leave)
-  subtask = Subtask(task)
+  subtask = Subtask()
   cx = LiftLowerContext(opts, task.inst, subtask)
+
   flat_ft = flatten_functype(opts, ft, 'lower')
   assert(types_match_values(flat_ft.params, flat_args))
   flat_args = CoreValueIter(flat_args)
 
   if opts.sync:
-    def on_start():
-      return lift_flat_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
+    max_flat_params = MAX_FLAT_PARAMS
+    max_flat_results = MAX_FLAT_RESULTS
+  else:
+    max_flat_params = MAX_FLAT_ASYNC_PARAMS
+    max_flat_results = 0
 
-    flat_results = None
-    def on_resolve(result):
-      nonlocal flat_results
-      flat_results = lower_flat_values(cx, MAX_FLAT_RESULTS, result, ft.result_type(), flat_args)
-
-    await subtask.call_sync(callee, on_start, on_resolve)
-    assert(types_match_values(flat_ft.results, flat_results))
-    subtask.deliver_resolve()
-    return flat_results
+  on_progress = lambda:()
+  flat_results = None
 
   def on_start():
     on_progress()
-    return lift_flat_values(cx, MAX_FLAT_ASYNC_PARAMS, flat_args, ft.param_types())
+    assert(subtask.state == Subtask.State.STARTING)
+    subtask.state = Subtask.State.STARTED
+    return lift_flat_values(cx, max_flat_params, flat_args, ft.param_types())
 
   def on_resolve(result):
     on_progress()
-    if result is not None:
-      [] = lower_flat_values(cx, 0, result, ft.result_type(), flat_args)
+    if result is None:
+      assert(subtask.cancellation_requested)
+      if subtask.state == Subtask.State.STARTING:
+        subtask.state = Subtask.State.CANCELLED_BEFORE_STARTED
+      else:
+        assert(subtask.state == Subtask.State.STARTED)
+        subtask.state = Subtask.State.CANCELLED_BEFORE_RETURNED
+    else:
+      assert(subtask.state == Subtask.State.STARTED)
+      subtask.state = Subtask.State.RETURNED
+      nonlocal flat_results
+      flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
 
-  subtaski = None
-  def on_progress():
-    if subtaski is not None:
-      def subtask_event():
-        if subtask.resolved():
-          subtask.deliver_resolve()
-        return (EventCode.SUBTASK, subtaski, subtask.state)
-      subtask.set_event(subtask_event)
+  subtask.callee = callee(task, on_start, on_resolve)
 
-  await subtask.call_async(callee, on_start, on_resolve)
-  if subtask.resolved():
+  if opts.sync:
+    if not subtask.resolved():
+      task.thread.suspend_until(subtask.resolved)
+    assert(types_match_values(flat_ft.results, flat_results))
     subtask.deliver_resolve()
-    return [Subtask.State.RETURNED]
-
-  subtaski = task.inst.table.add(subtask)
-  assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
-  assert(0 <= subtask.state < 2**4)
-  return [subtask.state | (subtaski << 4)]
+    return flat_results
+  else:
+    if subtask.resolved():
+      assert(flat_results == [])
+      subtask.deliver_resolve()
+      return [Subtask.State.RETURNED]
+    else:
+      subtaski = task.inst.table.add(subtask)
+      def on_progress():
+        def subtask_event():
+          if subtask.resolved():
+            subtask.deliver_resolve()
+          return (EventCode.SUBTASK, subtaski, subtask.state)
+        subtask.set_pending_event(subtask_event)
+      assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
+      assert(0 <= subtask.state < 2**4)
+      return [subtask.state | (subtaski << 4)]
 
 ### `canon resource.new`
 
-async def canon_resource_new(rt, task, rep):
+def canon_resource_new(rt, task, rep):
   trap_if(not task.inst.may_leave)
   h = ResourceHandle(rt, rep, own = True)
   i = task.inst.table.add(h)
@@ -2054,7 +2056,7 @@ async def canon_resource_new(rt, task, rep):
 
 ### `canon resource.drop`
 
-async def canon_resource_drop(rt, sync, task, i):
+def canon_resource_drop(rt, sync, task, i):
   trap_if(not task.inst.may_leave)
   inst = task.inst
   h = inst.table.remove(i)
@@ -2066,14 +2068,14 @@ async def canon_resource_drop(rt, sync, task, i):
     assert(h.borrow_scope is None)
     if inst is rt.impl:
       if rt.dtor:
-        await rt.dtor(h.rep)
+        rt.dtor(h.rep)
     else:
       if rt.dtor:
         caller_opts = CanonicalOptions(sync = sync)
         callee_opts = CanonicalOptions(sync = rt.dtor_sync, callback = rt.dtor_callback)
         ft = FuncType([U32Type()],[])
         callee = partial(canon_lift, callee_opts, rt.impl, ft, rt.dtor)
-        flat_results = await canon_lower(caller_opts, ft, callee, task, [h.rep])
+        flat_results = canon_lower(caller_opts, ft, callee, task, [h.rep])
       else:
         task.trap_if_on_the_stack(rt.impl)
   else:
@@ -2082,7 +2084,7 @@ async def canon_resource_drop(rt, sync, task, i):
 
 ### `canon resource.rep`
 
-async def canon_resource_rep(rt, task, i):
+def canon_resource_rep(rt, task, i):
   h = task.inst.table.get(i)
   trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not rt)
@@ -2090,14 +2092,14 @@ async def canon_resource_rep(rt, task, i):
 
 ### 🔀 `canon context.get`
 
-async def canon_context_get(t, i, task):
+def canon_context_get(t, i, task):
   assert(t == 'i32')
   assert(i < ContextLocalStorage.LENGTH)
   return [task.context.get(i)]
 
 ### 🔀 `canon context.set`
 
-async def canon_context_set(t, i, task, v):
+def canon_context_set(t, i, task, v):
   assert(t == 'i32')
   assert(i < ContextLocalStorage.LENGTH)
   task.context.set(i, v)
@@ -2105,18 +2107,15 @@ async def canon_context_set(t, i, task, v):
 
 ### 🔀 `canon backpressure.set`
 
-async def canon_backpressure_set(task, flat_args):
+def canon_backpressure_set(task, flat_args):
   trap_if(task.opts.sync)
   assert(len(flat_args) == 1)
-  if flat_args[0] == 0:
-    task.inst.no_backpressure.set()
-  else:
-    task.inst.no_backpressure.clear()
+  task.inst.backpressure = bool(flat_args[0])
   return []
 
 ### 🔀 `canon task.return`
 
-async def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
+def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync)
   trap_if(result_type != task.ft.result)
@@ -2128,7 +2127,7 @@ async def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
 
 ### 🔀 `canon task.cancel`
 
-async def canon_task_cancel(task):
+def canon_task_cancel(task):
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync)
   task.cancel()
@@ -2136,9 +2135,9 @@ async def canon_task_cancel(task):
 
 ### 🔀 `canon yield`
 
-async def canon_yield(cancellable, task):
+def canon_yield(cancellable, task):
   trap_if(not task.inst.may_leave)
-  event_code,_,_ = await task.yield_(cancellable, for_callback = False)
+  event_code,_,_ = task.yield_until(lambda:True, cancellable)
   match event_code:
     case EventCode.NONE:
       return [0]
@@ -2147,18 +2146,18 @@ async def canon_yield(cancellable, task):
 
 ### 🔀 `canon waitable-set.new`
 
-async def canon_waitable_set_new(task):
+def canon_waitable_set_new(task):
   trap_if(not task.inst.may_leave)
   return [ task.inst.table.add(WaitableSet()) ]
 
 ### 🔀 `canon waitable-set.wait`
 
-async def canon_waitable_set_wait(cancellable, mem, task, si, ptr):
+def canon_waitable_set_wait(cancellable, mem, task, si, ptr):
   trap_if(not task.inst.may_leave)
-  s = task.inst.table.get(si)
-  trap_if(not isinstance(s, WaitableSet))
-  e = await task.wait_for_event(s, cancellable, for_callback = False)
-  return unpack_event(mem, task, ptr, e)
+  wset = task.inst.table.get(si)
+  trap_if(not isinstance(wset, WaitableSet))
+  event = task.wait_until(lambda:True, wset, cancellable)
+  return unpack_event(mem, task, ptr, event)
 
 def unpack_event(mem, task, ptr, e: EventTuple):
   event, p1, p2 = e
@@ -2169,65 +2168,64 @@ def unpack_event(mem, task, ptr, e: EventTuple):
 
 ### 🔀 `canon waitable-set.poll`
 
-async def canon_waitable_set_poll(cancellable, mem, task, si, ptr):
+def canon_waitable_set_poll(cancellable, mem, task, si, ptr):
   trap_if(not task.inst.may_leave)
-  s = task.inst.table.get(si)
-  trap_if(not isinstance(s, WaitableSet))
-  e = await task.poll_for_event(s, cancellable, for_callback = False)
-  return unpack_event(mem, task, ptr, e)
+  wset = task.inst.table.get(si)
+  trap_if(not isinstance(wset, WaitableSet))
+  event = task.poll_until(lambda:True, wset, cancellable)
+  return unpack_event(mem, task, ptr, event)
 
 ### 🔀 `canon waitable-set.drop`
 
-async def canon_waitable_set_drop(task, i):
+def canon_waitable_set_drop(task, i):
   trap_if(not task.inst.may_leave)
-  s = task.inst.table.remove(i)
-  trap_if(not isinstance(s, WaitableSet))
-  s.drop()
+  wset = task.inst.table.remove(i)
+  trap_if(not isinstance(wset, WaitableSet))
+  wset.drop()
   return []
 
 ### 🔀 `canon waitable.join`
 
-async def canon_waitable_join(task, wi, si):
+def canon_waitable_join(task, wi, si):
   trap_if(not task.inst.may_leave)
   w = task.inst.table.get(wi)
   trap_if(not isinstance(w, Waitable))
   if si == 0:
     w.join(None)
   else:
-    s = task.inst.table.get(si)
-    trap_if(not isinstance(s, WaitableSet))
-    w.join(s)
+    wset = task.inst.table.get(si)
+    trap_if(not isinstance(wset, WaitableSet))
+    w.join(wset)
   return []
 
 ### 🔀 `canon subtask.cancel`
 
 BLOCKED = 0xffff_ffff
 
-async def canon_subtask_cancel(sync, task, i):
+def canon_subtask_cancel(sync, task, i):
   trap_if(not task.inst.may_leave)
   subtask = task.inst.table.get(i)
   trap_if(not isinstance(subtask, Subtask))
-  trap_if(subtask.resolve_delivered() or subtask.cancelled())
+  trap_if(subtask.resolve_delivered())
+  trap_if(subtask.cancellation_requested)
   if subtask.resolved():
     assert(subtask.has_pending_event())
   else:
-    await subtask.request_cancel()
-    if sync:
-      while not subtask.resolved():
-        if subtask.has_pending_event():
-          _ = subtask.get_event()
-        await task.block_on(subtask.wait_for_pending_event())
-    else:
-      if not subtask.resolved():
+    subtask.cancellation_requested = True
+    subtask.callee.request_cancellation()
+    if not subtask.resolved():
+      if sync:
+        task.thread.suspend_until(subtask.resolved)
+      else:
         return [BLOCKED]
-  code,index,payload = subtask.get_event()
+  code,index,payload = subtask.get_pending_event()
   assert(code == EventCode.SUBTASK and index == i and payload == subtask.state)
   assert(subtask.resolve_delivered())
   return [subtask.state]
 
 ### 🔀 `canon subtask.drop`
 
-async def canon_subtask_drop(task, i):
+def canon_subtask_drop(task, i):
   trap_if(not task.inst.may_leave)
   s = task.inst.table.remove(i)
   trap_if(not isinstance(s, Subtask))
@@ -2236,14 +2234,14 @@ async def canon_subtask_drop(task, i):
 
 ### 🔀 `canon {stream,future}.new`
 
-async def canon_stream_new(stream_t, task):
+def canon_stream_new(stream_t, task):
   trap_if(not task.inst.may_leave)
   shared = SharedStreamImpl(stream_t.t)
   ri = task.inst.table.add(ReadableStreamEnd(shared))
   wi = task.inst.table.add(WritableStreamEnd(shared))
   return [ ri | (wi << 32) ]
 
-async def canon_future_new(future_t, task):
+def canon_future_new(future_t, task):
   trap_if(not task.inst.may_leave)
   shared = SharedFutureImpl(future_t.t)
   ri = task.inst.table.add(ReadableFutureEnd(shared))
@@ -2252,15 +2250,15 @@ async def canon_future_new(future_t, task):
 
 ### 🔀 `canon stream.{read,write}`
 
-async def canon_stream_read(stream_t, opts, task, i, ptr, n):
-  return await stream_copy(ReadableStreamEnd, WritableBufferGuestImpl, EventCode.STREAM_READ,
-                           stream_t, opts, task, i, ptr, n)
+def canon_stream_read(stream_t, opts, task, i, ptr, n):
+  return stream_copy(ReadableStreamEnd, WritableBufferGuestImpl, EventCode.STREAM_READ,
+                     stream_t, opts, task, i, ptr, n)
 
-async def canon_stream_write(stream_t, opts, task, i, ptr, n):
-  return await stream_copy(WritableStreamEnd, ReadableBufferGuestImpl, EventCode.STREAM_WRITE,
-                           stream_t, opts, task, i, ptr, n)
+def canon_stream_write(stream_t, opts, task, i, ptr, n):
+  return stream_copy(WritableStreamEnd, ReadableBufferGuestImpl, EventCode.STREAM_WRITE,
+                     stream_t, opts, task, i, ptr, n)
 
-async def stream_copy(EndT, BufferT, event_code, stream_t, opts, task, i, ptr, n):
+def stream_copy(EndT, BufferT, event_code, stream_t, opts, task, i, ptr, n):
   trap_if(not task.inst.may_leave)
   e = task.inst.table.get(i)
   trap_if(not isinstance(e, EndT))
@@ -2283,35 +2281,34 @@ async def stream_copy(EndT, BufferT, event_code, stream_t, opts, task, i, ptr, n
     return (event_code, i, packed_result)
 
   def on_copy(reclaim_buffer):
-    e.set_event(partial(stream_event, CopyResult.COMPLETED, reclaim_buffer))
+    e.set_pending_event(partial(stream_event, CopyResult.COMPLETED, reclaim_buffer))
 
   def on_copy_done(result):
-    e.set_event(partial(stream_event, result, reclaim_buffer = lambda:()))
+    e.set_pending_event(partial(stream_event, result, reclaim_buffer = lambda:()))
 
   e.copying = True
   e.copy(task.inst, buffer, on_copy, on_copy_done)
 
-  if opts.sync and not e.has_pending_event():
-    await task.block_on(e.wait_for_pending_event())
-
-  if e.has_pending_event():
-    code,index,payload = e.get_event()
-    assert(code == event_code and index == i and payload != BLOCKED)
-    return [payload]
-  else:
-    return [BLOCKED]
+  if not e.has_pending_event():
+    if opts.sync:
+      task.thread.suspend_until(e.has_pending_event)
+    else:
+      return [BLOCKED]
+  code,index,payload = e.get_pending_event()
+  assert(code == event_code and index == i and payload != BLOCKED)
+  return [payload]
 
 ### 🔀 `canon future.{read,write}`
 
-async def canon_future_read(future_t, opts, task, i, ptr):
-  return await future_copy(ReadableFutureEnd, WritableBufferGuestImpl, EventCode.FUTURE_READ,
-                           future_t, opts, task, i, ptr)
+def canon_future_read(future_t, opts, task, i, ptr):
+  return future_copy(ReadableFutureEnd, WritableBufferGuestImpl, EventCode.FUTURE_READ,
+                     future_t, opts, task, i, ptr)
 
-async def canon_future_write(future_t, opts, task, i, ptr):
-  return await future_copy(WritableFutureEnd, ReadableBufferGuestImpl, EventCode.FUTURE_WRITE,
-                           future_t, opts, task, i, ptr)
+def canon_future_write(future_t, opts, task, i, ptr):
+  return future_copy(WritableFutureEnd, ReadableBufferGuestImpl, EventCode.FUTURE_WRITE,
+                     future_t, opts, task, i, ptr)
 
-async def future_copy(EndT, BufferT, event_code, future_t, opts, task, i, ptr):
+def future_copy(EndT, BufferT, event_code, future_t, opts, task, i, ptr):
   trap_if(not task.inst.may_leave)
   e = task.inst.table.get(i)
   trap_if(not isinstance(e, EndT))
@@ -2332,36 +2329,35 @@ async def future_copy(EndT, BufferT, event_code, future_t, opts, task, i, ptr):
 
   def on_copy_done(result):
     assert(result != CopyResult.DROPPED or event_code == EventCode.FUTURE_WRITE)
-    e.set_event(partial(future_event, result))
+    e.set_pending_event(partial(future_event, result))
 
   e.copying = True
   e.copy(task.inst, buffer, on_copy_done)
 
-  if opts.sync and not e.has_pending_event():
-    await task.block_on(e.wait_for_pending_event())
-
-  if e.has_pending_event():
-    code,index,payload = e.get_event()
-    assert(code == event_code and index == i)
-    return [payload]
-  else:
-    return [BLOCKED]
+  if not e.has_pending_event():
+    if opts.sync:
+      task.thread.suspend_until(e.has_pending_event)
+    else:
+      return [BLOCKED]
+  code,index,payload = e.get_pending_event()
+  assert(code == event_code and index == i)
+  return [payload]
 
 ### 🔀 `canon {stream,future}.cancel-{read,write}`
 
-async def canon_stream_cancel_read(stream_t, sync, task, i):
-  return await cancel_copy(ReadableStreamEnd, EventCode.STREAM_READ, stream_t, sync, task, i)
+def canon_stream_cancel_read(stream_t, sync, task, i):
+  return cancel_copy(ReadableStreamEnd, EventCode.STREAM_READ, stream_t, sync, task, i)
 
-async def canon_stream_cancel_write(stream_t, sync, task, i):
-  return await cancel_copy(WritableStreamEnd, EventCode.STREAM_WRITE, stream_t, sync, task, i)
+def canon_stream_cancel_write(stream_t, sync, task, i):
+  return cancel_copy(WritableStreamEnd, EventCode.STREAM_WRITE, stream_t, sync, task, i)
 
-async def canon_future_cancel_read(future_t, sync, task, i):
-  return await cancel_copy(ReadableFutureEnd, EventCode.FUTURE_READ, future_t, sync, task, i)
+def canon_future_cancel_read(future_t, sync, task, i):
+  return cancel_copy(ReadableFutureEnd, EventCode.FUTURE_READ, future_t, sync, task, i)
 
-async def canon_future_cancel_write(future_t, sync, task, i):
-  return await cancel_copy(WritableFutureEnd, EventCode.FUTURE_WRITE, future_t, sync, task, i)
+def canon_future_cancel_write(future_t, sync, task, i):
+  return cancel_copy(WritableFutureEnd, EventCode.FUTURE_WRITE, future_t, sync, task, i)
 
-async def cancel_copy(EndT, event_code, stream_or_future_t, sync, task, i):
+def cancel_copy(EndT, event_code, stream_or_future_t, sync, task, i):
   trap_if(not task.inst.may_leave)
   e = task.inst.table.get(i)
   trap_if(not isinstance(e, EndT))
@@ -2371,28 +2367,28 @@ async def cancel_copy(EndT, event_code, stream_or_future_t, sync, task, i):
     e.shared.cancel()
     if not e.has_pending_event():
       if sync:
-        await task.block_on(e.wait_for_pending_event())
+        task.thread.suspend_until(e.has_pending_event)
       else:
         return [BLOCKED]
-  code,index,payload = e.get_event()
+  code,index,payload = e.get_pending_event()
   assert(not e.copying and code == event_code and index == i)
   return [payload]
 
 ### 🔀 `canon {stream,future}.drop-{readable,writable}`
 
-async def canon_stream_drop_readable(stream_t, task, i):
-  return await drop(ReadableStreamEnd, stream_t, task, i)
+def canon_stream_drop_readable(stream_t, task, i):
+  return drop(ReadableStreamEnd, stream_t, task, i)
 
-async def canon_stream_drop_writable(stream_t, task, hi):
-  return await drop(WritableStreamEnd, stream_t, task, hi)
+def canon_stream_drop_writable(stream_t, task, hi):
+  return drop(WritableStreamEnd, stream_t, task, hi)
 
-async def canon_future_drop_readable(future_t, task, i):
-  return await drop(ReadableFutureEnd, future_t, task, i)
+def canon_future_drop_readable(future_t, task, i):
+  return drop(ReadableFutureEnd, future_t, task, i)
 
-async def canon_future_drop_writable(future_t, task, hi):
-  return await drop(WritableFutureEnd, future_t, task, hi)
+def canon_future_drop_writable(future_t, task, hi):
+  return drop(WritableFutureEnd, future_t, task, hi)
 
-async def drop(EndT, stream_or_future_t, task, hi):
+def drop(EndT, stream_or_future_t, task, hi):
   trap_if(not task.inst.may_leave)
   e = task.inst.table.remove(hi)
   trap_if(not isinstance(e, EndT))
@@ -2406,7 +2402,7 @@ async def drop(EndT, stream_or_future_t, task, hi):
 class ErrorContext:
   debug_message: String
 
-async def canon_error_context_new(opts, task, ptr, tagged_code_units):
+def canon_error_context_new(opts, task, ptr, tagged_code_units):
   trap_if(not task.inst.may_leave)
   if DETERMINISTIC_PROFILE or random.randint(0,1):
     s = String(('', 'utf8', 0))
@@ -2419,7 +2415,7 @@ async def canon_error_context_new(opts, task, ptr, tagged_code_units):
 
 ### 📝 `canon error-context.debug-message`
 
-async def canon_error_context_debug_message(opts, task, i, ptr):
+def canon_error_context_debug_message(opts, task, i, ptr):
   trap_if(not task.inst.may_leave)
   errctx = task.inst.table.get(i)
   trap_if(not isinstance(errctx, ErrorContext))
@@ -2429,7 +2425,7 @@ async def canon_error_context_debug_message(opts, task, i, ptr):
 
 ### 📝 `canon error-context.drop`
 
-async def canon_error_context_drop(task, i):
+def canon_error_context_drop(task, i):
   trap_if(not task.inst.may_leave)
   errctx = task.inst.table.remove(i)
   trap_if(not isinstance(errctx, ErrorContext))
