@@ -88,7 +88,7 @@ class FuncType(ExternType):
   results: list[ValType|tuple[str,ValType]]
   def param_types(self):
     return self.extract_types(self.params)
-  def result_types(self):
+  def result_type(self):
     return self.extract_types(self.results)
   def extract_types(self, vec):
     if len(vec) == 0:
@@ -606,11 +606,11 @@ class Task:
     else:
       return (EventCode.NONE, 0, 0)
 
-  def return_(self, results):
+  def return_(self, result):
     trap_if(self.state == Task.State.RESOLVED)
     trap_if(self.num_borrows > 0)
-    assert(results is not None)
-    self.on_resolve(results)
+    assert(result is not None)
+    self.on_resolve(result)
     self.state = Task.State.RESOLVED
 
   def cancel(self):
@@ -658,11 +658,11 @@ class Subtask(Waitable):
       self.state = Subtask.State.STARTED
       return on_start()
 
-    def sync_on_resolve(results):
-      assert(results is not None)
+    def sync_on_resolve(result):
+      assert(result is not None)
       assert(self.state == Subtask.State.STARTED)
       self.state = Subtask.State.RETURNED
-      on_resolve(results)
+      on_resolve(result)
 
     await Task.call_sync(self.supertask, callee, sync_on_start, sync_on_resolve)
 
@@ -694,8 +694,8 @@ class Subtask(Waitable):
       self.state = Subtask.State.STARTED
       return on_start()
 
-    def async_on_resolve(results):
-      if results is None:
+    def async_on_resolve(result):
+      if result is None:
         if self.state == Subtask.State.STARTING:
           self.state = Subtask.State.CANCELLED_BEFORE_STARTED
         else:
@@ -704,7 +704,7 @@ class Subtask(Waitable):
       else:
         assert(self.state == Subtask.State.STARTED)
         self.state = Subtask.State.RETURNED
-      on_resolve(results)
+      on_resolve(result)
 
     async def async_on_block(awaitable):
       relinquish_control()
@@ -1003,7 +1003,7 @@ def contains(t, p):
     case VariantType(cases):
       return p(t) or any(contains(c.t, p) for c in cases)
     case FuncType():
-      return any(p(u) for u in t.param_types() + t.result_types())
+      return any(p(u) for u in t.param_types() + t.result_type())
     case _:
       assert(False)
 
@@ -1619,7 +1619,7 @@ MAX_FLAT_RESULTS = 1
 
 def flatten_functype(opts, ft, context):
   flat_params = flatten_types(ft.param_types())
-  flat_results = flatten_types(ft.result_types())
+  flat_results = flatten_types(ft.result_type())
   if opts.sync:
     if len(flat_params) > MAX_FLAT_PARAMS:
       flat_params = ['i32']
@@ -1940,8 +1940,8 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve, on_bl
   if opts.sync:
     flat_results = await call_and_trap_on_throw(callee, task, flat_args)
     assert(types_match_values(flat_ft.results, flat_results))
-    results = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_types())
-    task.return_(results)
+    result = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_type())
+    task.return_(result)
     if opts.post_return is not None:
       task.inst.may_leave = False
       [] = await call_and_trap_on_throw(opts.post_return, task, flat_results)
@@ -2011,9 +2011,9 @@ async def canon_lower(opts, ft, callee, task, flat_args):
       return lift_flat_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
 
     flat_results = None
-    def on_resolve(results):
+    def on_resolve(result):
       nonlocal flat_results
-      flat_results = lower_flat_values(cx, MAX_FLAT_RESULTS, results, ft.result_types(), flat_args)
+      flat_results = lower_flat_values(cx, MAX_FLAT_RESULTS, result, ft.result_type(), flat_args)
 
     await subtask.call_sync(callee, on_start, on_resolve)
     assert(types_match_values(flat_ft.results, flat_results))
@@ -2024,10 +2024,10 @@ async def canon_lower(opts, ft, callee, task, flat_args):
     on_progress()
     return lift_flat_values(cx, MAX_FLAT_ASYNC_PARAMS, flat_args, ft.param_types())
 
-  def on_resolve(results):
+  def on_resolve(result):
     on_progress()
-    if results is not None:
-      [] = lower_flat_values(cx, 0, results, ft.result_types(), flat_args)
+    if result is not None:
+      [] = lower_flat_values(cx, 0, result, ft.result_type(), flat_args)
 
   subtaski = None
   def on_progress():
@@ -2122,8 +2122,8 @@ async def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
   trap_if(result_type != task.ft.results)
   trap_if(not LiftOptions.equal(opts, task.opts))
   cx = LiftLowerContext(opts, task.inst, task)
-  results = lift_flat_values(cx, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_types())
-  task.return_(results)
+  result = lift_flat_values(cx, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_type())
+  task.return_(result)
   return []
 
 ### 🔀 `canon task.cancel`
