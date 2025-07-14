@@ -223,20 +223,19 @@ class ComponentInstance:
   may_leave: bool
   backpressure: bool
   calling_sync_export: bool
-  calling_sync_import: bool
+  interruptible: asyncio.Event
   pending_tasks: list[tuple[Task, asyncio.Future]]
   starting_pending_task: bool
-  async_waiting_tasks: asyncio.Condition
 
   def __init__(self):
     self.table = Table()
     self.may_leave = True
     self.backpressure = False
     self.calling_sync_export = False
-    self.calling_sync_import = False
+    self.interruptible = asyncio.Event()
+    self.interruptible.set()
     self.pending_tasks = []
     self.starting_pending_task = False
-    self.async_waiting_tasks = asyncio.Condition(scheduler)
 
 #### Table State
 
@@ -519,7 +518,7 @@ class Task:
 
   def may_enter(self, pending_task):
     return not self.inst.backpressure and \
-           not self.inst.calling_sync_import and \
+           self.inst.interruptible.is_set() and \
            not (self.inst.calling_sync_export and pending_task.opts.sync)
 
   def maybe_start_pending_task(self):
@@ -536,14 +535,13 @@ class Task:
     awaitable = asyncio.ensure_future(awaitable)
     if awaitable.done() and not DETERMINISTIC_PROFILE and random.randint(0,1):
       return
-    assert(not self.inst.calling_sync_import)
-    self.calling_sync_import = True
+    assert(self.inst.interruptible.is_set())
+    self.inst.interruptible.clear()
     if await self.on_block(awaitable) == Cancelled.TRUE:
       assert(self.state == Task.State.INITIAL)
       self.state = Task.State.PENDING_CANCEL
       assert(await self.on_block(awaitable) == Cancelled.FALSE)
-    self.inst.calling_sync_import = False
-    self.inst.async_waiting_tasks.notify_all()
+    self.inst.interruptible.set()
 
   async def wait_async(self, awaitable) -> Cancelled:
     self.maybe_start_pending_task()
@@ -551,8 +549,8 @@ class Task:
     if awaitable.done() and not DETERMINISTIC_PROFILE and random.randint(0,1):
       return Cancelled.FALSE
     cancelled = await self.on_block(awaitable)
-    while self.inst.calling_sync_import:
-      cancelled |= await self.on_block(self.inst.async_waiting_tasks.wait())
+    while not self.inst.interruptible.is_set():
+      cancelled |= await self.on_block(self.inst.interruptible.wait())
     return cancelled
 
   async def call_sync(self, callee, on_start, on_return):
@@ -563,11 +561,10 @@ class Task:
         assert(await self.on_block(awaitable) == Cancelled.FALSE)
       return Cancelled.FALSE
 
-    assert(not self.inst.calling_sync_import)
-    self.inst.calling_sync_import = True
+    assert(self.inst.interruptible.is_set())
+    self.inst.interruptible.clear()
     await callee(self, on_start, on_return, sync_on_block)
-    self.inst.calling_sync_import = False
-    self.inst.async_waiting_tasks.notify_all()
+    self.inst.interruptible.set()
 
   async def wait_for_event(self, wset, sync) -> EventTuple:
     if self.state == Task.State.PENDING_CANCEL:
