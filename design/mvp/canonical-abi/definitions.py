@@ -643,35 +643,18 @@ class Subtask(Waitable):
     CANCELLED_BEFORE_RETURNED = 4
 
   state: State
-  supertask: Optional[Task]
+  task: Task
   lenders: Optional[list[ResourceHandle]]
   request_cancel_begin: asyncio.Future
   request_cancel_end: asyncio.Future
 
-  def __init__(self, supertask):
+  def __init__(self, task):
     Waitable.__init__(self)
     self.state = Subtask.State.STARTING
-    self.supertask = supertask
+    self.task = task
     self.lenders = []
     self.request_cancel_begin = asyncio.Future()
     self.request_cancel_end = asyncio.Future()
-
-  async def call_sync(self, callee, on_start, on_resolve):
-    def sync_on_start():
-      assert(self.state == Subtask.State.STARTING)
-      self.state = Subtask.State.STARTED
-      return on_start()
-
-    def sync_on_resolve(result):
-      assert(result is not None)
-      assert(self.state == Subtask.State.STARTED)
-      self.state = Subtask.State.RETURNED
-      on_resolve(result)
-
-    await Task.call_sync(self.supertask, callee, sync_on_start, sync_on_resolve)
-
-  def cancelled(self):
-    return self.request_cancel_begin.done()
 
   def resolved(self):
     match self.state:
@@ -684,31 +667,17 @@ class Subtask(Waitable):
         return True
 
   async def request_cancel(self):
-    assert(not self.cancelled() and not self.resolved())
+    assert(not self.cancellation_requested() and not self.resolved())
     self.request_cancel_begin.set_result(None)
     await self.request_cancel_end
 
+  def cancellation_requested(self):
+    return self.request_cancel_begin.done()
+
   async def call_async(self, callee, on_start, on_resolve):
     async def do_call():
-      await callee(self.supertask, async_on_start, async_on_resolve, async_on_block)
+      await callee(self.task, on_start, on_resolve, async_on_block)
       relinquish_control()
-
-    def async_on_start():
-      assert(self.state == Subtask.State.STARTING)
-      self.state = Subtask.State.STARTED
-      return on_start()
-
-    def async_on_resolve(result):
-      if result is None:
-        if self.state == Subtask.State.STARTING:
-          self.state = Subtask.State.CANCELLED_BEFORE_STARTED
-        else:
-          assert(self.state == Subtask.State.STARTED)
-          self.state = Subtask.State.CANCELLED_BEFORE_RETURNED
-      else:
-        assert(self.state == Subtask.State.STARTED)
-        self.state = Subtask.State.RETURNED
-      on_resolve(result)
 
     async def async_on_block(awaitable):
       relinquish_control()
@@ -2005,52 +1974,65 @@ async def call_and_trap_on_throw(callee, task, args):
 async def canon_lower(opts, ft, callee, task, flat_args):
   trap_if(not task.inst.may_leave)
   subtask = Subtask(task)
+
   cx = LiftLowerContext(opts, task.inst, subtask)
   flat_ft = flatten_functype(opts, ft, 'lower')
   assert(types_match_values(flat_ft.params, flat_args))
   flat_args = CoreValueIter(flat_args)
 
   if opts.sync:
-    def on_start():
-      return lift_flat_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
+    max_flat_params = MAX_FLAT_PARAMS
+    max_flat_results = MAX_FLAT_RESULTS
+  else:
+    max_flat_params = MAX_FLAT_ASYNC_PARAMS
+    max_flat_results = 0
 
-    flat_results = None
-    def on_resolve(result):
-      nonlocal flat_results
-      flat_results = lower_flat_values(cx, MAX_FLAT_RESULTS, result, ft.result_type(), flat_args)
-
-    await subtask.call_sync(callee, on_start, on_resolve)
-    assert(types_match_values(flat_ft.results, flat_results))
-    subtask.deliver_resolve()
-    return flat_results
+  on_progress = lambda:()
+  flat_results = None
 
   def on_start():
     on_progress()
-    return lift_flat_values(cx, MAX_FLAT_ASYNC_PARAMS, flat_args, ft.param_types())
+    assert(subtask.state == Subtask.State.STARTING)
+    subtask.state = Subtask.State.STARTED
+    return lift_flat_values(cx, max_flat_params, flat_args, ft.param_types())
 
   def on_resolve(result):
     on_progress()
-    if result is not None:
-      [] = lower_flat_values(cx, 0, result, ft.result_type(), flat_args)
+    if result is None:
+      assert(subtask.cancellation_requested())
+      if subtask.state == Subtask.State.STARTING:
+        subtask.state = Subtask.State.CANCELLED_BEFORE_STARTED
+      else:
+        assert(subtask.state == Subtask.State.STARTED)
+        subtask.state = Subtask.State.CANCELLED_BEFORE_RETURNED
+    else:
+      assert(subtask.state == Subtask.State.STARTED)
+      subtask.state = Subtask.State.RETURNED
+      nonlocal flat_results
+      flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
 
-  subtaski = None
-  def on_progress():
-    if subtaski is not None:
-      def subtask_event():
-        if subtask.resolved():
-          subtask.deliver_resolve()
-        return (EventCode.SUBTASK, subtaski, subtask.state)
-      subtask.set_event(subtask_event)
-
-  await subtask.call_async(callee, on_start, on_resolve)
-  if subtask.resolved():
+  if opts.sync:
+    await task.call_sync(callee, on_start, on_resolve)
+    assert(types_match_values(flat_ft.results, flat_results))
     subtask.deliver_resolve()
-    return [Subtask.State.RETURNED]
-
-  subtaski = task.inst.table.add(subtask)
-  assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
-  assert(0 <= subtask.state < 2**4)
-  return [subtask.state | (subtaski << 4)]
+    return flat_results
+  else:
+    await subtask.call_async(callee, on_start, on_resolve)
+    if subtask.resolved():
+      assert(flat_results == [])
+      subtask.deliver_resolve()
+      return [Subtask.State.RETURNED]
+    else:
+      subtaski = task.inst.table.add(subtask)
+      def on_progress():
+        def subtask_event():
+          if subtask.resolved():
+            subtask.deliver_resolve()
+          return (EventCode.SUBTASK, subtaski, subtask.state)
+        subtask.set_event(subtask_event)
+      assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
+      assert(0 <= subtask.state < 2**4)
+      return [subtask.state | (subtaski << 4)]
 
 ### `canon resource.new`
 
@@ -2211,7 +2193,8 @@ async def canon_subtask_cancel(sync, task, i):
   trap_if(not task.inst.may_leave)
   subtask = task.inst.table.get(i)
   trap_if(not isinstance(subtask, Subtask))
-  trap_if(subtask.resolve_delivered() or subtask.cancelled())
+  trap_if(subtask.resolve_delivered())
+  trap_if(subtask.cancellation_requested())
   if subtask.resolved():
     assert(subtask.has_pending_event())
   else:
