@@ -7,7 +7,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Optional, Callable, Awaitable, TypeVar, Generic, Literal
+from typing import Any, Optional, Callable, TypeVar, Generic, Literal
 from enum import Enum, IntEnum
 import math
 import struct
@@ -214,18 +214,18 @@ class CanonicalOptions(LiftLowerOptions):
 
 ### Runtime State
 
-scheduler = asyncio.Lock()
-
 #### Component Instance State
 
 class ComponentInstance:
+  store: Store
   table: Table
   may_leave: bool
   no_backpressure: asyncio.Event
   num_backpressure_waiters: int
   lock: asyncio.Lock
 
-  def __init__(self):
+  def __init__(self, store):
+    self.store = store
     self.table = Table()
     self.may_leave = True
     self.no_backpressure = asyncio.Event()
@@ -457,10 +457,6 @@ class Cancelled(IntEnum):
   FALSE = 0
   TRUE = 1
 
-OnStart = Callable[[], list[any]]
-OnResolve = Callable[[Optional[list[any]]], None]
-OnBlock = Callable[[Awaitable], Awaitable[Cancelled]]
-
 class Task:
   class State(Enum):
     INITIAL = 1
@@ -473,19 +469,19 @@ class Task:
   inst: ComponentInstance
   ft: FuncType
   supertask: Optional[Task]
-  on_resolve: OnResolve
-  on_block: OnBlock
+  thread: Thread
+  on_resolve: Callable[[Optional[list[any]]], None]
   num_borrows: int
   context: ContextLocalStorage
 
-  def __init__(self, opts, inst, ft, supertask, on_resolve, on_block):
+  def __init__(self, opts, inst, ft, supertask, thread, on_resolve):
     self.state = Task.State.INITIAL
     self.opts = opts
     self.inst = inst
     self.ft = ft
     self.supertask = supertask
+    self.thread = thread
     self.on_resolve = on_resolve
-    self.on_block = on_block
     self.num_borrows = 0
     self.context = ContextLocalStorage()
 
@@ -527,14 +523,14 @@ class Task:
     if unlock and (self.opts.sync or self.opts.callback):
       self.inst.lock.release()
 
-    cancelled = await self.on_block(f)
+    cancelled = await self.thread.suspend(f)
     if cancelled and not cancellable:
-      assert(await self.on_block(f) == Cancelled.FALSE)
+      assert(await self.thread.suspend(f) == Cancelled.FALSE)
 
     if unlock and (self.opts.sync or self.opts.callback):
       acquired = asyncio.create_task(self.inst.lock.acquire())
-      if await self.on_block(acquired) == Cancelled.TRUE:
-        assert(self.on_block(acquired) == Cancelled.FALSE)
+      if await self.thread.suspend(acquired) == Cancelled.TRUE:
+        assert(self.thread.suspend(acquired) == Cancelled.FALSE)
         cancelled = Cancelled.TRUE
 
     if cancelled:
@@ -547,16 +543,6 @@ class Task:
         return Cancelled.TRUE
     else:
       return Cancelled.FALSE
-
-  async def call_sync(self, callee, on_start, on_return):
-    async def sync_on_block(awaitable):
-      if await self.on_block(awaitable) == Cancelled.TRUE:
-        assert(self.state == Task.State.INITIAL)
-        self.state = Task.State.PENDING_CANCEL
-        assert(await self.on_block(awaitable) == Cancelled.FALSE)
-      return Cancelled.FALSE
-
-    await callee(self, on_start, on_return, sync_on_block)
 
   async def wait_for_event(self, waitable_set, cancellable, unlock) -> EventTuple:
     if self.state == Task.State.PENDING_CANCEL and cancellable:
@@ -623,35 +609,16 @@ class Subtask(Waitable):
     CANCELLED_BEFORE_RETURNED = 4
 
   state: State
-  supertask: Optional[Task]
+  thread: Optional[Thread]
   lenders: Optional[list[ResourceHandle]]
-  request_cancel_begin: asyncio.Future
-  request_cancel_end: asyncio.Future
+  cancellation_requested: bool
 
-  def __init__(self, supertask):
+  def __init__(self):
     Waitable.__init__(self)
     self.state = Subtask.State.STARTING
-    self.supertask = supertask
+    self.thread = None
     self.lenders = []
-    self.request_cancel_begin = asyncio.Future()
-    self.request_cancel_end = asyncio.Future()
-
-  async def call_sync(self, callee, on_start, on_resolve):
-    def sync_on_start():
-      assert(self.state == Subtask.State.STARTING)
-      self.state = Subtask.State.STARTED
-      return on_start()
-
-    def sync_on_resolve(result):
-      assert(result is not None)
-      assert(self.state == Subtask.State.STARTED)
-      self.state = Subtask.State.RETURNED
-      on_resolve(result)
-
-    await Task.call_sync(self.supertask, callee, sync_on_start, sync_on_resolve)
-
-  def cancelled(self):
-    return self.request_cancel_begin.done()
+    self.cancellation_requested = False
 
   def resolved(self):
     match self.state:
@@ -662,58 +629,6 @@ class Subtask(Waitable):
             Subtask.State.CANCELLED_BEFORE_STARTED |
             Subtask.State.CANCELLED_BEFORE_RETURNED):
         return True
-
-  async def request_cancel(self):
-    assert(not self.cancelled() and not self.resolved())
-    self.request_cancel_begin.set_result(None)
-    await self.request_cancel_end
-
-  async def call_async(self, callee, on_start, on_resolve):
-    async def do_call():
-      await callee(self.supertask, async_on_start, async_on_resolve, async_on_block)
-      relinquish_control()
-
-    def async_on_start():
-      assert(self.state == Subtask.State.STARTING)
-      self.state = Subtask.State.STARTED
-      return on_start()
-
-    def async_on_resolve(result):
-      if result is None:
-        if self.state == Subtask.State.STARTING:
-          self.state = Subtask.State.CANCELLED_BEFORE_STARTED
-        else:
-          assert(self.state == Subtask.State.STARTED)
-          self.state = Subtask.State.CANCELLED_BEFORE_RETURNED
-      else:
-        assert(self.state == Subtask.State.STARTED)
-        self.state = Subtask.State.RETURNED
-      on_resolve(result)
-
-    async def async_on_block(awaitable):
-      relinquish_control()
-      if not self.request_cancel_end.done():
-        await asyncio.wait([awaitable, self.request_cancel_begin],
-                           return_when = asyncio.FIRST_COMPLETED)
-        if self.request_cancel_begin.done():
-          return Cancelled.TRUE
-      else:
-        await awaitable
-      assert(awaitable.done())
-      await scheduler.acquire()
-      return Cancelled.FALSE
-
-    def relinquish_control():
-      if not ret.done():
-        ret.set_result(None)
-      elif self.request_cancel_begin.done() and not self.request_cancel_end.done():
-        self.request_cancel_end.set_result(None)
-      else:
-        scheduler.release()
-
-    ret = asyncio.Future()
-    asyncio.create_task(do_call())
-    await ret
 
   def add_lender(self, lending_handle):
     assert(not self.resolve_delivered() and not self.resolved())
@@ -954,6 +869,84 @@ class WritableFutureEnd(FutureEnd):
   def drop(self):
     trap_if(not self.done)
     FutureEnd.drop(self)
+
+#### Thread State
+
+class Thread:
+  store: Store
+  future: Optional[asyncio.Future]
+  on_resume: Optional[asyncio.Future]
+  on_suspend_or_exit: Optional[asyncio.Future]
+  returned: bool
+
+  def __init__(self, store, lifted_func, caller, on_start, on_resolve):
+    self.store = store
+    self.future = None
+    self.on_resume = asyncio.Future()
+    self.on_suspend_or_exit = None
+    self.returned = False
+    async def async_impl():
+      assert(await self.on_resume == Cancelled.FALSE)
+      self.on_resume = None
+      await lifted_func(caller, self, on_start, on_resolve)
+      self.on_suspend_or_exit.set_result(None)
+      self.returned = True
+    asyncio.create_task(async_impl())
+
+  async def resume(self, cancelled = Cancelled.FALSE):
+    if self.future:
+      assert(cancelled or self.future.done())
+      self.future = None
+      self.store.waiting.remove(self)
+    self.on_resume.set_result(cancelled)
+    assert(not self.on_suspend_or_exit)
+    self.on_suspend_or_exit = asyncio.Future()
+    await self.on_suspend_or_exit
+    self.on_suspend_or_exit = None
+    if self.future:
+      self.store.waiting.append(self)
+
+  async def suspend(self, future) -> Cancelled:
+    assert(not self.future)
+    self.future = future
+    self.on_suspend_or_exit.set_result(None)
+    self.on_suspend_or_exit = None
+    assert(not self.on_resume)
+    self.on_resume = asyncio.Future()
+    cancelled = await self.on_resume
+    self.on_resume = None
+    return cancelled
+
+#### Store State / Embedding API
+
+class Store:
+  loop: asyncio.AbstractEventLoop
+  waiting: list[Thread]
+
+  def __init__(self):
+    self.loop = asyncio.new_event_loop()
+    self.waiting = []
+
+  ExportCall = Thread
+
+  def start_export_call(self, lifted_func, on_start, on_resolve) -> ExportCall:
+    async def async_impl():
+      caller = None
+      thread = Thread(self, lifted_func, caller, on_start, on_resolve)
+      await thread.resume()
+      return thread
+    return self.loop.run_until_complete(async_impl())
+
+  def tick(self):
+    if not DETERMINISTIC_PROFILE:
+      random.shuffle(self.waiting)
+    for thread in self.waiting:
+      if thread.future.done():
+        self.loop.run_until_complete(thread.resume())
+        return
+
+  def export_call_finished(self, export_call: ExportCall):
+    return export_call.returned
 
 ### Despecialization
 
@@ -1910,8 +1903,8 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
 
 ### `canon lift`
 
-async def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve, on_block):
-  task = Task(opts, inst, ft, caller, on_resolve, on_block)
+async def canon_lift(opts, inst, ft, callee, caller, thread, on_start, on_resolve):
+  task = Task(opts, inst, ft, caller, thread, on_resolve)
   task.trap_if_on_the_stack(inst)
   if await task.enter() == Cancelled.TRUE:
     task.cancel()
@@ -1987,53 +1980,72 @@ async def call_and_trap_on_throw(callee, task, args):
 
 async def canon_lower(opts, ft, callee, task, flat_args):
   trap_if(not task.inst.may_leave)
-  subtask = Subtask(task)
+  subtask = Subtask()
+
   cx = LiftLowerContext(opts, task.inst, subtask)
   flat_ft = flatten_functype(opts, ft, 'lower')
   assert(types_match_values(flat_ft.params, flat_args))
   flat_args = CoreValueIter(flat_args)
 
   if opts.sync:
-    def on_start():
-      return lift_flat_values(cx, MAX_FLAT_PARAMS, flat_args, ft.param_types())
+    max_flat_params = MAX_FLAT_PARAMS
+    max_flat_results = MAX_FLAT_RESULTS
+  else:
+    max_flat_params = MAX_FLAT_ASYNC_PARAMS
+    max_flat_results = 0
 
-    flat_results = None
-    def on_resolve(result):
-      nonlocal flat_results
-      flat_results = lower_flat_values(cx, MAX_FLAT_RESULTS, result, ft.result_type(), flat_args)
-
-    await subtask.call_sync(callee, on_start, on_resolve)
-    assert(types_match_values(flat_ft.results, flat_results))
-    subtask.deliver_resolve()
-    return flat_results
+  on_progress = lambda:()
+  flat_results = None
 
   def on_start():
     on_progress()
-    return lift_flat_values(cx, MAX_FLAT_ASYNC_PARAMS, flat_args, ft.param_types())
+    assert(subtask.state == Subtask.State.STARTING)
+    subtask.state = Subtask.State.STARTED
+    return lift_flat_values(cx, max_flat_params, flat_args, ft.param_types())
 
   def on_resolve(result):
     on_progress()
-    if result is not None:
-      [] = lower_flat_values(cx, 0, result, ft.result_type(), flat_args)
+    if result is None:
+      assert(subtask.cancellation_requested)
+      if subtask.state == Subtask.State.STARTING:
+        subtask.state = Subtask.State.CANCELLED_BEFORE_STARTED
+      else:
+        assert(subtask.state == Subtask.State.STARTED)
+        subtask.state = Subtask.State.CANCELLED_BEFORE_RETURNED
+    else:
+      assert(subtask.state == Subtask.State.STARTED)
+      subtask.state = Subtask.State.RETURNED
+      nonlocal flat_results
+      flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
 
-  subtaski = None
-  def on_progress():
-    if subtaski is not None:
-      def subtask_event():
-        if subtask.resolved():
-          subtask.deliver_resolve()
-        return (EventCode.SUBTASK, subtaski, subtask.state)
-      subtask.set_event(subtask_event)
+  subtask.thread = Thread(task.inst.store, callee, task, on_start, on_resolve)
+  await subtask.thread.resume()
 
-  await subtask.call_async(callee, on_start, on_resolve)
-  if subtask.resolved():
+  if opts.sync:
+    if not subtask.resolved():
+      done = asyncio.Event()
+      def on_progress():
+        done.set()
+      await task.block_on(done.wait())
+    assert(types_match_values(flat_ft.results, flat_results))
     subtask.deliver_resolve()
-    return [Subtask.State.RETURNED]
-
-  subtaski = task.inst.table.add(subtask)
-  assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
-  assert(0 <= subtask.state < 2**4)
-  return [subtask.state | (subtaski << 4)]
+    return flat_results
+  else:
+    if subtask.resolved():
+      assert(flat_results == [])
+      subtask.deliver_resolve()
+      return [Subtask.State.RETURNED]
+    else:
+      subtaski = task.inst.table.add(subtask)
+      def on_progress():
+        def subtask_event():
+          if subtask.resolved():
+            subtask.deliver_resolve()
+          return (EventCode.SUBTASK, subtaski, subtask.state)
+        subtask.set_event(subtask_event)
+      assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
+      assert(0 <= subtask.state < 2**4)
+      return [subtask.state | (subtaski << 4)]
 
 ### `canon resource.new`
 
@@ -2198,11 +2210,13 @@ async def canon_subtask_cancel(sync, task, i):
   trap_if(not task.inst.may_leave)
   subtask = task.inst.table.get(i)
   trap_if(not isinstance(subtask, Subtask))
-  trap_if(subtask.resolve_delivered() or subtask.cancelled())
+  trap_if(subtask.resolve_delivered())
+  trap_if(subtask.cancellation_requested)
   if subtask.resolved():
     assert(subtask.has_pending_event())
   else:
-    await subtask.request_cancel()
+    subtask.cancellation_requested = True
+    await subtask.thread.resume(Cancelled.TRUE)
     if sync:
       while not subtask.resolved():
         if subtask.has_pending_event():
