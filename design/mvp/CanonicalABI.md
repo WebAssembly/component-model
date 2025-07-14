@@ -642,9 +642,13 @@ threaded through all core function calls as the "[current task]".
 
 Tasks are parameterized by the caller with 3 callbacks of the following types:
 ```python
+class Cancelled(IntEnum):
+  FALSE = 0
+  TRUE = 1
+
 OnStart = Callable[[], list[any]]
 OnResolve = Callable[[Optional[list[any]]], None]
-OnBlock = Callable[[Awaitable], Awaitable[bool]]
+OnBlock = Callable[[Awaitable], Awaitable[Cancelled]]
 ```
 and with the following meanings:
 * The `OnStart` callback is called by the task when the task is ready to start
@@ -660,8 +664,8 @@ and with the following meanings:
   on a Python [awaitable]. `OnBlock` allows a transitive (async) supertask to
   take control flow while its subtask is blocked. During a call to `OnBlock`,
   any other `asyncio.Task`s can be scheduled or new `asyncio.Task`s can be
-  started in response to new export calls. `OnBlock` may return `True` at most
-  once before a task is resolved to signal that the caller is requesting
+  started in response to new export calls. `OnBlock` may return `Cancelled.TRUE`
+  at most once before a task is resolved to signal that the caller is requesting
   cancellation; in this case, the given awaitable may not be resolved, and the
   cancelled task should call `OnResolve` ASAP (potentially passing `None`).
 
@@ -711,11 +715,11 @@ called:
     if not self.may_enter(self) or self.inst.pending_tasks:
       f = asyncio.Future()
       self.inst.pending_tasks.append((self, f))
-      if await self.on_block(f):
+      if await self.on_block(f) == Cancelled.TRUE:
         [i] = [i for i,(t,_) in enumerate(self.inst.pending_tasks) if t == self]
         self.inst.pending_tasks.pop(i)
         self.on_resolve(None)
-        return False
+        return Cancelled.FALSE
       assert(self.may_enter(self) and self.inst.starting_pending_task)
       self.inst.starting_pending_task = False
     if self.opts.sync:
@@ -830,7 +834,7 @@ Python [awaitable] using the `OnBlock` callback described above:
 
     awaitable = asyncio.ensure_future(awaitable)
     if awaitable.done() and not DETERMINISTIC_PROFILE and random.randint(0,1):
-      cancelled = False
+      cancelled = Cancelled.FALSE
     else:
       cancelled = await self.on_block(awaitable)
       if cancelled and not cancellable:
@@ -878,11 +882,11 @@ the calls in the stack actually block on external I/O.
 ```python
   async def call_sync(self, callee, on_start, on_return):
     async def sync_on_block(awaitable):
-      if await self.on_block(awaitable):
+      if await self.on_block(awaitable) == Cancelled.TRUE:
         assert(self.state == Task.State.INITIAL)
         self.state = Task.State.PENDING_CANCEL
-        assert(not await self.on_block(awaitable))
-      return False
+        assert(await self.on_block(awaitable) == Cancelled.FALSE)
+      return Cancelled.FALSE
 
     assert(not self.inst.calling_sync_import)
     self.inst.calling_sync_import = True
@@ -1132,12 +1136,12 @@ cancellation:
         await asyncio.wait([awaitable, self.request_cancel_begin],
                            return_when = asyncio.FIRST_COMPLETED)
         if self.request_cancel_begin.done():
-          return True
+          return Cancelled.TRUE
       else:
         await awaitable
       assert(awaitable.done())
       await scheduler.acquire()
-      return False
+      return Cancelled.FALSE
 
     def relinquish_control():
       if not ret.done():
