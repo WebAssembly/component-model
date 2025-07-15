@@ -2269,54 +2269,53 @@ interpreted as a *lexical* grammar defining a single token and thus whitespace
 is not automatically inserted, all terminals are single-quoted, and everything
 unquoted is a meta-character.
 ```ebnf
-exportname    ::= <plainname>
-                | <interfacename>
-importname    ::= <exportname>
-                | <depname>
-                | <urlname>
-                | <hashname>
-plainname     ::= <label>
-                | '[async]' <label> 🔀
-                | '[constructor]' <label>
-                | '[method]' <label> '.' <label>
-                | '[async method]' <label> '.' <label> 🔀
-                | '[static]' <label> '.' <label>
-                | '[async static]' <label> '.' <label> 🔀
-label         ::= <fragment>
-                | <label> '-' <fragment>
-fragment      ::= <word>
-                | <acronym>
-word          ::= [a-z] [0-9a-z]*
-acronym       ::= [A-Z] [0-9A-Z]*
-interfacename ::= <namespace> <label> <projection> <interfaceversion>?
-                | <namespace>+ <label> <projection>+ <interfaceversion>? 🪺
-namespace     ::= <words> ':'
-words         ::= <word>
-                | <words> '-' <word>
-projection    ::= '/' <label>
-# FIXME: surrounding alignment
+exportname        ::= <plainname>
+                    | <interfacename>
+importname        ::= <exportname>
+                    | <depname>
+                    | <urlname>
+                    | <hashname>
+plainname         ::= <label>
+                    | '[async]' <label> 🔀
+                    | '[constructor]' <label>
+                    | '[method]' <label> '.' <label>
+                    | '[async method]' <label> '.' <label> 🔀
+                    | '[static]' <label> '.' <label>
+                    | '[async static]' <label> '.' <label> 🔀
+label             ::= <fragment>
+                    | <label> '-' <fragment>
+fragment          ::= <word>
+                    | <acronym>
+word              ::= [a-z] [0-9a-z]*
+acronym           ::= [A-Z] [0-9A-Z]*
+interfacename     ::= <namespace> <label> <projection> <interfaceversion>?
+                    | <namespace>+ <label> <projection>+ <interfaceversion>? 🪺
+namespace         ::= <words> ':'
+words             ::= <word>
+                    | <words> '-' <word>
+projection        ::= '/' <label>
 interfaceversion  ::= '@' <valid semver>
                     | '@' <canonversion> 🔗
 canonversion      ::= [1-9] [0-9]* 🔗
                     | '0.' [1-9] [0-9]* 🔗
                     | '0.0.' [1-9] [0-9]* 🔗
 semversuffix      ::= [0-9A-Za-z.+-]* 🔗
-depname       ::= 'unlocked-dep=<' <pkgnamequery> '>'
-                | 'locked-dep=<' <pkgname> '>' ( ',' <hashname> )?
-pkgnamequery  ::= <pkgpath> <verrange>?
-pkgname       ::= <pkgpath> <pkgversion>?
-pkgversion    ::= '@' <valid semver>
-pkgpath       ::= <namespace> <words>
-                | <namespace>+ <words> <projection>* 🪺
-verrange      ::= '@*'
-                | '@{' <verlower> '}'
-                | '@{' <verupper> '}'
-                | '@{' <verlower> ' ' <verupper> '}'
-verlower      ::= '>=' <valid semver>
-verupper      ::= '<' <valid semver>
-urlname       ::= 'url=<' <nonbrackets> '>' (',' <hashname>)?
-nonbrackets   ::= [^<>]*
-hashname      ::= 'integrity=<' <integrity-metadata> '>'
+depname           ::= 'unlocked-dep=<' <pkgnamequery> '>'
+                    | 'locked-dep=<' <pkgname> '>' ( ',' <hashname> )?
+pkgnamequery      ::= <pkgpath> <verrange>?
+pkgname           ::= <pkgpath> <pkgversion>?
+pkgversion        ::= '@' <valid semver>
+pkgpath           ::= <namespace> <words>
+                    | <namespace>+ <words> <projection>* 🪺
+verrange          ::= '@*'
+                    | '@{' <verlower> '}'
+                    | '@{' <verupper> '}'
+                    | '@{' <verlower> ' ' <verupper> '}'
+verlower          ::= '>=' <valid semver>
+verupper          ::= '<' <valid semver>
+urlname           ::= 'url=<' <nonbrackets> '>' (',' <hashname>)?
+nonbrackets       ::= [^<>]*
+hashname          ::= 'integrity=<' <integrity-metadata> '>'
 ```
 Components provide six options for naming imports:
 * a **plain name** that leaves it up to the developer to "read the docs"
