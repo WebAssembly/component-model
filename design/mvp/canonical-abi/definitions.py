@@ -213,13 +213,19 @@ class Store:
 
 class Thread:
   task: Task
+  index: int
+  context: list[int]
   ready_func: Optional[Callable[[], bool]]
   run_lock: threading.Lock
   resume_lock: threading.Lock
   stack: threading.Thread
 
+  CONTEXT_LENGTH = 2
+
   def __init__(self, task, thread_func):
     self.task = task
+    self.index = task.inst.table.add(self)
+    self.context = [0] * Thread.CONTEXT_LENGTH
     self.ready_func = None
     self.run_lock = threading.Lock()
     self.run_lock.acquire()
@@ -230,9 +236,11 @@ class Thread:
       assert(self.resume_lock.locked())
       thread_func(task, self)
       self.task.thread_stop(self)
+      self.task.inst.table.remove(self.index)
       self.resume_lock.release()
     self.stack = threading.Thread(target = thread_stack_base)
     self.stack.start()
+    task.thread_start(self)
 
   def ready(self):
     return self.ready_func()
@@ -253,6 +261,22 @@ class Thread:
     assert(self.run_lock.locked())
     self.resume_lock.release()
     self.run_lock.acquire()
+
+  async def switch_to(self, cancellable, other: Thread):
+    # deterministically switch to other, leave this blocked
+    TODO
+
+  def yield_to(self, cancellable, other: Thread):
+    # deterministically switch to other, but leave this thread unblocked
+    TODO
+
+  def block(self, cancellable):
+    # perform just the first half of switch
+    TODO
+
+  def unblock(self, other: Thread):
+    # unblock other, but deterministically keep running here
+    TODO
 
 
 ### Lifting and Lowering Context
@@ -430,22 +454,6 @@ class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
       assert(all(v == () for v in vs))
     self.progress += len(vs)
 
-#### Context-Local Storage
-
-class ContextLocalStorage:
-  LENGTH = 1
-  array: list[int]
-
-  def __init__(self):
-    self.array = [0] * ContextLocalStorage.LENGTH
-
-  def set(self, i, v):
-    assert(types_match_values(['i32'], [v]))
-    self.array[i] = v
-
-  def get(self, i):
-    return self.array[i]
-
 #### Waitable State
 
 class EventCode(IntEnum):
@@ -456,6 +464,7 @@ class EventCode(IntEnum):
   FUTURE_READ = 4
   FUTURE_WRITE = 5
   TASK_CANCELLED = 6
+  THREAD_RESUMED = 7
 
 EventTuple = tuple[EventCode, int, int]
 
@@ -528,11 +537,10 @@ class Task(Call, Supertask):
   ft: FuncType
   supertask: Optional[Task]
   on_resolve: OnResolve
-  thread: Optional[Thread]
+  threads: list[Thread]
   cancellable: bool
   waiting_for_callback: bool
   num_borrows: int
-  context: ContextLocalStorage
 
   def __init__(self, opts, inst, ft, supertask, on_resolve, thread_func):
     self.state = Task.State.INITIAL
@@ -541,12 +549,12 @@ class Task(Call, Supertask):
     self.ft = ft
     self.supertask = supertask
     self.on_resolve = on_resolve
-    self.thread = Thread(self, thread_func)
+    self.threads = []
     self.cancellable = False
     self.waiting_for_callback = False
     self.num_borrows = 0
-    self.context = ContextLocalStorage()
-    self.thread.resume()
+    thread = Thread(self, thread_func)
+    thread.resume()
 
   def trap_if_on_the_stack(self, inst):
     c = self.supertask
@@ -558,7 +566,7 @@ class Task(Call, Supertask):
     return self.opts.sync or self.opts.callback
 
   def enter(self, thread):
-    assert(thread is self.thread and thread.task is self)
+    assert(thread in self.threads and thread.task is self)
     def has_backpressure():
       return self.inst.backpressure or (self.needs_exclusive() and self.inst.exclusive)
     if has_backpressure() or self.inst.pending_tasks > 0:
@@ -585,11 +593,13 @@ class Task(Call, Supertask):
   def request_cancellation(self):
     assert(self.state == Task.State.INITIAL)
     self.state = Task.State.PENDING_CANCEL
+    # TODO: move cancellability to the Thread and then search
+    # for a cancellable one here...
     if self.cancellable and not (self.waiting_for_callback and self.inst.exclusive):
-      self.thread.resume()
+      self.threads[0].resume()
 
   def wait_until(self, ready_func, thread, cancellable, for_callback):
-    assert(thread is self.thread and thread.task is self)
+    assert(thread in self.threads and thread.task is self)
     if cancellable and self.deliver_cancel():
       return True
     assert(not self.cancellable)
@@ -612,6 +622,7 @@ class Task(Call, Supertask):
     wset.num_waiting += 1
     cancelled = self.wait_until(wset.has_pending_event, thread, cancellable, for_callback)
     wset.num_waiting -= 1
+    # TODO: somehow get a THREAD_RESUME event...
     if cancelled:
       return (EventCode.TASK_CANCELLED, 0, 0)
     else:
@@ -619,6 +630,7 @@ class Task(Call, Supertask):
 
   def yield_(self, thread, cancellable, for_callback) -> EventTuple:
     cancelled = self.wait_until(lambda: True, thread, cancellable, for_callback)
+    # TODO: somehow get a THREAD_RESUME event...
     if cancelled:
       return (EventCode.TASK_CANCELLED, 0, 0)
     else:
@@ -628,6 +640,7 @@ class Task(Call, Supertask):
     wset.num_waiting += 1
     cancelled = self.wait_until(lambda: True, thread, cancellable, for_callback)
     wset.num_waiting -= 1
+    # TODO: somehow get a THREAD_RESUME event...
     if cancelled:
       return (EventCode.TASK_CANCELLED, 0, 0)
     elif wset.has_pending_event():
@@ -649,17 +662,21 @@ class Task(Call, Supertask):
     self.state = Task.State.RESOLVED
 
   def exit(self):
-    assert(self.thread is not None)
-    trap_if(self.state != Task.State.RESOLVED)
-    assert(self.num_borrows == 0)
+    assert(len(self.threads) > 0)
     if self.needs_exclusive():
       assert(self.inst.exclusive)
       self.inst.exclusive = False
 
+  def thread_start(self, thread):
+    assert(thread not in self.threads)
+    self.threads.append(thread)
+
   def thread_stop(self, thread):
-    assert(thread is self.thread and thread.task is self)
-    assert(self.state == Task.State.RESOLVED)
-    self.thread = None
+    assert(thread in self.threads and thread.task is self)
+    self.threads.remove(thread)
+    if len(self.threads) == 0:
+      trap_if(self.state != Task.State.RESOLVED)
+      assert(self.num_borrows == 0)
 
 #### Subtask State
 
@@ -2072,25 +2089,77 @@ def canon_resource_rep(rt, thread, i):
   trap_if(h.rt is not rt)
   return [h.rep]
 
+### 🧵 `canon thread.index`
+
+def canon_thread_index(shared, thread):
+  assert(not shared)
+  return [thread.index]
+
+### 🧵 `canon thread.new_indirect`
+
+def canon_thread_new_indirect(ft, ftbl, thread, i, c):
+  task = thread.task
+  trap_if(not task.inst.may_leave)
+  f = task.inst.ftbl.get(i)
+  trap_if(f.type != ft)
+  new_thread = Thread(task, f(c))
+  return [new_thread.index]
+
+### 🧵 `canon thread.switch-to`
+
+def canon_thread_switch_to(thread, cancellable, i):
+  trap_if(not thread.task.inst.may_leave)
+  other = thread.task.inst.table.get(i)
+  trap_if(not isinstance(other, Thread))
+  cancelled = thread.switch_to(cancellable, other)
+  return [ 1 if cancelled else 0 ]
+
+### 🧵 `canon thread.yield-to`
+
+def canon_thread_yield_to(thread, cancellable, i):
+  trap_if(not thread.task.inst.may_leave)
+  other = thread.task.inst.table.get(i)
+  trap_if(not isinstance(other, Thread))
+  other.yield_to(cancellable, other)
+  return []
+
+### 🧵 `canon thread.block`
+
+def canon_thread_block(thread, cancellable, i):
+  trap_if(not thread.task.inst.may_leave)
+  other = thread.task.inst.table.get(i)
+  trap_if(not isinstance(other, Thread))
+  cancelled = thread.block(cancellable)
+  return [ 1 if cancelled else 0 ]
+
+### 🧵 `canon thread.unblock`
+
+def canon_thread_unblock(thread, i):
+  trap_if(not thread.task.inst.may_leave)
+  other = thread.task.inst.table.get(i)
+  trap_if(not isinstance(other, Thread))
+  thread.unblock()
+  return []
+
 ### 🔀 `canon context.get`
 
 def canon_context_get(t, i, thread):
   assert(t == 'i32')
-  assert(i < ContextLocalStorage.LENGTH)
-  return [thread.task.context.get(i)]
+  assert(i < Thread.CONTEXT_LENGTH)
+  return [thread.context[i]]
 
 ### 🔀 `canon context.set`
 
 def canon_context_set(t, i, thread, v):
   assert(t == 'i32')
-  assert(i < ContextLocalStorage.LENGTH)
-  thread.task.context.set(i, v)
+  assert(i < Thread.CONTEXT_LENGTH)
+  thread.context[i] = v
   return []
 
 ### 🔀 `canon backpressure.set`
 
 def canon_backpressure_set(thread, flat_args):
-  trap_if(thread.task.opts.sync)
+  # TODO: remove trap_if(thread.task.opts.sync)
   assert(len(flat_args) == 1)
   thread.task.inst.backpressure = bool(flat_args[0])
   return []
