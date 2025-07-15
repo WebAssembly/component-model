@@ -215,21 +215,28 @@ class Store:
 
 class Thread:
   task: Task
+  index: int
   future: Optional[asyncio.Future]
   on_resume: Optional[asyncio.Future]
   on_suspend_or_exit: Optional[asyncio.Future]
+  context: list[int]
+
+  CONTEXT_LENGTH = 2
 
   def __init__(self, task, thread_func):
     self.task = task
+    self.index = task.inst.table.add(self)
     self.future = None
     self.on_resume = asyncio.Future()
     self.on_suspend_or_exit = None
+    self.context = [0] * Thread.CONTEXT_LENGTH
     async def thread_start():
       await self.on_resume
       self.on_resume = None
       await thread_func(task, self)
       self.on_suspend_or_exit.set_result(None)
-      self.task.thread = None
+      self.task.inst.table.remove(self.index)
+      self.task.thread_return(self)
     asyncio.create_task(thread_start())
 
   async def resume(self):
@@ -253,6 +260,29 @@ class Thread:
     self.on_resume = asyncio.Future()
     await self.on_resume
     self.on_resume = None
+
+  async def switch(self, other: Thread):
+    assert(not self.future and not other.future)
+    assert(self.on_suspend_or_exit and not other.on_suspend_or_exit)
+    other.on_suspend_or_exit = self.on_suspend_or_exit
+    self.on_suspend_or_exit = None
+    other.on_resume.set_result(Cancelled.FALSE)
+    assert(not self.on_resume)
+    self.on_resume = asyncio.Future()
+    await self.on_resume
+    self.on_resume = None
+
+  def yield_to(self, other: Thread):
+    # deterministically switch to other, but leave this thread unblocked
+    TODO
+
+  def block(self):
+    # perform just the first half of switch
+    TODO
+
+  def unblock(self, other: Thread):
+    # unblock other, but deterministically keep running here
+    TODO
 
 
 ### Lifting and Lowering Context
@@ -431,22 +461,6 @@ class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
       assert(all(v == () for v in vs))
     self.progress += len(vs)
 
-#### Context-Local Storage
-
-class ContextLocalStorage:
-  LENGTH = 1
-  array: list[int]
-
-  def __init__(self):
-    self.array = [0] * ContextLocalStorage.LENGTH
-
-  def set(self, i, v):
-    assert(types_match_values(['i32'], [v]))
-    self.array[i] = v
-
-  def get(self, i):
-    return self.array[i]
-
 #### Waitable State
 
 class EventCode(IntEnum):
@@ -457,6 +471,7 @@ class EventCode(IntEnum):
   FUTURE_READ = 4
   FUTURE_WRITE = 5
   TASK_CANCELLED = 6
+  THREAD_RESUMED = 7
 
 EventTuple = tuple[EventCode, int, int]
 
@@ -543,10 +558,9 @@ class Task(Call, Supertask):
   ft: FuncType
   supertask: Optional[Task]
   on_resolve: OnResolve
-  thread: Thread
+  threads: list[Thread]
   cancellable: bool
   num_borrows: int
-  context: ContextLocalStorage
 
   def __init__(self, opts, inst, ft, supertask, on_resolve, thread_func):
     self.state = Task.State.INITIAL
@@ -555,10 +569,13 @@ class Task(Call, Supertask):
     self.ft = ft
     self.supertask = supertask
     self.on_resolve = on_resolve
-    self.thread = Thread(self, thread_func)
+    self.threads = [Thread(self, thread_func)]
     self.cancellable = False
     self.num_borrows = 0
-    self.context = ContextLocalStorage()
+
+  async def start(self):
+    assert(len(self.threads) == 1)
+    await self.threads[0].resume()
 
   def trap_if_on_the_stack(self, inst):
     c = self.supertask
@@ -569,8 +586,10 @@ class Task(Call, Supertask):
   async def request_cancellation(self):
     assert(self.state == Task.State.INITIAL)
     self.state = Task.State.PENDING_CANCEL
+    # TODO: move cancellability to the Thread and then search
+    # for a cancellable one here...
     if self.cancellable:
-      await self.thread.resume()
+      await self.threads[0].resume()
 
   def deliver_cancel(self) -> bool:
     if self.state == Task.State.PENDING_CANCEL:
@@ -582,8 +601,9 @@ class Task(Call, Supertask):
   def needs_lock(self):
     return self.opts.sync or self.opts.callback
 
+  # TODO: somehow break this up...
   async def enter(self, thread):
-    assert(thread is self.thread and thread.task is self)
+    assert(thread in self.threads and thread.task is self)
     if (self.inst.no_backpressure.is_set() and
         self.inst.num_pending == 0 and
         (not self.needs_lock() or not self.inst.lock.locked())):
@@ -599,6 +619,7 @@ class Task(Call, Supertask):
         self.inst.num_pending -= 1
         if self.deliver_cancel():
           self.on_resolve(None)
+          self.state = Task.State.RESOLVED
           return False
         if not self.inst.no_backpressure.is_set():
           continue
@@ -611,6 +632,7 @@ class Task(Call, Supertask):
             else:
               acquired.cancel()
             self.on_resolve(None)
+            self.state = Task.State.RESOLVED
             return False
           if not self.inst.no_backpressure.is_set():
             self.inst.lock.release()
@@ -619,7 +641,7 @@ class Task(Call, Supertask):
         return True
 
   async def block_on(self, thread, awaitable, cancellable = False, unlock = False) -> Cancelled:
-    assert(thread is self.thread and thread.task is self)
+    assert(thread in self.threads and thread.task is self)
     f = asyncio.ensure_future(awaitable)
     if f.done() and not DETERMINISTIC_PROFILE and random.randint(0,1):
       return
@@ -633,12 +655,13 @@ class Task(Call, Supertask):
       await thread.suspend(asyncio.create_task(self.inst.lock.acquire()))
 
   async def wait_for_event(self, thread, waitable_set, cancellable, unlock) -> EventTuple:
-    assert(thread is self.thread and thread.task is self)
+    assert(thread in self.threads and thread.task is self)
     if cancellable and self.deliver_cancel():
       return (EventCode.TASK_CANCELLED, 0, 0)
     waitable_set.num_waiting += 1
     e = None
     while not e:
+      # TODO: somehow get a THREAD_RESUME event...
       maybe_event = waitable_set.maybe_has_pending_event.wait()
       await self.block_on(thread, maybe_event, cancellable, unlock)
       if self.deliver_cancel():
@@ -648,16 +671,17 @@ class Task(Call, Supertask):
     return e
 
   async def yield_(self, thread, cancellable, unlock) -> EventTuple:
-    assert(thread is self.thread and thread.task is self)
+    assert(thread in self.threads and thread.task is self)
     if cancellable and self.deliver_cancel():
       return (EventCode.TASK_CANCELLED, 0, 0)
+    # TODO: somehow get a THREAD_RESUME event...
     await self.block_on(thread, asyncio.sleep(0), cancellable, unlock)
     if cancellable and self.deliver_cancel():
       return (EventCode.TASK_CANCELLED, 0, 0)
     return (EventCode.NONE, 0, 0)
 
   async def poll_for_event(self, thread, waitable_set, cancellable, unlock) -> Optional[EventTuple]:
-    assert(thread is self.thread and thread.task is self)
+    assert(thread in self.threads and thread.task is self)
     waitable_set.num_waiting += 1
     event_code,_,_ = e = await self.yield_(thread, cancellable, unlock)
     waitable_set.num_waiting -= 1
@@ -682,10 +706,15 @@ class Task(Call, Supertask):
     self.state = Task.State.RESOLVED
 
   def exit(self):
-    trap_if(self.state != Task.State.RESOLVED)
-    assert(self.num_borrows == 0)
     if self.needs_lock():
       self.inst.lock.release()
+
+  def thread_return(self, thread):
+    assert(thread in self.threads and thread.task is self)
+    self.threads.remove(thread)
+    if len(self.threads) == 0:
+      trap_if(self.state != Task.State.RESOLVED)
+      assert(self.num_borrows == 0)
 
 #### Subtask State
 
@@ -1965,7 +1994,7 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Ca
       [packed] = await call_and_trap_on_throw(opts.callback, thread, [event_code, p1, p2])
 
   task = Task(opts, inst, ft, caller, on_resolve, thread_func)
-  await task.thread.resume()
+  await task.start()
   return task
 
 class CallbackCode(IntEnum):
@@ -2103,25 +2132,76 @@ async def canon_resource_rep(rt, thread, i):
   trap_if(h.rt is not rt)
   return [h.rep]
 
+### 🧵 `canon thread.index`
+
+async def canon_thread_index(shared, thread):
+  assert(not shared)
+  return [thread.index]
+
+### 🧵 `canon thread.new_indirect`
+
+async def canon_thread_new_indirect(ft, ftbl, thread, i, c):
+  trap_if(not thread.task.inst.may_leave)
+  f = thread.task.inst.ftbl.get(i)
+  trap_if(f.type != ft)
+  thread = Thread(thread.task, f(c))
+  return [thread.index]
+
+### 🧵 `canon thread.switch`
+
+async def canon_thread_switch(thread, i):
+  trap_if(not thread.task.inst.may_leave)
+  other = thread.task.inst.table.get(i)
+  trap_if(not isinstance(other, Thread))
+  cancelled = await thread.switch(other)
+  return [ 1 if cancelled else 0 ]
+
+### 🧵 `canon thread.yield-to`
+
+async def canon_thread_yield_to(thread, i):
+  trap_if(not thread.task.inst.may_leave)
+  other = thread.task.inst.table.get(i)
+  trap_if(not isinstance(other, Thread))
+  other.yield_to(other)
+  return []
+
+### 🧵 `canon thread.block`
+
+async def canon_thread_block(thread, i):
+  trap_if(not thread.task.inst.may_leave)
+  other = thread.task.inst.table.get(i)
+  trap_if(not isinstance(other, Thread))
+  cancelled = await thread.block()
+  return [ 1 if cancelled else 0 ]
+
+### 🧵 `canon thread.unblock`
+
+async def canon_thread_unblock(thread, i):
+  trap_if(not thread.task.inst.may_leave)
+  other = thread.task.inst.table.get(i)
+  trap_if(not isinstance(other, Thread))
+  thread.unblock()
+  return []
+
 ### 🔀 `canon context.get`
 
 async def canon_context_get(t, i, thread):
   assert(t == 'i32')
-  assert(i < ContextLocalStorage.LENGTH)
-  return [thread.task.context.get(i)]
+  assert(i < Thread.CONTEXT_LENGTH)
+  return [thread.context[i]]
 
 ### 🔀 `canon context.set`
 
 async def canon_context_set(t, i, thread, v):
   assert(t == 'i32')
-  assert(i < ContextLocalStorage.LENGTH)
-  thread.task.context.set(i, v)
+  assert(i < Thread.CONTEXT_LENGTH)
+  thread.context[i] = v
   return []
 
 ### 🔀 `canon backpressure.set`
 
 async def canon_backpressure_set(thread, flat_args):
-  trap_if(thread.task.opts.sync)
+  # TODO: remove trap_if(thread.task.opts.sync)
   assert(len(flat_args) == 1)
   if flat_args[0] == 0:
     thread.task.inst.no_backpressure.set()

@@ -240,6 +240,8 @@ as a parameter.
 
 ### Context-Local Storage
 
+TODO: update (also there are 2 now)
+
 Each task contains a distinct mutable **context-local storage** array. The
 current task's context-local storage can be read and written from core wasm
 code by calling the [`context.get`] and [`context.set`] built-ins.
