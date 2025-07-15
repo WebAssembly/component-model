@@ -358,22 +358,6 @@ class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
       assert(all(v == () for v in vs))
     self.progress += len(vs)
 
-#### Context-Local Storage
-
-class ContextLocalStorage:
-  LENGTH = 1
-  array: list[int]
-
-  def __init__(self):
-    self.array = [0] * ContextLocalStorage.LENGTH
-
-  def set(self, i, v):
-    assert(types_match_values(['i32'], [v]))
-    self.array[i] = v
-
-  def get(self, i):
-    return self.array[i]
-
 #### Waitable State
 
 class EventCode(IntEnum):
@@ -475,7 +459,6 @@ class Task:
   supertask: Optional[Task]
   on_resolve: Callable[[Optional[list[any]]], None]
   num_borrows: int
-  context: ContextLocalStorage
 
   def __init__(self, opts, inst, ft, supertask, on_resolve):
     self.state = Task.State.INITIAL
@@ -485,7 +468,6 @@ class Task:
     self.supertask = supertask
     self.on_resolve = on_resolve
     self.num_borrows = 0
-    self.context = ContextLocalStorage()
 
   async def enter(self, thread):
     self.trap_if_on_the_stack(self.inst)
@@ -509,6 +491,8 @@ class Task:
       trap_if(c.inst is inst)
       c = c.supertask
 
+  # TODO: move may_enter/maybe_start_pending_task to ComponentInstance
+
   def may_enter(self, pending_task):
     return not self.inst.backpressure and \
            self.inst.interruptible.is_set() and \
@@ -529,6 +513,7 @@ class Task:
     if f.done() and not DETERMINISTIC_PROFILE and random.randint(0,1):
       return
     assert(self.inst.interruptible.is_set())
+    # TODO: only clear interruptible if thread == task.main_thread
     self.inst.interruptible.clear()
     if await thread.suspend(f) == Cancelled.TRUE:
       assert(self.state == Task.State.INITIAL)
@@ -887,13 +872,19 @@ class WritableFutureEnd(FutureEnd):
 
 class Thread:
   task: Task
-  future: Optional[asyncio.Future]
+  index: int
+  context: list[int]
+  future: Optional[Awaitable]
   on_resume: Optional[asyncio.Future]
   on_suspend_or_exit: Optional[asyncio.Future]
   returned: bool
 
+  CONTEXT_LENGTH = 1
+
   def __init__(self, task, coro):
     self.task = task
+    self.index = task.inst.table.add(self)
+    self.context = [0] * Thread.CONTEXT_LENGTH
     self.future = None
     self.on_resume = asyncio.Future()
     self.on_suspend_or_exit = None
@@ -903,6 +894,7 @@ class Thread:
       self.on_resume = None
       await coro
       self.on_suspend_or_exit.set_result(None)
+      self.task.inst.table.remove(self.index)
       self.returned = True
     asyncio.create_task(async_impl())
 
@@ -929,6 +921,30 @@ class Thread:
     cancelled = await self.on_resume
     self.on_resume = None
     return cancelled
+
+  async def switch(self, other: Thread) -> Cancelled:
+    assert(not self.future and not other.future)
+    assert(self.on_suspend_or_exit and not other.on_suspend_or_exit)
+    other.on_suspend_or_exit = self.on_suspend_or_exit
+    self.on_suspend_or_exit = None
+    other.on_resume.set_result(Cancelled.FALSE)
+    assert(not self.on_resume)
+    self.on_resume = asyncio.Future()
+    cancelled = await self.on_resume
+    self.on_resume = None
+    return cancelled
+
+  def yield_(self, other: Thread) -> Cancelled:
+    # deterministically switch to other, but leave this thread unblocked
+    TODO
+
+  def unblock(self, other: Thread):
+    # unblock other, but deterministically keep running here
+    TODO
+
+  def wait(self) -> Cancelled:
+    # perform just the first half of switch
+    TODO
 
 #### Store State / Embedding API
 
@@ -2107,19 +2123,76 @@ async def canon_resource_rep(rt, thread, i):
   trap_if(h.rt is not rt)
   return [h.rep]
 
+### 🧵 `canon thread.index`
+
+async def canon_thread_index(shared, thread):
+  assert(not shared)
+  return [thread.index]
+
+### 🧵 `canon thread.new_indirect`
+
+async def canon_thread_new_indirect(shared, ft, ftbl, thread, i, c):
+  assert(not shared)
+  inst = thread.task.inst
+  trap_if(not inst.may_leave)
+  f = ftbl.get(i)
+  trap_if(f is None)
+  trap_if(f.type != ft)
+  thread = Thread(thread.task, f(c))
+  return [thread.index]
+
+### 🧵 `canon thread.switch`
+
+async def canon_thread_switch(shared, thread, i):
+  assert(not shared)
+  trap_if(not thread.task.inst.may_leave)
+  other = thread.task.inst.table.get(i)
+  trap_if(not isinstance(other, Thread))
+  cancelled = await thread.switch(other)
+  return [ 1 if cancelled else 0 ]
+
+### 🧵 `canon thread.yield`
+
+async def canon_thread_yield(shared, thread, i):
+  assert(not shared)
+  trap_if(not thread.task.inst.may_leave)
+  other = thread.task.inst.table.get(i)
+  trap_if(not isinstance(other, Thread))
+  other.yield_(other)
+  return []
+
+### 🧵 `canon thread.unblock`
+
+async def canon_thread_unblock(shared, thread, i):
+  trap_if(not thread.task.inst.may_leave)
+  other = thread.task.inst.table.get(i)
+  trap_if(not isinstance(other, Thread))
+  thread.unblock()
+  return []
+
+### 🧵 `canon thread.wait`
+
+async def canon_thread_wait(shared, thread, i):
+  assert(not shared)
+  trap_if(not thread.task.inst.may_leave)
+  other = thread.task.inst.table.get(i)
+  trap_if(not isinstance(other, Thread))
+  cancelled = await thread.suspend()
+  return [ 1 if cancelled else 0 ]
+
 ### 🔀 `canon context.get`
 
 async def canon_context_get(t, i, thread):
   assert(t == 'i32')
-  assert(i < ContextLocalStorage.LENGTH)
-  return [thread.task.context.get(i)]
+  assert(i < Thread.CONTEXT_LENGTH)
+  return [thread.context[i]]
 
 ### 🔀 `canon context.set`
 
 async def canon_context_set(t, i, thread, v):
   assert(t == 'i32')
-  assert(i < ContextLocalStorage.LENGTH)
-  thread.task.context.set(i, v)
+  assert(i < Thread.CONTEXT_LENGTH)
+  thread.context[i] = v
   return []
 
 ### 🔀 `canon backpressure.set`
