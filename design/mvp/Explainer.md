@@ -33,7 +33,7 @@ more user-focused explanation, take a look at the
   * [Start definitions](#-start-definitions)
   * [Import and export definitions](#import-and-export-definitions)
     * [Name uniqueness](#name-uniqueness)
-    * [Canonical interface name](#canonical-interface-name)
+    * [Canonical interface name](#-canonical-interface-name)
 * [Component invariants](#component-invariants)
 * [JavaScript embedding](#JavaScript-embedding)
   * [JS API](#JS-API)
@@ -56,6 +56,7 @@ implemented, considered stable and included in a future milestone:
 * 🧵: threading built-ins
 * 🔧: fixed-length lists
 * 📝: the `error-context` type
+* 🔗: canonical interface names
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
 this repo merges and supersedes the [module-linking] and [interface-types]
@@ -295,7 +296,8 @@ sort           ::= core <core:sort>
                  | type
                  | component
                  | instance
-inlineexport   ::= (export "<exportname>" <versionsuffix>? <sortidx>)
+inlineexport   ::= (export "<exportname>" <sortidx>)
+                 | (export "<exportname>" <versionsuffix> <sortidx>) 🔗
 ```
 Because component-level function, type and instance definitions are different
 than core-level function, type and instance definitions, they are put into
@@ -575,8 +577,10 @@ instancedecl  ::= core-prefix(<core:type>)
                 | <alias>
                 | <exportdecl>
                 | <value> 🪙
-importdecl    ::= (import "<importname>" <versionsuffix>? bind-id(<externdesc>))
-exportdecl    ::= (export "<exportname>" <versionsuffix>? bind-id(<externdesc>))
+importdecl    ::= (import "<importname>" bind-id(<externdesc>))
+                | (import "<importname>" <versionsuffix> bind-id(<externdesc>)) 🔗
+exportdecl    ::= (export "<exportname>" bind-id(<externdesc>))
+                | (export "<exportname>" <versionsuffix> bind-id(<externdesc>)) 🔗
 externdesc    ::= (<sort> (type <u32>) )
                 | core-prefix(<core:moduletype>)
                 | <functype>
@@ -989,7 +993,7 @@ and `$C1` is a subtype of `$C2`:
 )
 ```
 
-Note that [canonical interface names](#canonical-interface-name) may be
+🔗 Note that [canonical interface names](#-canonical-interface-name) may be
 annotated with a `versionsuffix` which is ignored for type checking except to
 improve diagnostic messages.
 
@@ -2247,9 +2251,11 @@ the identifier `$x`). In the case of exports, the `<id>?` right after the
 preceding definition being exported (e.g., `(export $x "x" (func $f))` binds a
 new identifier `$x`).
 ```ebnf
-import        ::= (import "<importname>" <versionsuffix>? bind-id(<externdesc>))
-export        ::= (export <id>? "<exportname>" <versionsuffix>? <sortidx> <externdesc>?)
-versionsuffix ::= (versionsuffix "<semversuffix>")
+import        ::= (import "<importname>" bind-id(<externdesc>))
+                | (import "<importname>" <versionsuffix> bind-id(<externdesc>)) 🔗
+export        ::= (export <id>? "<exportname>" <sortidx> <externdesc>?)
+                | (export <id>? "<exportname>" <versionsuffix> <sortidx> <externdesc>?) 🔗
+versionsuffix ::= (versionsuffix "<semversuffix>") 🔗
 ```
 All import names are required to be [strongly-unique]. Separately, all export
 names are also required to be [strongly-unique]. The rest of the grammar for
@@ -2290,11 +2296,11 @@ words         ::= <word>
 projection    ::= '/' <label>
 # FIXME: surrounding alignment
 interfaceversion  ::= '@' <valid semver>
-                    | '@' <canonversion>
-canonversion      ::= [1-9] [0-9]*
-                    | '0.' [1-9] [0-9]*
-                    | '0.0.' [1-9] [0-9]*
-semversuffix      ::= [0-9A-Za-z.+-]*
+                    | '@' <canonversion> 🔗
+canonversion      ::= [1-9] [0-9]* 🔗
+                    | '0.' [1-9] [0-9]* 🔗
+                    | '0.0.' [1-9] [0-9]* 🔗
+semversuffix      ::= [0-9A-Za-z.+-]* 🔗
 depname       ::= 'unlocked-dep=<' <pkgnamequery> '>'
                 | 'locked-dep=<' <pkgname> '>' ( ',' <hashname> )?
 pkgnamequery  ::= <pkgpath> <verrange>?
@@ -2387,12 +2393,12 @@ tooling as "registries":
 The `valid semver` production is as defined by the [Semantic Versioning 2.0]
 spec and is meant to be interpreted according to that specification. The use of
 `valid semver` in `interfaceversion` is temporary for backward compatibility;
-see [Canonical interface name](#canonical-interface-name) below. The `verrange`
-production embeds a minimal subset of the syntax for version ranges found in
-common package managers like `npm` and `cargo` and is meant to be interpreted
-with the same [semantics][SemVerRange]. (Mostly this interpretation is the usual
-SemVer-spec-defined ordering, but note the particular behavior of pre-release
-tags.)
+see [Canonical interface name](#-canonical-interface-name) below (🔗). The
+`verrange` production embeds a minimal subset of the syntax for version ranges
+found in common package managers like `npm` and `cargo` and is meant to be
+interpreted with the same [semantics][SemVerRange]. (Mostly this
+interpretation is the usual SemVer-spec-defined ordering, but note the
+particular behavior of pre-release tags.)
 
 The `plainname` production captures several language-neutral syntactic hints
 that allow bindings generators to produce more idiomatic bindings in their
@@ -2554,7 +2560,7 @@ annotations. For example, the validation rules for `[constructor]foo` require
 for details.
 
 
-### Canonical Interface Name
+### 🔗 Canonical Interface Name
 
 An `interfacename` (as defined above) is **canonical** iff it either:
 

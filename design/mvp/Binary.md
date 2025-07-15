@@ -12,7 +12,8 @@ rules, but rather merge the minimal need-to-know elements of both, with just
 enough detail to create a prototype. A complete definition of the binary format
 and validation will be present in the [formal specification](../../spec/).
 
-See [Gated Features](Explainer.md#gated-features) for an explanation of 🪙 and 🔧.
+See [Gated Features](Explainer.md#gated-features) for an explanation of emoji
+annotations like 🪙 and 🔧.
 
 
 ## Component Definitions
@@ -374,10 +375,10 @@ in the explainer.)
 import         ::= in:<importname'> ed:<externdesc>                     => (import in ed)
 export         ::= en:<exportname'> si:<sortidx> ed?:<externdesc>?      => (export en si ed?)
 importname'    ::= 0x00 len:<u32> in:<importname>                       => in     (if len = |in|)
-                 | 0x01 len:<u32> in:<importname> vs:<versionsuffix'>   => in vs  (if len = |in|)
+                 | 0x01 len:<u32> in:<importname> vs:<versionsuffix'>   => in vs  (if len = |in|) 🔗
 exportname'    ::= 0x00 len:<u32> en:<exportname>                       => en     (if len = |en|)
-                 | 0x01 len:<u32> en:<exportname> vs:<versionsuffix'>   => in vs  (if len = |in|)
-versionsuffix' ::= len:<u32> vs:<semversuffix>                          => (versionsuffix vs)  (if len = |vs|)
+                 | 0x01 len:<u32> en:<exportname> vs:<versionsuffix'>   => in vs  (if len = |in|) 🔗
+versionsuffix' ::= len:<u32> vs:<semversuffix>                          => (versionsuffix vs)  (if len = |vs|) 🔗
 ```
 
 Notes:
@@ -402,7 +403,7 @@ Notes:
   `(result (own $R))`, where `$R` is the resource labeled `r`.
 * Validation of `[method]` names requires the first parameter of the function
   to be `(param "self" (borrow $R))`, where `$R` is the resource labeled `r`.
-* Validation requires that `versionsuffix` is preceded by an `interfaceversion`
+* 🔗 Validation requires that `versionsuffix` is preceded by an `interfaceversion`
   matching `canonversion` and that the concatenation of the `canonversion` and
   the `versionsuffix` results in a `valid semver` as defined by
   [https://semver.org](https://semver.org/). A `versionsuffix` is otherwise
