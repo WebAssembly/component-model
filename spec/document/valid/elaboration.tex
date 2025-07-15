@@ -1,0 +1,897 @@
+\section{Type Elaboration}
+
+
+\subsection{Primitive Value Types}
+\label{judgment:PVTtoEVT}
+
+\fbox{$\tyctx \vdashh!PVTtoEVT! \primvaltype \leadstoh!PVTtoEVT! \evaltype$}
+
+Any $\primvaltype$ elaborates to a a $\evaltype$.
+
+\subsubsection{$\VTSTRING$}
+
+\[
+  \frac{
+  }{
+    \tyctx \vdashh!PVTtoEVT! \VTSTRING \leadstoh!PVTtoEVT! \EVTLIST~\EVTCHAR
+  }
+\]
+
+\subsubsection{$\primvaltype$ other than $\VTSTRING$}
+
+\[
+  \frac{
+    \primvaltype \neq \VTSTRING
+  }{
+    \tyctx \vdashh!PVTtoEVT! \primvaltype \leadstoh!PVTtoEVT! \primvaltype
+  }
+\]
+
+\subsection{Record Fields}
+\label{judgment:RFtoERF}
+\fbox{$\tyctx \vdashh!RFtoERF! \recordfield \leadstoh!RFtoERF! \erecordfield$}
+
+
+\[
+  \frac{
+    \tyctx \vdashh!VTtoEVT! \valtype \leadstoh!VTtoEVT! \evaltype
+  }{
+    \tyctx \vdashh!RFtoERF! \{ \RFNAME~\name, \RFTYPE~\valtype \}
+    \leadstoh!RFtoERF! \{ \ERFNAME~\name, \ERFTYPE~\evaltype \}
+  }
+\]
+
+\subsection{Variant Cases}
+\label{judgment:VCtoEVC}
+\fbox{$\vcctx \vdashh!VCtoEVC! \variantcase \leadstoh!VCtoEVC! \evariantcase$}
+
+Because validation must ensure that a variant case which refines
+another case has a compatible type, a variant case elaborates to a
+$\evariantcase$ in a special context $\vcctx$:
+
+\begin{record-production}{vcctx}
+  \{ \VCCCTX~\tyctx, \VCCCASES~\evariantcase^{*} \}
+\end{record-production}
+
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \forall i, \vcctx.\VCCCTX \vdashh!VTtoEVT! \valtype_i \leadstoh!VTtoEVT! {\evaltype}_i\\
+    \forall j, \vcctx.\VCCCASES[\u32_j] = \{ \EVCNAME~\name_j, \EVCTYPE~\overline{{\evaltype'}_k}, \dots \} \land \forall i, {\evaltype}_i \subtypeof {\evaltype'}_i
+    \end{array}
+  }{
+    \vcctx \vdashh!VCtoEVC! \{ \VCNAME~\name, \VCTYPE~\overline{\valtype_i}, \VCREFINES~\overline{\u32_j} \}
+    \leadstoh!VCtoEVC! \{ \EVCNAME~\name, \EVCTYPE~\overline{{\evaltype}_i}, \VCREFINES~\overline{\name_j} \}
+  }
+\]
+
+\subsection{Defined Value Types}
+\label{judgment:DVTtoEVT}
+\fbox{$\tyctx \vdashh!DVTtoEVT! \defvaltype \leadstoh!DVTtoEVT! \evaltype$}
+
+A defined value type elaborates to a $\evaltype$.
+
+\subsubsection{$\VTPRIM~\primvaltype$}
+
+\[
+  \frac{
+    \tyctx \vdashh!PVTtoEVT! \primvaltype \leadstoh!PVTtoEVT! \evaltype
+  }{
+    \tyctx \vdashh!DVTtoEVT! \VTPRIM~\primvaltype \leadstoh!DVTtoEVT! \evaltype
+  }
+\]
+
+\subsubsection{$\VTRECORD~\recordfield^{+}$}
+
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \forall i, \tyctx \vdashh!RFtoERF! \recordfield_i \leadstoh!RFtoERF! {\erecordfield}_i\\
+    \forall i j, {\erecordfield}_i.\ERFNAME = {\erecordfield}_j.\ERFNAME \Rightarrow i = j
+    \end{array}
+  }{
+    \tyctx \vdashh!DVTtoEVT! \VTRECORD~\overline{{\recordfield}_i}^n
+    \leadstoh!DVTtoEVT! \EVTRECORD~\overline{{\erecordfield}_i}^n
+  }
+\]
+
+\subsubsection{$\VTVARIANT~\variantcase^{+}$}
+
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \forall i, \{ \VCCCTX~\Gamma, \VCCCASES~{\evariantcase}_1,\dots,{\evariantcase}_{i-1} \}  \vdashh!VCtoEVC! \variantcase_i \leadstoh!VCtoEVC! {\evariantcase}_i\\
+    \forall i, j {\evariantcase}_i.\EVCNAME = {\evariantcase}_j.\EVCNAME \Rightarrow i = j
+    \end{array}
+  }{
+    \tyctx \vdashh!DVTtoEVT! \VTVARIANT~\overline{\variantcase_i}^n
+    \leadstoh!DVTtoEVT! \EVTVARIANT~\overline{{\evariantcase}_i}^n
+  }
+\]
+
+\subsubsection{$\VTLIST~\valtype$}
+\[
+  \frac{
+    \tyctx \vdashh!VTtoEVT! \valtype \leadstoh!VTtoEVT! \evaltype
+  }{
+    \tyctx \vdashh!DVTtoEVT! \VTLIST~\valtype \leadstoh!DVTtoEVT! \EVTLIST~\evaltype
+  }
+\]
+
+\subsubsection{$\VTTUPLE~\overline{\valtype_i}$}
+\[
+  \frac{
+    \forall i, \tyctx \vdashh!VTtoEVT! \valtype_i \leadstoh!VTtoEVT! {\evaltype}_i
+  }{
+    \tyctx \vdashh!DVTtoEVT! \VTTUPLE~\overline{\valtype_i}
+    \leadstoh!DVTtoEVT! \EVTRECORD~\overline{\{\ERFNAME~''i'',\ERFTYPE~{\evaltype}_i\}}
+  }
+\]
+
+\subsubsection{$\VTFLAGS~\overline{\name_i}$}
+\[
+  \frac{
+  }{
+    \tyctx \vdashh!DVTtoEVT! \VTFLAGS~\overline{\name_i}
+    \leadstoh!DVTtoEVT! \EVTRECORD~\overline{\{\ERFNAME~\name_i, \ERFTYPE~\EVTBOOL\}}
+  }
+\]
+
+\subsubsection{$\VTENUM~\overline{\name_i}$}
+
+\[
+  \frac{
+  }{
+    \tyctx \vdashh!DVTtoEVT! \VTENUM~\overline{\name_i}
+    \leadstoh!DVTtoEVT! \VTVARIANT~\overline{\{\EVCNAME~\name_i\}}
+  }
+\]
+
+\subsubsection{$\VTOPTION~\valtype$}
+
+\[
+  \frac{
+    \tyctx \vdashh!VTtoEVT! \valtype \leadstoh!VTtoEVT! \evaltype
+  }{
+    \tyctx \vdashh!DVTtoEVT! \VTOPTION~\valtype
+    \leadstoh!DVTtoEVT! \EVTVARIANT~\{ \EVCNAME~''none'' \}~\{ \EVCNAME~''some'', \EVCTYPE~\evaltype \}
+  }
+\]
+
+\subsubsection{$\VTUNION~\overline{\valtype_i}$}
+\[
+  \frac{
+    \forall i, \tyctx \vdashh!VTtoEVT! \valtype_i \leadstoh!VTtoEVT! {\evaltype}_i
+  }{
+    \tyctx \vdashh!DVTtoEVT! \VTUNION~\overline{\valtype_i}
+    \leadstoh!DVTtoEVT! \EVTVARIANT~\overline{\{\EVCNAME~''i'', \EVCTYPE~{\evaltype}_i\}}
+  }
+\]
+
+\subsubsection{$\VTRESULT~\overline{\valtype_i}~\overline{\valtype'_j}$}
+
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \forall i, \tyctx \vdashh!VTtoEVT! \valtype_i \leadstoh!VTtoEVT! {\evaltype}_i\\
+    \forall j, \tyctx \vdashh!VTtoEVT! \valtype'_j \leadstoh!VTtoEVT! {\evaltype'}_j\\
+    \end{array}
+  }{
+    \begin{aligned}
+    \tyctx\vdash!DVTtoEVT!{}&\VTRESULT~\overline{\valtype_i}~\overline{\valtype'_j}\\
+!     \leadstoh!DVTtoEVT!{}&\EVTVARIANT~\{\EVCNAME~''ok'',! \EVCTYPE~\overline{{\evaltype}_i}\}~\{\EVCNAME~''error'', \EVCTYPE~\overline{{\evaltype'}_j}\}\\
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\VTOWN~\typeidx$}
+
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \tyctx.\TCTYPES[\typeidx] = \edeftype\\
+    \edeftype \subtypeof \ESUBRESOURCE\\
+    \end{array}
+  }{
+    \tyctx \vdashh!DVTtoEVT! \VTOWN~\typeidx \leadstoh!DVTtoEVT! \EVTOWN~\edeftype
+  }
+\]
+
+\subsubsection{$\VTBORROW~\typeidx$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \tyctx.\TCTYPES[\typeidx] = \edeftype\\
+    \edeftype \subtypeof \ESUBRESOURCE\\
+    \end{array}
+  }{
+    \tyctx \vdashh!DVTtoEVT! \VTBORROW~\typeidx \leadstoh!DVTtoEVT! \EVTREF~\RSCALL~\edeftype
+  }
+\]
+
+\subsection{Value Types}
+\label{judgment:VTtoEVT}
+\fbox{$\tyctx \vdashh!VTtoEVT! \valtype \leadstoh!VTtoEVT! \evaltype$}
+
+\subsubsection{$\primvaltype$}
+\[
+  \frac{
+    \tyctx \vdashh!PVTtoEVT! \primvaltype \leadstoh!PVTtoEVT! \evaltype
+  }{
+    \tyctx \vdashh!VTtoEVT! \primvaltype \leadstoh!VTtoEVT! \evaltype
+  }
+\]
+
+\subsubsection{$\typeidx$}
+\[
+  \frac{
+  }{
+    \tyctx \vdashh!VTtoEVT! \typeidx \leadstoh!VTtoEVT! \tyctx.\TCTYPES[\typeidx]
+  }
+\]
+
+\subsection{Value Type Well-formedness}
+\label{judgment:EVT}
+\fbox{$\tyctx \vdashh!EVT!_\evaltypepos \evaltype$}
+
+Since certain value types cannot appear in certain places (notably,
+$\EVTREF~\RSCALL$ may not appear in a function result type), we define
+a family of well-formedness judgments. Each context which may require
+a $\evaltype$ uses one of these well-formedness judgments to ensure
+that it is of correct form.
+
+Note that the variable scoping constraints should already be enforced
+by earlier elaboration stages, which never generate free type
+variables, but they are included here for completeness.
+
+We define a formal syntax of the position parameters which may be
+used. In addition to recording whether or not the present type is a
+function result type, it records whether or not the type is being
+exported, in which case bare resource types are not allowed.
+
+\begin{record-production}{evaltypepos}
+  \{ \EVTPRESULT~\bool, \EVTPEXPORT~\bool \}
+\end{record-production}
+
+\subsubsection{Primitive value types}
+\[
+  \frac{
+    \evaltype \in \{ \EVTBOOL, \EVTS8, \EVTU8, \EVTS16, \EVTU16, \EVTS32, \EVTU32, \EVTS64, \EVTU64, \EVTFLOAT32, \EVTFLOAT64, \EVTCHAR \}
+  }{
+    \tyctx \vdashh!EVT!_\evaltypepos \evaltype
+  }
+\]
+
+\subsubsection{$\EVTLIST~\evaltype$}
+\[
+  \frac{
+    \tyctx \vdashh!EVT!_\evaltypepos \evaltype
+  }{
+    \tyctx \vdashh!EVT!_\evaltypepos \EVTLIST~\evaltype
+  }
+\]
+
+\subsubsection{$\EVTRECORD~\erecordfield^{\ast}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \forall i j, i \neq j \Rightarrow \name_i \neq name_j\\
+    \forall i, \tyctx \vdashh!EVT!_\evaltypepos {\evaltype}_i\\
+    \end{array}
+  }{
+    \tyctx \vdashh!EVT!_\evaltypepos
+     \EVTRECORD~\overline{\ERFNAME~\name_i, \ERFTYPE~{\evaltype}_i}
+  }
+\]
+
+\subsubsection{$\EVTVARIANT~\evariantcase^{+}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \forall i j, i \neq j \Rightarrow \name_i \neq \name_j\\
+    \forall i, \forall \evaltype, {\evaltype^?}_i = \evaltype \Rightarrow \tyctx \vdashh!EVT!_\evaltypepos \evaltype\\
+    \end{array}
+  }{
+    \tyctx \vdashh!EVT!_\evaltypepos
+     \EVTVARIANT~\overline{\EVCNAME~\name_i, \EVCTYPE~{\evaltype^?}_i, \EVCREFINES~\u32^?_i}^n
+  }
+\]
+
+\subsubsection{$\EVTOWN~\edeftype$}
+\[
+  \frac{
+    \tyctx \vdashh!EDT!_\evaltypepos \edeftype\\
+    \tyctx \vdash \edeftype \subtypeof \ESUBRESOURCE
+  }{
+    \tyctx \vdashh!EVT!_\evaltypepos \EVTOWN~\edeftype
+  }
+\]
+
+\subsubsection{$\EVTREF~\edeftype$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \neg \evaltypepos.\EVTPRESULT\\
+    \tyctx \vdashh!EVT!_\evaltypepos \EVTOWN~\edeftype
+    \end{array}
+  }{
+    \tyctx \vdashh!EVT!_\evaltypepos \EVTREF~\RSCALL~\edeftype
+  }
+\]
+
+\subsection{Parameter Lists}
+\label{judgment:PLtoEPL}
+\fbox{$\tyctx \vdashh!PLtoEPL! \paramlist \leadstoh!PLtoEPL! \eparamlist$}
+
+Any $\paramlist$ elaborates to a $\eparamlist$.
+
+\subsubsection{$\overline{\{\PLNAME~\name_i, \PLTYPE~\valtype_i\}}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \forall i, \tyctx \vdashh!VTtoEVT! \valtype_i \leadstoh!VTtoEVT! {\evaltype}_i\\
+    \forall i, \tyctx \vdashh!EVT!_{\{\EVTPRESULT~\false,\EVTPEXPORT~\false\}} {\evaltype}_i\\
+    \end{array}
+  }{
+    \tyctx \vdashh!PLtoEPL! \overline{\{\PLNAME~\name_i,
+    \PLTYPE~\valtype_i\}} \leadstoh!PLtoEPL! \overline{\{\EPLNAME~\name_i,
+    \EPLTYPE~{\evaltype}_i\}}
+  }
+\]
+
+\subsection{Parameter List Well-formedness}
+\label{judgment:EPL}
+\fbox{$\tyctx \vdashh!EPL! \eparamlist$}
+
+We define an analogous well-formedness judgment for parameter lists.
+Since parameter lists may only occur in parameter position, we define
+another syntax of position parameters which does not include the
+information about whether or not the type appears in parameter
+positoin; this version of the syntax will be used for all defined type
+well-formedness judgments, since defined types other than resources
+may not appear inside function parameter or return lists:
+
+\begin{record-production}{edeftypepos}
+  \{ \EDTPEXPORT~\bool \}
+\end{record-production}
+
+\subsubsection{$\overline{\{\EPLNAME~\name_i, \EPLTYPE~\evaltype_i\}}$}
+\[
+  \frac{
+    \forall i, \tyctx \vdashh!EVT!_{\{\EVTPRESULT~\false,\EVTPEXPORT~\edeftypepos.\EDTPEXPORT\}} \evaltype_i
+  }{
+    \tyctx \vdashh!EPL!_\edeftypepos \{\EPLNAME~\name_i, \EPLTYPE~\evaltype_i\}
+  }
+\]
+
+\subsection{Result Lists}
+\label{judgment:RLtoERL}
+\fbox{$\tyctx \vdashh!RLtoERL! \resultlist \leadstoh!RLtoERL! \eparamlist$}
+
+Any $\resultlist$ elaborates to a $\eresultlist$.
+
+\subsubsection{$\valtype$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \tyctx \vdashh!VTtoEVT! \valtype \leadstoh!VTtoEVT! \evaltype\\
+    \tyctx \vdashh!EVT!_{\{\EVTPRESULT~\true,\EVTPEXPORT~\false\}} \evaltype\\
+    \end{array}
+  }{
+    \tyctx \vdashh!RLtoERL! \valtype \leadstoh!RLtoERL! \evaltype
+  }
+\]
+
+\subsubsection{$\overline{\{\RLNAME~\name_i, \RLTYPE~\valtype_i\}}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \forall i, \tyctx \vdashh!VTtoEVT! \valtype_i \leadstoh!VTtoEVT! {\evaltype}_i\\
+    \forall i, \tyctx \vdashh!EVT!_{\{\EVTPRESULT~\true,\EVTPEXPORT~\false\}} {\evaltype}_i\\
+    \end{array}
+  }{
+    \tyctx \vdashh!RLtoERL! \overline{\{\RLNAME~\name_i,
+    \RLTYPE~\valtype_i\}} \leadstoh!RLtoERL! \overline{\{\ERLNAME~\name_i,
+    \ERLTYPE~{\evaltype}_i\}}
+  }
+\]
+
+\subsection{Result List Well-formedness}
+\label{judgment:ERL}
+
+\subsubsection{$\evaltype$}
+\[
+  \frac{
+    \tyctx \vdashh!EVT!_{\{\EVTPRESULT~\true,\EVTPEXPORT~\edeftypepos.\EDTPEXPORT\}} \evaltype
+  }{
+    \tyctx \vdashh!ERL!_\edeftypepos \evaltype
+  }
+\]
+
+\subsubsection{$\overline{\{\ERLNAME~\name_i, \ERLTYPE~\evaltype_i\}}$}
+\[
+  \frac{
+    \forall i, \tyctx \vdashh!EVT!_{\{\EVTPRESULT~\true,\EVTPEXPORT~\edeftypepos.\EDTPEXPORT\}} \evaltype_i
+  }{
+    \tyctx \vdashh!ERL!_\edeftypepos \{\ERLNAME~\name_i, \ERLTYPE~\evaltype_i\}
+  }
+\]
+
+\subsection{Function types}
+\label{judgment:FTtoEFT}
+\fbox{$\tyctx \vdashh!FTtoEFT! \functype \leadstoh!FTtoEFT! \efunctype$}
+
+Any $\functype$ elaborates to a $\efunctype$.
+
+\subsubsection{$\paramlist \to \resultlist$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+      \tyctx \vdashh!PLtoEPL! \paramlist \leadstoh!PLtoEPL! \eparamlist\\
+      \tyctx \vdashh!RLtoERL! \resultlist \leadstoh!RLtoERL! \eresultlist\\
+    \end{array}
+  }{
+    \tyctx \vdashh!FTtoEFT! \paramlist\to\resultlist
+    \leadstoh!FTtoEFT! \eparamlist\to\eresultlist
+  }
+\]
+
+\subsection{Type Bounds}
+\label{judgment:TBtoETB}
+\fbox{$\tyctx \vdashh!TBtoETB! \typebound \leadstoh!TBtoETB! \etypebound$}
+
+A type bound elaborates to a $\etypebound$.
+
+\subsubsection{$\TBEQ~\typeidx$}
+\[
+  \frac{
+  }{
+    \tyctx \vdashh!TBtoETB! \TBEQ~\typeidx \leadstoh!TBtoETB! \ETBEQ~\tyctx.\TCTYPES[\typeidx]
+  }
+\]
+
+\subsubsection{$\TBSUBR$}
+\[
+  \frac{
+  }{
+    \tyctx \vdashh!TBtoETB! \TBSUBR \leadstoh!TBtoETB! \ETBSUBR
+  }
+\]
+
+\subsection{Extern Descriptors}
+\label{judgment:EDtoEED}
+\fbox{$\tyctx \vdashh!EDtoEED! \externdesc \leadstoh!EDtoEED! \forall \overline{\boundedtyvar}. \eexterndesc$}
+
+An extern descriptor elaborates to a quantified $\eexterndesc$. The
+quantifiers track type variables that are introduced by the
+$\externdesc$, but which have no place in the $\eexterndesc$; in
+particular, those introduced by type and instance imports/exports.
+
+\subsubsection{$\EDTYPE~\typebound$}
+\[
+  \frac{
+    \tyctx \vdashh!TBtoETB! \typebound \leadstoh!TBtoETB! \etypebound
+  }{
+    \tyctx \vdashh!EDtoEED! \EDTYPE~\typebound \leadstoh!EDtoEED! \forall(\tyvar : \etypebound).\EEMDTYPE~\tyvar
+  }
+\]
+
+\subsubsection{$\EDCOREMODULE~\core:typeidx$}
+\[
+  \frac{
+    \tyctx.\TCCORE.\CTCTYPES[\core:typeidx] = \ecoremoduletype
+  }{
+    \tyctx \vdashh!EDtoEED! \EDCOREMODULE~\core:typeidx \leadstoh!EDtoEED! \forall\varnothing.\EEMDCOREMODULE~\ecoremoduletype
+  }
+\]
+
+\subsubsection{$\EDFUNC~\typeidx$}
+\[
+  \frac{
+    \tyctx.\TCTYPES[\typeidx] = \efunctype
+  }{
+    \tyctx \vdashh!EDtoEED! \EDFUNC~\typeidx \leadstoh!EDtoEED! \forall\varnothing.\EEMDFUNC~\efunctype
+  }
+\]
+
+\subsubsection{$\EDVALUE~\typeidx$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \tyctx.\TCTYPES[\typeidx] = \evaltype\\
+    \tyctx \vdashh!EVT! \evaltype\\
+    \end{array}
+  }{
+    \tyctx \vdashh!EDtoEED! \EDVALUE~\typeidx \leadstoh!EDtoEED! \forall\varnothing.\EEMDVALUE~\evaltype
+  }
+\]
+
+\subsubsection{$\EDINSTANCE~\typeidx$}
+\[
+  \frac{
+    \tyctx.\TCTYPES[typeidx] = \exists\boundedtyvar^\ast.\einstancetype
+  }{
+    \tyctx \vdashh!EDtoEED! \EDINSTANCE~\typeidx \leadstoh!EDtoEED! \forall\boundedtyvar^\ast.\EEMDINSTANCE~\einstancetype
+  }
+\]
+
+\subsubsection{$\EDCOMPONENT~\typeidx$}
+\[
+  \frac{
+    \tyctx.\TCTYPES[\typeidx] = \ecomponenttype
+  }{
+    \tyctx \vdashh!EDtoEED! \EDCOMPONENT~\typeidx \leadstoh!EDtoEED! \forall\varnothing.\EEMDCOMPONENT~\ecomponenttype
+  }
+\]
+
+\subsection{Extern Descriptor Well-formedness}
+\label{judgment:EED}
+\fbox{$\tyctx \vdashh!EED!_\edeftypepos \eexterndesc$}
+
+\subsubsection{$\EEMDCOREMODULE~\ecoremoduletype$}
+\[
+  \frac{
+  }{
+    \tyctx \vdashh!EED!_\edeftypepos \EEMDCOREMODULE~\ecoremoduletype
+  }
+\]
+
+\subsubsection{$\eexterndesc$ other than $\EEMDCOREMODULE$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    K \in \{ \EEMDFUNC, \EEMDVALUE, \EEMDTYPE, \EEMDINSTANCE, \EEMDCOMPONENT \}\\
+    \tyctx \vdashh!EDT!_\edeftypepos \edeftype\\
+    \end{array}
+  }{
+    \tyctx \vdashh!EED!_\edeftypepos K~\edeftype
+  }
+\]
+
+\subsection{Instance Declarators}
+\label{judgment:IDtoEIT}
+\fbox{$\tyctx \vdashh!IDtoEIT! \instancedecl \leadstoh!IDtoEIT! \exists \boundedtyvar^\ast. \einstancetype \dashvh!IDtoEIT! \tyctx'$}
+
+Each instance declarator elaborates to a quantified (partial)
+$\einstancetype$ and an updated context, reflecting the effect of the
+declarator on the component's index spaces.
+
+\subsubsection{$\IDALIAS~\{ \ASORT~\sort, \ATARGET~\ATEXPORT~\instanceidx~\name \}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+      \sort \in \{ \STYPE, \SINSTANCE \}\\
+      \tyctx.\TCINSTANCES[\instanceidx] = \overline{{\eexterndeclad}_i}\\
+      \exists i, \eexterndeclad_i.\EEDNAME = \name
+    \end{array}
+  }{
+    \begin{aligned}
+      \tyctx \vdashh!IDtoEIT!{}& \IDALIAS~\{\ASORT~\sort, \ATARGET~\ATEXPORT~\instanceidx~\name \}\\ \leadstoh!IDtoEIT!{}& \exists\varnothing. \varnothing \\\dashvh!IDtoEIT!{}& \tyctx \oplus \{ \F{index\_space}(\sort)~\eexterndeclad_i.\EEDDESC \}
+    \end{aligned}
+  }
+\]
+
+\subsubsection{$\IDALIAS~\{ \ASORT~\sort, \ATARGET~\ATOUTER~\u32_o~\u32_i\}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \sort = \STYPE\\
+    \edeftype = \tyctx.\TCPARENT[\u32_o].\TCTYPES[\u32_i]\\
+    \mathit{boundary} = \bigvee_{j < \u32_o} \tyctx.\TCPARENT[j].\TCOB\\
+    \subst = \begin{cases}\resolveVars{\tyctx.\TCPARENT[\u32_o]} & \text{if } \mathit{boundary}\\\varnothing&\text{otherwise}\end{cases}\\
+    \edeftype' = \edeftype[\subst]\\
+    \tyctx.\TCPARENT[\u32_o] \vdashh!EDT!_{\{\EDTPEXPORT~\true\}} \edeftype'\\
+    \mathit{boundary} \Rightarrow \freeVars{\edeftype'} = \varnothing
+    \end{array}
+  }{
+    \tyctx \vdashh!IDtoEIT! \IDALIAS~\{\ASORT~\sort, \ATARGET~\ATOUTER~\u32_o~\u32_i\} \leadstoh!IDtoEIT!
+     \exists\varnothing. \varnothing \dashvh!IDtoEIT! \tyctx \oplus \{ \TCTYPES~\edeftype' \}
+  }
+\]
+
+\subsubsection{$\IDTYPE~\deftype$}
+\[
+  \frac{
+    \tyctx \vdashh!DTtoEDT! \deftype \leadstoh!DTtoEDT! \edeftype
+  }{
+    \tyctx \vdashh!IDtoEIT! \IDTYPE~\deftype \leadstoh!IDtoEIT!
+     \exists\varnothing. \varnothing
+    \dashvh!IDtoEIT! \tyctx \oplus \{ \TCTYPES~\edeftype \}
+  }
+\]
+
+\subsubsection{$\IDEXPORT~\exportdecl$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+      \tyctx \vdashh!EDtoEED! \exportdecl.\EDDESC \leadstoh!EDtoEED! \forall\overline{\boundedtyvar_i}.\eexterndesc\\
+      \tyctx' = \tyctx \oplus \{ \TCVARS~\overline{(\boundedtyvar_i,)}\\
+      \tyctx' \vdashh!EED!_{\{\EDTPEXPORT~\true\}} \eexterndesc\\
+    \end{array}
+  }{
+    \begin{aligned}
+    \tyctx \vdashh!IDtoEIT!{}& \exportdecl\\
+    \leadstoh!IDtoEIT!{}&\exists\overline{\boundedtyvar_i}. \{ \EEDNAME~\exportdecl.\EDNAME, \EEDDESC~\eexterndesc \}\\
+    \dashvh!IDtoEIT!{}& \tyctx' \oplus \eexterndesc
+    \end{aligned}
+  }
+\]
+
+\subsection{Component declarators}
+\label{judgment:CDtoECT}
+\fbox{$\tyctx \vdashh!CDtoECT! \componentdecl \leadstoh!CDtoECT! \ecomponenttype \dashvh!CDtoECT! \tyctx'$}
+
+Each component declarator elaborates to a (partial)
+$\ecomponenttype$ and an updated context, reflecting the effect
+of the declarator on the component's index spaces.
+
+\subsubsection{$\instancedecl$}
+\[
+  \frac{
+    \tyctx \vdashh!IDtoEIT! \instancedecl \leadstoh!IDtoEIT! \exists \boundedtyvar^\ast. \einstancetype \dashvh!IDtoEIT! \tyctx'
+  }{
+    \tyctx \vdashh!CDtoECT! \instancedecl \leadstoh!CDtoECT! \forall\varnothing. \varnothing \to \exists \boundedtyvar^\ast. \einstancetype \dashvh!CDtoECT! \tyctx'
+  }
+\]
+
+\subsubsection{$\importdecl$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+      \tyctx \vdashh!EDtoEED! \importdecl.\IDDESC \leadstoh!EDtoEED! \forall\overline{\boundedtyvar_i}. \eexterndesc\\
+      \tyctx' = \tyctx \oplus \{ \TCVARS~\overline{(\boundedtyvar_i,)} \}\\
+      \tyctx' \vdashh!EED!_{\{\EDTPEXPORT~\true\}} \eexterndesc\\
+    \end{array}
+  }{
+    \begin{aligned}
+    \tyctx \vdashh!CDtoECT!{}&\importdecl\\
+     \leadstoh!CDtoECT!{}&\forall\overline{\boundedtyvar_i}. \{\EEDNAME~\importdecl.\IDNAME, \EEDDESC~\eexterndesc\} \to \exists \varnothing. \varnothing\\
+    \dashvh!CDtoECT!{}&\tyctx' \oplus \eexterndesc
+    \end{aligned}
+  }
+\]
+
+\subsection{Instance Types}
+\label{judgment:ITtoEIT}
+\fbox{$\tyctx \vdashh!ITtoEIT! \instancetype \leadstoh!ITtoEIT! \einstancetype$}
+
+A surface instance type elaborates to a quantified elaborated instance
+type $\exists \boundedtyvar^\ast. \einstancetype$.
+
+\subsubsection{$\overline{\instancedecl_i}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+      \tyctx_0 = \{ \TCPARENT~\tyctx \}\\
+      \forall i, \tyctx_{i-1} \vdashh!IDtoEIT! \instancedecl_i
+      \leadstoh!IDtoEIT! \exists \boundedtyvar^\ast_i. \einstancetype_i \dashvh!IDtoEIT! \tyctx_i\\
+      \einstancetype = \bigoplus_i {\einstancetype}_i \\
+      \tyctx_n.\TCVARS \cap \freeVars{\einstancetype} = \varnothing\\
+    \end{array}
+  }{
+    \tyctx \vdashh!ITtoEIT! \overline{\instancedecl_i}^n
+    \leadstoh!ITtoEIT! \exists \overline{\boundedtyvar^\ast_i}. \einstancetype
+  }
+\]
+
+\subsection{Component Types}
+\label{judgment:CTtoECT}
+\fbox{$\tyctx \vdashh!CTtoECT! \componenttype \leadstoh!CTtoECT! \ecomponenttype$}
+
+\subsubsection{$\overline{\componentdecl_i}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+      \tyctx_0 = \{ \TCPARENT~\tyctx \}\\
+      \forall i, \tyctx_{i-1} \vdashh!CDtoECT! \componentdecl_i \leadstoh!CDtoECT! \ecomponenttype_i \dashvh!CDtoECT! \tyctx_i\\
+      \ecomponenttype = \bigoplus_i \ecomponenttype_i\\
+      \tyctx_n.\TCVARS \cap \freeVars{\ecomponenttype} = \varnothing\\
+    \end{array}
+  }{
+    \tyctx \vdashh!CTtoECT! \overline{\componentdecl_i}^n
+    \leadstoh!CTtoECT! \ecomponenttype
+  }
+\]
+
+\subsection{Defined Types}
+\label{judgment:DTtoEDT}
+\fbox{$\tyctx \vdashh!DTtoEDT! \deftype \leadstoh!DTtoEDT! \edeftype$}
+
+A $\deftype$ elaborates to a $\edeftype$.
+
+In general, a $\deftype$ of the form $\resourcetype$ does not
+elaborate to any $\edeftype$; however, the component $\DTYPE$
+declarator \hyperref[rule:CDatECT:DTYPE]{generates} a new context
+entry for the resource in question and produces an appropriate
+$\EDTRESOURCE$ type.
+
+\subsubsection{$\defvaltype$}
+\[
+  \frac{
+    \tyctx \vdashh!DVTtoEVT! \defvaltype \leadstoh!DVTtoEVT! \evaltype
+  }{
+    \tyctx \vdashh!DTtoEDT! \defvaltype \leadstoh!DTtoEDT! \evaltype
+  }
+\]
+
+\subsubsection{$\functype$}
+\[
+  \frac{
+    \tyctx \vdashh!FTtoEFT! \functype \leadstoh!FTtoEFT! \efunctype
+  }{
+    \tyctx \vdashh!DTtoEDT! \functype \leadstoh!DTtoEDT! \efunctype
+  }
+\]
+
+\subsubsection{$\componenttype$}
+\[
+  \frac{
+    \tyctx \vdashh!CTtoECT! \componenttype \leadstoh!CTtoECT! \ecomponenttype
+  }{
+    \tyctx \vdashh!DTtoEDT! \componenttype \leadstoh!DTtoEDT! \ecomponenttype
+  }
+\]
+
+\subsubsection{$\instancetype$}
+\[
+  \frac{
+    \tyctx \vdashh!ITtoEIT! \instancetype \leadstoh!ITtoEIT! \exists \boundedtyvar^\ast. \einstancetype
+  }{
+    \tyctx \vdashh!DTtoEDT! \instancetype \leadstoh!DTtoEDT! \exists \boundedtyvar^\ast. \einstancetype
+  }
+\]
+
+\subsection{Defined Type Well-formedness}
+\label{judgment:EDT}
+\fbox{$\tyctx \vdashh!EDT!_\edeftypepos \edeftype$}
+
+\subsubsection{$\tyvar$}
+\[
+  \frac{
+    \tyvar \in \bigcup_i \tyctx.\TCPARENT[i].\TCVARS
+  }{
+    \tyctx \vdashh!EDT!_\edeftypepos \tyvar
+  }
+\]
+
+\subsubsection{$\EDTRESOURCE~\rtidx$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \neg \edeftypepos.\EVTPEXPORT \\
+    \rtidx \in \tyctx.\TCRTYPES\\
+    \end{array}
+  }{
+    \tyctx \vdashh!EDT!_\edeftypepos \EDTRESOURCE~\rtidx
+  }
+\]
+
+\subsubsection{$\evaltype$}
+\[
+  \frac{
+    \tyctx \vdashh!EVT!_{\{\EVTPRESULT~\false,\EVTPEXPORT~\edeftypepos.\EVTPEXPORT\}} \evaltype
+  }{
+    \tyctx \vdashh!EDT!_\edeftypepos \edeftype
+  }
+\]
+
+\subsubsection{$\efunctype$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+      \tyctx \vdashh!EPL!_\edeftypepos \eparamlist\\
+      \tyctx \vdashh!ERL!_\edeftypepos \eresultlist\\
+    \end{array}
+  }{
+    \tyctx \vdashh!EDT!_\edeftypepos \eparamlist\to\eresultlist
+  }
+\]
+
+\subsubsection{$\exists \boundedtyvar^\ast. \einstancetype$}
+\[
+  \frac{
+    \forall j, \tyctx \oplus \TCVARS~\overline{(\boundedtyvar_i, )} \vdashh!EED!_\edeftypepos \eexterndecl_j
+  }{
+    \tyctx \vdashh!EDT!_\edeftypepos \exists \overline{\boundedtyvar_i}. \overline{\eexterndecl_j}
+  }
+\]
+
+\subsubsection{$\ecomponenttype$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+      \forall j, \tyctx \oplus \TCVARS~\overline{(\boundedtyvar_i, )} \vdashh!EED!_\edeftypepos \eexterndecl_j\\
+      \tyctx \oplus \TCVARS~\overline{(\boundedtyvar_i, )} \vdashh!EDT!_\edeftypepos \einstancetype
+    \end{array}
+  }{
+    \tyctx \vdashh!EDT!_\edeftypepos \forall \overline{\boundedtyvar_i}. \overline{\eexterndecl_j} \to \einstancetype
+  }
+\]
+
+\subsection{Core module types}
+\label{judgment:CMTtoECMT}
+\fbox{$\tyctx \vdashh!CMTtoECMT! \coremoduletype \leadstoh!CMTtoECMT! \ecoremoduletype$}
+
+\subsubsection{$\overline{\coremoduledecl_i}$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+      \tyctx_0 = \{ \TCPARENT~\tyctx \}\\
+      \forall i, \tyctx_{i-1} \vdashh!CMDtoECMT! \coremoduledecl_i
+      \leadstoh!CMDtoECMT! {\ecoremoduletype}_i \dashvh!CMDtoECMT! \tyctx_i
+    \end{array}
+  }{
+    \tyctx \vdashh!CMTtoECMT! \overline{\coremoduledecl_i}
+    \leadstoh!CMTtoECMT! \bigoplus_i {\ecoremoduletype}_i
+  }
+\]
+
+\subsection{Core module declarators}
+\label{judgment:CMDtoECMT}
+\fbox{$\tyctx \vdashh!CMDtoECMT! \coremoduledecl \leadstoh!CMDtoECMT! \ecoremoduletype \dashvh!CMDtoECMT! \tyctx'$}
+
+Each core module declarator elaborates to a (partial)
+$\ecoremoduletype$ and an updated context, reflecting the effect
+of the declarator on the component's index spaces.
+
+\subsubsection{$\coreimportdecl$}
+\[
+  \frac{
+  }{
+    \tyctx \vdashh!CMDtoECMT! \coreimportdecl \leadstoh!CMDtoECMT! \coreimportdecl \to \varnothing \dashvh!CMDtoECMT! \tyctx
+  }
+\]
+
+\subsubsection{$\coredeftype$}
+\[
+  \frac{
+    \tyctx \vdashh!CDTtoECDT! \coredeftype \leadstoh!CDTtoECDT! \ecoredeftype
+  }{
+    \tyctx \vdashh!CMDtoECMT! \coredeftype \leadstoh!CMDtoECMT!
+     \varnothing \to \varnothing \dashvh!CMDtoECMT! \tyctx \oplus \{ \TCCORE.\CTCTYPES~\ecoredeftype \}
+  }
+\]
+
+\subsubsection{$\corealias$}
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+    \corealias.\CASORT = \CSTYPE\\
+    \corealias.\CATARGET = \CATOUTER~\u32_o~\u32_i\\
+    \end{array}
+  }{
+    \tyctx \vdashh!CMDtoECMT! \alias \leadstoh!CMDtoECMT!
+     \varnothing \to \varnothing \dashvh!CMDtoECMT! \tyctx \oplus \{ \TCCORE.\CTCTYPES~\tyctx.\TCPARENT[\u32_o].\TCCORE.\CTCTYPES[\u32_i] \}
+  }
+\]
+
+\subsubsection{$\coreexportdecl$}
+\[
+  \frac{
+  }{
+    \tyctx \vdashh!CMDtoECMT! \coreexportdecl \leadstoh!CMDtoECMT! \varnothing \to \coreexportdecl \dashvh!CMDtoECMT! \tyctx
+  }
+\]
+
+\subsection{Core definition types}
+\label{judgment:CDTtoECDT}
+\fbox{$\tyctx \vdashh!CDTtoECDT! \coredeftype \leadstoh!CDTtoECDT! \ecoredeftype$}
+
+A core definition type elaborates to a $\ecoredeftype$.
+
+\subsubsection{$\core:functype$}
+\[
+  \frac{
+  }{
+    \tyctx \vdashh!CDTtoECDT! \core:functype \leadstoh!CDTtoECDT! \core:functype
+  }
+\]
+
+\subsubsection{$\coremoduletype$}
+\[
+  \frac{
+    \tyctx \vdashh!CMTtoECMT! \coremoduletype \leadstoh!CMTtoECMT! \ecoremoduletype
+  }{
+    \tyctx \vdashh!CDTtoECDT! \coremoduletype \leadstoh!CDTtoECDT! \ecoremoduletype
+  }
+\]
