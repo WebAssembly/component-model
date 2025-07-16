@@ -33,6 +33,7 @@ more user-focused explanation, take a look at the
   * [Start definitions](#-start-definitions)
   * [Import and export definitions](#import-and-export-definitions)
     * [Name uniqueness](#name-uniqueness)
+    * [Canonical interface name](#-canonical-interface-name)
 * [Component invariants](#component-invariants)
 * [JavaScript embedding](#JavaScript-embedding)
   * [JS API](#JS-API)
@@ -55,6 +56,7 @@ implemented, considered stable and included in a future milestone:
 * 🧵: threading built-ins
 * 🔧: fixed-length lists
 * 📝: the `error-context` type
+* 🔗: canonical interface names
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
 this repo merges and supersedes the [module-linking] and [interface-types]
@@ -294,7 +296,8 @@ sort           ::= core <core:sort>
                  | type
                  | component
                  | instance
-inlineexport   ::= (export <exportname> <sortidx>)
+inlineexport   ::= (export "<exportname>" <sortidx>)
+                 | (export "<exportname>" <versionsuffix> <sortidx>) 🔗
 ```
 Because component-level function, type and instance definitions are different
 than core-level function, type and instance definitions, they are put into
@@ -574,8 +577,10 @@ instancedecl  ::= core-prefix(<core:type>)
                 | <alias>
                 | <exportdecl>
                 | <value> 🪙
-importdecl    ::= (import <importname> bind-id(<externdesc>))
-exportdecl    ::= (export <exportname> bind-id(<externdesc>))
+importdecl    ::= (import "<importname>" bind-id(<externdesc>))
+                | (import "<importname>" <versionsuffix> bind-id(<externdesc>)) 🔗
+exportdecl    ::= (export "<exportname>" bind-id(<externdesc>))
+                | (export "<exportname>" <versionsuffix> bind-id(<externdesc>)) 🔗
 externdesc    ::= (<sort> (type <u32>) )
                 | core-prefix(<core:moduletype>)
                 | <functype>
@@ -987,6 +992,10 @@ and `$C1` is a subtype of `$C2`:
   ))
 )
 ```
+
+🔗 Note that [canonical interface names](#-canonical-interface-name) may be
+annotated with a `versionsuffix` which is ignored for type checking except to
+improve diagnostic messages.
 
 When we next consider type imports and exports, there are two distinct
 subcases of `typebound` to consider: `eq` and `sub`.
@@ -2264,8 +2273,11 @@ the identifier `$x`). In the case of exports, the `<id>?` right after the
 preceding definition being exported (e.g., `(export $x "x" (func $f))` binds a
 new identifier `$x`).
 ```ebnf
-import ::= (import "<importname>" bind-id(<externdesc>))
-export ::= (export <id>? "<exportname>" <sortidx> <externdesc>?)
+import        ::= (import "<importname>" bind-id(<externdesc>))
+                | (import "<importname>" <versionsuffix> bind-id(<externdesc>)) 🔗
+export        ::= (export <id>? "<exportname>" <sortidx> <externdesc>?)
+                | (export <id>? "<exportname>" <versionsuffix> <sortidx> <externdesc>?) 🔗
+versionsuffix ::= (versionsuffix "<semversuffix>") 🔗
 ```
 All import names are required to be [strongly-unique]. Separately, all export
 names are also required to be [strongly-unique]. The rest of the grammar for
@@ -2279,47 +2291,53 @@ interpreted as a *lexical* grammar defining a single token and thus whitespace
 is not automatically inserted, all terminals are single-quoted, and everything
 unquoted is a meta-character.
 ```ebnf
-exportname    ::= <plainname>
-                | <interfacename>
-importname    ::= <exportname>
-                | <depname>
-                | <urlname>
-                | <hashname>
-plainname     ::= <label>
-                | '[async]' <label> 🔀
-                | '[constructor]' <label>
-                | '[method]' <label> '.' <label>
-                | '[async method]' <label> '.' <label> 🔀
-                | '[static]' <label> '.' <label>
-                | '[async static]' <label> '.' <label> 🔀
-label         ::= <fragment>
-                | <label> '-' <fragment>
-fragment      ::= <word>
-                | <acronym>
-word          ::= [a-z] [0-9a-z]*
-acronym       ::= [A-Z] [0-9A-Z]*
-interfacename ::= <namespace> <label> <projection> <version>?
-                | <namespace>+ <label> <projection>+ <version>? 🪺
-namespace     ::= <words> ':'
-words         ::= <word>
-                | <words> '-' <word>
-projection    ::= '/' <label>
-version       ::= '@' <valid semver>
-depname       ::= 'unlocked-dep=<' <pkgnamequery> '>'
-                | 'locked-dep=<' <pkgname> '>' ( ',' <hashname> )?
-pkgnamequery  ::= <pkgpath> <verrange>?
-pkgname       ::= <pkgpath> <version>?
-pkgpath       ::= <namespace> <words>
-                | <namespace>+ <words> <projection>* 🪺
-verrange      ::= '@*'
-                | '@{' <verlower> '}'
-                | '@{' <verupper> '}'
-                | '@{' <verlower> ' ' <verupper> '}'
-verlower      ::= '>=' <valid semver>
-verupper      ::= '<' <valid semver>
-urlname       ::= 'url=<' <nonbrackets> '>' (',' <hashname>)?
-nonbrackets   ::= [^<>]*
-hashname      ::= 'integrity=<' <integrity-metadata> '>'
+exportname        ::= <plainname>
+                    | <interfacename>
+importname        ::= <exportname>
+                    | <depname>
+                    | <urlname>
+                    | <hashname>
+plainname         ::= <label>
+                    | '[async]' <label> 🔀
+                    | '[constructor]' <label>
+                    | '[method]' <label> '.' <label>
+                    | '[async method]' <label> '.' <label> 🔀
+                    | '[static]' <label> '.' <label>
+                    | '[async static]' <label> '.' <label> 🔀
+label             ::= <fragment>
+                    | <label> '-' <fragment>
+fragment          ::= <word>
+                    | <acronym>
+word              ::= [a-z] [0-9a-z]*
+acronym           ::= [A-Z] [0-9A-Z]*
+interfacename     ::= <namespace> <label> <projection> <interfaceversion>?
+                    | <namespace>+ <label> <projection>+ <interfaceversion>? 🪺
+namespace         ::= <words> ':'
+words             ::= <word>
+                    | <words> '-' <word>
+projection        ::= '/' <label>
+interfaceversion  ::= '@' <valid semver>
+                    | '@' <canonversion> 🔗
+canonversion      ::= [1-9] [0-9]* 🔗
+                    | '0.' [1-9] [0-9]* 🔗
+                    | '0.0.' [1-9] [0-9]* 🔗
+semversuffix      ::= [0-9A-Za-z.+-]* 🔗
+depname           ::= 'unlocked-dep=<' <pkgnamequery> '>'
+                    | 'locked-dep=<' <pkgname> '>' ( ',' <hashname> )?
+pkgnamequery      ::= <pkgpath> <verrange>?
+pkgname           ::= <pkgpath> <pkgversion>?
+pkgversion        ::= '@' <valid semver>
+pkgpath           ::= <namespace> <words>
+                    | <namespace>+ <words> <projection>* 🪺
+verrange          ::= '@*'
+                    | '@{' <verlower> '}'
+                    | '@{' <verupper> '}'
+                    | '@{' <verlower> ' ' <verupper> '}'
+verlower          ::= '>=' <valid semver>
+verupper          ::= '<' <valid semver>
+urlname           ::= 'url=<' <nonbrackets> '>' (',' <hashname>)?
+nonbrackets       ::= [^<>]*
+hashname          ::= 'integrity=<' <integrity-metadata> '>'
 ```
 Components provide six options for naming imports:
 * a **plain name** that leaves it up to the developer to "read the docs"
@@ -2394,7 +2412,9 @@ tooling as "registries":
   parameter of [`WebAssembly.instantiate()`])
 
 The `valid semver` production is as defined by the [Semantic Versioning 2.0]
-spec and is meant to be interpreted according to that specification. The
+spec and is meant to be interpreted according to that specification. The use of
+`valid semver` in `interfaceversion` is temporary for backward compatibility;
+see [Canonical interface name](#-canonical-interface-name) below (🔗). The
 `verrange` production embeds a minimal subset of the syntax for version ranges
 found in common package managers like `npm` and `cargo` and is meant to be
 interpreted with the same [semantics][SemVerRange]. (Mostly this
@@ -2559,6 +2579,53 @@ Note that additional validation rules involving types apply to names with
 annotations. For example, the validation rules for `[constructor]foo` require
 `foo` to be a resource type. See [Binary.md](Binary.md#import-and-export-definitions)
 for details.
+
+
+### 🔗 Canonical Interface Name
+
+An `interfacename` (as defined above) is **canonical** iff it either:
+
+- has no `interfaceversion`
+- has an `interfaceversion` matching the `canonversion` production
+
+The purpose of `canonversion` is to simplify the matching of compatible import
+and export versions. For example, if a guest imports some interface from
+`wasi:http/types@0.2.1` and a host provides the (subtype-compatible) interface
+`wasi:http/types@0.2.6`, we'd like to make it easy for the host to link with the
+guest. The `canonversion` for both of these interfaces would be `0.2`, so this
+linking could be done by matching canonical interface names literally.
+Symmetrically, if a host provides `wasi:http/types@0.2.1` and a guest imports
+`wasi:http/types@0.2.6`, so long as the guest only uses the subset of
+functions defined in `wasi:http/types@0.2.1` (which is checked by normal
+component type validation), linking succeeds. Thus, including only the
+canonicalized version in the name allows both backwards and (limited)
+forwards compatibility using only trivial string equality (as well as the
+type checking already required).
+
+Any `valid semver` (as used in WIT) can be canonicalized by splitting it into
+two parts - the `canonversion` prefix and the remaining `semversuffix`. Using
+the `<major>.<minor>.<patch>` syntax of [Semantic Versioning 2.0], the split
+point is chosen as follows:
+
+- if `major` > 0, split immediately after `major`
+  - `1.2.3` &rarr; `1` / `.2.3`
+- otherwise if `minor` > 0, split immediately after `minor`
+  - `0.2.6-rc.1` &rarr; `0.2` / `.6-rc.1`
+- otherwise, split immediately after `patch`
+  - `0.0.1-alpha` &rarr; `0.0.1` / `-alpha`
+
+When a version is canonicalized, any `semversuffix` that was split off of the
+version should be preserved in the `versionsuffix` field of any resulting
+`import`s and `export`s. This gives component runtimes and other tools access to
+the original version for error messages, documentation, and other development
+purposes. Where a `versionsuffix` is present the preceding `interfacename` must
+have a `canonversion`, and the concatenation of the `canonversion` and
+`versionsuffix` must be a `valid semver`.
+
+For compatibility with older versions of this spec, non-canonical
+`interfacename`s (with `interfaceversion`s matching any `valid semver`) are
+temporarily permitted. These non-canonical names may trigger warnings and will
+start being rejected some time after after [WASI Preview 3] is released.
 
 
 ## Component Invariants
@@ -2916,6 +2983,7 @@ For some use-case-focused, worked examples, see:
 [`rectype`]: https://webassembly.github.io/gc/core/text/types.html#text-rectype
 [shared-everything-threads]: https://github.com/WebAssembly/shared-everything-threads
 [WASI Preview 2]: https://github.com/WebAssembly/WASI/tree/main/wasip2#readme
+[WASI Preview 3]: https://github.com/WebAssembly/WASI/tree/main/wasip2#looking-forward-to-preview-3
 [reference types]: https://github.com/WebAssembly/reference-types/blob/master/proposals/reference-types/Overview.md
 
 [Strongly-unique]: #name-uniqueness
