@@ -87,8 +87,8 @@
     (canon waitable.join (core func $waitable.join))
     (canon waitable-set.new (core func $waitable-set.new))
     (canon future.new $FT (core func $future.new))
-    (canon future.read $FT async (memory $memory "mem") (core func $future.read))
-    (canon future.write $FT async (memory $memory "mem") (core func $future.write))
+    (canon future.read $FT async (core func $future.read))
+    (canon future.write $FT async (core func $future.write))
     (canon future.drop-readable $FT (core func $future.drop-readable))
     (canon future.drop-writable $FT (core func $future.drop-writable))
     (core instance $cm (instantiate $CM (with "" (instance
