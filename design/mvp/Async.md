@@ -58,6 +58,9 @@ additional goals and requirements for native async support:
 * Maintain meaningful cross-language call stacks (for the benefit of debugging,
   logging and tracing).
 * Provide mechanisms for applying and observing backpressure.
+* Allow non-reentrant synchronous and event-loop-driven core wasm code (that,
+  e.g., assumes a single global linear memory stack) to not have to worry about
+  additional reentrancy.
 
 
 ## High-level Approach
@@ -474,6 +477,16 @@ wants to accept new accept new export calls while waiting or not.
 See the [`canon_backpressure_set`] function and [`Task.enter`] method in the
 Canonical ABI explainer for the setting and implementation of backpressure.
 
+In addition to *explicit* backpressure set by wasm code, there is also an
+*implicit* source of backpressure used to protect non-reentrant core wasm
+code. In particular, when an export is lifted synchronously or using an
+`async callback`, a component-instance-wide lock is implicitly acquired every
+time core wasm is executed. By returning to the event loop after every event
+(instead of once at the end of the task), `async callback` exports release
+the lock between every event, allowing a higher degree of concurrency than
+synchronous exports. `async` (stackful) exports ignore the lock entirely and
+thus achieve the highest degree of (cooperative) concurrency.
+
 Once a task is allowed to start according to these backpressure rules, its
 arguments are lowered into the callee's linear memory and the task is in
 the "started" state.
@@ -607,6 +620,9 @@ defined by the Component Model:
 * Whenever a task yields or waits on (or polls) a waitable set with an already
   pending event, whether the task "blocks" and transfers execution to its async
   caller is nondeterministic.
+* If multiple tasks are waiting on [backpressure](#backpressure), and the
+  backpressure is disabled, the order in which these pending tasks (and new
+  tasks started while there are still pending tasks) start is nondeterministic.
 
 Despite the above, the following scenarios do behave deterministically:
 * If a component `a` asynchronously calls the export of another component `b`,
