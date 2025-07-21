@@ -221,22 +221,17 @@ scheduler = asyncio.Lock()
 class ComponentInstance:
   table: Table
   may_leave: bool
-  backpressure: bool
-  calling_sync_export: bool
-  calling_sync_import: bool
-  pending_tasks: list[tuple[Task, asyncio.Future]]
-  starting_pending_task: bool
-  async_waiting_tasks: asyncio.Condition
+  no_backpressure: asyncio.Event
+  exclusive: asyncio.Lock
+  pending_tasks: int
 
   def __init__(self):
     self.table = Table()
     self.may_leave = True
-    self.backpressure = False
-    self.calling_sync_export = False
-    self.calling_sync_import = False
-    self.pending_tasks = []
-    self.starting_pending_task = False
-    self.async_waiting_tasks = asyncio.Condition(scheduler)
+    self.no_backpressure = asyncio.Event()
+    self.no_backpressure.set()
+    self.exclusive = asyncio.Lock()
+    self.pending_tasks = 0
 
 #### Table State
 
@@ -494,70 +489,75 @@ class Task:
     self.num_borrows = 0
     self.context = ContextLocalStorage()
 
-  async def enter(self):
-    assert(scheduler.locked())
-    self.trap_if_on_the_stack(self.inst)
-    if not self.may_enter(self) or self.inst.pending_tasks:
-      f = asyncio.Future()
-      self.inst.pending_tasks.append((self, f))
-      if await self.on_block(f) == Cancelled.TRUE:
-        [i] = [i for i,(t,_) in enumerate(self.inst.pending_tasks) if t == self]
-        self.inst.pending_tasks.pop(i)
-        self.on_resolve(None)
-        return Cancelled.FALSE
-      assert(self.may_enter(self) and self.inst.starting_pending_task)
-      self.inst.starting_pending_task = False
-    if self.opts.sync:
-      self.inst.calling_sync_export = True
-    return True
-
   def trap_if_on_the_stack(self, inst):
     c = self.supertask
     while c is not None:
       trap_if(c.inst is inst)
       c = c.supertask
 
-  def may_enter(self, pending_task):
-    return not self.inst.backpressure and \
-           not self.inst.calling_sync_import and \
-           not (self.inst.calling_sync_export and pending_task.opts.sync)
+  def needs_exclusive(self):
+    return self.opts.sync or self.opts.callback
 
-  def maybe_start_pending_task(self):
-    if self.inst.starting_pending_task:
-      return
-    for i,(pending_task,pending_future) in enumerate(self.inst.pending_tasks):
-      if self.may_enter(pending_task):
-        self.inst.pending_tasks.pop(i)
-        self.inst.starting_pending_task = True
-        pending_future.set_result(None)
-        return
-
-  async def wait_on(self, awaitable, sync, cancellable = False) -> bool:
-    if sync:
-      assert(not self.inst.calling_sync_import)
-      self.inst.calling_sync_import = True
+  async def enter(self):
+    if (self.inst.no_backpressure.is_set() and
+        self.inst.pending_tasks == 0 and
+        (not self.needs_exclusive() or not self.inst.exclusive.locked())):
+      if self.needs_exclusive():
+        await self.inst.exclusive.acquire()
+      return True
     else:
-      self.maybe_start_pending_task()
+      while True:
+        self.inst.pending_tasks += 1
+        no_backpressure = asyncio.create_task(self.inst.no_backpressure.wait())
+        cancelled = await self.on_block(no_backpressure)
+        self.inst.pending_tasks -= 1
+        if cancelled:
+          self.on_resolve(None)
+          return False
+        if not self.inst.no_backpressure.is_set():
+          continue
+        if self.needs_exclusive():
+          acquired = asyncio.create_task(self.inst.exclusive.acquire())
+          if await self.on_block(acquired) == Cancelled.TRUE:
+            if acquired.done():
+              self.inst.exclusive.release()
+            else:
+              acquired.cancel()
+            self.on_resolve(None)
+            return False
+          if not self.inst.no_backpressure.is_set():
+            self.inst.exclusive.release()
+            continue
+        return True
 
-    awaitable = asyncio.ensure_future(awaitable)
-    if awaitable.done() and not DETERMINISTIC_PROFILE and random.randint(0,1):
-      cancelled = Cancelled.FALSE
-    else:
-      cancelled = await self.on_block(awaitable)
-      if cancelled and not cancellable:
-        assert(self.state == Task.State.INITIAL)
+  async def block_on(self, awaitable, cancellable = False, for_callback = False) -> Cancelled:
+    f = asyncio.ensure_future(awaitable)
+    if f.done() and not DETERMINISTIC_PROFILE and random.randint(0,1):
+      return Cancelled.FALSE
+
+    if for_callback:
+      self.inst.exclusive.release()
+
+    cancelled = await self.on_block(f)
+    if cancelled and not cancellable:
+      assert(await self.on_block(f) == Cancelled.FALSE)
+
+    if for_callback:
+      acquired = asyncio.create_task(self.inst.exclusive.acquire())
+      if await self.on_block(acquired) == Cancelled.TRUE:
+        assert(self.on_block(acquired) == Cancelled.FALSE)
+        cancelled = Cancelled.TRUE
+
+    if cancelled:
+      assert(self.state == Task.State.INITIAL)
+      if not cancellable:
         self.state = Task.State.PENDING_CANCEL
-        cancelled = await self.on_block(awaitable)
-        assert(not cancelled)
-
-    if sync:
-      self.inst.calling_sync_import = False
-      self.inst.async_waiting_tasks.notify_all()
+        return Cancelled.FALSE
+      else:
+        self.state = Task.State.CANCEL_DELIVERED
+        return Cancelled.TRUE
     else:
-      while self.inst.calling_sync_import:
-        await self.inst.async_waiting_tasks.wait()
-
-    return cancelled
+      return Cancelled.FALSE
 
   async def call_sync(self, callee, on_start, on_return):
     async def sync_on_block(awaitable):
@@ -567,14 +567,10 @@ class Task:
         assert(await self.on_block(awaitable) == Cancelled.FALSE)
       return Cancelled.FALSE
 
-    assert(not self.inst.calling_sync_import)
-    self.inst.calling_sync_import = True
     await callee(self, on_start, on_return, sync_on_block)
-    self.inst.calling_sync_import = False
-    self.inst.async_waiting_tasks.notify_all()
 
-  async def wait_for_event(self, waitable_set, sync) -> EventTuple:
-    if self.state == Task.State.PENDING_CANCEL:
+  async def wait_for_event(self, waitable_set, cancellable, for_callback) -> EventTuple:
+    if cancellable and self.state == Task.State.PENDING_CANCEL:
       self.state = Task.State.CANCEL_DELIVERED
       return (EventCode.TASK_CANCELLED, 0, 0)
     else:
@@ -582,27 +578,25 @@ class Task:
       e = None
       while not e:
         maybe_event = waitable_set.maybe_has_pending_event.wait()
-        if await self.wait_on(maybe_event, sync, cancellable = True):
-          assert(self.state == Task.State.INITIAL)
-          self.state = Task.State.CANCEL_DELIVERED
+        if await self.block_on(maybe_event, cancellable, for_callback) == Cancelled.TRUE:
           return (EventCode.TASK_CANCELLED, 0, 0)
         e = waitable_set.poll()
       waitable_set.num_waiting -= 1
     return e
 
-  async def yield_(self, sync) -> EventTuple:
-    if self.state == Task.State.PENDING_CANCEL:
+  async def yield_(self, cancellable, for_callback) -> EventTuple:
+    if cancellable and self.state == Task.State.PENDING_CANCEL:
       self.state = Task.State.CANCEL_DELIVERED
       return (EventCode.TASK_CANCELLED, 0, 0)
-    elif await self.wait_on(asyncio.sleep(0), sync, cancellable = True):
-      assert(self.state == Task.State.INITIAL)
-      self.state = Task.State.CANCEL_DELIVERED
+    elif await self.block_on(asyncio.sleep(0), cancellable, for_callback) == Cancelled.TRUE:
       return (EventCode.TASK_CANCELLED, 0, 0)
     else:
       return (EventCode.NONE, 0, 0)
 
-  async def poll_for_event(self, waitable_set, sync) -> Optional[EventTuple]:
-    event_code,_,_ = e = await self.yield_(sync)
+  async def poll_for_event(self, waitable_set, cancellable, for_callback) -> Optional[EventTuple]:
+    waitable_set.num_waiting += 1
+    event_code,_,_ = e = await self.yield_(cancellable, for_callback)
+    waitable_set.num_waiting -= 1
     if event_code == EventCode.TASK_CANCELLED:
       return e
     elif (e := waitable_set.poll()):
@@ -624,13 +618,10 @@ class Task:
     self.state = Task.State.RESOLVED
 
   def exit(self):
-    assert(scheduler.locked())
     trap_if(self.state != Task.State.RESOLVED)
     assert(self.num_borrows == 0)
-    if self.opts.sync:
-      assert(self.inst.calling_sync_export)
-      self.inst.calling_sync_export = False
-    self.maybe_start_pending_task()
+    if self.needs_exclusive():
+      self.inst.exclusive.release()
 
 #### Subtask State
 
@@ -1932,6 +1923,7 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
 
 async def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve, on_block):
   task = Task(opts, inst, ft, caller, on_resolve, on_block)
+  task.trap_if_on_the_stack(inst)
   if not await task.enter():
     return
 
@@ -1967,15 +1959,15 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve, on_bl
         task.exit()
         return
       case CallbackCode.YIELD:
-        e = await task.yield_(sync = False)
+        e = await task.yield_(cancellable = True, for_callback = True)
       case CallbackCode.WAIT:
         s = task.inst.table.get(si)
         trap_if(not isinstance(s, WaitableSet))
-        e = await task.wait_for_event(s, sync = False)
+        e = await task.wait_for_event(s, cancellable = True, for_callback = True)
       case CallbackCode.POLL:
         s = task.inst.table.get(si)
         trap_if(not isinstance(s, WaitableSet))
-        e = await task.poll_for_event(s, sync = False)
+        e = await task.poll_for_event(s, cancellable = True, for_callback = True)
     event_code, p1, p2 = e
     [packed] = await call_and_trap_on_throw(opts.callback, task, [event_code, p1, p2])
 
@@ -2115,7 +2107,11 @@ async def canon_context_set(t, i, task, v):
 
 async def canon_backpressure_set(task, flat_args):
   trap_if(task.opts.sync)
-  task.inst.backpressure = bool(flat_args[0])
+  assert(len(flat_args) == 1)
+  if flat_args[0] == 0:
+    task.inst.no_backpressure.set()
+  else:
+    task.inst.no_backpressure.clear()
   return []
 
 ### 🔀 `canon task.return`
@@ -2140,9 +2136,9 @@ async def canon_task_cancel(task):
 
 ### 🔀 `canon yield`
 
-async def canon_yield(sync, task):
+async def canon_yield(cancellable, task):
   trap_if(not task.inst.may_leave)
-  event_code,_,_ = await task.yield_(sync)
+  event_code,_,_ = await task.yield_(cancellable, for_callback = False)
   match event_code:
     case EventCode.NONE:
       return [0]
@@ -2157,11 +2153,11 @@ async def canon_waitable_set_new(task):
 
 ### 🔀 `canon waitable-set.wait`
 
-async def canon_waitable_set_wait(sync, mem, task, si, ptr):
+async def canon_waitable_set_wait(cancellable, mem, task, si, ptr):
   trap_if(not task.inst.may_leave)
   s = task.inst.table.get(si)
   trap_if(not isinstance(s, WaitableSet))
-  e = await task.wait_for_event(s, sync)
+  e = await task.wait_for_event(s, cancellable, for_callback = False)
   return unpack_event(mem, task, ptr, e)
 
 def unpack_event(mem, task, ptr, e: EventTuple):
@@ -2173,11 +2169,11 @@ def unpack_event(mem, task, ptr, e: EventTuple):
 
 ### 🔀 `canon waitable-set.poll`
 
-async def canon_waitable_set_poll(sync, mem, task, si, ptr):
+async def canon_waitable_set_poll(cancellable, mem, task, si, ptr):
   trap_if(not task.inst.may_leave)
   s = task.inst.table.get(si)
   trap_if(not isinstance(s, WaitableSet))
-  e = await task.poll_for_event(s, sync)
+  e = await task.poll_for_event(s, cancellable, for_callback = False)
   return unpack_event(mem, task, ptr, e)
 
 ### 🔀 `canon waitable-set.drop`
@@ -2220,7 +2216,7 @@ async def canon_subtask_cancel(sync, task, i):
       while not subtask.resolved():
         if subtask.has_pending_event():
           _ = subtask.get_event()
-        await task.wait_on(subtask.wait_for_pending_event(), sync = True)
+        await task.block_on(subtask.wait_for_pending_event())
     else:
       if not subtask.resolved():
         return [BLOCKED]
@@ -2296,7 +2292,7 @@ async def stream_copy(EndT, BufferT, event_code, stream_t, opts, task, i, ptr, n
   e.copy(task.inst, buffer, on_copy, on_copy_done)
 
   if opts.sync and not e.has_pending_event():
-    await task.wait_on(e.wait_for_pending_event(), sync = True)
+    await task.block_on(e.wait_for_pending_event())
 
   if e.has_pending_event():
     code,index,payload = e.get_event()
@@ -2342,7 +2338,7 @@ async def future_copy(EndT, BufferT, event_code, future_t, opts, task, i, ptr):
   e.copy(task.inst, buffer, on_copy_done)
 
   if opts.sync and not e.has_pending_event():
-    await task.wait_on(e.wait_for_pending_event(), sync = True)
+    await task.block_on(e.wait_for_pending_event())
 
   if e.has_pending_event():
     code,index,payload = e.get_event()
@@ -2375,7 +2371,7 @@ async def cancel_copy(EndT, event_code, stream_or_future_t, sync, task, i):
     e.shared.cancel()
     if not e.has_pending_event():
       if sync:
-        await task.wait_on(e.wait_for_pending_event(), sync = True)
+        await task.block_on(e.wait_for_pending_event())
       else:
         return [BLOCKED]
   code,index,payload = e.get_event()

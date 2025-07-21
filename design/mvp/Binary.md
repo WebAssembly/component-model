@@ -295,7 +295,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x05                                                => (canon task.cancel (core func)) 🔀
            | 0x0a 0x7f i:<u32>                                   => (canon context.get i32 i (core func)) 🔀
            | 0x0b 0x7f i:<u32>                                   => (canon context.set i32 i (core func)) 🔀
-           | 0x0c async?:<async>?                                => (canon yield async? (core func)) 🔀
+           | 0x0c cancel?:<cancel?>                              => (canon yield cancel? (core func)) 🔀
            | 0x06 async?:<async?>                                => (canon subtask.cancel async? (core func)) 🔀
            | 0x0d                                                => (canon subtask.drop (core func)) 🔀
            | 0x0e t:<typeidx>                                    => (canon stream.new t (core func)) 🔀
@@ -316,8 +316,8 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x1d opts:<opts>                                    => (canon error-context.debug-message opts (core func)) 📝
            | 0x1e                                                => (canon error-context.drop (core func)) 📝
            | 0x1f                                                => (canon waitable-set.new (core func)) 🔀
-           | 0x20 async?:<async>? m:<core:memidx>                => (canon waitable-set.wait async? (memory m) (core func)) 🔀
-           | 0x21 async?:<async>? m:<core:memidx>                => (canon waitable-set.poll async? (memory m) (core func)) 🔀
+           | 0x20 cancel?:<cancel?> m:<core:memidx>              => (canon waitable-set.wait cancel? (memory m) (core func)) 🔀
+           | 0x21 cancel?:<cancel?> m:<core:memidx>              => (canon waitable-set.poll cancel? (memory m) (core func)) 🔀
            | 0x22                                                => (canon waitable-set.drop (core func)) 🔀
            | 0x23                                                => (canon waitable.join (core func)) 🔀
            | 0x40 ft:<typeidx>                                   => (canon thread.spawn_ref ft (core func)) 🧵
@@ -325,6 +325,8 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x42                                                => (canon thread.available_parallelism (core func)) 🧵
 async?   ::= 0x00                                                =>
            | 0x01                                                => async
+cancel?  ::= 0x00                                                =>
+           | 0x01                                                => cancellable 🚟
 opts     ::= opt*:vec(<canonopt>)                                => opt*
 canonopt ::= 0x00                                                => string-encoding=utf8
            | 0x01                                                => string-encoding=utf16
@@ -505,6 +507,8 @@ named once.
 * The `0x00` variant of `importname'` and `exportname'` will be removed. Any
   remaining variant(s) will be renumbered or the prefix byte will be removed or
   repurposed.
+* Most built-ins should have a `<canonopt>*` immediate instead of an ad hoc
+  subset of `canonopt`s.
 
 
 [`core:byte`]: https://webassembly.github.io/spec/core/binary/values.html#binary-byte
