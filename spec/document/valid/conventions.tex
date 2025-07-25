@@ -1,0 +1,23 @@
+\section{Conventions}
+
+As in Core WebAssembly, a \emph{validation} stage checks that a
+component is well-formed, and only valid components may be
+instantiated.
+
+Similarly to Core WebAssembly, a \emph{type system} over the abstract
+syntax of a component is used to specify which modules are valid, and
+the rules governing the validity of a component are given in both
+prose and formal mathematical notation.
+
+\subsection{Notation}
+
+Both the formal and prose notation share a number of constructs:
+
+\begin{itemize}
+\item When writing a value of the abstract syntax, any component of
+  the abstract syntax which has the form $\X{nonterminal}^n$,
+  $\X{nonterminal}^\ast$, $\X{nonterminal}^{+}$, or
+  $\X{nonterminal}^{?}$, we may write $\overline{\dots_i}^n$ to mean
+  that this position is filled by a series of $n$ abstract values,
+  named $\dots_1$ to $\dots_n$.
+\end{itemize}
