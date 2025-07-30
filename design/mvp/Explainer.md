@@ -1610,7 +1610,7 @@ ABI explainer.)
 
 The `task.cancel` built-in indicates that the [current task] is now [resolved]
 and has dropped all borrowed handles lent to it during the call (trapping if
-otherwise). `task.cancel` can only be called after the `TASK_CANCELLED` event
+otherwise). `task.cancel` can only be called after the `task-cancelled` event
 has been received (via `callback`, `waitable-set.{wait,poll}` or `yield`) to
 indicate that the supertask has requested cancellation and thus is not
 expecting a return value. (See also "[Cancellation]" in the async explainer and
@@ -1618,20 +1618,23 @@ expecting a return value. (See also "[Cancellation]" in the async explainer and
 
 ###### 🔀 `yield`
 
-| Synopsis                   |                          |
-| -------------------------- | ------------------------ |
-| Approximate WIT signature  | `func<async?>() -> bool` |
-| Canonical ABI signature    | `[] -> [i32]`            |
+| Synopsis                   |                                |
+| -------------------------- | ------------------------------ |
+| Approximate WIT signature  | `func<cancellable?>() -> bool` |
+| Canonical ABI signature    | `[] -> [i32]`                  |
 
 The `yield` built-in allows the runtime to switch to other tasks, enabling a
-long-running computation to cooperatively interleave execution. `yield` returns
-`true` (`1`) if the caller has requested [cancellation] of the [current task].
+long-running computation to cooperatively interleave execution. If `yield` is
+called from a synchronous- or `async callback`-lifted export, no other
+synchronous or `async callback`-lifted tasks can start or progress in the
+current component instance (ensuring non-reentrance of the core wasm code).
+However, non-`callback` `async`-lifted ("stackful async") exports may start
+or progress at any time.
 
-If the `async` immediate is present, the runtime can switch to other tasks in
-the *same* component instance, which the calling core wasm must be prepared to
-handle. If `async` is not present, only tasks in *other* component instances
-may be switched to. (See also [`canon_yield`] in the Canonical ABI explainer
-for details.)
+If `cancellable` is set, `yield` may return `true` (`1`) if the caller requests
+[cancellation] of the [current task]. If `cancellable` is not set, the return
+value is always `false` (`0`). Cancellation is returned at most once for a
+given task and thus must be propagated once received.
 
 ###### 🔀 `waitable-set.new`
 
@@ -1650,7 +1653,7 @@ populated explicitly with [waitables] by `waitable.join`. (See also
 
 | Synopsis                   |                                                |
 | -------------------------- | ---------------------------------------------- |
-| Approximate WIT signature  | `func<async?>(s: waitable-set) -> event`       |
+| Approximate WIT signature  | `func<cancellable?>(s: waitable-set) -> event` |
 | Canonical ABI signature    | `[s:i32 payload-addr:i32] -> [event-code:i32]` |
 
 where `event` is defined in WIT as:
@@ -1679,11 +1682,19 @@ describing the event. The `event` `none` is never returned. Waitable sets
 may be `wait`ed upon when empty, in which case the caller will necessarily
 block until another task adds a waitable to the set that can make progress.
 
-If the `async` immediate is present, other tasks in the same component instance
-can be started (via export call) or resumed while the current task blocks. If
-`async` is not present, the current component instance will not execute any
-code until `wait` returns (however, *other* component instances may execute
-code in the interim).
+`waitable-set.wait` allows the runtime to cooperatively switch to other tasks
+to execute while the current task is blocked. If `waitable-set.wait` is
+called from a synchronous- or `async callback`-lifted export, no other
+synchronous or `async callback`-lifted tasks can start or progress in the
+current component instance (ensuring non-reentrance of the core wasm code).
+However, non-`callback` `async`-lifted ("stackful async") exports may start
+or progress at any time.
+
+If `cancellable` is set, `waitable-set.wait` may return `task-cancelled`
+(`6`) if the caller requests [cancellation] of the [current task]. If
+`cancellable` is not set, `task-cancelled` is never returned.
+`task-cancelled` is returned at most once for a given task and thus must be
+propagated once received.
 
 A `subtask` event notifies the supertask that its subtask is now in the given
 state (the meanings of which are described by the [async explainer]).
@@ -1701,16 +1712,25 @@ in the Canonical ABI explainer for details.)
 
 | Synopsis                   |                                                |
 | -------------------------- | ---------------------------------------------- |
-| Approximate WIT signature  | `func<async?>(s: waitable-set) -> event`       |
+| Approximate WIT signature  | `func<cancellable?>(s: waitable-set) -> event` |
 | Canonical ABI signature    | `[s:i32 payload-addr:i32] -> [event-code:i32]` |
 
 where `event` is defined as in [`waitable-set.wait`](#-waitable-setwait).
 
 The `waitable-set.poll` built-in returns the `event` `none` if no event
 was available without blocking. `poll` implicitly performs a `yield`, allowing
-other tasks to be scheduled before `poll` returns. The `async?` immediate is
-passed to `yield`, determining whether other code in the same component
-instance may execute.
+other tasks to be scheduled before `poll` returns. If `waitable-set.poll` is
+called from a synchronous- or `async callback`-lifted export, no other
+synchronous or `async callback`-lifted tasks can start or progress in the
+current component instance (ensuring non-reentrance of the core wasm code).
+However, non-`callback` `async`-lifted ("stackful async") exports may start
+or progress at any time.
+
+If `cancellable` is set, `waitable-set.poll` may return `task-cancelled`
+(`6`) if the caller requests [cancellation] of the [current task]. If
+`cancellable` is not set, `task-cancelled` is never returned.
+`task-cancelled` is returned at most once for a given task and thus must be
+propagated once received.
 
 The Canonical ABI of `waitable-set.poll` is the same as `waitable-set.wait`
 (with the `none` case indicated by returning `0`). (See also

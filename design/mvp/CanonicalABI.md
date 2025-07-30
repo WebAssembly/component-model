@@ -214,22 +214,17 @@ behavior and enforce invariants.
 class ComponentInstance:
   table: Table
   may_leave: bool
-  backpressure: bool
-  calling_sync_export: bool
-  calling_sync_import: bool
-  pending_tasks: list[tuple[Task, asyncio.Future]]
-  starting_pending_task: bool
-  async_waiting_tasks: asyncio.Condition
+  no_backpressure: asyncio.Event
+  exclusive: asyncio.Lock
+  pending_tasks: int
 
   def __init__(self):
     self.table = Table()
     self.may_leave = True
-    self.backpressure = False
-    self.calling_sync_export = False
-    self.calling_sync_import = False
-    self.pending_tasks = []
-    self.starting_pending_task = False
-    self.async_waiting_tasks = asyncio.Condition(scheduler)
+    self.no_backpressure = asyncio.Event()
+    self.no_backpressure.set()
+    self.exclusive = asyncio.Lock()
+    self.pending_tasks = 0
 ```
 These fields will be described as they are used by the following definitions.
 
@@ -705,53 +700,17 @@ Using a conservative syntactic analysis of a complete component, an optimizing
 implementation can statically eliminate fields when a particular feature (such
 as `borrow` or `async`) is not present in the component definition.
 
-The `Task.enter` method is called immediately after constructing a `Task` to
-perform all the guards necessary before the task's core wasm entry point can be
-called:
-```python
-  async def enter(self):
-    assert(scheduler.locked())
-    self.trap_if_on_the_stack(self.inst)
-    if not self.may_enter(self) or self.inst.pending_tasks:
-      f = asyncio.Future()
-      self.inst.pending_tasks.append((self, f))
-      if await self.on_block(f) == Cancelled.TRUE:
-        [i] = [i for i,(t,_) in enumerate(self.inst.pending_tasks) if t == self]
-        self.inst.pending_tasks.pop(i)
-        self.on_resolve(None)
-        return Cancelled.FALSE
-      assert(self.may_enter(self) and self.inst.starting_pending_task)
-      self.inst.starting_pending_task = False
-    if self.opts.sync:
-      self.inst.calling_sync_export = True
-    return True
-```
-The `trap_if_on_the_stack` method (defined next) prevents unexpected
-reentrance, enforcing a [component invariant].
-
-If `may_enter` (defined below) is not `True`, this indicates that
-[backpressure](Async.md#backpressure) is necessary. In this case, `enter`
-puts itself into a per-`ComponentInstance` `pending_tasks` queue and blocks
-until released by `maybe_start_pending_task` (also defined below). The
-additional `or self.inst.pending_tasks` condition ensures fairness, preventing
-continual new tasks from starving pending tasks. If the `OnBlock` callback
-returns `True`, the caller has requested that the pending task be cancelled. In
-this case, since core wasm hasn't started running in the callee's component
-instance yet, the task can be immediately, safely aborted by the runtime.
-
-The `calling_sync_export` flag set by `enter` (and cleared by `exit`) is used
-by `may_enter` to prevent sync-lifted export calls from overlapping.
-
-The `Task.trap_if_on_the_stack` method called by `enter` prevents reentrance
-using the `supertask` field of `Task` which points to the task's supertask in the
-async call tree defined by [structured concurrency]. Structured concurrency
-is necessary to distinguish between the deadlock-hazardous kind of reentrance
-(where the new task is a transitive subtask of a task already running in the
-same component instance) and the normal kind of async reentrance (where the new
-task is just a sibling of any existing tasks running in the component
-instance). Note that, in the [future](Async.md#TODO), there will be a way for a
-function to opt in (via function type attribute) to the hazardous kind of
-reentrance, which will nuance this test.
+The `Task.trap_if_on_the_stack` method checks for unintended reentrance,
+enforcing a [component invariant]. This guard uses the `supertask` field of
+`Task` which points to the task's supertask in the async call tree defined by
+[structured concurrency]. Structured concurrency is necessary to distinguish
+between the deadlock-hazardous kind of reentrance (where the new task is a
+transitive subtask of a task already running in the same component instance)
+and the normal kind of async reentrance (where the new task is just a sibling
+of any existing tasks running in the component instance). Note that, in the
+[future](Async.md#TODO), there will be a way for a function to opt in (via
+function type attribute) to the hazardous kind of reentrance, which will nuance
+this test.
 ```python
   def trap_if_on_the_stack(self, inst):
     c = self.supertask
@@ -772,111 +731,158 @@ in several ways:
   a packed bit-vector (assigning each potentially-reenterable async component
   instance a static bit position) that is passed by copy from caller to callee.
 
-The `Task.may_enter` method called by `enter` blocks a new task from starting
-for three reasons:
-* The core wasm code has explicitly indicated that it is overloaded by calling
-  `task.backpressure` to set the `backpressure` field of `Task`.
-* The component instance is currently blocked on a synchronous call from core
-  wasm into a Canonical ABI built-in and is thus not currently in a reentrant
-  state.
-* The current pending call is to a synchronously-lifted export and there is
-  already a synchronously-lifted export in progress.
+The `Task.needs_exclusive` predicate returns whether the Canonical ABI options
+indicate that the core wasm being executed does not expect to be reentered
+(e.g., because the code is using a single global linear memory shadow stack).
+Concretely, this is assumed to be the case when core wasm is lifted
+synchronously or with `async callback`. This predicate is used by the other
+`Task` methods to determine whether to acquire/release the
+component-instance-wide `exclusive` [`asyncio.Lock`].
 ```python
-  def may_enter(self, pending_task):
-    return not self.inst.backpressure and \
-           not self.inst.calling_sync_import and \
-           not (self.inst.calling_sync_export and pending_task.opts.sync)
+  def needs_exclusive(self):
+    return self.opts.sync or self.opts.callback
+
 ```
-Notably, the above definition of `may_enter` only prevents *synchronously*
-lifted tasks from overlapping. *Asynchronously* lifted tasks are allowed to
-freely overlap (with each other and synchronously-lifted tasks). This allows
-purely-synchronous toolchains to stay simple and ignore asynchrony while
-enabling more-advanced hybrid use cases (such as "background tasks"), putting
-the burden of not interfering with the synchronous tasks on the toolchain.
 
-The `Task.maybe_start_pending_task` method unblocks pending tasks enqueued by
-`enter` above once `may_enter` is true for the pending task. One key property
-ensured by the trio of `enter`, `may_enter` and `maybe_start_pending_task` is
-that `pending_tasks` are only allowed to start one at a time, ensuring that if
-an overloaded component instance enables backpressures, builds up a large queue
-of pending tasks, and then disables backpressure, there will not be a
-thundering herd of tasks started all at once that OOM the component before it
-has a chance to re-enable backpressure. To ensure this property, the
-`starting_pending_task` flag is set here and cleared when the pending task
-actually resumes execution in `enter`, preventing more pending tasks from being
-started in the interim. Lastly, `maybe_start_pending_task` is only called at
-specific points (`wait_on` and `exit`, below) where the core wasm code has had
-the opportunity to re-enable backpressure if need be.
+The `Task.enter` method implements [backpressure] between when a caller makes a
+call to an imported callee and when the callee's core wasm entry point is
+executed. This interstitial placement allows an overloaded component instance
+to avoid the need to otherwise-endlessly allocate guest memory for blocked
+async calls until OOM. When backpressure is enabled, `enter` will block until
+backpressure is disabled. There are three sources of backpressure:
+ 1. *Explicit backpressure* triggered by core wasm calling `backpressure.set`
+    which, in `canon_backpressure_set` (defined below), clears the
+    `no_backpressure` [`asyncio.Event`].
+ 2. *Residual backpressure* triggered by explicit backpressure having been
+    disabled, but there still being greater than zero "pending" tasks that need
+    to be given the chance to start without getting starved by new tasks.
+ 3. *Implicit backpressure* triggered when `Task.needs_exclusive()` is true and
+    the `exclusive` lock is already held.
+
+Introducing `Task.enter` in two cases, the first case is the fast path where
+none of these three sources of backpressure apply and thus the new task can
+start without "blocking" (which means control flow deterministically proceeds
+to lowering arguments and calling the core wasm callee):
 ```python
-  def maybe_start_pending_task(self):
-    if self.inst.starting_pending_task:
-      return
-    for i,(pending_task,pending_future) in enumerate(self.inst.pending_tasks):
-      if self.may_enter(pending_task):
-        self.inst.pending_tasks.pop(i)
-        self.inst.starting_pending_task = True
-        pending_future.set_result(None)
-        return
+  async def enter(self):
+    if (self.inst.no_backpressure.is_set() and
+        self.inst.pending_tasks == 0 and
+        (not self.needs_exclusive() or not self.inst.exclusive.locked())):
+      if self.needs_exclusive():
+        await self.inst.exclusive.acquire()
+      return True
 ```
-Notably, the loop in `maybe_start_pending_task` allows pending async tasks to
-start even when there is a blocked pending sync task ahead of them in the
-`pending_tasks` queue.
 
-The `Task.wait_on` method defines how to block the current task on a given
-Python [awaitable] using the `OnBlock` callback described above:
+The `else` branch handles the case where backpressure is needed and thus the
+task must "block" (which means deterministically returning control flow to any
+transitive `async` callers on the stack via the `OnBlock` callback). The code
+below is careful to satisfy three requirements:
+ 1. The component-instance-wide `pending_tasks` counter tracks how many
+    residual tasks are still waiting to start due to explicit backpressure.
+ 2. While blocked in `Task.enter`, caller cancellation (signalled by
+    `OnBlock` returning `Cancelled.TRUE`) aborts execution immediately by
+    calling `on_resolve(None)` without waiting for anything else first.
+ 3. Once backpressure is (re)enabled, no tasks start, even previous pending
+    tasks (i.e., disabling backpressure doesn't unleash a thundering herd of
+    unstoppable pending tasks).
+
+To satisfy these requirements, `Task.enter` checks `no_backpressure` in a loop
+after `OnBlock` returns. Residual backpressure is only checked once to trigger
+this whole `else` branch; afterwards, `OnBlock` is allowed to
+non-deterministically decide which tasks are scheduled, giving the host a
+chance to non-deterministically start new or pending tasks (e.g., based on
+prioritization heuristics):
 ```python
-  async def wait_on(self, awaitable, sync, cancellable = False) -> bool:
-    if sync:
-      assert(not self.inst.calling_sync_import)
-      self.inst.calling_sync_import = True
     else:
-      self.maybe_start_pending_task()
+      while True:
+        self.inst.pending_tasks += 1
+        no_backpressure = asyncio.create_task(self.inst.no_backpressure.wait())
+        cancelled = await self.on_block(no_backpressure)
+        self.inst.pending_tasks -= 1
+        if cancelled:
+          self.on_resolve(None)
+          return False
+        if not self.inst.no_backpressure.is_set():
+          continue
+        if self.needs_exclusive():
+          acquired = asyncio.create_task(self.inst.exclusive.acquire())
+          if await self.on_block(acquired) == Cancelled.TRUE:
+            if acquired.done():
+              self.inst.exclusive.release()
+            else:
+              acquired.cancel()
+            self.on_resolve(None)
+            return False
+          if not self.inst.no_backpressure.is_set():
+            self.inst.exclusive.release()
+            continue
+        return True
+```
+While the above Python code loops and calls `OnBlock` multiple times, from a
+semantic perspective, all that matters is that `OnBlock` is called at least
+once (thereby returning control flow back to any `async` callers). A realistic
+implementation could avoid the loop and multiple suspensions by having the
+scheduler simultaneously check all the backpressure conditions before starting
+a new `async` task.
 
-    awaitable = asyncio.ensure_future(awaitable)
-    if awaitable.done() and not DETERMINISTIC_PROFILE and random.randint(0,1):
-      cancelled = Cancelled.FALSE
-    else:
-      cancelled = await self.on_block(awaitable)
-      if cancelled and not cancellable:
-        assert(self.state == Task.State.INITIAL)
+The `Task.block_on` method defines what happens when a task needs to
+potentially block until a given Python [awaitable] completes. This awaitable
+can either represent external I/O or some event triggered by internal wasm
+execution.
+```python
+  async def block_on(self, awaitable, cancellable = False, for_callback = False) -> Cancelled:
+    f = asyncio.ensure_future(awaitable)
+    if f.done() and not DETERMINISTIC_PROFILE and random.randint(0,1):
+      return Cancelled.FALSE
+
+    if for_callback:
+      self.inst.exclusive.release()
+
+    cancelled = await self.on_block(f)
+    if cancelled and not cancellable:
+      assert(await self.on_block(f) == Cancelled.FALSE)
+
+    if for_callback:
+      acquired = asyncio.create_task(self.inst.exclusive.acquire())
+      if await self.on_block(acquired) == Cancelled.TRUE:
+        assert(self.on_block(acquired) == Cancelled.FALSE)
+        cancelled = Cancelled.TRUE
+
+    if cancelled:
+      assert(self.state == Task.State.INITIAL)
+      if not cancellable:
         self.state = Task.State.PENDING_CANCEL
-        cancelled = await self.on_block(awaitable)
-        assert(not cancelled)
-
-    if sync:
-      self.inst.calling_sync_import = False
-      self.inst.async_waiting_tasks.notify_all()
+        return Cancelled.FALSE
+      else:
+        self.state = Task.State.CANCEL_DELIVERED
+        return Cancelled.TRUE
     else:
-      while self.inst.calling_sync_import:
-        await self.inst.async_waiting_tasks.wait()
-
-    return cancelled
+      return Cancelled.FALSE
 ```
-If the given `awaitable` is already resolved (e.g., if between making an async
-import call that blocked and calling `waitable-set.wait` the I/O operation
-completed), the Component Model allows the runtime to nondeterministically
-avoid calling `OnBlock` which, in component-to-component async calls, means
-that control flow does not need to transfer to the calling component.
+If the given `awaitable` is already `done()`, the Component Model allows the
+runtime to non-deterministically avoid "blocking" the task.
 
-If `wait_on` is called with `sync` set to `True`, only tasks in *other*
-component instances may execute; no code in the current component instance may
-execute. This is achieved by setting and waiting on `calling_sync_import`
-(using the `async_waiting_tasks` [`asyncio.Condition`]). `calling_sync_import`
-is also checked by `may_enter` (to prevent reentrance by a new task) and set by
-`call_sync` (defined next).
+If `block_on` is called with `cancellable` set, then the caller is ready to
+handle a supertask's request for cancellation so `block_on` propagates
+cancellation requests returned by the `OnBlock` callback. However, if
+`cancellable` is *not* set, the caller does not expect cancellation and needs
+to wait until the given awaitable is complete. To handle this case, `block_on`
+records the supertask's cancellation request in `state` and calls the `OnBlock`
+callback a second time (which, by contract, will not return `Cancelled.TRUE` a
+second time). Future `cancellable` calls will see the `PENDING_CANCEL` in
+`state` and deliver the cancellation request to the core wasm caller.
 
-If `wait_on` is called with `cancellable` set to `True`, then the caller
-expects and propagates the case where the supertask requests cancellation
-(when `True` is returned). But if `cancellable` is `False`, then `wait_on` must
-handle the cancellation request itself by setting the task's `state` to
-`PENDING_CANCEL` (to be picked up by `wait_for_event`, `poll_for_event` or
-`yield` in the future) and calling `OnBlock` a second time (noting that
-`OnBlock` can only request cancellation *once*).
+If `block_on` is called with `for_callback` set, then the `exclusive` lock
+(which is used to serialize non-reentrant execution of synchronous and `async
+callback` code) is `release()`ed before blocking and re-`acquire()`d after
+unblocking. `for_callback` is set by the `async callback` event loop to allow
+concurrent tasks to execute when the current task blocks at a reentrancy-safe
+point.
 
 The `Task.call_sync` method defines how a task makes a synchronous call to an
-imported `callee`. `call_sync` works just like `wait_on` when `sync` is `True`
-and `cancellable` is `False` except that `call_sync` avoids unconditionally
-blocking and instead only blocks if `callee` transitively blocks. This means
+imported `callee`. `call_sync` works like `block_on` with `cancellable = False`
+(recording the request for cancellation and calling `OnBlock` a second time)
+except that `call_sync` only blocks if `callee` transitively blocks. This means
 that N-deep synchronous callstacks avoid the overhead of async calls if none of
 the calls in the stack actually block on external I/O.
 ```python
@@ -888,11 +894,7 @@ the calls in the stack actually block on external I/O.
         assert(await self.on_block(awaitable) == Cancelled.FALSE)
       return Cancelled.FALSE
 
-    assert(not self.inst.calling_sync_import)
-    self.inst.calling_sync_import = True
     await callee(self, on_start, on_return, sync_on_block)
-    self.inst.calling_sync_import = False
-    self.inst.async_waiting_tasks.notify_all()
 ```
 
 The `Task.wait_for_event` method is called by `canon_waitable_set_wait` or,
@@ -900,8 +902,8 @@ when a `callback` is used, when the `callback` returns `WAIT` to the event
 loop. `wait_for_event` waits until a `Waitable` in a given `WaitableSet` makes
 progress:
 ```python
-  async def wait_for_event(self, waitable_set, sync) -> EventTuple:
-    if self.state == Task.State.PENDING_CANCEL:
+  async def wait_for_event(self, waitable_set, cancellable, for_callback) -> EventTuple:
+    if cancellable and self.state == Task.State.PENDING_CANCEL:
       self.state = Task.State.CANCEL_DELIVERED
       return (EventCode.TASK_CANCELLED, 0, 0)
     else:
@@ -909,9 +911,7 @@ progress:
       e = None
       while not e:
         maybe_event = waitable_set.maybe_has_pending_event.wait()
-        if await self.wait_on(maybe_event, sync, cancellable = True):
-          assert(self.state == Task.State.INITIAL)
-          self.state = Task.State.CANCEL_DELIVERED
+        if await self.block_on(maybe_event, cancellable, for_callback) == Cancelled.TRUE:
           return (EventCode.TASK_CANCELLED, 0, 0)
         e = waitable_set.poll()
       waitable_set.num_waiting -= 1
@@ -924,11 +924,14 @@ not semantically observable by the wasm code and so the host implementation can
 loop or not using its own event delivery scheme.
 
 If there is already a pending cancellation request (from a previous
-non-cancellable `wait_on` or a `call_sync`), the cancellation request is
+non-cancellable `block_on` or a `call_sync`), the cancellation request is
 delivered to core wasm via the `TASK_CANCELLED` event code and task's `state`
 is transitioned to `CANCEL_DELIVERED` so that `canon_task_cancel` can be called
 without trapping. If cancellation is requested *during* `wait_for_event`, there
 is a direct transition to the `CANCEL_DELIVERED` state.
+
+The `num_waiting` increment/decrement prevent the given waitable set from being
+`waitable-set.drop`ed in the interim.
 
 The `Task.yield_` method is called by `canon_yield` or, when a `callback` is
 used, when the `callback` returns `YIELD` to the event loop. Yielding allows
@@ -937,13 +940,11 @@ external I/O. This is emulated in the Python code below by waiting on an
 immediately-resolved future, which calls the `OnBlock` callback, which allows
 control flow to switch to other `asyncio.Task`s.
 ```python
-  async def yield_(self, sync) -> EventTuple:
-    if self.state == Task.State.PENDING_CANCEL:
+  async def yield_(self, cancellable, for_callback) -> EventTuple:
+    if cancellable and self.state == Task.State.PENDING_CANCEL:
       self.state = Task.State.CANCEL_DELIVERED
       return (EventCode.TASK_CANCELLED, 0, 0)
-    elif await self.wait_on(asyncio.sleep(0), sync, cancellable = True):
-      assert(self.state == Task.State.INITIAL)
-      self.state = Task.State.CANCEL_DELIVERED
+    elif await self.block_on(asyncio.sleep(0), cancellable, for_callback) == Cancelled.TRUE:
       return (EventCode.TASK_CANCELLED, 0, 0)
     else:
       return (EventCode.NONE, 0, 0)
@@ -957,8 +958,10 @@ when a `callback` is used, when the `callback` returns `POLL` to the event
 loop. Polling returns the `NONE` event code instead of blocking when there are
 no pending events.
 ```python
-  async def poll_for_event(self, waitable_set, sync) -> Optional[EventTuple]:
-    event_code,_,_ = e = await self.yield_(sync)
+  async def poll_for_event(self, waitable_set, cancellable, for_callback) -> Optional[EventTuple]:
+    waitable_set.num_waiting += 1
+    event_code,_,_ = e = await self.yield_(cancellable, for_callback)
+    waitable_set.num_waiting -= 1
     if event_code == EventCode.TASK_CANCELLED:
       return e
     elif (e := waitable_set.poll()):
@@ -966,9 +969,10 @@ no pending events.
     else:
       return (EventCode.NONE, 0, 0)
 ```
-The implicit `yield_` call in `poll_for_event` allows other tasks (in the same
-or different component instances, as controlled by `sync`) to be scheduled,
-preventing starvation in various common polling use cases.
+The implicit `yield_` call in `poll_for_event` allows other tasks to be
+scheduled, preventing starvation in various common polling use cases. The
+`num_waiting` increment/decrement prevents the given waitable set from being
+`waitable-set.drop`ed in the interim.
 
 The `Task.return_` method is called by either `canon_task_return` or
 `canon_lift` to return a list of `0` or `1` lifted values to the task's caller
@@ -998,22 +1002,16 @@ The `Task.cancel` method is called by `canon_task_cancel` and enforces the same
 As guarded here, the `task.cancel` built-in can only be called after the
 `TASK_CANCELLED` event code has been delivered to core wasm.
 
-Lastly, the `Task.exit` method is called when the task has signalled that it is
-finished executing. This method guards that the various obligations of the
-callee implied by the Canonical ABI have in fact been met and also performs
-final bookkeeping that matches initial bookkeeping performed by `enter`.
-Lastly, when a `Task` exits, it attempts to start another pending task which,
-in particular, may be a synchronous task unblocked by the clearing of
-`calling_sync_export`.
+Lastly, the `Task.exit` method is called when the task has finished executing
+to check that the task has returned a value (or been cancelled) and to release
+the `exclusive` lock that was `acquire()`d by `Task.enter()` to serialize
+non-reentrant core wasm execution.
 ```python
   def exit(self):
-    assert(scheduler.locked())
     trap_if(self.state != Task.State.RESOLVED)
     assert(self.num_borrows == 0)
-    if self.opts.sync:
-      assert(self.inst.calling_sync_export)
-      self.inst.calling_sync_export = False
-    self.maybe_start_pending_task()
+    if self.needs_exclusive():
+      self.inst.exclusive.release()
 ```
 
 
@@ -3091,10 +3089,12 @@ component exports directly from the command line, the host might parse `argv`
 into lifted values according to the declared types of the export and render the
 return value into text printed to `stdout`.
 
-Based on this, `canon_lift` is defined in chunks as follows:
+Based on this, `canon_lift` is defined in chunks as follows, starting with how
+a `lift`ed function starts executing:
 ```python
 async def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve, on_block):
   task = Task(opts, inst, ft, caller, on_resolve, on_block)
+  task.trap_if_on_the_stack(inst)
   if not await task.enter():
     return
 
@@ -3104,16 +3104,26 @@ async def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve, on_bl
   flat_ft = flatten_functype(opts, ft, 'lift')
   assert(types_match_values(flat_ft.params, flat_args))
 ```
-Each call to `canon lift` creates a new `Task` and waits to enter the component
-instance, allowing the component instance to express backpressure before
-lowering the arguments into the callee's memory.
+Each call starts by immediately checking for unexpected reentrance using
+`Task.trap_if_on_the_stack`. Next, a `lift`ed function waits until there is no
+backpressure, as defined by `Task.enter`. If the supertask cancels the call
+while waiting for backpressure, the call is aborted before the arguments are
+lowered (which means that owned-handle arguments are not transferred) without
+ever executing the core wasm callee. Once the backpressure gate is cleared, the
+arguments are lowered into core wasm values and memory according to the
+`canonopt` immediates of `canon lift` (as defined by `lower_flat_values`
+above).
 
-In the synchronous case, `canon_lift` first calls into the lifted core
-function, passing the lowered core flat parameters and receiving the core flat
-results to be lifted. Once the core results are lifted, `canon_lift` optionally
-makes a second call into any supplied `post-return` function, passing the flat
-results as arguments so that the guest code and free any allocations associated
-with compound return values.
+If the `async` `canonopt` is *not* specified, a `lift`ed function then calls
+the core wasm callee, passing the lowered arguments in core function parameters
+and receiving the return value as core function results. Once the core results
+are lifted according to `lift_flat_values` above, the optional `post-return`
+function (specified as a `canonopt` immediate of `canon lift`) is called,
+passing the same core wasm results as parameters so that the `post-return`
+function can free any associated allocations. Since `Task.enter` acquired the
+`exclusive` lock and the `Task.exit` call here releases the `exclusive` lock,
+synchronous functions cannot overlap execution; attempts by callers to make
+overlapping calls will result in backpressure in `Task.enter`.
 ```python
   if opts.sync:
     flat_results = await call_and_trap_on_throw(callee, task, flat_args)
@@ -3133,11 +3143,21 @@ functions can always be implemented by a plain synchronous function call
 without the need for fibers which would otherwise be necessary if the
 `post-return` function performed a blocking operation.
 
-In both of the asynchronous cases below (`callback` and non-`callback`),
-`canon_task_return` must be called (as checked by `Task.exit`).
+In both of the `async` cases below (with or without `callback`), the
+`task.return` built-in must be called, providing the return value as core wasm
+*parameters* to the `task.return` built-in (rather than as core function
+results as in the synchronous case). If `task.return` is *not* called by the
+time the `lift`ed function exits, `Task.exit` traps.
 
-In the asynchronous non-`callback` case, waiting happens when core wasm calls
-the imported `canon_waitable_set_wait` built-in.
+In the `async` non-`callback` ("stackful async") case, there is a single call
+to the core wasm callee which must return empty core results. Waiting for async
+I/O happens by the callee synchronously calling built-ins like
+`waitable-set.wait`. When these built-ins need to block, they call
+`Task.block_on` which allows other concurrent tasks to make progress. Note
+that, since `Task.enter` does *not* acquire the `exclusive` lock for stackful
+async functions, calls to `waitable-set.wait` made by a stackful async function
+do not prevent other stackful async calls from starting or progressing in the
+same component instance.
 ```python
   if not opts.callback:
     [] = await call_and_trap_on_throw(callee, task, flat_args)
@@ -3146,9 +3166,10 @@ the imported `canon_waitable_set_wait` built-in.
     return
 ```
 
-Lastly, in the asynchronous `callback` case, waiting happens by core wasm
-returning to an event loop in `canon_lift`, with the `callback` called
-repeatedly until the `EXIT` code is returned:
+Lastly, in the `async callback` ("stackless async") case, waiting happens by
+first calling the core wasm callee and then repeatedly calling the `callback`
+function (specified as a `funcidx` immediate in `canon lift`) until the
+`EXIT` code (`0`) is returned:
 ```python
   [packed] = await call_and_trap_on_throw(callee, task, flat_args)
   while True:
@@ -3158,18 +3179,31 @@ repeatedly until the `EXIT` code is returned:
         task.exit()
         return
       case CallbackCode.YIELD:
-        e = await task.yield_(sync = False)
+        e = await task.yield_(cancellable = True, for_callback = True)
       case CallbackCode.WAIT:
         s = task.inst.table.get(si)
         trap_if(not isinstance(s, WaitableSet))
-        e = await task.wait_for_event(s, sync = False)
+        e = await task.wait_for_event(s, cancellable = True, for_callback = True)
       case CallbackCode.POLL:
         s = task.inst.table.get(si)
         trap_if(not isinstance(s, WaitableSet))
-        e = await task.poll_for_event(s, sync = False)
+        e = await task.poll_for_event(s, cancellable = True, for_callback = True)
     event_code, p1, p2 = e
     [packed] = await call_and_trap_on_throw(opts.callback, task, [event_code, p1, p2])
 ```
+The `Task.yield_`, `wait_for_event` and `poll_for_event` methods called here
+are the same methods called by the `canon yield`, `waitable-set.wait` and
+`waitable-set.poll` built-ins. Thus, the main difference between stackful and
+stackless async is whether these blocking operations are performed from an
+empty or non-empty core wasm callstack. A key difference, though, is that the
+`for_callback` flag is only set when calling these blocking operations from the
+event loop, not the built-ins. `for_callback` tells these blocking operations
+to release the `exclusive` lock taken by `Task.enter()` so that other `async
+callback` functions can start or make progress in the interim. Since the
+built-ins don't set `for_callback`, they do not drop the `exclusive` lock,
+thereby ensuring the invariant that `async callback` code is never reentered
+while other `async callback` core wasm code (or, because they share the same
+`exclusive` lock, synchronous core wasm code) is on the stack.
 
 The bit-packing scheme used for the `i32` `packed` return value is defined as
 follows:
@@ -3462,17 +3496,21 @@ For a canonical definition:
 validation specifies:
 * `$f` is given type `(func (param $enabled i32))`
 
-Calling `$f` invokes the following function, which sets the `backpressure`
-flag on the current `ComponentInstance`:
+Calling `$f` invokes the following function, which clears or sets the
+`no_backpressure` [`asyncio.Event`] of the current `ComponentInstance`.
+`no_backpressure` is waited on by `Task.enter` (at the beginning of a call to a
+`lift`ed function) to prevent new calls from starting when backpressure is
+enabled:
 ```python
 async def canon_backpressure_set(task, flat_args):
   trap_if(task.opts.sync)
-  task.inst.backpressure = bool(flat_args[0])
+  assert(len(flat_args) == 1)
+  if flat_args[0] == 0:
+    task.inst.no_backpressure.set()
+  else:
+    task.inst.no_backpressure.clear()
   return []
 ```
-The `backpressure` flag is read by `Task.enter` (defined above) to prevent new
-tasks from entering the component instance and forcing the guest code to
-consume resources.
 
 
 ### 🔀 `canon task.return`
@@ -3557,32 +3595,35 @@ returned a value or already called `task.cancel`.
 
 For a canonical definition:
 ```wat
-(canon yield $async? (core func $f))
+(canon yield $cancellable? (core func $f))
 ```
 validation specifies:
 * `$f` is given type `(func (result i32))`
-* 🚟 - `async` is allowed (otherwise it must be `false`)
+* 🚟 - `cancellable` is allowed (otherwise it must be absent)
 
-Calling `$f` calls `Task.yield_` to allow other tasks to execute:
+Calling `$f` calls `Task.yield_` to allow other tasks to execute. This allows a
+long-running computation that is not otherwise performing I/O to cooperatively
+allow other tasks to execute.
 ```python
-async def canon_yield(sync, task):
+async def canon_yield(cancellable, task):
   trap_if(not task.inst.may_leave)
-  event_code,_,_ = await task.yield_(sync)
+  event_code,_,_ = await task.yield_(cancellable, for_callback = False)
   match event_code:
     case EventCode.NONE:
       return [0]
     case EventCode.TASK_CANCELLED:
       return [1]
 ```
-If `async` is not set, no other tasks *in the same component instance* can
-execute, however tasks in *other* component instances may execute. This allows
-a long-running task in one component to avoid starving other components without
-needing support full reentrancy.
+If `cancellable` is set, then `yield` will return whether the supertask has
+already or concurrently requested cancellation. `yield` (and other cancellable
+operations) will only indicate cancellation once and thus, if a caller is not
+prepared to propagate cancellation, they can omit `cancellable` so that
+cancellation is instead delivered at a later `cancellable` call.
 
-Because other tasks can execute, a subtask can be cancelled while executing
-`yield`, in which case `yield` returns `1`. The language runtime and bindings
-generators should handle cancellation the same way as when receiving the
-`TASK_CANCELLED` event from `waitable-set.wait`.
+Note that, since `for_callback` is not set, when called from a
+synchronously-lifted or `async callback`-lifted export, `yield` will not allow
+other synchronously- lifted or `async callback`-lifted code to execute before
+returning.
 
 
 ### 🔀 `canon waitable-set.new`
@@ -3607,21 +3648,21 @@ async def canon_waitable_set_new(task):
 
 For a canonical definition:
 ```wat
-(canon waitable-set.wait $async? (memory $mem) (core func $f))
+(canon waitable-set.wait $cancellable? (memory $mem) (core func $f))
 ```
 validation specifies:
 * `$f` is given type `(func (param $si) (param $ptr i32) (result i32))`
-* 🚟 - `async` is allowed (otherwise it must be `false`)
+* 🚟 - `cancellable` is allowed (otherwise it must be absent)
 
 Calling `$f` invokes the following function which waits for progress to be made
 on a `Waitable` in the given waitable set (indicated by index `$si`) and then
 returning its `EventCode` and writing the payload values into linear memory:
 ```python
-async def canon_waitable_set_wait(sync, mem, task, si, ptr):
+async def canon_waitable_set_wait(cancellable, mem, task, si, ptr):
   trap_if(not task.inst.may_leave)
   s = task.inst.table.get(si)
   trap_if(not isinstance(s, WaitableSet))
-  e = await task.wait_for_event(s, sync)
+  e = await task.wait_for_event(s, cancellable, for_callback = False)
   return unpack_event(mem, task, ptr, e)
 
 def unpack_event(mem, task, ptr, e: EventTuple):
@@ -3631,16 +3672,17 @@ def unpack_event(mem, task, ptr, e: EventTuple):
   store(cx, p2, U32Type(), ptr + 4)
   return [event]
 ```
-If `async` is not set, `wait_for_event` will prevent other tasks from executing
-in the same component instance, which can be useful for producer toolchains in
-situations where interleaving is not supported. However, this is generally worse
-for concurrency and thus producer toolchains should set `async` when possible.
+If `cancellable` is set, then `waitable-set.wait` will return whether the
+supertask has already or concurrently requested cancellation.
+`waitable-set.wait` (and other cancellable operations) will only indicate
+cancellation once and thus, if a caller is not prepared to propagate
+cancellation, they can omit `cancellable` so that cancellation is instead
+delivered at a later `cancellable` call.
 
-`wait` can be called from a synchronously-lifted export so that even
-synchronous code can make concurrent import calls. In these synchronous cases,
-though, the automatic backpressure (applied by `Task.enter`) will ensure there
-is only ever at most once synchronously-lifted task executing in a component
-instance at a time.
+Note that, since `for_callback` is not set, when called from a
+synchronously-lifted or `async callback`-lifted export, `waitable-set.wait`
+will not allow other synchronously-lifted or `async callback`-lifted code to
+execute before returning.
 
 
 ### 🔀 `canon waitable-set.poll`
@@ -3657,15 +3699,28 @@ Calling `$f` invokes the following function, which returns `NONE` (`0`) instead
 of blocking if there is no event available, and otherwise returns the event the
 same way as `wait`.
 ```python
-async def canon_waitable_set_poll(sync, mem, task, si, ptr):
+async def canon_waitable_set_poll(cancellable, mem, task, si, ptr):
   trap_if(not task.inst.may_leave)
   s = task.inst.table.get(si)
   trap_if(not isinstance(s, WaitableSet))
-  e = await task.poll_for_event(s, sync)
+  e = await task.poll_for_event(s, cancellable, for_callback = False)
   return unpack_event(mem, task, ptr, e)
 ```
-When `async` is set, `poll_for_event` can yield to other tasks (in this or other
-components) as part of polling for an event.
+Even though `waitable-set.poll` doesn't strictly block for a waitable to have
+an event, it does semantically perform a `yield` (inside `Task.poll_for_event`)
+to allow other tasks to make progress and avoid busy-waiting deadlock.
+
+If `cancellable` is set, then `waitable-set.poll` will return whether the
+supertask has already or concurrently requested cancellation.
+`waitable-set.poll` (and other cancellable operations) will only indicate
+cancellation once and thus, if a caller is not prepared to propagate
+cancellation, they can omit `cancellable` so that cancellation is instead
+delivered at a later `cancellable` call.
+
+Note that, since `for_callback` is not set, when called from a
+synchronously-lifted or `async callback`-lifted export, `waitable-set.poll`
+will not allow other synchronously-lifted or `async callback`-lifted code to
+execute before returning.
 
 
 ### 🔀 `canon waitable-set.drop`
@@ -3688,6 +3743,9 @@ async def canon_waitable_set_drop(task, i):
   s.drop()
   return []
 ```
+Note that `WaitableSet.drop` will trap if it is non-empty or there is a
+concurrent `yield`, `waitable-set.wait`, `waitable-set.poll` or `async
+callback` currently using this waitable set.
 
 
 ### 🔀 `canon waitable.join`
@@ -3764,7 +3822,7 @@ async def canon_subtask_cancel(sync, task, i):
       while not subtask.resolved():
         if subtask.has_pending_event():
           _ = subtask.get_event()
-        await task.wait_on(subtask.wait_for_pending_event(), sync = True)
+        await task.block_on(subtask.wait_for_pending_event())
     else:
       if not subtask.resolved():
         return [BLOCKED]
@@ -3926,13 +3984,11 @@ all future use of this stream end. Lastly, `stream_event` packs the
   e.copying = True
   e.copy(task.inst, buffer, on_copy, on_copy_done)
 ```
-If `stream.{read,write}` is called synchronously, the call waits for
-progress if necessary (blocking all execution in the calling component
-instance, but allowing other tasks in other component instances to make
-progress):
+If `stream.{read,write}` is called synchronously, the call blocks until the
+operation makes progress (thereby setting a pending event):
 ```python
   if opts.sync and not e.has_pending_event():
-    await task.wait_on(e.wait_for_pending_event(), sync = True)
+    await task.block_on(e.wait_for_pending_event())
 ```
 Finally, if there is a pending event on the stream end (which is necessarily a
 `copy_event` closure), it is eagerly returned to the caller. Otherwise, the
@@ -4023,7 +4079,7 @@ and returning either the progress made or `BLOCKED`.
 ```python
 
   if opts.sync and not e.has_pending_event():
-    await task.wait_on(e.wait_for_pending_event(), sync = True)
+    await task.block_on(e.wait_for_pending_event())
 
   if e.has_pending_event():
     code,index,payload = e.get_event()
@@ -4073,7 +4129,7 @@ async def cancel_copy(EndT, event_code, stream_or_future_t, sync, task, i):
     e.shared.cancel()
     if not e.has_pending_event():
       if sync:
-        await task.wait_on(e.wait_for_pending_event(), sync = True)
+        await task.block_on(e.wait_for_pending_event())
       else:
         return [BLOCKED]
   code,index,payload = e.get_event()
@@ -4087,9 +4143,9 @@ callbacks (passed by `canon_{stream,future}_{read,write}` above) which will set
 a pending event that is caught by the *second* check for
 `e.has_pending_event()`.
 
-If the copy hasn't been cancelled, the synchronous case uses `Task.wait_on` to
-synchronously and uninterruptibly wait for one of the `on_*` callbacks to
-eventually be called (which will set the pending event).
+If the copy hasn't been cancelled, the synchronous case uses `Task.block_on` to
+wait for one of the `on_*` callbacks to eventually be called (which will set
+the pending event).
 
 The asynchronous case simply returns `BLOCKING` and the client code must wait
 as usual for a `{STREAM,FUTURE}_{READ,WRITE}` event. In this case, cancellation
@@ -4358,6 +4414,7 @@ def canon_thread_available_parallelism():
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Shared-Everything Dynamic Linking]: examples/SharedEverythingDynamicLinking.md
 [Structured Concurrency]: Async.md#structured-concurrency
+[Backpressure]: Async.md#backpressure
 [Current Task]: Async.md#current-task
 [Readable and Writable Ends]: Async.md#streams-and-futures
 [Context-Local Storage]: Async.md#context-local-storage
@@ -4400,6 +4457,7 @@ def canon_thread_available_parallelism():
 [`asyncio`]: https://docs.python.org/3/library/asyncio.html
 [`asyncio.Task`]: https://docs.python.org/3/library/asyncio-task.html#asyncio.Task
 [`asyncio.Event`]: https://docs.python.org/3/library/asyncio-sync.html#event
+[`asyncio.Lock`]: https://docs.python.org/3/library/asyncio-sync.html#lock
 [`asyncio.Condition`]: https://docs.python.org/3/library/asyncio-sync.html#condition
 [Awaitable]: https://docs.python.org/3/library/asyncio-task.html#awaitables
 
