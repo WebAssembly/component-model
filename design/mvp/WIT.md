@@ -1641,6 +1641,10 @@ functions*, which do not have an implicit `self` parameter but are meant to be
 lexically nested in the scope of the resource type. Lastly, a resource
 statement can contain at most one *constructor* function, which is syntactic
 sugar for a function returning a handle of the containing resource type.
+Constructors can be fallible or infallible. Fallible constructors have an
+explicitly-written return type which must be of the form `result<r, ...>`
+where `r` is the name of the containing `resource`. Infallible constructors
+have no written return type and are given the implicit return type `r`.
 
 For example, the following resource definition:
 ```wit
@@ -1650,11 +1654,15 @@ resource blob {
     read: func(n: u32) -> list<u8>;
     merge: static func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob;
 }
+resource blob2 {
+    constructor(init: list<u8>) -> result<blob2>;
+}
 ```
 desugars into:
 ```wit
 resource blob;
 %[constructor]blob: func(init: list<u8>) -> blob;
+%[constructor]blob2: func(init: list<u8>) -> result<blob2>;
 %[method]blob.write: func(self: borrow<blob>, bytes: list<u8>);
 %[method]blob.read: func(self: borrow<blob>, n: u32) -> list<u8>;
 %[static]blob.merge: func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob;
