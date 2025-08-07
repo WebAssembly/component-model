@@ -2454,9 +2454,19 @@ generators to insert the function into the nested scope of a class, abstract
 data type, object, namespace, package, module or whatever resources get bound
 to. For example, a function named `[method]C.foo` could be bound in C++ to a
 member function `foo` in a class `C`. The JS API [below](#JS-API) describes how
-the native JavaScript bindings could look. Validation described in
-[Binary.md](Binary.md) inspects the contents of `plainname` and ensures that
-the function has a compatible signature.
+the native JavaScript bindings could look.
+
+To restrict the set of cases that bindings generators need to consider, these
+annotations trigger additional type-validation rules (listed in
+[Binary.md](Binary.md)) such as:
+* An import or export named `[static]R.foo` must be a function and `R` must
+  be the name of an imported or exported resource type in the same `instance`
+  or `component` type.
+* Similarly, an import or export named `[constructor]R` must be a function
+  whose return type must be `(own $R)` or `(result (own $R) (error <valtype>)?)`
+  where `$R` is the type-index of the resource type named `R`.
+* Similarly, an import or export named `[method]R.foo` must be a function whose
+  first parameter must be `(param "self" (borrow $R))`.
 
 When a function is annotated with `async`, bindings generators are expected to
 emit whatever asynchronous language construct is appropriate (such as an
