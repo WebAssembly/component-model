@@ -784,7 +784,7 @@ There is no core function result because a callee [returns](#returning) their
 value by *calling* the *imported* `task.return` function which has signature:
 ```wat
 ;; task.return
-(func (param $ret-ptr i32) (result $ret-len i32))
+(func (param $ret-ptr i32) (param $ret-len i32))
 ```
 
 The parameters of `task.return` work the same as if the WIT return type was the
