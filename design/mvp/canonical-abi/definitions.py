@@ -295,65 +295,6 @@ class ResourceType(Type):
     self.dtor_sync = dtor_sync
     self.dtor_callback = dtor_callback
 
-#### Buffer State
-
-class Buffer:
-  MAX_LENGTH = 2**28 - 1
-  t: ValType
-  remain: Callable[[], int]
-  is_zero_length: Callable[[], bool]
-
-class ReadableBuffer(Buffer):
-  read: Callable[[int], list[any]]
-
-class WritableBuffer(Buffer):
-  write: Callable[[list[any]]]
-
-class BufferGuestImpl(Buffer):
-  cx: LiftLowerContext
-  t: ValType
-  ptr: int
-  progress: int
-  length: int
-
-  def __init__(self, t, cx, ptr, length):
-    trap_if(length > Buffer.MAX_LENGTH)
-    if t and length > 0:
-      trap_if(ptr != align_to(ptr, alignment(t)))
-      trap_if(ptr + length * elem_size(t) > len(cx.opts.memory))
-    self.cx = cx
-    self.t = t
-    self.ptr = ptr
-    self.progress = 0
-    self.length = length
-
-  def remain(self):
-    return self.length - self.progress
-
-  def is_zero_length(self):
-    return self.length == 0
-
-class ReadableBufferGuestImpl(BufferGuestImpl):
-  def read(self, n):
-    assert(n <= self.remain())
-    if self.t:
-      vs = load_list_from_valid_range(self.cx, self.ptr, n, self.t)
-      self.ptr += n * elem_size(self.t)
-    else:
-      vs = n * [()]
-    self.progress += n
-    return vs
-
-class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
-  def write(self, vs):
-    assert(len(vs) <= self.remain())
-    if self.t:
-      store_list_into_valid_range(self.cx, vs, self.ptr, self.t)
-      self.ptr += len(vs) * elem_size(self.t)
-    else:
-      assert(all(v == () for v in vs))
-    self.progress += len(vs)
-
 #### Context-Local Storage
 
 class ContextLocalStorage:
@@ -744,6 +685,65 @@ class Subtask(Waitable):
   def drop(self):
     trap_if(not self.resolve_delivered())
     Waitable.drop(self)
+
+#### Buffer State
+
+class Buffer:
+  MAX_LENGTH = 2**28 - 1
+  t: ValType
+  remain: Callable[[], int]
+  is_zero_length: Callable[[], bool]
+
+class ReadableBuffer(Buffer):
+  read: Callable[[int], list[any]]
+
+class WritableBuffer(Buffer):
+  write: Callable[[list[any]]]
+
+class BufferGuestImpl(Buffer):
+  cx: LiftLowerContext
+  t: ValType
+  ptr: int
+  progress: int
+  length: int
+
+  def __init__(self, t, cx, ptr, length):
+    trap_if(length > Buffer.MAX_LENGTH)
+    if t and length > 0:
+      trap_if(ptr != align_to(ptr, alignment(t)))
+      trap_if(ptr + length * elem_size(t) > len(cx.opts.memory))
+    self.cx = cx
+    self.t = t
+    self.ptr = ptr
+    self.progress = 0
+    self.length = length
+
+  def remain(self):
+    return self.length - self.progress
+
+  def is_zero_length(self):
+    return self.length == 0
+
+class ReadableBufferGuestImpl(BufferGuestImpl):
+  def read(self, n):
+    assert(n <= self.remain())
+    if self.t:
+      vs = load_list_from_valid_range(self.cx, self.ptr, n, self.t)
+      self.ptr += n * elem_size(self.t)
+    else:
+      vs = n * [()]
+    self.progress += n
+    return vs
+
+class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
+  def write(self, vs):
+    assert(len(vs) <= self.remain())
+    if self.t:
+      store_list_into_valid_range(self.cx, vs, self.ptr, self.t)
+      self.ptr += len(vs) * elem_size(self.t)
+    else:
+      assert(all(v == () for v in vs))
+    self.progress += len(vs)
 
 #### Stream State
 

@@ -14,10 +14,10 @@ being specified here.
     * [Component Instance State](#component-instance-state)
     * [Table State](#table-state)
     * [Resource State](#resource-state)
-    * [Buffer State](#buffer-state)
     * [Task State](#task-state)
     * [Waitable State](#waitable-state)
     * [Subtask State](#subtask-state)
+    * [Buffer State](#buffer-state)
     * [Stream State](#stream-state)
     * [Future State](#future-state)
   * [Despecialization](#despecialization)
@@ -343,116 +343,6 @@ class ResourceType(Type):
     self.dtor_sync = dtor_sync
     self.dtor_callback = dtor_callback
 ```
-
-
-#### Buffer State
-
-A "buffer" is an abstract region of memory that can either be read-from or
-written-to. This region of memory can either be owned by the host or by wasm.
-Currently wasm memory is always 32-bit linear memory, but soon 64-bit and GC
-memory will be added. Thus, buffers provide an abstraction over at least 4
-different "kinds" of memory.
-
-(Currently, buffers are only created implicitly as part of stream and future
-built-ins such as `stream.read`. However, in the
-[future](https://github.com/WebAssembly/component-model/issues/369#issuecomment-2248574765),
-explicit component-level buffer types and canonical built-ins may be added to
-allow explicitly creating buffers and passing them between components.)
-
-A "readable buffer" allows reading `t` values *from* the buffer's memory. A
-"writable buffer" allows writing `t` values *into* the buffer's memory. All
-buffers have an associated component-level value type `t` and a `remain` method
-that returns how many `t` values may still be read or written. Buffers mostly
-hide their original/complete size. However, zero-length buffers need to be
-treated specially (particularly when a zero-length read rendezvous with a
-zero-length write), so there is a special query for detecting whether a buffer
-is zero-length. Based on this, buffers are represented by the following 3
-abstract Python classes:
-```python
-class Buffer:
-  MAX_LENGTH = 2**28 - 1
-  t: ValType
-  remain: Callable[[], int]
-  is_zero_length: Callable[[], bool]
-
-class ReadableBuffer(Buffer):
-  read: Callable[[int], list[any]]
-
-class WritableBuffer(Buffer):
-  write: Callable[[list[any]]]
-```
-As preconditions (internally ensured by the Canonical ABI code below):
-* `read` may only be passed a positive number less than or equal to `remain`
-* `write` may only be passed a non-empty list of length less than or equal to
-  `remain` containing values of type `t`
-
-Since `read` and `write` are synchronous Python functions, buffers inherently
-guarantee synchronous access to a fixed-size backing memory and are thus
-distinguished from streams (which provide *asynchronous* operations for reading
-and writing an unbounded number of values to potentially-different regions of
-memory over time).
-
-The `ReadableBuffer` and `WritableBuffer` abstract classes may either be
-implemented by the host or by another wasm component. In the latter case, these
-abstract classes are implemented by the concrete `ReadableBufferGuestImpl` and
-`WritableBufferGuestImpl` classes which eagerly check alignment and range
-when the buffer is constructed so that `read` and `write` are infallible
-operations (modulo traps):
-```python
-class BufferGuestImpl(Buffer):
-  cx: LiftLowerContext
-  t: ValType
-  ptr: int
-  progress: int
-  length: int
-
-  def __init__(self, t, cx, ptr, length):
-    trap_if(length > Buffer.MAX_LENGTH)
-    if t and length > 0:
-      trap_if(ptr != align_to(ptr, alignment(t)))
-      trap_if(ptr + length * elem_size(t) > len(cx.opts.memory))
-    self.cx = cx
-    self.t = t
-    self.ptr = ptr
-    self.progress = 0
-    self.length = length
-
-  def remain(self):
-    return self.length - self.progress
-
-  def is_zero_length(self):
-    return self.length == 0
-
-class ReadableBufferGuestImpl(BufferGuestImpl):
-  def read(self, n):
-    assert(n <= self.remain())
-    if self.t:
-      vs = load_list_from_valid_range(self.cx, self.ptr, n, self.t)
-      self.ptr += n * elem_size(self.t)
-    else:
-      vs = n * [()]
-    self.progress += n
-    return vs
-
-class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
-  def write(self, vs):
-    assert(len(vs) <= self.remain())
-    if self.t:
-      store_list_into_valid_range(self.cx, vs, self.ptr, self.t)
-      self.ptr += len(vs) * elem_size(self.t)
-    else:
-      assert(all(v == () for v in vs))
-    self.progress += len(vs)
-```
-When `t` is `None` (arising from `stream` and `future` with empty element
-types), the core-wasm-supplied `ptr` is entirely ignored, while the `length`
-and `progress` are still semantically meaningful. Source bindings may represent
-this case with a generic stream/future of [unit] type or a distinct type that
-conveys events without values.
-
-The `load_list_from_valid_range` and `store_list_into_valid_range` functions
-that do all the heavy lifting are shared with function parameter/result lifting
-and lowering and defined below.
 
 
 #### Context-Local Storage
@@ -1231,6 +1121,116 @@ allowed to resolve and explicitly relinquish any borrowed handles.
     trap_if(not self.resolve_delivered())
     Waitable.drop(self)
 ```
+
+
+#### Buffer State
+
+A "buffer" is an abstract region of memory that can either be read-from or
+written-to. This region of memory can either be owned by the host or by wasm.
+Currently wasm memory is always 32-bit linear memory, but soon 64-bit and GC
+memory will be added. Thus, buffers provide an abstraction over at least 4
+different "kinds" of memory.
+
+(Currently, buffers are only created implicitly as part of stream and future
+built-ins such as `stream.read`. However, in the
+[future](https://github.com/WebAssembly/component-model/issues/369#issuecomment-2248574765),
+explicit component-level buffer types and canonical built-ins may be added to
+allow explicitly creating buffers and passing them between components.)
+
+A "readable buffer" allows reading `t` values *from* the buffer's memory. A
+"writable buffer" allows writing `t` values *into* the buffer's memory. All
+buffers have an associated component-level value type `t` and a `remain` method
+that returns how many `t` values may still be read or written. Buffers mostly
+hide their original/complete size. However, zero-length buffers need to be
+treated specially (particularly when a zero-length read rendezvous with a
+zero-length write), so there is a special query for detecting whether a buffer
+is zero-length. Based on this, buffers are represented by the following 3
+abstract Python classes:
+```python
+class Buffer:
+  MAX_LENGTH = 2**28 - 1
+  t: ValType
+  remain: Callable[[], int]
+  is_zero_length: Callable[[], bool]
+
+class ReadableBuffer(Buffer):
+  read: Callable[[int], list[any]]
+
+class WritableBuffer(Buffer):
+  write: Callable[[list[any]]]
+```
+As preconditions (internally ensured by the Canonical ABI code below):
+* `read` may only be passed a positive number less than or equal to `remain`
+* `write` may only be passed a non-empty list of length less than or equal to
+  `remain` containing values of type `t`
+
+Since `read` and `write` are synchronous Python functions, buffers inherently
+guarantee synchronous access to a fixed-size backing memory and are thus
+distinguished from streams (which provide *asynchronous* operations for reading
+and writing an unbounded number of values to potentially-different regions of
+memory over time).
+
+The `ReadableBuffer` and `WritableBuffer` abstract classes may either be
+implemented by the host or by another wasm component. In the latter case, these
+abstract classes are implemented by the concrete `ReadableBufferGuestImpl` and
+`WritableBufferGuestImpl` classes which eagerly check alignment and range
+when the buffer is constructed so that `read` and `write` are infallible
+operations (modulo traps):
+```python
+class BufferGuestImpl(Buffer):
+  cx: LiftLowerContext
+  t: ValType
+  ptr: int
+  progress: int
+  length: int
+
+  def __init__(self, t, cx, ptr, length):
+    trap_if(length > Buffer.MAX_LENGTH)
+    if t and length > 0:
+      trap_if(ptr != align_to(ptr, alignment(t)))
+      trap_if(ptr + length * elem_size(t) > len(cx.opts.memory))
+    self.cx = cx
+    self.t = t
+    self.ptr = ptr
+    self.progress = 0
+    self.length = length
+
+  def remain(self):
+    return self.length - self.progress
+
+  def is_zero_length(self):
+    return self.length == 0
+
+class ReadableBufferGuestImpl(BufferGuestImpl):
+  def read(self, n):
+    assert(n <= self.remain())
+    if self.t:
+      vs = load_list_from_valid_range(self.cx, self.ptr, n, self.t)
+      self.ptr += n * elem_size(self.t)
+    else:
+      vs = n * [()]
+    self.progress += n
+    return vs
+
+class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
+  def write(self, vs):
+    assert(len(vs) <= self.remain())
+    if self.t:
+      store_list_into_valid_range(self.cx, vs, self.ptr, self.t)
+      self.ptr += len(vs) * elem_size(self.t)
+    else:
+      assert(all(v == () for v in vs))
+    self.progress += len(vs)
+```
+When `t` is `None` (arising from `stream` and `future` with empty element
+types), the core-wasm-supplied `ptr` is entirely ignored, while the `length`
+and `progress` are still semantically meaningful. Source bindings may represent
+this case with a generic stream/future of [unit] type or a distinct type that
+conveys events without values.
+
+The `load_list_from_valid_range` and `store_list_into_valid_range` functions
+that do all the heavy lifting are shared with function parameter/result lifting
+and lowering and defined below.
 
 
 #### Stream State
