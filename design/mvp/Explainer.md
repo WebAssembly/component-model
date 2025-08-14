@@ -2794,6 +2794,8 @@ At a high level, the additional coercions would be:
 | `option` | same as [`T?`] | same as [`T?`] |
 | `result` | same as `variant`, but coerce a top-level `error` return value to a thrown exception | same as `variant`, but coerce uncaught exceptions to top-level `error` return values |
 | `own`, `borrow` | see below | see below |
+| `future` | to a `Promise` | from a `Promise` |
+| `stream` | to a `ReadableStream` | from a `ReadableStream` |
 
 Notes:
 * Function parameter names are ignored since JavaScript doesn't have named
@@ -2825,9 +2827,6 @@ Notes:
   its wrapper object was unreachable from JS. For `borrow` handles, the wrapper
   object would become dynamically invalid (throwing on any access) at the end
   of the export call.
-* The forthcoming addition of [future and stream types] would allow `Promise`
-  and `ReadableStream` values to be passed directly to and from components
-  without requiring handles or callbacks.
 * When an imported JavaScript function is a built-in function wrapping a Web
   IDL function, the specified behavior should allow the intermediate JavaScript
   call to be optimized away when the types are sufficiently compatible, falling
@@ -3065,6 +3064,5 @@ For some use-case-focused, worked examples, see:
 [OCI Registry]: https://github.com/opencontainers/distribution-spec
 
 [Scoping and Layering]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8
-[Future and Stream Types]: https://docs.google.com/presentation/d/1MNVOZ8hdofO3tI0szg_i-Yoy0N2QPU2C--LzVuoGSlE
 
 [`navigator.hardwareConcurrency`]: https://developer.mozilla.org/en-US/docs/Web/API/Navigator/hardwareConcurrency
