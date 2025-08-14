@@ -1781,9 +1781,8 @@ meanings though so they're also provided as first-class types.
 
 🗺️ The `map` type is semantically equivalent to a list of pairs of keys and
 values but is meant to be represented by bindings generators in the source
-language as a mapping from keys to values (e.g., as an object, map, dictionary
-or hash table) where, in the case of duplicate keys, the last key's value is
-used.
+language as a mapping from keys to values (e.g., as an associative array or or
+hash table) where, in the case of duplicate keys, the last key's value is used.
 
 The `future` and `stream` types are described as part of the [async
 explainer](Async.md#streams-and-futures).
