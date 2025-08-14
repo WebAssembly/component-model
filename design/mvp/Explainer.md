@@ -57,6 +57,7 @@ implemented, considered stable and included in a future milestone:
 * 🔧: fixed-length lists
 * 📝: the `error-context` type
 * 🔗: canonical interface names
+* 🗺️: `map` type
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
 this repo merges and supersedes the [module-linking] and [interface-types]
@@ -560,12 +561,14 @@ defvaltype    ::= bool
                 | (enum "<label>"+)
                 | (option <valtype>)
                 | (result <valtype>? (error <valtype>)?)
+                | (map <keytype> <valtype>) 🗺️
                 | (own <typeidx>)
                 | (borrow <typeidx>)
                 | (stream <typeidx>?) 🔀
                 | (future <typeidx>?) 🔀
 valtype       ::= <typeidx>
                 | <defvaltype>
+keytype       ::= bool | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64 | char | string 🗺️
 resourcetype  ::= (resource (rep i32) (dtor async? <funcidx> (callback <funcidx>)?)?)
 functype      ::= (func (param "<label>" <valtype>)* (result <valtype>)?)
 componenttype ::= (component <componentdecl>*)
@@ -765,6 +768,7 @@ defined by the following mapping:
                     (option <valtype>) ↦ (variant (case "none") (case "some" <valtype>))
 (result <valtype>? (error <valtype>)?) ↦ (variant (case "ok" <valtype>?) (case "error" <valtype>?))
                                 string ↦ (list char)
+             (map <keytype> <valtype>) ↦ (list (tuple <keytype> <valtype>))
 ```
 
 Specialized value types have the same set of semantic values as their
@@ -779,6 +783,14 @@ this can sometimes allow values to be represented differently. For example,
 `list<char>` uses a sequence of 4-byte `char` code points.  Similarly,
 `flags` in the Canonical ABI uses a bit-vector while an equivalent record
 of boolean fields uses a sequence of boolean-valued bytes.
+
+Since a `map` is a specialization of a list of (key, value) pairs without any
+additional semantic guarantee of key uniqueness, the Component Model does not
+forcibly prevent duplicate keys from appearing in the list. In the case of
+duplicate keys, the expectation for bindings generators is that for any given
+key, the *last* (key, value) pair in the list defines the value of the key in
+the map. To simplify bindings generation, `<keytype>`s is a conservative subset
+of `<valtype>`, but this subset could be expanded over time based on use cases.
 
 Note that, at least initially, variants are required to have a non-empty list of
 cases. This could be relaxed in the future to allow an empty list of cases, with
@@ -2793,6 +2805,7 @@ At a high level, the additional coercions would be:
 | `enum` | same as [`enum`] | same as [`enum`] |
 | `option` | same as [`T?`] | same as [`T?`] |
 | `result` | same as `variant`, but coerce a top-level `error` return value to a thrown exception | same as `variant`, but coerce uncaught exceptions to top-level `error` return values |
+| `map` | `new Map(_)` | `Map`s directly or other objects via `Object.entries(_)` |
 | `own`, `borrow` | see below | see below |
 | `future` | to a `Promise` | from a `Promise` |
 | `stream` | to a `ReadableStream` | from a `ReadableStream` |

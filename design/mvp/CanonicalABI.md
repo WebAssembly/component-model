@@ -1661,6 +1661,7 @@ def despecialize(t):
     case EnumType(labels)    : return VariantType([ CaseType(l, None) for l in labels ])
     case OptionType(t)       : return VariantType([ CaseType("none", None), CaseType("some", t) ])
     case ResultType(ok, err) : return VariantType([ CaseType("ok", ok), CaseType("error", err) ])
+    case MapType(k, v)       : return ListType(despecialize(TupleType([k, v])))
     case _                   : return t
 ```
 The specialized value types `string` and `flags` are missing from this list

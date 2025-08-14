@@ -157,6 +157,11 @@ class ResultType(ValType):
   error: Optional[ValType]
 
 @dataclass
+class MapType(ValType):
+  k: ValType # <keytype>
+  v: ValType
+
+@dataclass
 class FlagsType(ValType):
   labels: list[str]
 
@@ -974,6 +979,7 @@ def despecialize(t):
     case EnumType(labels)    : return VariantType([ CaseType(l, None) for l in labels ])
     case OptionType(t)       : return VariantType([ CaseType("none", None), CaseType("some", t) ])
     case ResultType(ok, err) : return VariantType([ CaseType("ok", ok), CaseType("error", err) ])
+    case MapType(k, v)       : return ListType(despecialize(TupleType([k, v])))
     case _                   : return t
 
 ### Type Predicates
