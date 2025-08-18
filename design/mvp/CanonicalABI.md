@@ -3453,7 +3453,7 @@ For a canonical definition:
 ```
 validation specifies:
 * `$t` must be `i32` (for now; see [here][context-local storage])
-* `$i` must be less than `2`
+* `$i` must be less than `ContextLocalStorage.LENGTH` (`1`)
 * `$f` is given type `(func (result i32))`
 
 Calling `$f` invokes the following function, which reads the [context-local
@@ -3474,7 +3474,7 @@ For a canonical definition:
 ```
 validation specifies:
 * `$t` must be `i32` (for now; see [here][context-local storage])
-* `$i` must be less than `2`
+* `$i` must be less than `ContextLocalStorage.LENGTH` (`1`)
 * `$f` is given type `(func (param $v i32))`
 
 Calling `$f` invokes the following function, which writes to the [context-local
