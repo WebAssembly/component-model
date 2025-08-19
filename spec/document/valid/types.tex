@@ -1,0 +1,266 @@
+\section{Elaborated Types}
+
+During validation, the abstract syntax types described above are
+\emph{elaborated} into types of a different structure, which are
+easier to work with. Elaborated types are different from the original
+abstract syntax types in three major aspects:
+
+* They do not contain any indirections through type index spaces:
+  since recursive types are explicitly not permitted by the component
+  model, it is possible to simply inline all such indirections.
+
+* Due to the above, instance and component types do not contain any
+  embedded declarations; the type sharing that necesstated the use of
+  type alias declarations is replaced with explicit binders and type
+  variables.
+
+  * Value types have been \emph{despecialised}: the value type
+  constructors $\VTTUPLE$, $\VTFLAGS$, $\VTENUM$, $\VTOPTION$,
+  $\VTUNION$, $\VTRESULT$, and $\VTSTRING$ have been replaced by
+  equivalent types.
+
+This elaboration also ensures that the type definitions themselves
+have valid structures, and so may be considered as validation on
+types.
+
+\subsection{Primitive Value Types}
+
+Any $\primvaltype$, $\defvaltype$, or $\valtype$ elaborates to a a
+$\evaltype$ with the following syntax:
+
+\begin{sum-production}{evaltype}
+  \EVTBOOL \alt
+  \EVTS8 | \EVTU8 | \EVTS16 | \EVTU16 | \EVTS32 | \EVTU32 | \EVTS64 | \EVTU64 \alt
+  \EVTFLOAT32 | \EVTFLOAT64 \alt
+  \EVTCHAR \alt
+  \EVTLIST~\evaltype \alt
+  \EVTRECORD~\erecordfield^{+} \alt
+  \EVTVARIANT~\evariantcase^{+} \alt
+  \EVTOWN~\edeftype \alt
+  \EVTREF~\refscope~\edeftype
+\end{sum-production}
+
+Because values are used linearly, values in the context must be
+associated with information about whether they are alive or dead. This
+is accomplished by assigning them types from $\evaltypead$:
+
+\begin{sum-production}{evaltypead}
+  \evaltype \alt
+  \evaltype^\dagger
+\end{sum-production}
+
+\subsection{Record Fields}
+
+Any $\recordfield$ elaborates to a $\erecordfield$ with the following
+abstract syntax:
+
+\begin{record-production}{erecordfield}
+  \{ \ERFNAME~\name, \ERFTYPE~\evaltype \}
+\end{record-production}
+
+\subsection{Variant Cases}
+
+Any $\variantcase$ elaborates to a $\evariantcase$ with the following
+abstract syntax:
+
+\begin{record-production}{evariantcase}
+  \{ \EVCNAME~\name, \EVCTYPE~\evaltype^?, \EVCREFINES~\u32^? \}
+\end{record-production}
+
+\subsection{Resource Types}
+
+Resource type definitions record the Core representation (which is
+presently fixed as $\i32$) and the destructor for a resource type:
+
+\begin{record-production}{eresourcetype}
+  \{ \ERTREP~\i32, \ERTDTOR~\funcidx \}
+\end{record-production}
+
+\subsection{Parameter Lists}
+
+Any $\paramlist$ elaborates to a $\eparamlist$ with the following
+abstract syntax:
+
+\begin{record-production}{eparamlist}
+  \{ \EPLNAME~\name, \EPLTYPE~\evaltype \}^\ast
+\end{record-production}
+
+\subsection{Result Lists}
+
+Any $\resultlist$ elaborates to a $\eresultlist$ with the following
+abstract syntax:
+
+\begin{sum-production}{eresultlist}
+  \evaltype \alt
+  \{ \ERLNAME~\name, \ERLTYPE~\evaltype \}^\ast
+\end{sum-production}
+
+\subsection{Function types}
+
+Any $\functype$ elaborates to a $\efunctype$ with the following
+abstract syntax:
+
+\begin{record-production}{efunctype}
+  \eparamlist\to\eresultlist
+\end{record-production}
+
+\subsection{Type bound}
+
+Any type bound elaborates to a $\etypebound$ with the following
+abstract syntax:
+
+\begin{sum-production}{etypebound}
+  \ETBEQ~\edeftype \alt
+  \ETBSUBR
+\end{sum-production}
+
+\subsection{Instance Types}
+
+An elaborated instance type is nothing more than a list of its
+exports. An instance type does not contain existential quantifiers for
+its type exports, as they can always be hoisted to a containing
+component type.
+
+\begin{sum-productions}
+  \production{einstancetype} \eexterndecl^{*}
+  \production{eexterndecl} \{ \EEDNAME~\name, \EEDDESC~\eexterndesc \}
+  \production{eexterndesc}
+    \EEMDCOREMODULE~\ecoremoduletype \alt
+    \EEMDFUNC~\efunctype \alt
+    \EEMDVALUE~\evaltype \alt
+    \EEMDTYPE~\edeftype \alt
+    \EEMDINSTANCE~\einstancetype \alt
+    \EEMDCOMPONENT~\ecomponenttype
+\end{sum-productions}
+
+Because instance value exports must be used linearly in the context,
+instances in the contexts are, by analogy with $\evaltypead$, assigned
+types from $\einstancetypead$.
+
+\begin{sum-productions}
+  \production{einstancetypead} \eexterndeclad^{*}
+  \production{eexterndeclad}
+    \eexterndecl \alt
+    \eexterndecl^\dagger
+\end{sum-productions}
+
+\subsubsection{Notational conventions}
+
+\begin{itemize}
+\item We write $\einstancetype \oplus \einstancetype'$ to mean the
+  instance type formed by the concationation of the export
+  declarations of $\einstancetype$ and $\einstancetype'$.
+
+\item We write $\bigoplus_i {\einstancetype}_i$ to mean the instance
+  type formed by
+  ${\einstancetype}_1 \oplus \dots \oplus {\einstancetype}_n$.
+\end{itemize}
+
+\subsection{Component Types}
+
+In a similar manner to instance types above, component types change
+significantly upon elaboration: an elaborated component type is
+described as a mapping from a quantified list of imports to the
+existentially quantified type of the instance that it will produce
+upon instantiation:
+
+\begin{record-productions}
+  \production{ecomponenttype}
+  \forall \boundedtyvar^\ast. \eexterndecl^\ast \to
+  \exists \boundedtyvar^\ast. \einstancetype
+  \production{boundedtyvar} (\tyvar : \etypebound)
+\end{record-productions}
+
+\subsubsection{Notational conventions}
+
+\begin{itemize}
+\item Much like with instance types above, we write
+  $\ecomponenttype \oplus \ecomponenttype'$ to mean the combination of
+  two component types; in this case, the component type whose
+  \begin{itemize}
+  \item universally quantified type variables are the concatenation of
+    the universally quantified type variables of $\ecomponenttype$ and
+    $\ecomponenttype$; and whose
+
+  \item imports are the concatenation of the import lists of
+    $\ecomponenttype$ and $\ecomponenttype'$; and whose
+
+  \item existentially quantified type variables are the concatenation
+    of the existentially quantified type variables of
+    $\ecomponenttype$ and $\ecomponenttype'$; and whose
+
+  \item instantiation result (instance) type is the result of applying
+    $\oplus$ to the instantiation result (instance) types of
+    $\ecomponenttype$ and $\ecomponenttype'$.
+  \end{itemize}
+\end{itemize}
+
+\subsection{Defined Types}
+
+Any $\deftype$ elaborates to a $\edeftype$ with the
+following abstract syntax:
+
+\begin{sum-production}{edeftype}
+  \tyvar \alt
+  \EDTRESOURCE~\rtidx \alt
+  \evaltype \alt
+  \efunctype \alt
+  \ecomponenttype \alt
+  \exists \boundedtyvar^\ast. einstancetype\\
+\end{sum-production}
+
+\subsection{Core Instance Types}
+
+Although there are no core instance types present at the surface
+level, it is useful to define the abstract syntax of (elaborated) core
+instance types, as they will be needed to characterise the results of
+instantiationg core modules. As with a component instance type, an
+(elaborated) core instance type is nothing more than a list of its
+exports:
+
+\begin{record-production}{ecoreinstancetype}
+  \coreexportdecl^\ast
+\end{record-production}
+
+\subsubsection{Notational conventions}
+
+\begin{itemize}
+\item We write $\ecoreinstancetype \oplus \ecoreinstancetype'$ to mean
+  the instance type formed by the concatenation of the export
+  declarations of $\ecoreinstancetype$ and $\ecoreinstancetype'$.
+\end{itemize}
+
+
+\subsection{Core Module Types}
+
+Core module types are defined much like component types above: as a
+mapping from import descriptions to the type of the instance that will
+be produced upon instantiating the module:
+
+
+\begin{record-production}{ecoremoduletype}
+  \coreimportdecl^\ast \to \coreexportdecl^\ast
+\end{record-production}
+
+
+\subsubsection{Notational conventions}
+
+\begin{itemize}
+\item Much like with core instance types above, we write
+  $\ecoremoduletype \oplus \ecoremoduletype'$ to mean the combination
+  of two module types; in this case, the module type whose imports are
+  the concatenation of the import lists of $\ecoremoduletype$ and
+  $\ecoremoduletype'$ and whose instantiation result (instance) type
+  is the result of applying $\oplus$ to the instantiation result
+  (instance) types of $\ecoremoduletype$ and $\ecoremoduletype'$.
+\end{itemize}
+
+\subsection{Core Definition Types}
+
+Any core definition type elaborates to a $\ecoredeftype$ with
+the following abstract syntax:
+
+\begin{sum-production}{ecoredeftype}
+  \core:functype \alt
+  \ecoremoduletype
+\end{sum-production}
