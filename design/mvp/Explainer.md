@@ -1408,8 +1408,8 @@ broken using an auxiliary module performing `call_indirect`.
 In addition to the `lift` and `lower` canonical function definitions which
 adapt *existing* functions, there are also a set of canonical "built-ins" that
 define core functions out of nothing that can be imported by core modules to
-dynamically interact with Canonical ABI entities like resources and
-[tasks][Future and Stream Types] 🔀.
+dynamically interact with Canonical ABI entities like resources,
+[tasks, subtasks, waitable sets, streams and futures](Async.md).
 ```ebnf
 canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
@@ -3045,7 +3045,7 @@ For some use-case-focused, worked examples, see:
 [Task]: Async.md#task
 [Current Task]: Async.md#current-task
 [Context-Local Storage]: Async.md#context-local-storage
-[Subtask]: Async.md#subtask
+[Subtask]: Async.md#structured-concurrency
 [Stream or Future]: Async.md#streams-and-futures
 [Readable and Writable Ends]: Async.md#streams-and-futures
 [Readable or Writable End]: Async.md#streams-and-futures
