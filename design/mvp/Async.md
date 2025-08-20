@@ -369,11 +369,8 @@ example, given `f` and `g` with types:
 f: func(x: whatever) -> stream<T>;
 g: func(s: stream<T>) -> stuff;
 ```
-`g(f(x))` works as you might hope, concurrently streaming `x` into `f` which
-concurrently streams its results into `g`. If `f` has an error, it can close
-its returned `stream<T>` with an [`error-context`](Explainer.md#error-context-type)
-value which `g` will receive along with the notification that its readable
-stream was closed.
+Given this, `g(f(x))` works as you might hope, concurrently streaming the
+results of `f` into `g`.
 
 Given the readable or writable end of a stream, core wasm code can call the
 imported `stream.read` or `stream.write` canonical built-ins, resp., passing the
