@@ -1345,9 +1345,7 @@ type. For example, with Core WebAssembly [exception-handling] and
 an `i32`, throw, suspend or trap. In contrast, a component function with type
 `(func (result string))` may only return a `string` or trap. To express
 failure, component functions can return `result` and languages with exception
-handling can bind exceptions to the `error` case. Similarly, the forthcoming
-addition of [future and stream types] would explicitly declare patterns of
-stack-switching in component function signatures.
+handling can bind exceptions to the `error` case.
 
 Similar to the `import` and `alias` abbreviations shown above, `canon`
 definitions can also be written in an inverted form that puts the sort first:
