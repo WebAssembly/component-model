@@ -465,11 +465,6 @@ call the [`backpressure.set`] built-in to set a component-instance-wide
 "backpressure" flag that causes subsequent export calls to immediately return
 in the "starting" state without calling the component's Core WebAssembly code.
 
-Once task enables backpressure, it can [wait](#waiting) for existing tasks to
-finish and release their associated resources. Thus, a task can choose to
-[wait](#waiting) with or without backpressure enabled, depending on whether it
-wants to accept new accept new export calls while waiting or not.
-
 See the [`canon_backpressure_set`] function and [`Task.enter`] method in the
 Canonical ABI explainer for the setting and implementation of backpressure.
 
