@@ -214,7 +214,7 @@ label'        ::= len:<u32> l:<label>                     => l    (if len = |l|)
 valtype       ::= i:<typeidx>                             => i
                 | pvt:<primvaltype>                       => pvt
 resourcetype  ::= 0x3f 0x7f f?:<funcidx>?                 => (resource (rep i32) (dtor f)?)
-                | 0x3e 0x7f f:<funcidx> cb?:<funcidx>?    => (resource (rep i32) (dtor async f (callback cb)?))
+                | 0x3e 0x7f f:<funcidx> cb?:<funcidx>?    => (resource (rep i32) (dtor async f (callback cb)?)) 🚝
 functype      ::= 0x40 ps:<paramlist> rs:<resultlist>     => (func ps rs)
 paramlist     ::= lt*:vec(<labelvaltype>)                 => (param lt)*
 resultlist    ::= 0x00 t:<valtype>                        => (result t)
@@ -288,7 +288,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x01 0x00 f:<funcidx> opts:<opts>                   => (canon lower f opts (core func))
            | 0x02 rt:<typeidx>                                   => (canon resource.new rt (core func))
            | 0x03 rt:<typeidx>                                   => (canon resource.drop rt (core func))
-           | 0x07 rt:<typeidx>                                   => (canon resource.drop rt async (core func)) 🔀
+           | 0x07 rt:<typeidx>                                   => (canon resource.drop rt async (core func)) 🚝
            | 0x04 rt:<typeidx>                                   => (canon resource.rep rt (core func))
            | 0x08                                                => (canon backpressure.set (core func)) 🔀
            | 0x09 rs:<resultlist> opts:<opts>                    => (canon task.return rs opts (core func)) 🔀

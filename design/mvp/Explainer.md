@@ -566,7 +566,8 @@ defvaltype    ::= bool
                 | (future <typeidx>?) 🔀
 valtype       ::= <typeidx>
                 | <defvaltype>
-resourcetype  ::= (resource (rep i32) (dtor async? <funcidx> (callback <funcidx>)?)?)
+resourcetype  ::= (resource (rep i32) (dtor <funcidx>)?)
+                | (resource (rep i32) (dtor async <funcidx> (callback <funcidx>)?)?) 🚝
 functype      ::= (func (param "<label>" <valtype>)* (result <valtype>)?)
 componenttype ::= (component <componentdecl>*)
 instancetype  ::= (instance <instancedecl>*)
@@ -1411,7 +1412,8 @@ dynamically interact with Canonical ABI entities like resources,
 ```ebnf
 canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
-        | (canon resource.drop <typeidx> async? (core func <id>?))
+        | (canon resource.drop <typeidx> (core func <id>?))
+        | (canon resource.drop <typeidx> async (core func <id>?)) 🚝
         | (canon resource.rep <typeidx> (core func <id>?))
         | (canon context.get <valtype> <u32> (core func <id>?)) 🔀
         | (canon context.set <valtype> <u32> (core func <id>?)) 🔀
@@ -1478,7 +1480,7 @@ When the `async` immediate is false:
 | Approximate WIT signature  | `func<T>(t: T)`                    |
 | Canonical ABI signature    | `[t:i32] -> []`                    |
 
-When the `async` immediate is true:
+🚝 When the `async` immediate is true:
 
 | Synopsis                   |                                    |
 | -------------------------- | ---------------------------------- |
