@@ -3,9 +3,9 @@
 This document defines the Canonical ABI used to convert between the values and
 functions of components in the Component Model and the values and functions
 of modules in Core WebAssembly. See the [AST explainer](Explainer.md) for a
-walkthrough of the static structure of a component and the
-[async explainer](Async.md) for a high-level description of the async model
-being specified here.
+walkthrough of the static structure of a component and the [concurrency
+explainer] for a high-level description of the concurrency model being
+specified here.
 
 * [Introduction](#introduction)
 * [Embedding](#embedding)
@@ -16,7 +16,6 @@ being specified here.
     * [Component Instance State](#component-instance-state)
     * [Table State](#table-state)
     * [Resource State](#resource-state)
-    * [Context-Local Storage](#context-local-storage)
     * [Thread State](#thread-state)
     * [Waitable State](#waitable-state)
     * [Task State](#task-state)
@@ -46,7 +45,6 @@ being specified here.
   * [`canon backpressure.set`](#-canon-backpressureset) 🔀
   * [`canon task.return`](#-canon-taskreturn) 🔀
   * [`canon task.cancel`](#-canon-taskcancel) 🔀
-  * [`canon yield`](#-canon-yield) 🔀
   * [`canon waitable-set.new`](#-canon-waitable-setnew) 🔀
   * [`canon waitable-set.wait`](#-canon-waitable-setwait) 🔀
   * [`canon waitable-set.poll`](#-canon-waitable-setpoll) 🔀
@@ -59,12 +57,19 @@ being specified here.
   * [`canon future.{read,write}`](#-canon-futurereadwrite) 🔀
   * [`canon {stream,future}.cancel-{read,write}`](#-canon-streamfuturecancel-readwrite) 🔀
   * [`canon {stream,future}.drop-{readable,writable}`](#-canon-streamfuturedrop-readablewritable) 🔀
+  * [`canon thread.index`](#-canon-threadindex) 🧵
+  * [`canon thread.new_indirect`](#-canon-threadnew_indirect) 🧵
+  * [`canon thread.switch-to`](#-canon-threadswitch-to) 🧵
+  * [`canon thread.suspend`](#-canon-threadsuspend) 🧵
+  * [`canon thread.resume-later`](#-canon-threadresume-later) 🧵
+  * [`canon thread.yield-to`](#-canon-threadyield-to) 🧵
+  * [`canon thread.yield`](#-canon-threadyield) 🧵
+  * [`canon thread.spawn_ref`](#-canon-threadspawn_ref) 🧵②
+  * [`canon thread.spawn_indirect`](#-canon-threadspawn_indirect) 🧵②
+  * [`canon thread.available-parallelism`](#-canon-threadavailable-parallelism) 🧵②
   * [`canon error-context.new`](#-canon-error-contextnew) 📝
   * [`canon error-context.debug-message`](#-canon-error-contextdebug-message) 📝
   * [`canon error-context.drop`](#-canon-error-contextdrop) 📝
-  * [`canon thread.spawn_ref`](#-canon-threadspawn_ref) 🧵
-  * [`canon thread.spawn_indirect`](#-canon-threadspawn_indirect) 🧵
-  * [`canon thread.available_parallelism`](#-canon-threadavailable_parallelism) 🧵
 
 ## Introduction
 
@@ -135,22 +140,22 @@ class Store:
         return
 ```
 The `tick` method does not have an analogue in Core WebAssembly and enables
-[native async](Async.md) support in the Component Model. The expectation is
-that the host will interleave calls to `invoke` with calls to `tick`,
-repeatedly calling `tick` until there is no more work to do or the store is
-destroyed. The nondeterministic `random.shuffle` indicates that the embedder is
-allowed to use any algorithm (involving priorities, fairness, etc) to choose
-which thread to schedule next (and hopefully an algorithm more efficient than
-the simple polling loop written above). The `Thread.ready` and `Thread.resume`
+native concurrency support in the Component Model. The expectation is that
+the host will interleave calls to `invoke` with calls to `tick`, repeatedly
+calling `tick` until there is no more work to do or the store is destroyed.
+The nondeterministic `random.shuffle` indicates that the embedder is allowed
+to use any algorithm (involving priorities, fairness, etc) to choose which
+thread to schedule next (and hopefully an algorithm more efficient than the
+simple polling loop written above). The `Thread.ready` and `Thread.resume`
 methods along with how the `pending` list is populated are all defined
 [below](#thread-state) as part of the `Thread` class.
 
 The `FuncInst` passed to `Store.invoke` is defined to take 3 parameters:
 * an optional `caller` `Supertask` which is used to maintain the
-  [async callstack](Async.md#structured-concurrency) and enforce the
+  [async callstack][Structured Concurrency] and enforce the
   non-reentrance [component invariant];
 * an `OnStart` callback that is called by a `FuncInst` to receive its arguments
-  after waiting on any [backpressure](Async.md#backpressure);
+  after waiting on any [backpressure];
 * an `OnResolve` callback that is called by a `FuncInst` with either a list
   of return values or, if cancellation has been requested, `None`.
 
@@ -179,10 +184,10 @@ passing `None` and/or skipping the call to `OnStart`).
 
 If the `FuncInst` calls `OnResolve` before returning; the returned `Call`
 object is somewhat vestigial since `request_cancellation` cannot be called.
-However, as described in the [async explainer](Async.md#structured-concurrency),
-an async call's `Thread` can keep executing after calling `OnResolve`; there's
-just nothing (currently) that the caller can know or do about it (hence there
-are currently no other methods on `Call`).
+However, as described in the [concurrency explainer], an async call's
+`Thread` can keep executing after calling `OnResolve`; there's just nothing
+(currently) that the caller can know or do about it (hence there are
+currently no other methods on `Call`).
 
 
 ## Supporting definitions
@@ -412,34 +417,9 @@ class ResourceType(Type):
 ```
 
 
-#### Context-Local Storage
-
-The `ContextLocalStorage` class implements [context-local storage], with each
-new `Task` getting a fresh, zero-initialized `ContextLocalStorage` that can be
-accessed by core wasm code using `canon context.{get,set}`. (In the future,
-when threads are integrated, each `thread.spawn`ed thread would also get a
-fresh, zero-initialized `ContextLocalStorage`.)
-```python
-class ContextLocalStorage:
-  LENGTH = 1
-  array: list[int]
-
-  def __init__(self):
-    self.array = [0] * ContextLocalStorage.LENGTH
-
-  def set(self, i, v):
-    assert(types_match_values(['i32'], [v]))
-    self.array[i] = v
-
-  def get(self, i):
-    return self.array[i]
-```
-`LENGTH` is currently set to `1`, but the plan is to increase it to `2` once
-toolchains are ready to migrate the linear-memory-stack pointer from a
-`global` to context-local storage as part of implementing threads.
-
-
 #### Thread State
+
+TODO: reword ... "[current thread]"
 
 The `Thread` class provides a set of primitive `suspend` and `resume`
 operations that are used by the rest of the Canonical ABI definitions to
@@ -478,6 +458,10 @@ class Thread:
   cancellable: bool
   cancelled: bool
   in_event_loop: bool
+  index: Optional[int]
+  context: list[int]
+
+  CONTEXT_LENGTH = 2
 
   def running(self):
     return self.parent_lock is not None
@@ -508,12 +492,16 @@ immediately blocked `acquire()`ing `fiber_lock` (which will be `release()`ed by
     self.cancellable = False
     self.cancelled = False
     self.in_event_loop = False
+    self.index = None
+    self.context = [0] * Thread.CONTEXT_LENGTH
     def fiber_func():
       self.fiber_lock.acquire()
       assert(self.running())
-      thread_func()
+      thread_func(self)
       assert(self.running())
       self.task.thread_stop(self)
+      if self.index is not None:
+        self.task.inst.table.remove(self.index)
       self.parent_lock.release()
     self.fiber = threading.Thread(target = fiber_func)
     self.fiber.start()
@@ -524,7 +512,7 @@ immediately blocked `acquire()`ing `fiber_lock` (which will be `release()`ed by
 and unregister themselves (via `thread_stop`) when they exit. This registration
 is used for delivering cancellation requests sent to the `Task` by the caller
 (via `Task.request_cancellation`) as well as enforcing Canonical ABI rules
-when the last (and currently only) `Thread` in a `Task` exits.
+when the last `Thread` in a `Task` exits.
 
 Once a `Thread` is created, it will only start `running` when `Thread.resume`
 is called. Once a thread is `running` it can then be `suspended` again by
@@ -548,6 +536,10 @@ complementarily using `parent_lock` and `fiber_lock` as follows:
 ```python
   def resume(self, cancel = False):
     assert(not self.running() and not self.cancelled)
+    if self.ready_func:
+      assert(cancel or self.ready_func())
+      self.ready_func = None
+      self.task.inst.store.pending.remove(self)
     assert(self.cancellable or not cancel)
     self.cancelled = cancel
     self.parent_lock = threading.Lock()
@@ -570,6 +562,15 @@ complementarily using `parent_lock` and `fiber_lock` as follows:
     return completed
 ```
 
+TODO
+```python
+  def resume_later(self, other: Thread):
+    assert(self.running() and other.suspended())
+    other.ready_func = lambda: True
+    other.task.inst.store.pending.append(other)
+```
+
+TODO
 A `Thread` can also suspend until an arbitrary condition (evaluated by the
 given boolean-valued `ready_func`) is satisfied. This method is used when a
 component needs to wait on some external event (in the host, another component,
@@ -581,11 +582,7 @@ or a set of both):
       return True
     self.ready_func = ready_func
     self.task.inst.store.pending.append(self)
-    completed = self.suspend(cancellable)
-    assert(cancellable or ready_func())
-    self.ready_func = None
-    self.task.inst.store.pending.remove(self)
-    return completed
+    return self.suspend(cancellable)
 ```
 By adding the current `Thread` to the `Store.pending` list, `suspend_until`
 ensures that the `ready_func` is repeatedly polled by `Store.tick` until it
@@ -602,14 +599,41 @@ which `suspend_until`s a condition that's already met (e.g. in the case of
 `yield`), the embedder can use scheduling heuristics to decide whether to
 consider the call `BLOCKED` or keep going.
 
+TODO
+```python
+  def switch_to(self, cancellable, other: Thread) -> bool:
+    assert(self.running() and other.suspended())
+    assert(not self.cancellable)
+    self.cancellable = cancellable
+    assert(self.parent_lock and not other.parent_lock)
+    other.parent_lock = self.parent_lock
+    self.parent_lock = None
+    assert(not self.running() and other.running())
+    other.fiber_lock.release()
+    self.fiber_lock.acquire()
+    assert(self.running())
+    self.cancellable = False
+    completed = not self.cancelled
+    self.cancelled = False
+    return completed
+```
+
+TODO
+```python
+  def yield_to(self, cancellable, other: Thread) -> bool:
+    assert(not self.ready_func)
+    self.ready_func = lambda: True
+    self.task.inst.store.pending.append(self)
+    return self.switch_to(cancellable, other)
+```
+
 
 #### Waitable State
 
 A "waitable" is a concurrent activity that can be waited on by the built-ins
 `waitable-set.wait` and `waitable-set.poll`. Currently, there are 5 different
-kinds of waitables: [subtasks](Async.md#structured-concurrency)
-and the 4 combinations of the [readable and writable ends of futures and
-streams](Async.md#streams-and-futures).
+kinds of waitables: [subtasks] and the 4 combinations of the [readable and
+writable ends] of futures and streams.
 
 Waitables deliver "events" which are values of the following `EventTuple` type.
 The two `int` "payload" fields of `EventTuple` store core wasm `i32`s and are
@@ -725,6 +749,9 @@ priorities); runtimes do not have to literally randomize event delivery.
 
 #### Task State
 
+TODO: reword
+TODO: maybe explain `assert(thread in self.threads and thread.task is self)`
+
 A "task" is created for each call to a component export and is implicitly
 threaded through all core function calls as the "[current task]". Tasks are
 represented by objects of the `Task` class which are created by the
@@ -749,8 +776,7 @@ class Task(Call, Supertask):
   supertask: Optional[Task]
   on_resolve: OnResolve
   num_borrows: int
-  thread: Optional[Thread]
-  context: ContextLocalStorage
+  threads: list[Thread]
 
   def __init__(self, opts, inst, ft, supertask, on_resolve):
     self.state = Task.State.INITIAL
@@ -760,8 +786,7 @@ class Task(Call, Supertask):
     self.supertask = supertask
     self.on_resolve = on_resolve
     self.num_borrows = 0
-    self.thread = None
-    self.context = ContextLocalStorage()
+    self.threads = []
 ```
 
 The `Task.trap_if_on_the_stack` method checks for unintended reentrance,
@@ -772,9 +797,9 @@ between the deadlock-hazardous kind of reentrance (where the new task is a
 transitive subtask of a task already running in the same component instance)
 and the normal kind of async reentrance (where the new task is just a sibling
 of any existing tasks running in the component instance). Note that, in the
-[future](Async.md#TODO), there will be a way for a function to opt in (via
-function type attribute) to the hazardous kind of reentrance, which will nuance
-this test.
+[future](Concurrency.md#TODO), there will be a way for a function to opt in
+(via function type attribute) to the hazardous kind of reentrance, which will
+nuance this test.
 ```python
   def trap_if_on_the_stack(self, inst):
     c = self.supertask
@@ -825,12 +850,13 @@ backpressure is disabled. There are three sources of backpressure:
     by new tasks.
 
 ```python
-  def enter(self):
+  def enter(self, thread):
+    assert(thread in self.threads and thread.task is self)
     def has_backpressure():
       return self.inst.backpressure or (self.needs_exclusive() and self.inst.exclusive)
     if has_backpressure() or self.inst.num_waiting_to_enter > 0:
       self.inst.num_waiting_to_enter += 1
-      completed = self.thread.suspend_until(lambda: not has_backpressure(), cancellable = True)
+      completed = thread.suspend_until(lambda: not has_backpressure(), cancellable = True)
       self.inst.num_waiting_to_enter -= 1
       if not completed:
         self.cancel()
@@ -841,9 +867,10 @@ backpressure is disabled. There are three sources of backpressure:
     return True
 ```
 Since the order in which suspended threads are resumed is nondeterministic (see
-`Store.tick` above), once `Task.enter` suspends due to backpressure, the above
-definition allows the host to arbitrarily select which tasks to resume in which
-order. Additionally, the above definition ensures the following properties:
+`Store.tick` above), once `Task.enter` suspends the [current thread] due to
+backpressure, the above definition allows the host to arbitrarily select which
+threads to resume in which order. Additionally, the above definition ensures
+the following properties:
 * While a callee is waiting to `enter`, if the caller requests cancellation,
   the callee is immediately cancelled.
 * When backpressure is disabled then reenabled, no new tasks start, even
@@ -851,6 +878,7 @@ order. Additionally, the above definition ensures the following properties:
   backpressure (i.e., disabling backpressure never unleashes an unstoppable
   thundering heard of pending tasks).
 
+TODO
 The `Task.request_cancellation` method is called by the host or wasm caller
 (via the `Call` interface of `Task`) to signal that they don't need the return
 value and that the caller should hurry up and call the `OnResolve` callback. If
@@ -864,11 +892,13 @@ be delivered in the future by `Task.wait_until` (defined next).
 ```python
   def request_cancellation(self):
     assert(self.state == Task.State.INITIAL)
-    if self.thread.cancellable and not (self.thread.in_event_loop and self.inst.exclusive):
-      self.state = Task.State.CANCEL_DELIVERED
-      self.thread.resume(cancel = True)
-    else:
-      self.state = Task.State.PENDING_CANCEL
+    random.shuffle(self.threads)
+    for thread in self.threads:
+      if thread.cancellable and not (thread.in_event_loop and self.inst.exclusive):
+        self.state = Task.State.CANCEL_DELIVERED
+        thread.resume(cancel = True)
+        return
+    self.state = Task.State.PENDING_CANCEL
 ```
 `in_event_loop` is set by the `async callback` event loop (in `canon_lift`,
 defined below) every time the event loop suspends the thread and is used here
@@ -880,14 +910,23 @@ loop, which sets `cancellable`) but it cannot be resumed until the second task
 returns to its event loop (since `async callback` wasm code is non-reentrant
 and `needs_exclusive`).
 
+TODO
+```python
+  def deliver_pending_cancel(self, cancellable) -> bool:
+    if cancellable and self.state == Task.State.PENDING_CANCEL:
+      self.state = Task.State.CANCEL_DELIVERED
+      return True
+    return False
+```
+
 The `Task.suspend_until` method wraps `Thread.suspend_until` to deliver any
 pending cancellation set by `Task.request_cancellation`:
 ```python
-  def suspend_until(self, ready_func, cancellable) -> bool:
-    if cancellable and self.state == Task.State.PENDING_CANCEL:
-      self.state = Task.State.CANCEL_DELIVERED
+  def suspend_until(self, ready_func, thread, cancellable) -> bool:
+    assert(thread in self.threads and thread.task is self)
+    if self.deliver_pending_cancel(cancellable):
       return False
-    return self.thread.suspend_until(ready_func, cancellable)
+    return thread.suspend_until(ready_func, cancellable)
 ```
 
 The `Task.wait_until` method is called by `waitable-set.wait` or from the event
@@ -898,11 +937,12 @@ the `WaitableSet.num_waiting` counter is kept above `0` so that
 `waitable-set.drop` will trap if another task tries to drop the waitable set
 being used.
 ```python
-  def wait_until(self, ready_func, wset, cancellable) -> EventTuple:
+  def wait_until(self, ready_func, thread, wset, cancellable) -> EventTuple:
+    assert(thread in self.threads and thread.task is self)
     wset.num_waiting += 1
     def ready_and_has_event():
       return ready_func() and wset.has_pending_event()
-    if not self.suspend_until(ready_and_has_event, cancellable):
+    if not self.suspend_until(ready_and_has_event, thread, cancellable):
       event = (EventCode.TASK_CANCELLED, 0, 0)
     else:
       event = wset.get_pending_event()
@@ -917,9 +957,10 @@ have a pending event, returning `EventCode.NONE` if there is none already.
 However, `poll_until` *does* call `suspsend_until` to allow the runtime to
 nondeterministically switch to another task (or not).
 ```python
-  def poll_until(self, ready_func, wset, cancellable) -> Optional[EventTuple]:
+  def poll_until(self, ready_func, thread, wset, cancellable) -> Optional[EventTuple]:
+    assert(thread in self.threads and thread.task is self)
     wset.num_waiting += 1
-    if not self.suspend_until(ready_func, cancellable):
+    if not self.suspend_until(ready_func, thread, cancellable):
       event = (EventCode.TASK_CANCELLED, 0, 0)
     elif wset.has_pending_event():
       event = wset.get_pending_event()
@@ -934,11 +975,33 @@ event loop of an `async callback` function when `CallbackCode.YIELD` is
 returned. `yield_until` works like `poll_until` if given a fresh empty waitable
 set.
 ```python
-  def yield_until(self, ready_func, cancellable) -> EventTuple:
-    if not self.suspend_until(ready_func, cancellable):
+  def yield_until(self, ready_func, thread, cancellable) -> EventTuple:
+    assert(thread in self.threads and thread.task is self)
+    if not self.suspend_until(ready_func, thread, cancellable):
       return (EventCode.TASK_CANCELLED, 0, 0)
     else:
       return (EventCode.NONE, 0, 0)
+```
+
+TODO: only called by `thread.*` built-ins, so no "until" ready func
+```python
+  def suspend(self, thread, cancellable) -> bool:
+    assert(thread in self.threads and thread.task is self)
+    if self.deliver_pending_cancel(cancellable):
+      return False
+    return thread.suspend(cancellable)
+
+  def switch_to(self, thread, cancellable, other_thread) -> bool:
+    assert(thread in self.threads and thread.task is self)
+    if self.deliver_pending_cancel(cancellable):
+      return False
+    return thread.switch_to(cancellable, other_thread)
+
+  def yield_to(self, thread, cancellable, other_thread) -> bool:
+    assert(thread in self.threads and thread.task is self)
+    if self.deliver_pending_cancel(cancellable):
+      return False
+    return thread.yield_to(cancellable, other_thread)
 ```
 
 The `Task.return_` method is called by either `canon_task_return` or
@@ -977,26 +1040,28 @@ the `exclusive` flag set by `Task.enter`, allowing other `needs_exclusive`
 tasks to start or make progress.
 ```python
   def exit(self):
-    assert(self.thread is not None)
+    assert(len(self.threads) > 0)
     if self.needs_exclusive():
       assert(self.inst.exclusive)
       self.inst.exclusive = False
 ```
 
+TODO
 Lastly, the `Task.thread_start` and `Task.thread_stop` functions are called by
 a `Thread` (defined above) to register/unregister itself when it starts/stops.
-When a `Task`'s final (and, currently, only) `Thread` returns, the `trap_if`
+When a `Task`'s final `Thread` returns, the `trap_if`
 guards that the task has upheld its contract to call `OnResolve`.
 ```python
   def thread_start(self, thread):
-    assert(self.thread is None and thread.task is self)
-    self.thread = thread
+    assert(thread not in self.threads and thread.task is self)
+    self.threads.append(thread)
 
   def thread_stop(self, thread):
-    assert(thread is self.thread and thread.task is self)
-    self.thread = None
-    trap_if(self.state != Task.State.RESOLVED)
-    assert(self.num_borrows == 0)
+    assert(thread in self.threads and thread.task is self)
+    self.threads.remove(thread)
+    if len(self.threads) == 0:
+      trap_if(self.state != Task.State.RESOLVED)
+      assert(self.num_borrows == 0)
 ```
 
 
@@ -1031,7 +1096,7 @@ class Subtask(Waitable):
 ```
 
 The `state` field of `Subtask` tracks the callee's progression from the initial
-[`STARTING`](Async.md#backpressure) state along the [subtask state machine].
+[`STARTING`][Backpressure] state along the [subtask state machine].
 A `Subtask` is considered "resolved" if it has returned a value or if, after
 having had cancellation requested by the caller, called `task.cancel` (either
 before or after calling `OnStart`):
@@ -1198,15 +1263,15 @@ and lowering and defined below.
 
 Values of `stream` type are represented in the Canonical ABI as `i32` indices
 into the current component instance's table referring to either the
-[readable or writable end](Async.md#streams-and-futures) of a stream. Reading
-from the readable end of a stream is achieved by calling `stream.read` and
-supplying a `WritableBuffer`. Conversely, writing to the writable end of a
-stream is achieved by calling `stream.write` and supplying a `ReadableBuffer`.
-The runtime waits until both a readable and writable buffer have been supplied
-and then performs a direct copy between the two buffers. This rendezvous-based
-design avoids the need for an intermediate buffer and copy (unlike, e.g., a
-Unix pipe; a Unix pipe would instead be implemented as a resource type owning
-the buffer memory and *two* streams; on going in and one coming out).
+[readable or writable end] of a stream. Reading from the readable end of a
+stream is achieved by calling `stream.read` and supplying a `WritableBuffer`.
+Conversely, writing to the writable end of a stream is achieved by calling
+`stream.write` and supplying a `ReadableBuffer`. The runtime waits until both
+a readable and writable buffer have been supplied and then performs a direct
+copy between the two buffers. This rendezvous-based design avoids the need
+for an intermediate buffer and copy (unlike, e.g., a Unix pipe; a Unix pipe
+would instead be implemented as a resource type owning the buffer memory and
+*two* streams; on going in and one coming out).
 
 The result of a `{stream,future}.{read,write}` is communicated to the wasm
 guest via a `CopyResult` code:
@@ -2998,8 +3063,7 @@ present, is validated as such:
 * `post-return` - only allowed on [`canon lift`](#canon-lift), which has rules
   for validation
 * 🔀 `async` - cannot be present with `post-return`
-* 🔀,not(🚟) `async` - `callback` must also be present. Note that with the 🚟
-  feature (the "stackful" ABI), this restriction is lifted.
+* 🔀,not(🧵) `async` - `callback` must also be present
 * 🔀 `callback` - the function has type `(func (param i32 i32 i32) (result i32))`
   and cannot be present without `async` and is only allowed with
   [`canon lift`](#canon-lift)
@@ -3052,9 +3116,12 @@ a `lift`ed function starts executing:
 def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
   task = Task(opts, inst, ft, caller, on_resolve)
   task.trap_if_on_the_stack(inst)
-  def thread_func():
-    if not task.enter():
+  def thread_func(thread):
+    if not task.enter(thread):
       return
+
+    assert(thread.index is None)
+    thread.index = thread.task.inst.table.add(thread)
 
     cx = LiftLowerContext(opts, inst, task)
     args = on_start()
@@ -3073,7 +3140,8 @@ resolved. If the caller cancels the new `Task` while the `Task` is still
 waiting to `enter`, the call is aborted before the arguments are lowered (which
 means that owned-handle arguments are not transferred).
 
-Once the backpressure gate is cleared, the arguments are lowered into core wasm
+Once the backpressure gate is cleared, TODO (`thread.index`)
+... the arguments are lowered into core wasm
 values and memory according to the `canonopt` immediates of `canon lift` (as
 defined by `lower_flat_values` above).
 
@@ -3089,13 +3157,13 @@ synchronous functions cannot overlap execution; attempts by callers to make
 overlapping calls will result in backpressure in `Task.enter`.
 ```python
     if opts.sync:
-      flat_results = call_and_trap_on_throw(callee, task, flat_args)
+      flat_results = call_and_trap_on_throw(callee, thread, flat_args)
       assert(types_match_values(flat_ft.results, flat_results))
       result = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_type())
       task.return_(result)
       if opts.post_return is not None:
         inst.may_leave = False
-        [] = call_and_trap_on_throw(opts.post_return, task, flat_results)
+        [] = call_and_trap_on_throw(opts.post_return, thread, flat_results)
         inst.may_leave = True
       task.exit()
       return
@@ -3110,8 +3178,7 @@ In both of the `async` cases below (with or without `callback`), the
 `task.return` built-in must be called, providing the return value as core wasm
 *parameters* to the `task.return` built-in (rather than as core function
 results as in the synchronous case). If `task.return` is *not* called by the
-time the `Task`'s last (and, currently, only) `Thread` exits, there is a trap
-(in `Task.thread_stop`).
+time the `Task`'s last `Thread` exits, there is a trap (in `Task.thread_stop`).
 
 In the `async` non-`callback` ("stackful async") case, there is a single call
 to the core wasm callee which must return empty core results. Waiting for async
@@ -3124,7 +3191,7 @@ do not prevent other stackful async calls from starting or progressing in the
 same component instance.
 ```python
     if not opts.callback:
-      [] = call_and_trap_on_throw(callee, task, flat_args)
+      [] = call_and_trap_on_throw(callee, thread, flat_args)
       assert(types_match_values(flat_ft.results, []))
       task.exit()
       return
@@ -3135,26 +3202,26 @@ first calling the core wasm callee and then repeatedly calling the `callback`
 function (specified as a `funcidx` immediate in `canon lift`) until the
 `EXIT` code (`0`) is returned:
 ```python
-    [packed] = call_and_trap_on_throw(callee, task, flat_args)
+    [packed] = call_and_trap_on_throw(callee, thread, flat_args)
     code,si = unpack_callback_result(packed)
     while code != CallbackCode.EXIT:
       thread.in_event_loop = True
       inst.exclusive = False
       match code:
         case CallbackCode.YIELD:
-          event = task.yield_until(lambda: not inst.exclusive, cancellable = True)
+          event = task.yield_until(lambda: not inst.exclusive, thread, cancellable = True)
         case CallbackCode.WAIT:
           wset = inst.table.get(si)
           trap_if(not isinstance(wset, WaitableSet))
-          event = task.wait_until(lambda: not inst.exclusive, wset, cancellable = True)
+          event = task.wait_until(lambda: not inst.exclusive, thread, wset, cancellable = True)
         case CallbackCode.POLL:
           wset = inst.table.get(si)
           trap_if(not isinstance(wset, WaitableSet))
-          event = task.poll_until(lambda: not inst.exclusive, wset, cancellable = True)
+          event = task.poll_until(lambda: not inst.exclusive, thread, wset, cancellable = True)
       thread.in_event_loop = False
       inst.exclusive = True
       event_code, p1, p2 = event
-      [packed] = call_and_trap_on_throw(opts.callback, task, [event_code, p1, p2])
+      [packed] = call_and_trap_on_throw(opts.callback, thread, [event_code, p1, p2])
       code,si = unpack_callback_result(packed)
     task.exit()
     return
@@ -3184,8 +3251,8 @@ caller. If `thread_func` and the core wasm `callee` return a value (by calling
 the `OnResolve` callback) before blocking, the call will complete synchronously
 even for `async` callers. Note that if an `async` callee calls `OnResolve` and
 *then* blocks, the caller will see the call complete synchronously even though
-the callee is still running concurrently in the `Thread` created here (see the
-[Async Explainer](Async.md#structured-concurrency) for more on this).
+the callee is still running concurrently in the `Thread` created here (see
+the [concurrency explainer] for more on this).
 ```python
   thread = Thread(task, thread_func)
   thread.resume()
@@ -3221,9 +3288,9 @@ boundaries. Thus, if a component wishes to signal an error, it must use some
 sort of explicit type such as `result` (whose `error` case particular language
 bindings may choose to map to and from exceptions):
 ```python
-def call_and_trap_on_throw(callee, task, args):
+def call_and_trap_on_throw(callee, thread, args):
   try:
-    return callee(task, args)
+    return callee(thread, args)
   except CoreWebAssemblyException:
     trap()
 ```
@@ -3249,15 +3316,15 @@ validation is performed where `$callee` has type `$ft`:
 When instantiating component instance `$inst`, `$f` is defined to be the
 partially-bound closure `canon_lower($opts, $ft, $callee)` which has two
 remaining arguments passed at runtime:
-* `task`, the [current task]
+* `thread`, the [current thread]
 * `flat_args`, a list of core wasm values passed by the caller
 
 Based on this, `canon_lower` is defined in chunks as follows:
 ```python
-def canon_lower(opts, ft, callee: FuncInst, task, flat_args):
-  trap_if(not task.inst.may_leave)
+def canon_lower(opts, ft, callee: FuncInst, thread, flat_args):
+  trap_if(not thread.task.inst.may_leave)
   subtask = Subtask()
-  cx = LiftLowerContext(opts, task.inst, subtask)
+  cx = LiftLowerContext(opts, thread.task.inst, subtask)
 ```
 Each call to `canon_lower` creates a new `Subtask`. However, this `Subtask` is
 only added to the current component instance's table (below) if `async` is
@@ -3307,7 +3374,7 @@ above).
       nonlocal flat_results
       flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
 
-  subtask.callee = callee(task, on_start, on_resolve)
+  subtask.callee = callee(thread.task, on_start, on_resolve)
 ```
 The `Subtask.state` field is updated by the callbacks to keep track of the
 call progres. The `on_progress` variable starts as a no-op, but is used by the
@@ -3331,7 +3398,7 @@ use a plain synchronous function call instead, as expected.
 ```python
   if opts.sync:
     if not subtask.resolved():
-      task.thread.suspend_until(subtask.resolved)
+      thread.suspend_until(subtask.resolved)
     assert(types_match_values(flat_ft.results, flat_results))
     subtask.deliver_resolve()
     return flat_results
@@ -3356,7 +3423,7 @@ argument memory can be reused, but the result buffer has to be kept reserved.
       subtask.deliver_resolve()
       return [Subtask.State.RETURNED]
     else:
-      subtaski = task.inst.table.add(subtask)
+      subtaski = thread.task.inst.table.add(subtask)
       def on_progress():
         def subtask_event():
           if subtask.resolved():
@@ -3394,10 +3461,10 @@ Calling `$f` invokes the following function, which adds an owning handle
 containing the given resource representation to the current component
 instance's table:
 ```python
-def canon_resource_new(rt, task, rep):
-  trap_if(not task.inst.may_leave)
+def canon_resource_new(rt, thread, rep):
+  trap_if(not thread.task.inst.may_leave)
   h = ResourceHandle(rt, rep, own = True)
-  i = task.inst.table.add(h)
+  i = thread.task.inst.table.add(h)
   return [i]
 ```
 
@@ -3411,15 +3478,15 @@ For a canonical definition:
 validation specifies:
 * `$rt` must refer to resource type
 * `$f` is given type `(func (param i32))`
-* 🔀+🚝 - `async` is allowed (otherwise it is not allowed)
+* 🧵 - `async` is allowed (otherwise it is not allowed)
 
 Calling `$f` invokes the following function, which removes the handle from the
 current component instance's table and, if the handle was owning, calls the
 resource's destructor.
 ```python
-def canon_resource_drop(rt, sync, task, i):
-  trap_if(not task.inst.may_leave)
-  inst = task.inst
+def canon_resource_drop(rt, sync, thread, i):
+  inst = thread.task.inst
+  trap_if(not inst.may_leave)
   h = inst.table.remove(i)
   trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not rt)
@@ -3436,9 +3503,9 @@ def canon_resource_drop(rt, sync, task, i):
         callee_opts = CanonicalOptions(sync = rt.dtor_sync, callback = rt.dtor_callback)
         ft = FuncType([U32Type()],[])
         callee = partial(canon_lift, callee_opts, rt.impl, ft, rt.dtor)
-        flat_results = canon_lower(caller_opts, ft, callee, task, [h.rep])
+        flat_results = canon_lower(caller_opts, ft, callee, thread, [h.rep])
       else:
-        task.trap_if_on_the_stack(rt.impl)
+        thread.task.trap_if_on_the_stack(rt.impl)
   else:
     h.borrow_scope.num_borrows -= 1
   return flat_results
@@ -3472,8 +3539,8 @@ validation specifies:
 Calling `$f` invokes the following function, which extracts the resource
 representation from the handle in the current component instance's table:
 ```python
-def canon_resource_rep(rt, task, i):
-  h = task.inst.table.get(i)
+def canon_resource_rep(rt, thread, i):
+  h = thread.task.inst.table.get(i)
   trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not rt)
   return [h.rep]
@@ -3489,17 +3556,17 @@ For a canonical definition:
 (canon context.get $t $i (core func $f))
 ```
 validation specifies:
-* `$t` must be `i32` (for now; see [here][context-local storage])
-* `$i` must be less than `ContextLocalStorage.LENGTH` (`1`)
+* `$t` must be `i32` (for now; see [here][thread-local storage])
+* `$i` must be less than `Thread.CONTEXT_LENGTH` (`2`)
 * `$f` is given type `(func (result i32))`
 
-Calling `$f` invokes the following function, which reads the [context-local
-storage] of the [current task]:
+Calling `$f` invokes the following function, which reads the [thread-local
+storage] of the [current thread]:
 ```python
-def canon_context_get(t, i, task):
+def canon_context_get(t, i, thread):
   assert(t == 'i32')
-  assert(i < ContextLocalStorage.LENGTH)
-  return [task.context.get(i)]
+  assert(i < Thread.CONTEXT_LENGTH)
+  return [thread.context[i]]
 ```
 
 
@@ -3510,17 +3577,17 @@ For a canonical definition:
 (canon context.set $t $i (core func $f))
 ```
 validation specifies:
-* `$t` must be `i32` (for now; see [here][context-local storage])
-* `$i` must be less than `ContextLocalStorage.LENGTH` (`1`)
+* `$t` must be `i32` (for now; see [here][thread-local storage])
+* `$i` must be less than `Thread.CONTEXT_LENGTH` (`2`)
 * `$f` is given type `(func (param $v i32))`
 
-Calling `$f` invokes the following function, which writes to the [context-local
-storage] of the [current task]:
+Calling `$f` invokes the following function, which writes to the [thread-local
+storage] of the [current thread]:
 ```python
-def canon_context_set(t, i, task, v):
+def canon_context_set(t, i, thread, v):
   assert(t == 'i32')
-  assert(i < ContextLocalStorage.LENGTH)
-  task.context.set(i, v)
+  assert(i < Thread.CONTEXT_LENGTH)
+  thread.context[i] = v
   return []
 ```
 
@@ -3538,10 +3605,9 @@ Calling `$f` invokes the following function, which sets or clears the
 `ComponentInstance.backpressure` flag. `Task.enter` waits for this flag to be
 clear before allowing new tasks to start.
 ```python
-def canon_backpressure_set(task, flat_args):
-  trap_if(task.opts.sync)
+def canon_backpressure_set(thread, flat_args):
   assert(len(flat_args) == 1)
-  task.inst.backpressure = bool(flat_args[0])
+  thread.task.inst.backpressure = bool(flat_args[0])
   return []
 ```
 
@@ -3561,9 +3627,10 @@ specifies:
 * [`lift($f.result)` above](#canonopt-validation) defines required options
 
 Calling `$f` invokes the following function which lifts the results from core
-wasm state and passes them to the caller via `Task.return_`:
+wasm state and passes them to the [current task]'s caller via `Task.return_`:
 ```python
-def canon_task_return(task, result_type, opts: LiftOptions, flat_args):
+def canon_task_return(thread, result_type, opts: LiftOptions, flat_args):
+  task = thread.task
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync)
   trap_if(result_type != task.ft.result)
@@ -3609,7 +3676,8 @@ Calling `$f` cancels the [current task], confirming a previous `subtask.cancel`
 request made by a supertask and claiming that all `borrow` handles lent to the
 current task have already been dropped (and trapping in `Task.cancel` if not).
 ```python
-def canon_task_cancel(task):
+def canon_task_cancel(thread):
+  task = thread.task
   trap_if(not task.inst.may_leave)
   trap_if(task.opts.sync)
   task.cancel()
@@ -3624,41 +3692,6 @@ case the callee expects to receive a return value) or if the task has already
 returned a value or already called `task.cancel`.
 
 
-### 🔀 `canon yield`
-
-For a canonical definition:
-```wat
-(canon yield $cancellable? (core func $f))
-```
-validation specifies:
-* `$f` is given type `(func (result i32))`
-* 🚟 - `cancellable` is allowed (otherwise it must be absent)
-
-Calling `$f` invokes the following function which yields execution so that
-others tasks can execute. This allows a long-running computation that is not
-otherwise performing I/O to avoid starving other tasks in a cooperative
-setting.
-```python
-def canon_yield(cancellable, task):
-  trap_if(not task.inst.may_leave)
-  event_code,_,_ = task.yield_until(lambda:True, cancellable)
-  match event_code:
-    case EventCode.NONE:
-      return [0]
-    case EventCode.TASK_CANCELLED:
-      return [1]
-```
-Even though `yield_until` passes `lambda:True` as the condition it is waiting
-for, `yield_until` does transitively peform a `Thread.suspend` which allows
-the embedder to nondeterministically switch to executing another task.
-
-If `cancellable` is set, then `yield` will return whether the supertask has
-already or concurrently requested cancellation. `yield` (and other cancellable
-operations) will only indicate cancellation once and thus, if a caller is not
-prepared to propagate cancellation, they can omit `cancellable` so that
-cancellation is instead delivered at a later `cancellable` call.
-
-
 ### 🔀 `canon waitable-set.new`
 
 For a canonical definition:
@@ -3671,9 +3704,9 @@ validation specifies:
 Calling `$f` invokes the following function, which adds an empty waitable set
 to the current component instance's table:
 ```python
-def canon_waitable_set_new(task):
-  trap_if(not task.inst.may_leave)
-  return [ task.inst.table.add(WaitableSet()) ]
+def canon_waitable_set_new(thread):
+  trap_if(not thread.task.inst.may_leave)
+  return [ thread.task.inst.table.add(WaitableSet()) ]
 ```
 
 
@@ -3685,22 +3718,22 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func (param $si) (param $ptr i32) (result i32))`
-* 🚟 - `cancellable` is allowed (otherwise it must be absent)
+* 🧵 - `cancellable` is allowed (otherwise it must be absent)
 
 Calling `$f` invokes the following function which waits for progress to be made
 on a `Waitable` in the given waitable set (indicated by index `$si`) and then
 returning its `EventCode` and writing the payload values into linear memory:
 ```python
-def canon_waitable_set_wait(cancellable, mem, task, si, ptr):
-  trap_if(not task.inst.may_leave)
-  wset = task.inst.table.get(si)
+def canon_waitable_set_wait(cancellable, mem, thread, si, ptr):
+  trap_if(not thread.task.inst.may_leave)
+  wset = thread.task.inst.table.get(si)
   trap_if(not isinstance(wset, WaitableSet))
-  event = task.wait_until(lambda:True, wset, cancellable)
-  return unpack_event(mem, task, ptr, event)
+  event = thread.task.wait_until(lambda:True, thread, wset, cancellable)
+  return unpack_event(mem, thread, ptr, event)
 
-def unpack_event(mem, task, ptr, e: EventTuple):
+def unpack_event(mem, thread, ptr, e: EventTuple):
   event, p1, p2 = e
-  cx = LiftLowerContext(LiftLowerOptions(memory = mem), task.inst)
+  cx = LiftLowerContext(LiftLowerOptions(memory = mem), thread.task.inst)
   store(cx, p1, U32Type(), ptr)
   store(cx, p2, U32Type(), ptr + 4)
   return [event]
@@ -3724,23 +3757,23 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func (param $si i32) (param $ptr i32) (result i32))`
-* 🚟 - `async` is allowed (otherwise it must be `false`)
+* 🧵 - `async` is allowed (otherwise it must be `false`)
 
 Calling `$f` invokes the following function, which returns `NONE` (`0`) instead
 of blocking if there is no event available, and otherwise returns the event the
 same way as `wait`.
 ```python
-def canon_waitable_set_poll(cancellable, mem, task, si, ptr):
-  trap_if(not task.inst.may_leave)
-  wset = task.inst.table.get(si)
+def canon_waitable_set_poll(cancellable, mem, thread, si, ptr):
+  trap_if(not thread.task.inst.may_leave)
+  wset = thread.task.inst.table.get(si)
   trap_if(not isinstance(wset, WaitableSet))
-  event = task.poll_until(lambda:True, wset, cancellable)
-  return unpack_event(mem, task, ptr, event)
+  event = thread.task.poll_until(lambda:True, thread, wset, cancellable)
+  return unpack_event(mem, thread, ptr, event)
 ```
 Even though `waitable-set.poll` doesn't block until the given waitable set has
 a pending event, `poll_until` does transitively perform a `Thread.suspend`
 which allows the embedder to nondeterministically switch to executing another
-task (like `yield`).
+task (like `thread.yield`).
 
 If `cancellable` is set, then `waitable-set.poll` will return whether the
 supertask has already or concurrently requested cancellation.
@@ -3763,15 +3796,15 @@ Calling `$f` invokes the following function, which removes the indicated
 waitable set from the current component instance's table, performing the guards
 defined by `WaitableSet.drop` above:
 ```python
-def canon_waitable_set_drop(task, i):
-  trap_if(not task.inst.may_leave)
-  wset = task.inst.table.remove(i)
+def canon_waitable_set_drop(thread, i):
+  trap_if(not thread.task.inst.may_leave)
+  wset = thread.task.inst.table.remove(i)
   trap_if(not isinstance(wset, WaitableSet))
   wset.drop()
   return []
 ```
 Note that `WaitableSet.drop` will trap if it is non-empty or there is a
-concurrent `yield`, `waitable-set.wait`, `waitable-set.poll` or `async
+concurrent `thread.yield`, `waitable-set.wait`, `waitable-set.poll` or `async
 callback` currently using this waitable set.
 
 
@@ -3788,14 +3821,14 @@ Calling `$f` invokes the following function which adds the Waitable indicated
 by the index `wi` to the waitable set indicated by the index `si`, removing the
 waitable from any waitable set that it is currently a member of.
 ```python
-def canon_waitable_join(task, wi, si):
-  trap_if(not task.inst.may_leave)
-  w = task.inst.table.get(wi)
+def canon_waitable_join(thread, wi, si):
+  trap_if(not thread.task.inst.may_leave)
+  w = thread.task.inst.table.get(wi)
   trap_if(not isinstance(w, Waitable))
   if si == 0:
     w.join(None)
   else:
-    wset = task.inst.table.get(si)
+    wset = thread.task.inst.table.get(si)
     trap_if(not isinstance(wset, WaitableSet))
     w.join(wset)
   return []
@@ -3815,12 +3848,12 @@ For a canonical definition:
 validation specifies:
 * `$f` is given type `(func (param i32))`
 
-Calling `$f` sends a request to the subtask at the given index to cancel its
-execution ASAP. This request is cooperative and the subtask may take arbitrarily
-long to receive and confirm the request. If the subtask doesn't immediately
-confirm the cancellation request, `subtask.cancel` returns `BLOCKED` and the
-caller must wait for a `SUBTASK` progress update using `waitable-set` methods
-as usual.
+Calling `$f` sends a request to a nondeterministically-chosen thread of the
+subtask at the given index to cancel the subtask ASAP. This request is
+cooperative and the subtask may take arbitrarily long to receive and confirm
+the request. If the subtask doesn't immediately confirm the cancellation
+request, `subtask.cancel` returns `BLOCKED` and the caller must wait for a
+`SUBTASK` progress update using `waitable-set` methods as usual.
 
 When cancellation is confirmed the supertask will receive the final state of
 the subtask which is one of:
@@ -3836,9 +3869,9 @@ the event payload of a future `SUBTASK` event.
 ```python
 BLOCKED = 0xffff_ffff
 
-def canon_subtask_cancel(sync, task, i):
-  trap_if(not task.inst.may_leave)
-  subtask = task.inst.table.get(i)
+def canon_subtask_cancel(sync, thread, i):
+  trap_if(not thread.task.inst.may_leave)
+  subtask = thread.task.inst.table.get(i)
   trap_if(not isinstance(subtask, Subtask))
   trap_if(subtask.resolve_delivered())
   trap_if(subtask.cancellation_requested)
@@ -3849,7 +3882,7 @@ def canon_subtask_cancel(sync, task, i):
     subtask.callee.request_cancellation()
     if not subtask.resolved():
       if sync:
-        task.thread.suspend_until(subtask.resolved)
+        thread.suspend_until(subtask.resolved)
       else:
         return [BLOCKED]
   code,index,payload = subtask.get_pending_event()
@@ -3882,9 +3915,9 @@ Calling `$f` removes the subtask at the given index from the current component
 instance's table, performing the guards and bookkeeping defined by
 `Subtask.drop()`.
 ```python
-def canon_subtask_drop(task, i):
-  trap_if(not task.inst.may_leave)
-  s = task.inst.table.remove(i)
+def canon_subtask_drop(thread, i):
+  trap_if(not thread.task.inst.may_leave)
+  s = thread.task.inst.table.remove(i)
   trap_if(not isinstance(s, Subtask))
   s.drop()
   return []
@@ -3910,18 +3943,18 @@ writable end. The expectation is that, after calling `{stream,future}.new`, the
 readable end is subsequently transferred to another component (or the host) via
 `stream` or `future` parameter/result type (see `lift_{stream,future}` above).
 ```python
-def canon_stream_new(stream_t, task):
-  trap_if(not task.inst.may_leave)
+def canon_stream_new(stream_t, thread):
+  trap_if(not thread.task.inst.may_leave)
   shared = SharedStreamImpl(stream_t.t)
-  ri = task.inst.table.add(ReadableStreamEnd(shared))
-  wi = task.inst.table.add(WritableStreamEnd(shared))
+  ri = thread.task.inst.table.add(ReadableStreamEnd(shared))
+  wi = thread.task.inst.table.add(WritableStreamEnd(shared))
   return [ ri | (wi << 32) ]
 
-def canon_future_new(future_t, task):
-  trap_if(not task.inst.may_leave)
+def canon_future_new(future_t, thread):
+  trap_if(not thread.task.inst.may_leave)
   shared = SharedFutureImpl(future_t.t)
-  ri = task.inst.table.add(ReadableFutureEnd(shared))
-  wi = task.inst.table.add(WritableFutureEnd(shared))
+  ri = thread.task.inst.table.add(ReadableFutureEnd(shared))
+  wi = thread.task.inst.table.add(WritableFutureEnd(shared))
   return [ ri | (wi << 32) ]
 ```
 
@@ -3945,13 +3978,13 @@ specifies:
 The implementation of these built-ins funnels down to a single `stream_copy`
 function that is parameterized by the direction of the copy:
 ```python
-def canon_stream_read(stream_t, opts, task, i, ptr, n):
+def canon_stream_read(stream_t, opts, thread, i, ptr, n):
   return stream_copy(ReadableStreamEnd, WritableBufferGuestImpl, EventCode.STREAM_READ,
-                     stream_t, opts, task, i, ptr, n)
+                     stream_t, opts, thread, i, ptr, n)
 
-def canon_stream_write(stream_t, opts, task, i, ptr, n):
+def canon_stream_write(stream_t, opts, thread, i, ptr, n):
   return stream_copy(WritableStreamEnd, ReadableBufferGuestImpl, EventCode.STREAM_WRITE,
-                     stream_t, opts, task, i, ptr, n)
+                     stream_t, opts, thread, i, ptr, n)
 ```
 
 Introducing the `stream_copy` function in chunks, `stream_copy` first checks
@@ -3959,13 +3992,14 @@ that the element at index `i` is of the right type, not already `copying`, and
 not already `done` (as defined next). (In the future, the `copying` trap could
 be relaxed, allowing a finite number of pipelined reads or writes.)
 ```python
-def stream_copy(EndT, BufferT, event_code, stream_t, opts, task, i, ptr, n):
-  trap_if(not task.inst.may_leave)
-  e = task.inst.table.get(i)
+def stream_copy(EndT, BufferT, event_code, stream_t, opts, thread, i, ptr, n):
+  trap_if(not thread.task.inst.may_leave)
+  e = thread.task.inst.table.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_t.t)
   trap_if(e.copying or e.done)
 ```
+
 Then a readable or writable buffer is created which (in `Buffer`'s constructor)
 eagerly checks the alignment and bounds of (`i`, `n`). (In the future, the
 restriction on futures/streams containing `borrow`s could be relaxed by
@@ -3973,9 +4007,10 @@ maintaining sufficient bookkeeping state to ensure that borrowed handles *or
 streams/futures of borrowed handles* could not outlive their originating call.)
 ```python
   assert(not contains_borrow(stream_t))
-  cx = LiftLowerContext(opts, task.inst, borrow_scope = None)
+  cx = LiftLowerContext(opts, thread.task.inst, borrow_scope = None)
   buffer = BufferT(stream_t.t, cx, ptr, n)
 ```
+
 Next, the `copy` method of `{Readable,Writable}{Stream,Future}End` is called to
 perform the actual read/write. The `on_copy*` callbacks passed to `copy` bind
 and store a `stream_event` closure on the readable/writable end (via the
@@ -4008,7 +4043,7 @@ single `i32` payload for core wasm.
     e.set_pending_event(partial(stream_event, result, reclaim_buffer = lambda:()))
 
   e.copying = True
-  e.copy(task.inst, buffer, on_copy, on_copy_done)
+  e.copy(thread.task.inst, buffer, on_copy, on_copy_done)
 ```
 
 When this `copy` makes progress, a `stream_event` is set on the stream end
@@ -4019,7 +4054,7 @@ synchronously and return `BLOCKED` if not:
 ```python
   if not e.has_pending_event():
     if opts.sync:
-      task.thread.suspend_until(e.has_pending_event)
+      thread.suspend_until(e.has_pending_event)
     else:
       return [BLOCKED]
   code,index,payload = e.get_pending_event()
@@ -4047,30 +4082,31 @@ specifies:
 The implementation of these built-ins funnels down to a single `future_copy`
 function that is parameterized by the direction of the copy:
 ```python
-def canon_future_read(future_t, opts, task, i, ptr):
+def canon_future_read(future_t, opts, thread, i, ptr):
   return future_copy(ReadableFutureEnd, WritableBufferGuestImpl, EventCode.FUTURE_READ,
-                     future_t, opts, task, i, ptr)
+                     future_t, opts, thread, i, ptr)
 
-def canon_future_write(future_t, opts, task, i, ptr):
+def canon_future_write(future_t, opts, thread, i, ptr):
   return future_copy(WritableFutureEnd, ReadableBufferGuestImpl, EventCode.FUTURE_WRITE,
-                     future_t, opts, task, i, ptr)
+                     future_t, opts, thread, i, ptr)
 ```
 
 Introducing the `future_copy` function in chunks, `future_copy` starts with the
 same set of guards as `stream_copy` for parameters `i` and `ptr`. The only
 difference is that, with futures, the `Buffer` length is fixed to `1`.
 ```python
-def future_copy(EndT, BufferT, event_code, future_t, opts, task, i, ptr):
-  trap_if(not task.inst.may_leave)
-  e = task.inst.table.get(i)
+def future_copy(EndT, BufferT, event_code, future_t, opts, thread, i, ptr):
+  trap_if(not thread.task.inst.may_leave)
+  e = thread.task.inst.table.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != future_t.t)
   trap_if(e.copying or e.done)
 
   assert(not contains_borrow(future_t))
-  cx = LiftLowerContext(opts, task.inst, borrow_scope = None)
+  cx = LiftLowerContext(opts, thread.task.inst, borrow_scope = None)
   buffer = BufferT(future_t.t, cx, ptr, 1)
 ```
+
 Next, the `copy` method of `{Readable,Writable}FutureEnd.copy` is called to
 perform the actual read/write. Other than the simplifications allowed by the
 absence of repeated partial copies, the main difference in the following code
@@ -4095,7 +4131,7 @@ in the high 28 bits; they're always zero.
     e.set_pending_event(partial(future_event, result))
 
   e.copying = True
-  e.copy(task.inst, buffer, on_copy_done)
+  e.copy(thread.task.inst, buffer, on_copy_done)
 ```
 
 The end of `future_copy` is the exact same as `stream_copy`: waiting if `sync`
@@ -4103,7 +4139,7 @@ and returning either the progress made or `BLOCKED`.
 ```python
   if not e.has_pending_event():
     if opts.sync:
-      task.thread.suspend_until(e.has_pending_event)
+      thread.suspend_until(e.has_pending_event)
     else:
       return [BLOCKED]
   code,index,payload = e.get_pending_event()
@@ -4124,26 +4160,26 @@ For canonical definitions:
 validation specifies:
 * `$f` is given type `(func (param i32) (result i32))`
 * `$stream_t`/`$future_t` must be a type of the form `(stream $t?)`/`(future $t?)`
-* 🚝 - `async` is allowed (otherwise it must be `false`)
+* 🧵 - `async` is allowed (otherwise it must be `false`)
 
 The implementation of these four built-ins all funnel down to a single
 parameterized `cancel_copy` function:
 ```python
-def canon_stream_cancel_read(stream_t, sync, task, i):
-  return cancel_copy(ReadableStreamEnd, EventCode.STREAM_READ, stream_t, sync, task, i)
+def canon_stream_cancel_read(stream_t, sync, thread, i):
+  return cancel_copy(ReadableStreamEnd, EventCode.STREAM_READ, stream_t, sync, thread, i)
 
-def canon_stream_cancel_write(stream_t, sync, task, i):
-  return cancel_copy(WritableStreamEnd, EventCode.STREAM_WRITE, stream_t, sync, task, i)
+def canon_stream_cancel_write(stream_t, sync, thread, i):
+  return cancel_copy(WritableStreamEnd, EventCode.STREAM_WRITE, stream_t, sync, thread, i)
 
-def canon_future_cancel_read(future_t, sync, task, i):
-  return cancel_copy(ReadableFutureEnd, EventCode.FUTURE_READ, future_t, sync, task, i)
+def canon_future_cancel_read(future_t, sync, thread, i):
+  return cancel_copy(ReadableFutureEnd, EventCode.FUTURE_READ, future_t, sync, thread, i)
 
-def canon_future_cancel_write(future_t, sync, task, i):
-  return cancel_copy(WritableFutureEnd, EventCode.FUTURE_WRITE, future_t, sync, task, i)
+def canon_future_cancel_write(future_t, sync, thread, i):
+  return cancel_copy(WritableFutureEnd, EventCode.FUTURE_WRITE, future_t, sync, thread, i)
 
-def cancel_copy(EndT, event_code, stream_or_future_t, sync, task, i):
-  trap_if(not task.inst.may_leave)
-  e = task.inst.table.get(i)
+def cancel_copy(EndT, event_code, stream_or_future_t, sync, thread, i):
+  trap_if(not thread.task.inst.may_leave)
+  e = thread.task.inst.table.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_or_future_t.t)
   trap_if(not e.copying)
@@ -4151,7 +4187,7 @@ def cancel_copy(EndT, event_code, stream_or_future_t, sync, task, i):
     e.shared.cancel()
     if not e.has_pending_event():
       if sync:
-        task.thread.suspend_until(e.has_pending_event)
+        thread.suspend_until(e.has_pending_event)
       else:
         return [BLOCKED]
   code,index,payload = e.get_pending_event()
@@ -4198,25 +4234,284 @@ the given index from the current component instance's table, performing the
 guards and bookkeeping defined by `{Readable,Writable}{Stream,Future}End.drop()`
 above.
 ```python
-def canon_stream_drop_readable(stream_t, task, i):
-  return drop(ReadableStreamEnd, stream_t, task, i)
+def canon_stream_drop_readable(stream_t, thread, i):
+  return drop(ReadableStreamEnd, stream_t, thread, i)
 
-def canon_stream_drop_writable(stream_t, task, hi):
-  return drop(WritableStreamEnd, stream_t, task, hi)
+def canon_stream_drop_writable(stream_t, thread, hi):
+  return drop(WritableStreamEnd, stream_t, thread, hi)
 
-def canon_future_drop_readable(future_t, task, i):
-  return drop(ReadableFutureEnd, future_t, task, i)
+def canon_future_drop_readable(future_t, thread, i):
+  return drop(ReadableFutureEnd, future_t, thread, i)
 
-def canon_future_drop_writable(future_t, task, hi):
-  return drop(WritableFutureEnd, future_t, task, hi)
+def canon_future_drop_writable(future_t, thread, hi):
+  return drop(WritableFutureEnd, future_t, thread, hi)
 
-def drop(EndT, stream_or_future_t, task, hi):
-  trap_if(not task.inst.may_leave)
-  e = task.inst.table.remove(hi)
+def drop(EndT, stream_or_future_t, thread, hi):
+  trap_if(not thread.task.inst.may_leave)
+  e = thread.task.inst.table.remove(hi)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_or_future_t.t)
   e.drop()
   return []
+```
+
+
+### 🧵 `canon thread.index`
+
+TODO
+```python
+def canon_thread_index(thread):
+  assert(thread.index is not None)
+  return [thread.index]
+```
+TODO: note useful for getting index of export-created thread (since not
+created by `thread.new_indirect`
+
+
+### 🧵 `canon thread.new_indirect`
+
+TODO
+```python
+@dataclass
+class CoreFuncRef:
+  t: CoreFuncType
+  callee: Callable[[Thread, list[CoreValType]], list[CoreValType]]
+
+def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], thread, fi, closure):
+  assert(ft == CoreFuncType(['i32'], []))
+  trap_if(not thread.task.inst.may_leave)
+  f = ftbl.get(fi)
+  trap_if(f.t != ft)
+  def thread_func(thread):
+    [] = call_and_trap_on_throw(f.callee, thread, [closure])
+  new_thread = Thread(thread.task, thread_func)
+  new_thread.index = thread.task.inst.table.add(new_thread)
+  return [new_thread.index]
+```
+
+
+### 🧵 `canon thread.switch-to`
+
+TODO
+```python
+class SuspendResult(IntEnum):
+  COMPLETED = 0
+  CANCELLED = 1
+
+def canon_thread_switch_to(cancellable, thread, i):
+  trap_if(not thread.task.inst.may_leave)
+  other_thread = thread.task.inst.table.get(i)
+  trap_if(not isinstance(other_thread, Thread))
+  trap_if(not other_thread.suspended())
+  if not thread.task.switch_to(thread, cancellable, other_thread):
+    assert(cancellable)
+    return [SuspendResult.CANCELLED]
+  else:
+    return [SuspendResult.COMPLETED]
+```
+
+
+### 🧵 `canon thread.suspend`
+
+TODO
+```python
+def canon_thread_suspend(cancellable, thread):
+  trap_if(not thread.task.inst.may_leave)
+  if not thread.task.suspend(thread, cancellable):
+    assert(cancellable)
+    return [SuspendResult.CANCELLED]
+  else:
+    return [SuspendResult.COMPLETED]
+```
+
+
+### 🧵 `canon thread.resume-later`
+
+TODO
+```python
+def canon_thread_resume_later(thread, i):
+  trap_if(not thread.task.inst.may_leave)
+  other_thread = thread.task.inst.table.get(i)
+  trap_if(not isinstance(other_thread, Thread))
+  trap_if(not other_thread.suspended())
+  thread.resume_later(other_thread)
+  return []
+```
+TODO: there is no `Task.resume_later` b/c no 'cancellable'
+
+
+### 🧵 `canon thread.yield-to`
+
+TODO
+```python
+def canon_thread_yield_to(cancellable, thread, i):
+  trap_if(not thread.task.inst.may_leave)
+  other_thread = thread.task.inst.table.get(i)
+  trap_if(not isinstance(other_thread, Thread))
+  trap_if(not other_thread.suspended())
+  if not thread.task.yield_to(thread, cancellable, other_thread):
+    assert(cancellable)
+    return [SuspendResult.CANCELLED]
+  else:
+    return [SuspendResult.COMPLETED]
+```
+
+
+### 🧵 `canon thread.yield`
+
+For a canonical definition:
+```wat
+(canon thread.yield $cancellable? (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (result i32))`
+* 🧵 - `cancellable` is allowed (otherwise it must be absent)
+
+Calling `$f` invokes the following function which yields execution so that
+others tasks can execute. This allows a long-running computation that is not
+otherwise performing I/O to avoid starving other tasks in a cooperative
+setting.
+```python
+def canon_thread_yield(cancellable, thread):
+  trap_if(not thread.task.inst.may_leave)
+  event_code,_,_ = thread.task.yield_until(lambda:True, thread, cancellable)
+  match event_code:
+    case EventCode.NONE:
+      return [SuspendResult.COMPLETED]
+    case EventCode.TASK_CANCELLED:
+      return [SuspendResult.CANCELLED]
+```
+Even though `yield_until` passes `lambda:True` as the condition it is waiting
+for, `yield_until` does transitively peform a `Thread.suspend` which allows
+the embedder to nondeterministically switch to executing another task.
+
+If `cancellable` is set, then `thread.yield` will return whether the supertask
+has already or concurrently requested cancellation. `thread.yield` (and other
+cancellable operations) will only indicate cancellation once and thus, if a
+caller is not prepared to propagate cancellation, they can omit `cancellable`
+so that cancellation is instead delivered at a later `cancellable` call.
+
+
+### 🧵② `canon thread.spawn_ref`
+
+TODO: update
+
+For a canonical definition:
+```wat
+(canon thread.spawn_ref $shared? $ft (core func $spawn_ref))
+```
+validation specifies:
+* `$ft` must refer to a `shared` function type; initially, only the type
+  `(shared (func (param $c i32)))` is allowed (see explanation below)
+* `$spawn_ref` is given type `(func (param $f (ref null $ft)) (param $c i32)
+  (result $e i32))`.
+
+> Note: ideally, a thread could be spawned with [arbitrary thread parameters].
+> Currently, that would require additional work in the toolchain to support so,
+> for simplicity, the current proposal simply fixes a single `i32` parameter
+> type. However, `thread.spawn_ref` could be extended to allow arbitrary thread
+> parameters in the future, once it's concretely beneficial to the toolchain.
+> The inclusion of `$ft` ensures backwards compatibility for when arbitrary
+> parameters are allowed.
+
+Calling `$spawn_ref` checks that the reference `$f` is not null. Then, it spawns
+a thread which:
+  - invokes `$f` with `$c`
+  - executes `$f` until completion or trap in a `shared` context as described by
+    the [shared-everything threads] proposal.
+
+In pseudocode, `$spawn_ref` looks like:
+
+TODO: change to return the thread index or 0 if fail
+```python
+def canon_thread_spawn_ref(f, c):
+  trap_if(f is None)
+  if DETERMINISTIC_PROFILE:
+    return [-1]
+
+  def thread_start():
+    try:
+      f(c)
+    except CoreWebAssemblyException:
+      trap()
+
+  if spawn(thread_start):
+    return [0]
+  else:
+    return [-1]
+```
+
+
+### 🧵② `canon thread.spawn_indirect`
+
+TODO: update
+
+For a canonical definition:
+```wat
+(canon thread.spawn_indirect $shared? $ft $tbl (core func $spawn_indirect))
+```
+validation specifies:
+* `$ft` must refer to a `shared` function type; initially, only the type
+  `(shared (func (param $c i32)))` is allowed (see explanation in
+  `thread.spawn_ref` above)
+* `$tbl` must refer to a shared table whose element type matches `(ref null
+  (shared func))`
+* `$spawn_indirect` is given type `(func (param $i i32) (param $c i32) (result
+  $e i32))`.
+
+Calling `$spawn_indirect` retrieves a reference to function `$f` from table
+`$tbl` and checks that `$f` is of type `$ft`. If that succeeds, it spawns a
+thread which:
+  - invokes `$f` with `$c`
+  - executes `$f` until completion or trap in a `shared` context as described by
+    the [shared-everything threads] proposal.
+
+In pseudocode, `$spawn_indirect` looks like:
+
+TODO: change to return the thread index or 0 if fail
+```python
+def canon_thread_spawn_indirect(ft, tbl, i, c):
+  f = tbl[i]
+  trap_if(f is None)
+  trap_if(f.type != ft)
+  if DETERMINISTIC_PROFILE:
+    return [-1]
+
+  def thread_start():
+    try:
+      f(c)
+    except CoreWebAssemblyException:
+      trap()
+
+  if spawn(thread_start):
+    return [0]
+  else:
+    return [-1]
+```
+
+
+### 🧵② `canon thread.available-parallelism`
+
+TODO: update
+
+For a canonical definition:
+```wat
+(canon thread.available-parallelism (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func shared (result i32))`.
+
+Calling `$f` returns the number of threads the underlying hardware can be
+expected to execute in parallel. This value can be artificially limited by
+engine configuration and is not allowed to change over the lifetime of a
+component instance.
+
+```python
+def canon_thread_available_parallelism():
+  if DETERMINISTIC_PROFILE:
+    return [1]
+  else:
+    return [NUM_ALLOWED_THREADS]
 ```
 
 
@@ -4240,15 +4535,15 @@ index.
 class ErrorContext:
   debug_message: String
 
-def canon_error_context_new(opts, task, ptr, tagged_code_units):
-  trap_if(not task.inst.may_leave)
+def canon_error_context_new(opts, thread, ptr, tagged_code_units):
+  trap_if(not thread.task.inst.may_leave)
   if DETERMINISTIC_PROFILE or random.randint(0,1):
     s = String(('', 'utf8', 0))
   else:
-    cx = LiftLowerContext(opts, task.inst)
+    cx = LiftLowerContext(opts, thread.task.inst)
     s = load_string_from_range(cx, ptr, tagged_code_units)
     s = host_defined_transformation(s)
-  i = task.inst.table.add(ErrorContext(s))
+  i = thread.task.inst.table.add(ErrorContext(s))
   return [i]
 ```
 Supporting the requirement (introduced in the
@@ -4279,16 +4574,17 @@ value may non-deterministically discard or transform the debug message, a
 single `error-context` value must return the same debug message from
 `error.debug-message` over time.
 ```python
-def canon_error_context_debug_message(opts, task, i, ptr):
-  trap_if(not task.inst.may_leave)
-  errctx = task.inst.table.get(i)
+def canon_error_context_debug_message(opts, thread, i, ptr):
+  trap_if(not thread.task.inst.may_leave)
+  errctx = thread.task.inst.table.get(i)
   trap_if(not isinstance(errctx, ErrorContext))
-  cx = LiftLowerContext(opts, task.inst)
+  cx = LiftLowerContext(opts, thread.task.inst)
   store_string(cx, errctx.debug_message, ptr)
   return []
 ```
 Note that `ptr` points to an 8-byte region of memory into which will be stored
 the pointer and length of the debug string (allocated via `opts.realloc`).
+
 
 ### 📝 `canon error-context.drop`
 
@@ -4302,126 +4598,11 @@ validation specifies:
 Calling `$f` calls the following function, which drops the error context value
 at the given index from the current component instance's table:
 ```python
-def canon_error_context_drop(task, i):
-  trap_if(not task.inst.may_leave)
-  errctx = task.inst.table.remove(i)
+def canon_error_context_drop(thread, i):
+  trap_if(not thread.task.inst.may_leave)
+  errctx = thread.task.inst.table.remove(i)
   trap_if(not isinstance(errctx, ErrorContext))
   return []
-```
-
-
-### 🧵 `canon thread.spawn_ref`
-
-For a canonical definition:
-```wat
-(canon thread.spawn_ref $ft (core func $spawn_ref))
-```
-validation specifies:
-* `$ft` must refer to a `shared` function type; initially, only the type
-  `(shared (func (param $c i32)))` is allowed (see explanation below)
-* `$spawn_ref` is given type `(func (param $f (ref null $ft)) (param $c i32)
-  (result $e i32))`.
-
-> Note: ideally, a thread could be spawned with [arbitrary thread parameters].
-> Currently, that would require additional work in the toolchain to support so,
-> for simplicity, the current proposal simply fixes a single `i32` parameter
-> type. However, `thread.spawn_ref` could be extended to allow arbitrary thread
-> parameters in the future, once it's concretely beneficial to the toolchain.
-> The inclusion of `$ft` ensures backwards compatibility for when arbitrary
-> parameters are allowed.
-
-Calling `$spawn_ref` checks that the reference `$f` is not null. Then, it spawns
-a thread which:
-  - invokes `$f` with `$c`
-  - executes `$f` until completion or trap in a `shared` context as described by
-    the [shared-everything threads] proposal.
-
-In pseudocode, `$spawn_ref` looks like:
-
-```python
-def canon_thread_spawn_ref(f, c):
-  trap_if(f is None)
-  if DETERMINISTIC_PROFILE:
-    return [-1]
-
-  def thread_start():
-    try:
-      f(c)
-    except CoreWebAssemblyException:
-      trap()
-
-  if spawn(thread_start):
-    return [0]
-  else:
-    return [-1]
-```
-
-
-### 🧵 `canon thread.spawn_indirect`
-
-For a canonical definition:
-```wat
-(canon thread.spawn_indirect $ft $tbl (core func $spawn_indirect))
-```
-validation specifies:
-* `$ft` must refer to a `shared` function type; initially, only the type
-  `(shared (func (param $c i32)))` is allowed (see explanation in
-  `thread.spawn_ref` above)
-* `$tbl` must refer to a shared table whose element type matches `(ref null
-  (shared func))`
-* `$spawn_indirect` is given type `(func (param $i i32) (param $c i32) (result
-  $e i32))`.
-
-Calling `$spawn_indirect` retrieves a reference to function `$f` from table
-`$tbl` and checks that `$f` is of type `$ft`. If that succeeds, it spawns a
-thread which:
-  - invokes `$f` with `$c`
-  - executes `$f` until completion or trap in a `shared` context as described by
-    the [shared-everything threads] proposal.
-
-In pseudocode, `$spawn_indirect` looks like:
-
-```python
-def canon_thread_spawn_indirect(ft, tbl, i, c):
-  f = tbl[i]
-  trap_if(f is None)
-  trap_if(f.type != ft)
-  if DETERMINISTIC_PROFILE:
-    return [-1]
-
-  def thread_start():
-    try:
-      f(c)
-    except CoreWebAssemblyException:
-      trap()
-
-  if spawn(thread_start):
-    return [0]
-  else:
-    return [-1]
-```
-
-
-### 🧵 `canon thread.available_parallelism`
-
-For a canonical definition:
-```wat
-(canon thread.available_parallelism (core func $f))
-```
-validation specifies:
-* `$f` is given type `(func shared (result i32))`.
-
-Calling `$f` returns the number of threads the underlying hardware can be
-expected to execute in parallel. This value can be artificially limited by
-engine configuration and is not allowed to change over the lifetime of a
-component instance.
-
-```python
-def canon_thread_available_parallelism():
-  if DETERMINISTIC_PROFILE:
-    return [1]
-  else:
-    return [NUM_ALLOWED_THREADS]
 ```
 
 
@@ -4435,12 +4616,16 @@ def canon_thread_available_parallelism():
 [JavaScript Embedding]: Explainer.md#JavaScript-embedding
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Shared-Everything Dynamic Linking]: examples/SharedEverythingDynamicLinking.md
-[Structured Concurrency]: Async.md#structured-concurrency
-[Backpressure]: Async.md#backpressure
-[Current Task]: Async.md#current-task
-[Readable and Writable Ends]: Async.md#streams-and-futures
-[Context-Local Storage]: Async.md#context-local-storage
-[Subtask State Machine]: Async.md#cancellation
+[Concurrency Explainer]: Concurrency.md
+[Structured Concurrency]: Concurrency.md#structured-concurrency
+[Backpressure]: Concurrency.md#backpressure
+[Current Thread]: Concurrency.md#current-thread-and-task
+[Current Task]: Concurrency.md#current-thread-and-task
+[Subtasks]: Concurrency.md#structured-concurrency
+[Readable and Writable Ends]: Concurrency.md#streams-and-futures
+[Readable or Writable End]: Concurrency.md#streams-and-futures
+[Thread-Local Storage]: Concurrency.md#thread-local-storage
+[Subtask State Machine]: Concurrency.md#cancellation
 [Lazy Lowering]: https://github.com/WebAssembly/component-model/issues/383
 
 [Core WebAssembly Embedding]: https://webassembly.github.io/spec/core/appendix/embedding.html
