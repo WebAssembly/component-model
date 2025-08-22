@@ -1418,10 +1418,10 @@ canon ::= ...
         | (canon backpressure.set (core func <id>?)) 🔀
         | (canon task.return (result <valtype>)? <canonopt>* (core func <id>?)) 🔀
         | (canon task.cancel (core func <id>?)) 🔀
-        | (canon yield async? (core func <id>?)) 🔀
+        | (canon yield cancellable? (core func <id>?)) 🔀
         | (canon waitable-set.new (core func <id>?)) 🔀
-        | (canon waitable-set.wait async? (memory <core:memidx>) (core func <id>?)) 🔀
-        | (canon waitable-set.poll async? (memory <core:memidx>) (core func <id>?)) 🔀
+        | (canon waitable-set.wait cancellable? (memory <core:memidx>) (core func <id>?)) 🔀
+        | (canon waitable-set.poll cancellable? (memory <core:memidx>) (core func <id>?)) 🔀
         | (canon waitable-set.drop (core func <id>?)) 🔀
         | (canon waitable.join (core func <id>?)) 🔀
         | (canon subtask.cancel async? (core func <id>?)) 🔀
