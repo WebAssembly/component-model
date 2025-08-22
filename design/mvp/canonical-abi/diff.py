@@ -30,8 +30,8 @@ def is_comment_or_empty(line):
 
 def is_canon_thread_function(line):
     normalized = normalize_line(line)
-    return (normalized.startswith('async def canon_thread') or
-            normalized.startswith('def canon_thread'))
+    return (normalized.startswith('def canon_thread_spawn') or
+            normalized.startswith('def canon_thread_available_parallelism'))
 
 def filter_canon_thread_functions(code_blocks):
     filtered_blocks = []
