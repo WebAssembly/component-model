@@ -132,33 +132,41 @@ Thus, backpressure combined with the partitioning of low-level state provided
 by the Component Model enables sync and async code to interoperate while
 preserving the expectations of both.
 
-In addition to being able to define and call whole functions asynchronously,
-the `stream` and `future` types can be used in function signatures to pass
-parameters and results incrementally over time, achieving finer-grained
-concurrency. Streams and futures are thus not defined to be free-standing
-resources with their own internal memory buffers (like a traditional channel or
-pipe) but, rather, more-primitive control-flow mechanisms that synchronize the
-incremental passing of parameters and results during cross-component calls.
-Higher-level resources like channels and pipes could then be defined in terms
-of these lower-level `stream` and `future` primitives, e.g.:
-
+Lastly, WIT is extended with two new type constructors—`future<T>` and
+`stream<T>`—to allow new WIT interfaces to explicitly represent concurrency in
+*both* the sync and async ABIs in way that can be bound to many language's
+idiomatic futures, promises, streams and channels. Futures and streams are,
+semantically, unidirectional unbuffered channels with a dynamically-enforced
+[session type] describing the passing of exactly 1 or 0..N values, resp., with
+the additional ability for the reader end to signal a loss of interest
+to the writer end. Thus, futures and streams are more primitive concepts than,
+e.g., Unix pipes (which have an associated intermediate memory buffer that
+values are copied into and out of). Rather, streams could be used to *define*
+higher-level concepts like pipes, HTTP response bodies or stream transformers.
+E.g.:
 ```wit
 resource pipe {
-    constructor(buffer-size: u32);
-    write: func(bytes: stream<u8>) -> result;
-    read: func() -> stream<u8>;
+  constructor(buffer-size: u32);
+  write: func(bytes: stream<u8>) -> result;
+  read: func() -> stream<u8>;
 }
+resource response {
+  constructor(body: stream<u8>);
+  consume-body: func() -> stream<u8>;
+}
+transform: func(in: stream<point>) -> stream<point>;
 ```
-
-but also many other domain-specific concurrent resources like WASI HTTP request
-and response bodies or WASI blobs. Streams and futures are however high-level
-enough to be bound automatically to many source languages' built-in concurrency
-features like futures, promises, streams, generators and iterators, unlike
-lower-level concurrency primitives (like callbacks or `wasi:io@0.2.0`
-`pollable`s). Thus, the Component Model seeks to provide the lowest-level
-fine-grained concurrency primitives that are high-level and idiomatic enough to
-enable automatic generation of usable language-integrated bindings.
-
+A `future` or `stream` in a function signature always refers to the transfer of
+unique ownership of the *readable end* of the future or stream. To get a
+*writable end*, a component must first internally create a (readable, writable)
+end pair (via the [`{stream,future}.new`] built-ins) and then pass the readable
+end elsewhere (e.g., in the above WIT, as a parameter to an imported
+`pipe.write` or as a result of an exported `transform`). Given the readable or
+writable end of a future or stream (represented as an `i32` index into the
+component instance's handle table), Core WebAssembly can then call a
+[`{stream,future}.{read,write}`] built-in to synchronously or asynchronously
+copy into or out of a caller-provided buffer of Core WebAssembly linear (or,
+soon, GC) memory.
 
 ## Concepts
 
@@ -1124,6 +1132,7 @@ comes after:
 [CPS Transform]: https://en.wikipedia.org/wiki/Continuation-passing_style
 [Event Loop]: https://en.wikipedia.org/wiki/Event_loop
 [Structured Concurrency]: https://en.wikipedia.org/wiki/Structured_concurrency
+[Session Types]: https://en.wikipedia.org/wiki/Session_type
 [Unit]: https://en.wikipedia.org/wiki/Unit_type
 [Thread-local Storage]: https://en.wikipedia.org/wiki/Thread-local_storage
 [FS or GS Segment Base Address]: https://docs.kernel.org/arch/x86/x86_64/fsgs.html
@@ -1144,6 +1153,8 @@ comes after:
 [`waitable-set.wait`]: Explainer.md#-waitable-setwait
 [`waitable-set.poll`]: Explainer.md#-waitable-setpoll
 [`thread.spawn*`]: Explainer.md#-threadspawn_ref
+[`{stream,future}.new`]: Explainer.md#-streamnew-and-futurenew
+[`{stream,future}.{read,write}`]: Explainer.md#-streamread-and-streamwrite
 [ESM-integration]: Explainer.md#ESM-integration
 
 [Canonical ABI Explainer]: CanonicalABI.md
