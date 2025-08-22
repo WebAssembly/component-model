@@ -401,8 +401,9 @@ Notes:
   `[static]` matches the `plainname` of a preceding `resource` import or
   export, respectively, in the same scope (component, component type or
   instance type).
-* Validation of `[constructor]` names requires that the `func` returns a
-  `(result (own $R))`, where `$R` is the resource labeled `r`.
+* Validation of `[constructor]` names requires a `func` type whose result type
+  is either `(own $R)` or `(result (own $R) E?)` where `$R` is a resource type
+  labeled `r`.
 * Validation of `[method]` names requires the first parameter of the function
   to be `(param "self" (borrow $R))`, where `$R` is the resource labeled `r`.
 * 🔗 Validation requires that `versionsuffix` is preceded by an `interfaceversion`
