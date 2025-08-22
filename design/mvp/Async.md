@@ -24,12 +24,12 @@ summary of the motivation and animated sketch of the design in action.
   * [Borrows](#borrows)
   * [Cancellation](#cancellation)
   * [Nondeterminism](#nondeterminism)
+* [Interaction with the start function](#interaction-with-the-start-function)
+* [Interaction with multi-threading](#interaction-with-multi-threading)
 * [Async ABI](#async-abi)
   * [Async Import ABI](#async-import-abi)
   * [Async Export ABI](#async-export-abi)
 * [Examples](#examples)
-* [Interaction with the start function](#interaction-with-the-start-function)
-* [Interaction with multi-threading](#interaction-with-multi-threading)
 * [TODO](#todo)
 
 
@@ -639,6 +639,82 @@ Despite the above, the following scenarios do behave deterministically:
   the operations are performed).
 
 
+## Interaction with the start function
+
+Since any component-level function with an empty signature can be used as a
+[`start`] function, there's nothing to stop an `async`-lifted function from
+being used as a `start` function. Async start functions are useful when
+executing general-purpose code at initialization time, e.g.:
+* If the top-level scripts of a scripting language are executed by the `start`
+  function, asychrony arises from regular use of the language's concurrency
+  features. For example, in JS, this takes the form of [top-level `await`].
+* If C++ or other OOPLs global object constructors are executed by the `start`
+  function, these can execute general-purpose code which may use concurrent
+  I/O APIs.
+
+Since component `start` functions are already defined to be executed
+synchronously before the component is considered initialized and ready for its
+exports to be called, the natural thing for `start` to do when calling an
+`async`-lifted function is wait for the callee to reach the ["returned"
+state](#returning). This gives `async` `start` functions a simple way to do
+concurrent initialization and signal completion using the same language
+bindings as regular `async` `export` functions.
+
+However, as explained above, an async task can always continue executing after
+reaching the "returned" state and thus an async task spawned by `start` may
+continue executing even after the component instance is initialized and
+receiving export calls. These post-return `start`-tasks can be used by the
+language toolchain to implement traditional "background tasks" (e.g., the
+`setInterval()` or `requestIdleCallback()` JavaScript APIs). From the
+perspective of [structured concurrency], these background tasks are new task
+tree roots (siblings to the roots created when component exports are
+called by the host). Thus, subtasks and threads spawned by the background task
+will have proper async callstacks as used to define reentrancy and support
+debugging/profiling/tracing.
+
+In future, when [runtime instantiation] is added to the Component Model, the
+component-level function used to create a component instance could be lowered
+with `async` to allow a parent component to instantiate child components
+concurrently, relaxing the fully synchronous model of instantiation supported
+by declarative instantiation and `start` above.
+
+
+## Interaction with multi-threading
+
+For now, the integration between multi-threading (via [`thread.spawn*`]) and
+native async is limited. In particular, because all [lift and lower definitions]
+produce non-`shared` functions, any threads spawned by a component via
+`thread.spawn*` will not be able to directly call imports (synchronously *or*
+asynchronously) and will thus have to use Core WebAssembly `atomics.*`
+instructions to switch back to a non-`shared` function running on the "main"
+thread (i.e., whichever thread was used to call the component's exports).
+
+However, a future addition to this proposal (in the [TODO](#todo)s below) would
+be to allow lifting and lowering with `async` + `shared`. What's exciting about
+this approach is that a non-`shared` component-level function could be safely
+lowered with `async shared`. In the case that the lifted function being lowered
+was also `async shared`, the entire call could happen on the non-main thread
+without a context switch. But if the lifting side was non-`shared`, then the
+Component Model could automatically handle the synchronization of enqueuing a
+call to the export (as in the backpressure case mentioned above), returning a
+subtask for the async caller to wait on as usual. Thus, the sync+async
+composition story described above could naturally be extended to a
+sync+async+shared composition story, continuing to avoid the "what color is
+your function" problem (where `shared` is the [color]).
+
+Even without any use of [`thread.spawn*`], native async provides an opportunity
+to achieve some automatic parallelism "for free". In particular, due to the
+shared-nothing nature of components, each component instance could be given a
+separate thread on which to interleave all tasks executing in that instance.
+Thus, in a cross-component call from `C1` to `C2`, `C2`'s task can run in a
+separate thread that is automatically synchronized with `C1` by the runtime.
+This is analogous to how traditional OS processes can run in separate threads,
+except that the component model is *allowing*, but not *requiring* the separate
+threads. While it's unclear how much parallelism this would unlock in practice,
+it does present interesting opportunities to experiment with optimizations over
+time as applications are built with more components.
+
+
 ## Async ABI
 
 At an ABI level, native async in the Component Model defines for every WIT
@@ -1023,82 +1099,6 @@ initial core `summarize` call.
 The `$event`, `$p1` and `$p2` parameters passed to `cb` are the same as the
 return values from `task.wait` in the previous example. The precise meaning of
 these values is defined by the Canonical ABI.
-
-
-## Interaction with the start function
-
-Since any component-level function with an empty signature can be used as a
-[`start`] function, there's nothing to stop an `async`-lifted function from
-being used as a `start` function. Async start functions are useful when
-executing general-purpose code at initialization time, e.g.:
-* If the top-level scripts of a scripting language are executed by the `start`
-  function, asychrony arises from regular use of the language's concurrency
-  features. For example, in JS, this takes the form of [top-level `await`].
-* If C++ or other OOPLs global object constructors are executed by the `start`
-  function, these can execute general-purpose code which may use concurrent
-  I/O APIs.
-
-Since component `start` functions are already defined to be executed
-synchronously before the component is considered initialized and ready for its
-exports to be called, the natural thing for `start` to do when calling an
-`async`-lifted function is wait for the callee to reach the ["returned"
-state](#returning). This gives `async` `start` functions a simple way to do
-concurrent initialization and signal completion using the same language
-bindings as regular `async` `export` functions.
-
-However, as explained above, an async task can always continue executing after
-reaching the "returned" state and thus an async task spawned by `start` may
-continue executing even after the component instance is initialized and
-receiving export calls. These post-return `start`-tasks can be used by the
-language toolchain to implement traditional "background tasks" (e.g., the
-`setInterval()` or `requestIdleCallback()` JavaScript APIs). From the
-perspective of [structured concurrency], these background tasks are new task
-tree roots (siblings to the roots created when component exports are
-called by the host). Thus, subtasks and threads spawned by the background task
-will have proper async callstacks as used to define reentrancy and support
-debugging/profiling/tracing.
-
-In future, when [runtime instantiation] is added to the Component Model, the
-component-level function used to create a component instance could be lowered
-with `async` to allow a parent component to instantiate child components
-concurrently, relaxing the fully synchronous model of instantiation supported
-by declarative instantiation and `start` above.
-
-
-## Interaction with multi-threading
-
-For now, the integration between multi-threading (via [`thread.spawn*`]) and
-native async is limited. In particular, because all [lift and lower definitions]
-produce non-`shared` functions, any threads spawned by a component via
-`thread.spawn*` will not be able to directly call imports (synchronously *or*
-asynchronously) and will thus have to use Core WebAssembly `atomics.*`
-instructions to switch back to a non-`shared` function running on the "main"
-thread (i.e., whichever thread was used to call the component's exports).
-
-However, a future addition to this proposal (in the [TODO](#todo)s below) would
-be to allow lifting and lowering with `async` + `shared`. What's exciting about
-this approach is that a non-`shared` component-level function could be safely
-lowered with `async shared`. In the case that the lifted function being lowered
-was also `async shared`, the entire call could happen on the non-main thread
-without a context switch. But if the lifting side was non-`shared`, then the
-Component Model could automatically handle the synchronization of enqueuing a
-call to the export (as in the backpressure case mentioned above), returning a
-subtask for the async caller to wait on as usual. Thus, the sync+async
-composition story described above could naturally be extended to a
-sync+async+shared composition story, continuing to avoid the "what color is
-your function" problem (where `shared` is the [color]).
-
-Even without any use of [`thread.spawn*`], native async provides an opportunity
-to achieve some automatic parallelism "for free". In particular, due to the
-shared-nothing nature of components, each component instance could be given a
-separate thread on which to interleave all tasks executing in that instance.
-Thus, in a cross-component call from `C1` to `C2`, `C2`'s task can run in a
-separate thread that is automatically synchronized with `C1` by the runtime.
-This is analogous to how traditional OS processes can run in separate threads,
-except that the component model is *allowing*, but not *requiring* the separate
-threads. While it's unclear how much parallelism this would unlock in practice,
-it does present interesting opportunities to experiment with optimizations over
-time as applications are built with more components.
 
 
 ## TODO
