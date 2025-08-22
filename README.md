@@ -15,7 +15,8 @@ reference interpreter and test suite.
 
 The Component Model is currently being incrementally developed and stabilized
 as part of [WASI Preview 2]. The subsequent [WASI Preview 3] milestone will be
-primarily concerned with the addition of [async support][Concurrency Model].
+primarily concerned with the addition of [async and thread support][Concurrency
+Model].
 
 ## Contributing
 
@@ -32,11 +33,10 @@ To contribute to any of these repositories, see the Community Group's
 [IDL]: design/mvp/WIT.md
 [Text Format]: design/mvp/Explainer.md
 [Binary Format]: design/mvp/Binary.md
-[Concurrency Model]: design/mvp/Async.md
+[Concurrency Model]: design/mvp/Concurrency.md
 [Canonical ABI]: design/mvp/CanonicalABI.md
 [formal spec]: spec/
 [W3C WebAssembly Community Group]: https://www.w3.org/community/webassembly/
 [Contributing Guidelines]: https://webassembly.org/community/contributing/
 [WASI Preview 2]: https://github.com/WebAssembly/WASI/tree/main/wasip2#readme
 [WASI Preview 3]: https://github.com/WebAssembly/WASI/tree/main/wasip2#looking-forward-to-preview-3
-[Async Support]: https://docs.google.com/presentation/d/1MNVOZ8hdofO3tI0szg_i-Yoy0N2QPU2C--LzVuoGSlE/edit?usp=share_link
