@@ -369,6 +369,10 @@ v = [{ str(i):b for i in range(32) } for b in [True,False]]
 test_heap(t, v, [0,2],
           [0xff,0xff,0xff,0xff, 0,0,0,0])
 
+t = MapType(U8Type(), U16Type())
+test_heap(t, [{'0':42, '1':83}, {'0':43, '1':84}], [0, 2],
+          [42,0xff,83,0, 43,0xff,84,0])
+
 def test_flatten(t, params, results):
   expect = CoreFuncType(params, results)
 
