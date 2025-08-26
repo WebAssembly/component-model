@@ -518,6 +518,16 @@ class Task(Call, Supertask):
     self.thread = None
     self.context = ContextLocalStorage()
 
+  def thread_start(self, thread):
+    assert(self.thread is None and thread.task is self)
+    self.thread = thread
+
+  def thread_stop(self, thread):
+    assert(thread is self.thread and thread.task is self)
+    self.thread = None
+    trap_if(self.state != Task.State.RESOLVED)
+    assert(self.num_borrows == 0)
+
   def trap_if_on_the_stack(self, inst):
     c = self.supertask
     while c is not None:
@@ -528,6 +538,7 @@ class Task(Call, Supertask):
     return self.opts.sync or self.opts.callback
 
   def enter(self):
+    assert(self.thread is not None)
     def has_backpressure():
       return self.inst.backpressure or (self.needs_exclusive() and self.inst.exclusive)
     if has_backpressure() or self.inst.num_waiting_to_enter > 0:
@@ -541,6 +552,12 @@ class Task(Call, Supertask):
       assert(not self.inst.exclusive)
       self.inst.exclusive = True
     return True
+
+  def exit(self):
+    assert(self.thread is not None)
+    if self.needs_exclusive():
+      assert(self.inst.exclusive)
+      self.inst.exclusive = False
 
   def request_cancellation(self):
     assert(self.state == Task.State.INITIAL)
@@ -596,22 +613,6 @@ class Task(Call, Supertask):
     trap_if(self.num_borrows > 0)
     self.on_resolve(None)
     self.state = Task.State.RESOLVED
-
-  def exit(self):
-    assert(self.thread is not None)
-    if self.needs_exclusive():
-      assert(self.inst.exclusive)
-      self.inst.exclusive = False
-
-  def thread_start(self, thread):
-    assert(self.thread is None and thread.task is self)
-    self.thread = thread
-
-  def thread_stop(self, thread):
-    assert(thread is self.thread and thread.task is self)
-    self.thread = None
-    trap_if(self.state != Task.State.RESOLVED)
-    assert(self.num_borrows == 0)
 
 #### Subtask State
 

@@ -1469,7 +1469,7 @@ In the Canonical ABI, `T.rep` is defined to be the `$rep` in the
 it's designed to allow different types in the future, it is currently
 hard-coded to always be `i32`.
 
-(See also [`canon_resource_new`] in the Canonical ABI explainer.)
+For details, see [`canon_resource_new`] in the Canonical ABI explainer.
 
 ###### `resource.drop`
 
@@ -1497,8 +1497,9 @@ drop completed eagerly, or if not, identifies the in-progress drop.
 
 In the Canonical ABI, the returned `i32` is either `0` (if the drop completed
 eagerly) or the index of the in-progress drop subtask (representing the
-in-progress `dtor` call). (See also [`canon_resource_drop`] in the Canonical
-ABI explainer.)
+in-progress `dtor` call).
+
+For details, see [`canon_resource_drop`] in the Canonical ABI explainer.
 
 ###### `resource.rep`
 
@@ -1544,38 +1545,40 @@ allowing it to create and return new resources to its client:
 Here, the `i32` returned by `resource.new`, which is an index into the current
 component instance's table, is immediately returned by `make_R`, thereby
 transferring ownership of the newly-created resource to the export's caller.
-(See also [`canon_resource_rep`] in the Canonical ABI explainer.)
+
+For details, see [`canon_resource_rep`] in the Canonical ABI explainer.
 
 ##### 🔀 Async built-ins
 
-See the [async explainer] for high-level context and terminology and the
-[Canonical ABI explainer] for detailed runtime semantics.
+See the [async explainer] for background.
 
 ###### 🔀 `context.get`
 
 | Synopsis                   |                    |
 | -------------------------- | ------------------ |
 | Approximate WIT signature  | `func<T,i>() -> T` |
-| Canonical ABI signature    | `[] -> [T]`        |
+| Canonical ABI signature    | `[] -> [i32]`      |
 
 The `context.get` built-in returns the `i`th element of the [current task]'s
 [context-local storage] array. Validation currently restricts `i` to be less
-than 2 and `t` to be `i32`, but will be relaxed in the future (as described
-[here][context-local storage]). (See also [`canon_context_get`] in the
-Canonical ABI explainer for details.)
+than 1 and `t` to be `i32`, but will be relaxed in the future (as described
+[here][context-local storage]).
+
+For details, see [`canon_context_get`] in the Canonical ABI explainer.
 
 ###### 🔀 `context.set`
 
 | Synopsis                   |                   |
 | -------------------------- | ----------------- |
 | Approximate WIT signature  | `func<T,i>(v: T)` |
-| Canonical ABI signature    | `[T] -> []`       |
+| Canonical ABI signature    | `[i32] -> []`     |
 
 The `context.set` built-in sets the `i`th element of the [current task]'s
 [context-local storage] array to the value `v`. Validation currently
-restricts `i` to be less than 2 and `t` to be `i32`, but will be relaxed in the
-future (as described [here][context-local storage]). (See also
-[`canon_context_set`] in the Canonical ABI explainer for details.)
+restricts `i` to be less than 1 and `t` to be `i32`, but will be relaxed in the
+future (as described [here][context-local storage]).
+
+For details, see [`canon_context_set`] in the Canonical ABI explainer.
 
 ###### 🔀 `backpressure.set`
 
@@ -1587,8 +1590,9 @@ future (as described [here][context-local storage]). (See also
 The `backpressure.set` built-in allows the async-lifted callee to toggle a
 per-component-instance flag that, when set, prevents new incoming export calls
 to the component (until the flag is unset). This allows the component to exert
-[backpressure]. (See also [`canon_backpressure_set`] in the Canonical ABI
-explainer for details.)
+[backpressure].
+
+For details, see [`canon_backpressure_set`] in the Canonical ABI explainer.
 
 ###### 🔀 `task.return`
 
@@ -1597,9 +1601,10 @@ currently-executing task. This built-in must be called exactly once per export
 activation. The `canon task.return` definition takes component-level return
 type and the list of `canonopt` to be used to lift the return value. When
 called, the declared return type and the `string-encoding` and `memory`
-`canonopt`s are checked to exactly match those of the current task. (See also
-"[Returning]" in the async explainer and [`canon_task_return`] in the Canonical
-ABI explainer.)
+`canonopt`s are checked to exactly match those of the current task.
+
+For details, see [Returning] in the async explainer and [`canon_task_return`]
+in the Canonical ABI explainer.
 
 ###### 🔀 `task.cancel`
 
@@ -1613,8 +1618,10 @@ and has dropped all borrowed handles lent to it during the call (trapping if
 otherwise). `task.cancel` can only be called after the `task-cancelled` event
 has been received (via `callback`, `waitable-set.{wait,poll}` or `yield`) to
 indicate that the supertask has requested cancellation and thus is not
-expecting a return value. (See also "[Cancellation]" in the async explainer and
-[`canon_task_cancel`] in the Canonical ABI explainer for details.)
+expecting a return value.
+
+For details, see [Cancellation] in the async explainer and
+[`canon_task_cancel`] in the Canonical ABI explainer.
 
 ###### 🔀 `yield`
 
@@ -1636,6 +1643,8 @@ If `cancellable` is set, `yield` may return `true` (`1`) if the caller requests
 value is always `false` (`0`). Cancellation is returned at most once for a
 given task and thus must be propagated once received.
 
+For details, see [`canon_yield`] in the Canonical ABI explainer.
+
 ###### 🔀 `waitable-set.new`
 
 | Synopsis                   |                          |
@@ -1646,8 +1655,9 @@ given task and thus must be propagated once received.
 The `waitable-set.new` built-in returns the `i32` index of a new [waitable
 set]. The `waitable-set` type is not a true WIT-level type but instead serves
 to document associated built-ins below. Waitable sets start out empty and are
-populated explicitly with [waitables] by `waitable.join`. (See also
-[`canon_waitable_set_new`] in the Canonical ABI explainer for details.)
+populated explicitly with [waitables] by `waitable.join`.
+
+For details, see [`canon_waitable_set_new`] in the Canonical ABI explainer.
 
 ###### 🔀 `waitable-set.wait`
 
@@ -1705,8 +1715,9 @@ part [`stream.read` and `stream.write`](#-streamread-and-streamwrite) and
 
 In the Canonical ABI, the `event-code` return value provides the `event`
 discriminant and the case payloads are stored as two contiguous `i32`s at the
-8-byte-aligned address `payload-addr`. (See also [`canon_waitable_set_wait`]
-in the Canonical ABI explainer for details.)
+8-byte-aligned address `payload-addr`.
+
+For details, see [`canon_waitable_set_wait`] in the Canonical ABI explainer.
 
 ###### 🔀 `waitable-set.poll`
 
@@ -1733,8 +1744,9 @@ If `cancellable` is set, `waitable-set.poll` may return `task-cancelled`
 propagated once received.
 
 The Canonical ABI of `waitable-set.poll` is the same as `waitable-set.wait`
-(with the `none` case indicated by returning `0`). (See also
-[`canon_waitable_set_poll`] in the Canonical ABI explainer for details.)
+(with the `none` case indicated by returning `0`).
+
+For details, see [`canon_waitable_set_poll`] in the Canonical ABI explainer.
 
 ###### 🔀 `waitable-set.drop`
 
@@ -1745,8 +1757,9 @@ The Canonical ABI of `waitable-set.poll` is the same as `waitable-set.wait`
 
 The `waitable-set.drop` built-in removes the indicated [waitable set] from the
 current component instance's table, trapping if the waitable set is not empty
-or if another task is concurrently `wait`ing on it. (See also
-[`canon_waitable_set_drop`] in the Canonical ABI explainer for details.)
+or if another task is concurrently `wait`ing on it.
+
+For details, see [`canon_waitable_set_drop`] in the Canonical ABI explainer.
 
 ###### 🔀 `waitable.join`
 
@@ -1765,8 +1778,9 @@ waitable can be in at most one set.
 In the Canonical ABI, `w` is an index into the current component instance's
 table and can be any type of waitable (`subtask` or
 `{readable,writable}-{stream,future}-end`). A value of `0` represents a `none`
-`maybe_set`, since `0` is not a valid table index. (See also
-[`canon_waitable_join`] in the Canonical ABI explainer for details.)
+`maybe_set`, since `0` is not a valid table index.
+
+For details, see [`canon_waitable_join`] in the Canonical ABI explainer.
 
 ###### 🔀 `subtask.cancel`
 
@@ -1780,8 +1794,9 @@ If the `async` is present, `none` is returned (reprented as `-1` in the
 Canonical ABI) to indicate that the subtask blocked before it was [resolved].
 Otherwise, `subtask.cancel` returns the `subtask-state` that the subtask
 resolved to (which is one of `returned`, `cancelled-before-started` or
-`cancelled-before-returned`). (See also [`canon_subtask_cancel`] in the
-Canonical ABI explainer for details.)
+`cancelled-before-returned`).
+
+For details, see [`canon_subtask_cancel`] in the Canonical ABI explainer.
 
 ###### 🔀 `subtask.drop`
 
@@ -1791,8 +1806,9 @@ Canonical ABI explainer for details.)
 | Canonical ABI signature    | `[subtask:i32] -> []`    |
 
 The `subtask.drop` built-in removes the indicated [subtask] from the current
-component instance's table, trapping if the subtask hasn't returned. (See
-[`canon_subtask_drop`] in the Canonical ABI explainer for details.)
+component instance's table, trapping if the subtask hasn't returned.
+
+For details, see [`canon_subtask_drop`] in the Canonical ABI explainer.
 
 ###### 🔀 `stream.new` and `future.new`
 
@@ -1806,8 +1822,7 @@ The `stream.new` and `future.new` built-ins return the [readable and writable
 ends] of a new `stream<T?>` or `future<T?>`. The readable and writable ends are
 added to the current component instance's table and then the two `i32` indices
 of the two ends are packed into a single `i64` return value (with the readable
-end in the low 32 bits). (See also [`canon_stream_new`] in the Canonical ABI
-explainer for details.)
+end in the low 32 bits).
 
 The types `readable-stream-end<T?>` and `writable-stream-end<T?>` are not WIT
 types; they are the conceptual lower-level types that describe how the
@@ -1815,6 +1830,8 @@ canonical built-ins use the readable and writable ends of a `stream<T?>`.
 
 An analogous relationship exists among `readable-future-end<T?>`,
 `writable-future-end<T?>`, and the WIT `future<T?>`.
+
+For details, see [`canon_stream_new`] in the Canonical ABI explainer.
 
 ###### 🔀 `stream.read` and `stream.write`
 
@@ -1886,7 +1903,7 @@ bit-packed into a single `i32` where:
 * Otherwise, the `result` is in the low 4 bits and the `progress` is in the
   high 28 bits.
 
-(See [`canon_stream_read`] in the Canonical ABI explainer for details.)
+For details, see [`canon_stream_read`] in the Canonical ABI explainer.
 
 ###### 🔀 `future.read` and `future.write`
 
@@ -1952,8 +1969,7 @@ return value is bit-packed into the single `i32` return value where
 as the value of `future-write-result.cancelled`, rather than the value implied
 by the `enum` definition above.
 
-(See [`canon_future_read`] in the Canonical ABI explainer for details.)
-
+For details, see [`canon_future_read`] in the Canonical ABI explainer.
 
 ###### 🔀 `stream.cancel-read`, `stream.cancel-write`, `future.cancel-read`, and `future.cancel-write`
 
@@ -1978,8 +1994,9 @@ be `cancelled` but may also be `completed` or `dropped`, if one of these racily
 happened first.
 
 In the Canonical ABI, the optional result value is bit-packed into the single
-`i32` result in the same way as `{stream,future}.{read,write}`. (See
-[`canon_stream_cancel_read`] in the Canonical ABI explainer for details.)
+`i32` result in the same way as `{stream,future}.{read,write}`.
+
+For details, see [`canon_stream_cancel_read`] in the Canonical ABI explainer.
 
 ###### 🔀 `stream.drop-readable`, `stream.drop-writable`, `future.drop-readable`, and `future.drop-writable`
 
@@ -1995,8 +2012,9 @@ The `{stream,future}.drop-{readable,writable}` built-ins remove the indicated
 [stream or future] from the current component instance's table, trapping if the
 stream or future has a mismatched direction or type or are in the middle of a
 `read` or `write` or, in the special case of `future.drop-writable`, if a
-value has not already been written. (See [`canon_stream_drop_readable`] in the
-Canonical ABI explainer for details.)
+value has not already been written.
+
+For details, see [`canon_stream_drop_readable`] in the Canonical ABI explainer.
 
 ##### 📝 Error Context built-ins
 
@@ -2012,8 +2030,9 @@ string is non-deterministically transformed to produce the `error-context`'s
 internal [debug message](#error-context-type).
 
 In the Canonical ABI, the returned value is an index into the current component
-instance's table of a new error context value. (See also
-[`canon_error_context_new`] in the Canonical ABI explainer.)
+instance's table of a new error context value.
+
+For details, see [`canon_error_context_new`] in the Canonical ABI explainer.
 
 ###### 📝 `error-context.debug-message`
 
@@ -2027,8 +2046,10 @@ The `error-context.debug-message` built-in returns the
 
 In the Canonical ABI, it writes the debug message into `ptr` as an 8-byte
 (`ptr`, `length`) pair, according to the Canonical ABI for `string`, given the
-`<canonopt>*` immediates. (See also [`canon_error_context_debug_message`] in
-the Canonical ABI explainer.)
+`<canonopt>*` immediates.
+
+For details, see [`canon_error_context_debug_message`] in the Canonical ABI
+explainer.
 
 ###### 📝 `error-context.drop`
 
@@ -2041,8 +2062,9 @@ The `error-context.drop` built-in drops the given `error-context` value from
 the component instance.
 
 In the Canonical ABI, `errctxi` is an index into the current component
-instance's table. (See also [`canon_error_context_drop`] in the Canonical ABI
-explainer.)
+instance's table.
+
+For details, see [`canon_error_context_drop`] in the Canonical ABI explainer.
 
 ##### 🧵 Threading built-ins
 
@@ -2063,8 +2085,7 @@ function `f` while passing `c` to it, returning whether a thread was
 successfully spawned. While it's designed to allow different types in the
 future, the type of `c` is currently hard-coded to always be `i32`.
 
-(See also [`canon_thread_spawn_ref`] in the Canonical ABI explainer.)
-
+For details, see [`canon_thread_spawn_ref`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.spawn_indirect`
 
@@ -2079,7 +2100,7 @@ not equal to `FuncT` (much like the `call_indirect` core instruction). Once `f`
 is retrieved, this built-in operates like `thread.spawn_ref` above, including
 the limitations on `f`'s parameters.
 
-(See also [`canon_thread_spawn_indirect`] in the Canonical ABI explainer.)
+For details, see [`canon_thread_spawn_indirect`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.available_parallelism`
 
@@ -2095,8 +2116,8 @@ The concept of "available parallelism" corresponds is sometimes referred to
 as "hardware concurrency", such as in [`navigator.hardwareConcurrency`] in
 JavaScript.
 
-(See also [`canon_thread_available_parallelism`] in the Canonical ABI
-explainer.)
+For details, see [`canon_thread_available_parallelism`] in the Canonical ABI
+explainer.
 
 ### 🪙 Value Definitions
 

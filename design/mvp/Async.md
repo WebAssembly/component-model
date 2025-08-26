@@ -100,26 +100,20 @@ to define their imports and exports.
 
 To provide wasm runtimes with additional optimization opportunities for
 languages with "stackless" concurrency (e.g. languages using `async`/`await`),
-two `async` ABI sub-options are provided: a "stackless" ABI selected by
-providing a `callback` function and a "stackful" ABI selected by *not*
-providing a `callback` function. The stackless ABI allows core wasm to
-repeatedly return to an [event loop] to receive events concerning a selected
-set of "waitables", thereby clearing the native stack when waiting for events
-and allowing the runtime to reuse stack segments between events. In the
-[future](#TODO), a `strict-callback` option may be added to require (via
-runtime traps) *all* waiting to happen via the event loop, thereby giving the
-engine more up-front information that the engine can use to avoid allocating
-[fibers] in more cases. In the meantime, to support complex applications with
-mixed dependencies and concurrency models, the `callback` immediate allows
-*both* returning to the event loop *and* making blocking calls to wait for
-event.
+two async ABI sub-options are provided: a "stackless" async ABI selected by
+providing a `callback` function and a "stackful" async ABI selected by *not*
+providing a `callback` function. The stackless async ABI allows core wasm to
+repeatedly return to an event loop to receive events (delivered to the
+`callback`), thereby clearing the native stack for the benefit of the wasm
+runtime while waiting in the event loop.
 
 To propagate backpressure, it's necessary for a component to be able to say
-"there are too many async export calls already in progress, don't start any
-more until I let some of them complete". Thus, the low-level async ABI provides
-a way to apply and release backpressure.
+"there are too many concurrent export calls already in progress, don't start
+any more until I let some of them complete". Thus, the Component Model provides
+a built-in way for a component instance to apply and release backpressure that
+callers must always be prepared to handle.
 
-With this backpressure protocol in place, there is a natural way for sync and
+With this backpressure mechanism in place, there is a natural way for sync and
 async code to interoperate:
 1. If an async component calls a sync component and the sync component blocks,
    execution is immediately returned to the async component, effectively
@@ -291,20 +285,22 @@ in the Canonical ABI explainer.
 
 ### Structured concurrency
 
-Calling *into* a component creates a `Task` to track ABI state related to the
-*callee* (like "number of outstanding borrows").
+As mentioned above, calling a component export creates a task to track the
+state used to enforce Canonical ABI rules that apply to the callee (an example
+being: the number of received borrowed handles that still need to be dropped
+before the call returns).
 
-Calling *out* of a component creates a `Subtask` to track ABI state related to
-the *caller* (like "which handles have been lent").
+Symmetrically, calling a component *import* creates a **subtask** to track the
+state used to enforce Canonical ABI rules that apply to the *caller* (an
+example being: which handles have been lent that the caller can't drop until
+the call resolves).
 
-When one component calls another, there is thus a `Subtask`+`Task` pair that
-collectively maintains the overall state of the call and enforces that both
-components uphold their end of the ABI contract. But when the host calls into
-a component, there is only a `Task` and, symmetrically, when a component calls
-into the host, there is only a `Subtask`.
-
-Based on this, the call stack when a component calls a host-defined import will
-have the general form:
+When one component calls another, there is thus a new task+subtask pair created
+to ensure that both components uphold their end of the Canonical ABI rules. But
+when the host calls a component export, there is only a task and,
+symmetrically, when a component calls a host-defined import, there is only a
+subtask. Thus, the **async call stack** at the point when a component calls a
+host-defined import will have the general form:
 ```
 [Host]
   ↓ host calls component export
@@ -314,27 +310,28 @@ have the general form:
   ↓ component calls import implemented by the host
 [Component Subtask <> Host task]
 ```
-Here, the `<-` arrow represents the `supertask` relationship that is immutably
-established when first making the call. A paired `Subtask` and `Task` have the
-same `supertask` and can thus be visualized as a single node in the callstack.
+Here, the `↓` arrow represents the **subtask** relationship (the dual of which
+is the **supertask** relationship). Since a task+subtask pair have the same
+supertask, they can be thought of as a single node in the async call stack.
 
-(These concepts are represented in the Canonical ABI Python code via the
-[`Task`] and [`Subtask`] classes.)
+A subtask/supertask relationship is immutably established when an import is
+called, setting the [current task](#current-task) as the supertask
+of the new subtask created for the import call.
 
-One semantically-observable use of this async call stack is to distinguish
-between hazardous **recursive reentrance**, in which a component instance is
-reentered when one of its tasks is already on the callstack, from
-business-as-usual **sibling reentrance**, in which a component instance is
-freshly reentered when its other tasks are suspended waiting on I/O. Recursive
-reentrance currently always traps, but may be allowed (and indicated to core
-wasm) in an opt-in manner in the [future](#TODO).
+A semantically-observable use of the async call stack is to distinguish between
+hazardous **recursive reentrance**, in which a component instance is reentered
+when one of its tasks is already on the callstack, from business-as-usual
+**sibling reentrance**, in which a component instance is reentered for the
+first time on a particular async call stack. Recursive reentrance currently
+always traps, but will be allowed (and indicated to core wasm) in an opt-in
+manner in the [future](#TODO).
 
 The async call stack is also useful for non-semantic purposes such as providing
-backtraces when debugging, profiling and distributed tracing. While particular
-languages can and do maintain their own async call stacks in core wasm state,
-without the Component Model's async call stack, linkage *between* different
-languages would be lost at component boundaries, leading to a loss of overall
-context in multi-component applications.
+backtraces when debugging, profiling and tracing. While particular languages
+can and do maintain their own async call stacks in core wasm state, without the
+Component Model's async call stack, linkage *between* different languages would
+be lost at component boundaries, leading to a loss of overall context in
+multi-component applications.
 
 There is an important nuance to the Component Model's minimal form of
 Structured Concurrency compared to Structured Concurrency support that appears
@@ -464,7 +461,7 @@ the Canonical-ABI-defined "yield" code to the event loop.
 
 ### Backpressure
 
-Once a component exports asynchronously-lifted functions, multiple concurrent
+Once a component exports functions using the async ABI, multiple concurrent
 export calls can start piling up, each consuming some of the component's finite
 private resources (like linear memory), requiring the component to be able to
 exert *backpressure* to allow some tasks to finish (and release private
@@ -473,18 +470,15 @@ call the [`backpressure.set`] built-in to set a component-instance-wide
 "backpressure" flag that causes subsequent export calls to immediately return
 in the "starting" state without calling the component's Core WebAssembly code.
 
-See the [`canon_backpressure_set`] function and [`Task.enter`] method in the
-Canonical ABI explainer for the setting and implementation of backpressure.
-
 In addition to *explicit* backpressure set by wasm code, there is also an
-*implicit* source of backpressure used to protect non-reentrant core wasm
-code. In particular, when an export is lifted synchronously or using an
-`async callback`, a component-instance-wide lock is implicitly acquired every
-time core wasm is executed. By returning to the event loop after every event
-(instead of once at the end of the task), `async callback` exports release
-the lock between every event, allowing a higher degree of concurrency than
-synchronous exports. `async` (stackful) exports ignore the lock entirely and
-thus achieve the highest degree of (cooperative) concurrency.
+*implicit* source of backpressure used to protect non-reentrant core wasm code.
+In particular, when an export uses the sync ABI or the stackless async ABI, a
+component-instance-wide lock is implicitly acquired every time core wasm is
+executed. By returning to the event loop after every event (instead of once at
+the end of the task), stackless async exports release the lock between every
+event, allowing a higher degree of concurrency than synchronous exports.
+Stackfull async exports ignore the lock entirely and thus achieve the highest
+degree of (cooperative) concurrency.
 
 Once a task is allowed to start according to these backpressure rules, its
 arguments are lowered into the callee's linear memory and the task is in
@@ -492,7 +486,7 @@ the "started" state.
 
 ### Returning
 
-The way an async function returns its value is by calling [`task.return`],
+The way an async export call returns its value is by calling [`task.return`],
 passing the core values that are to be lifted as *parameters*.
 
 Returning values by calling `task.return` allows a task to continue executing
@@ -507,9 +501,7 @@ loop interleaving `stream.read`s (of the readable end passed for `in`) and
 `stream.write`s (of the writable end it `stream.new`ed) before exiting the
 task.
 
-Once `task.return` is called, the task is in the "returned" state and can
-finish execution any time thereafter. See the [`canon_task_return`] function in
-the Canonical ABI explainer for more details.
+Once `task.return` is called, the task is in the "returned" state.
 
 ### Borrows
 
@@ -527,10 +519,10 @@ callee task that is decremented when the `borrow` handle is dropped. If a
 callee task attempts to return when its `num_borrows` is greater than zero, the
 callee traps.
 
-In an asynchronous setting, the only generalization necessary is that, since
-there can be multiple overlapping async tasks executing in a component
-instance, a borrowed handle must track *which* task's `num_borrow`s was
-incremented so that the correct counter can be decremented.
+In an asynchronous setting, since there can be multiple overlapping async tasks
+executing in a component instance, a borrowed handle must track *which* task's
+`num_borrow`s was incremented so that the correct counter can be decremented
+and there is a trap upon `task.return` if `num_borrows` is nonzero.
 
 ### Cancellation
 
@@ -584,28 +576,28 @@ Canonical ABI explainer for more details.
 
 ### Nondeterminism
 
-Given the general goal of supporting concurrency, Component Model async
-necessarily introduces a degree of nondeterminism. Async concurrency is however
-[cooperative], meaning that nondeterministic behavior can only be observed at
-well-defined points in the program. This contrasts with non-cooperative
-[multithreading] in which nondeterminism can be observed at every core wasm
-instruction.
+Component Model concurrency support necessarily introduces a degree of
+nondeterminism. However, until Core WebAssembly adds
+[shared-everything-threads], Component Model concurrency is [cooperative],
+which means that nondeterministic behavior can only be observed at well-defined
+points in the program. Once [shared-everything-threads] is added,
+WebAssembly's full [weak memory model] will be observable, but only within
+components that use the new `shared` attribute on functions.
 
-One inherent source of potential nondeterminism that is independent of async is
-the behavior of host-defined import and export calls. Async extends this
-host-dependent nondeterminism to the behavior of the `read` and `write`
-built-ins called on `stream`s and `future`s that have been passed to and from
-the host via host-defined import and export calls. However, just as with import
-and export calls, it is possible for a host to define a deterministic ordering
-of `stream` and `future` `read` and `write` behavior such that overall
-component execution is deterministic.
+One inherent source of potential nondeterminism that is independent of the
+Component Model is the behavior of host-defined import and export calls.
+Component Model concurrency extends this host-dependent nondeterminism to the
+behavior of the `read` and `write` built-ins called on `stream`s and `future`s
+that have been passed to and from the host. However, just as with import and
+export calls, it is possible for a host to define a deterministic ordering of
+`stream` and `future` `read` and `write` behavior such that overall component
+execution is deterministic.
 
 In addition to the inherent host-dependent nondeterminism, the Component Model
 adds several internal sources of nondeterministic behavior that are described
 next. However, each of these sources of nondeterminism can be removed by a host
-implementing the WebAssembly [Determinsic Profile], maintaining the ability for
-a host to provide spec-defined deterministic component execution for components
-even when they use async.
+implementing the WebAssembly [Deterministic Profile], maintaining the ability for
+a host to provide spec-defined deterministic component execution for components.
 
 The following sources of nondeterminism arise via internal built-in operations
 defined by the Component Model:
