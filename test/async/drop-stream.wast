@@ -155,6 +155,6 @@
   (func (export "drop-while-writing") (alias export $d "drop-while-writing"))
 )
 (component instance $new-tester-instance $Tester)
-(assert_trap (invoke "drop-while-reading") "cannot drop busy stream or future")
+(assert_trap (invoke "drop-while-reading") "cannot remove busy stream")
 (component instance $new-tester-instance $Tester)
-(assert_trap (invoke "drop-while-writing") "cannot drop busy stream or future")
+(assert_trap (invoke "drop-while-writing") "cannot drop busy stream")
