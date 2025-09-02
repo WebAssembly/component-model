@@ -549,7 +549,8 @@ trap if `task.return` has not been called. Thus, *some* thread (either the
 thread created implicitly for the initial export call or some thread
 transitively created by that thread) must call `task.return`.
 
-Once `task.return` is called, the task is in the "returned" state.
+Once `task.return` is called, the task is in the "returned" state. Calling
+`task.return` when not in the "started" state traps.
 
 ### Borrows
 
