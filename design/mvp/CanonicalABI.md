@@ -43,7 +43,8 @@ being specified here.
   * [`canon resource.rep`](#canon-resourcerep)
   * [`canon context.get`](#-canon-contextget) 🔀
   * [`canon context.set`](#-canon-contextset) 🔀
-  * [`canon backpressure.set`](#-canon-backpressureset) 🔀
+  * [`canon backpressure.set`](#-canon-backpressureset) 🔀✕
+  * [`canon backpressure.{inc,dec}`](#-canon-backpressureincdec) 🔀
   * [`canon task.return`](#-canon-taskreturn) 🔀
   * [`canon task.cancel`](#-canon-taskcancel) 🔀
   * [`canon yield`](#-canon-yield) 🔀
@@ -279,7 +280,7 @@ class ComponentInstance:
   store: Store
   table: Table
   may_leave: bool
-  backpressure: bool
+  backpressure: int
   exclusive: bool
   num_waiting_to_enter: int
 
@@ -287,7 +288,7 @@ class ComponentInstance:
     self.store = store
     self.table = Table()
     self.may_leave = True
-    self.backpressure = False
+    self.backpressure = 0
     self.exclusive = False
     self.num_waiting_to_enter = 0
 ```
@@ -829,8 +830,8 @@ to avoid the need to otherwise-endlessly allocate guest memory for blocked
 async calls until OOM. When backpressure is enabled, `enter` will block until
 backpressure is disabled. There are three sources of backpressure:
  1. *Explicit backpressure* is triggered by core wasm calling
-    `backpressure.set` which, in `canon_backpressure_set` (defined below),
-    sets the `ComponentInstance.backpressure` flag.
+    `backpressure.{inc,dec}` which modify the `ComponentInstance.backpressure`
+    counter.
  2. *Implicit backpressure* triggered when `Task.needs_exclusive()` is true and
     the `exclusive` lock is already held.
  3. *Residual backpressure* triggered by explicit or implicit backpressure
@@ -842,7 +843,7 @@ backpressure is disabled. There are three sources of backpressure:
   def enter(self):
     assert(self.thread is not None)
     def has_backpressure():
-      return self.inst.backpressure or (self.needs_exclusive() and self.inst.exclusive)
+      return self.inst.backpressure > 0 or (self.needs_exclusive() and self.inst.exclusive)
     if has_backpressure() or self.inst.num_waiting_to_enter > 0:
       self.inst.num_waiting_to_enter += 1
       completed = self.thread.suspend_until(lambda: not has_backpressure(), cancellable = True)
@@ -3523,7 +3524,12 @@ def canon_context_set(t, i, task, v):
 ```
 
 
-### 🔀 `canon backpressure.set`
+### 🔀✕ `canon backpressure.set`
+
+> This built-in is deprecated in favor of `backpressure.{inc,dec}` and will be
+> removed once producer tools have transitioned. Producer tools should avoid
+> emitting calls to both `set` and `inc`/`dec` since `set` will clobber the
+> counter.
 
 For a canonical definition:
 ```wat
@@ -3532,16 +3538,42 @@ For a canonical definition:
 validation specifies:
 * `$f` is given type `(func (param $enabled i32))`
 
-Calling `$f` invokes the following function, which sets or clears the
-`ComponentInstance.backpressure` flag. `Task.enter` waits for this flag to be
-clear before allowing new tasks to start.
+Calling `$f` invokes the following function, which sets the `backpressure`
+counter to `1` or `0`. `Task.enter` waits for `backpressure` to be `0` before
+allowing new tasks to start.
 ```python
 def canon_backpressure_set(task, flat_args):
-  trap_if(task.opts.sync)
   assert(len(flat_args) == 1)
-  task.inst.backpressure = bool(flat_args[0])
+  task.inst.backpressure = int(bool(flat_args[0]))
   return []
 ```
+
+### 🔀 `canon backpressure.{inc,dec}`
+
+For a canonical definition:
+```wat
+(canon backpressure.inc (core func $inc))
+(canon backpressure.dec (core func $dec))
+```
+validation specifies:
+* `$inc`/`$dec` are given type `(func)`
+
+Calling `$inc` or `$dec` invokes one of the following functions:
+```python
+def canon_backpressure_inc(task):
+  assert(0 <= task.inst.backpressure < 2**16)
+  task.inst.backpressure += 1
+  trap_if(task.inst.backpressure == 2**16)
+  return []
+
+def canon_backpressure_dec(task):
+  assert(0 <= task.inst.backpressure < 2**16)
+  task.inst.backpressure -= 1
+  trap_if(task.inst.backpressure < 0)
+  return []
+```
+`Task.enter` waits for `backpressure` to return to `0` before allowing new
+tasks to start, implementing [backpressure].
 
 
 ### 🔀 `canon task.return`
