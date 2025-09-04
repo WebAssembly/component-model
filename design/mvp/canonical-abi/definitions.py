@@ -871,8 +871,9 @@ class SharedStreamImpl(ReadableStream, WritableStream):
 
 class CopyState(Enum):
   IDLE = 1
-  COPYING = 2
-  DONE = 3
+  SYNC_COPYING = 2
+  ASYNC_COPYING = 3
+  DONE = 4
 
 class CopyEnd(Waitable):
   state: CopyState
@@ -881,8 +882,11 @@ class CopyEnd(Waitable):
     Waitable.__init__(self)
     self.state = CopyState.IDLE
 
+  def copying(self):
+    return self.state == CopyState.SYNC_COPYING or self.state == CopyState.ASYNC_COPYING
+
   def drop(self):
-    trap_if(self.state == CopyState.COPYING)
+    trap_if(self.copying())
     Waitable.drop(self)
 
 class ReadableStreamEnd(CopyEnd):
@@ -2344,7 +2348,6 @@ def stream_copy(EndT, BufferT, event_code, stream_t, opts, thread, i, ptr, n):
 
   def stream_event(result, reclaim_buffer):
     reclaim_buffer()
-    assert(e.state == CopyState.COPYING)
     if result == CopyResult.DROPPED:
       e.state = CopyState.DONE
     else:
@@ -2360,13 +2363,14 @@ def stream_copy(EndT, BufferT, event_code, stream_t, opts, thread, i, ptr, n):
   def on_copy_done(result):
     e.set_pending_event(partial(stream_event, result, reclaim_buffer = lambda:()))
 
-  e.state = CopyState.COPYING
   e.copy(thread.task.inst, buffer, on_copy, on_copy_done)
 
   if not e.has_pending_event():
     if opts.sync:
+      e.state = CopyState.SYNC_COPYING
       thread.suspend_until(e.has_pending_event)
     else:
+      e.state = CopyState.ASYNC_COPYING
       return [BLOCKED]
   code,index,payload = e.get_pending_event()
   assert(code == event_code and index == i and payload != BLOCKED)
@@ -2395,7 +2399,6 @@ def future_copy(EndT, BufferT, event_code, future_t, opts, thread, i, ptr):
 
   def future_event(result):
     assert((buffer.remain() == 0) == (result == CopyResult.COMPLETED))
-    assert(e.state == CopyState.COPYING)
     if result == CopyResult.DROPPED or result == CopyResult.COMPLETED:
       e.state = CopyState.DONE
     else:
@@ -2406,13 +2409,14 @@ def future_copy(EndT, BufferT, event_code, future_t, opts, thread, i, ptr):
     assert(result != CopyResult.DROPPED or event_code == EventCode.FUTURE_WRITE)
     e.set_pending_event(partial(future_event, result))
 
-  e.state = CopyState.COPYING
   e.copy(thread.task.inst, buffer, on_copy_done)
 
   if not e.has_pending_event():
     if opts.sync:
+      e.state = CopyState.SYNC_COPYING
       thread.suspend_until(e.has_pending_event)
     else:
+      e.state = CopyState.ASYNC_COPYING
       return [BLOCKED]
   code,index,payload = e.get_pending_event()
   assert(code == event_code and index == i)
@@ -2437,7 +2441,7 @@ def cancel_copy(EndT, event_code, stream_or_future_t, sync, thread, i):
   e = thread.task.inst.table.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_or_future_t.t)
-  trap_if(e.state != CopyState.COPYING)
+  trap_if(e.state != CopyState.ASYNC_COPYING)
   if not e.has_pending_event():
     e.shared.cancel()
     if not e.has_pending_event():
@@ -2446,7 +2450,7 @@ def cancel_copy(EndT, event_code, stream_or_future_t, sync, thread, i):
       else:
         return [BLOCKED]
   code,index,payload = e.get_pending_event()
-  assert(e.state != CopyState.COPYING and code == event_code and index == i)
+  assert(not e.copying() and code == event_code and index == i)
   return [payload]
 
 ### 🔀 `canon {stream,future}.drop-{readable,writable}`

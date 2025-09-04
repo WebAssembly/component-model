@@ -2011,8 +2011,8 @@ For details, see [`canon_future_read`] in the Canonical ABI explainer.
 | Canonical ABI signature                             | `[e: i32] -> [i32]`                                                           |
 
 The `{stream,future}.cancel-{read,write}` built-ins take the matching [readable
-or writable end] of a stream or future that has a pending
-`{stream,future}.{read,write}`.
+or writable end] of a stream or future that has a pending `async`
+`{stream,future}.{read,write}` (trapping otherwise).
 
 If cancellation finishes without blocking, the return value is a
 `stream-result` or `future-{read,write}-result`. If cancellation blocks, the

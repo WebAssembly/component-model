@@ -1507,8 +1507,9 @@ out into the `CopyEnd` class that is derived below:
 ```python
 class CopyState(Enum):
   IDLE = 1
-  COPYING = 2
-  DONE = 3
+  SYNC_COPYING = 2
+  ASYNC_COPYING = 3
+  DONE = 4
 
 class CopyEnd(Waitable):
   state: CopyState
@@ -1517,14 +1518,19 @@ class CopyEnd(Waitable):
     Waitable.__init__(self)
     self.state = CopyState.IDLE
 
+  def copying(self):
+    return self.state == CopyState.SYNC_COPYING or self.state == CopyState.ASYNC_COPYING
+
   def drop(self):
-    trap_if(self.state == CopyState.COPYING)
+    trap_if(self.copying())
     Waitable.drop(self)
 ```
 As shown in `drop`, attempting to drop a readable or writable end while a copy
 is in progress traps. This means that client code must take care to wait for
 these operations to finish (potentially cancelling them via
-`stream.cancel-{read,write}`) before dropping.
+`stream.cancel-{read,write}`) before dropping. The `SYNC_COPY` vs. `ASYNC_COPY`
+distinction is tracked in the state to determine whether the copy operation can
+be cancelled.
 
 Given the above, we can define the concrete `{Readable,Writable}StreamEnd`
 classes which are almost entirely symmetric, with the only difference being
@@ -4083,7 +4089,6 @@ until this point into a single `i32` payload for core wasm.
 ```python
   def stream_event(result, reclaim_buffer):
     reclaim_buffer()
-    assert(e.state == CopyState.COPYING)
     if result == CopyResult.DROPPED:
       e.state = CopyState.DONE
     else:
@@ -4099,7 +4104,6 @@ until this point into a single `i32` payload for core wasm.
   def on_copy_done(result):
     e.set_pending_event(partial(stream_event, result, reclaim_buffer = lambda:()))
 
-  e.state = CopyState.COPYING
   e.copy(thread.task.inst, buffer, on_copy, on_copy_done)
 ```
 
@@ -4111,8 +4115,10 @@ synchronously and return `BLOCKED` if not:
 ```python
   if not e.has_pending_event():
     if opts.sync:
+      e.state = CopyState.SYNC_COPYING
       thread.suspend_until(e.has_pending_event)
     else:
+      e.state = CopyState.ASYNC_COPYING
       return [BLOCKED]
   code,index,payload = e.get_pending_event()
   assert(code == event_code and index == i and payload != BLOCKED)
@@ -4177,7 +4183,6 @@ of elements copied is not packed in the high 28 bits; they're always zero.
 ```python
   def future_event(result):
     assert((buffer.remain() == 0) == (result == CopyResult.COMPLETED))
-    assert(e.state == CopyState.COPYING)
     if result == CopyResult.DROPPED or result == CopyResult.COMPLETED:
       e.state = CopyState.DONE
     else:
@@ -4188,7 +4193,6 @@ of elements copied is not packed in the high 28 bits; they're always zero.
     assert(result != CopyResult.DROPPED or event_code == EventCode.FUTURE_WRITE)
     e.set_pending_event(partial(future_event, result))
 
-  e.state = CopyState.COPYING
   e.copy(thread.task.inst, buffer, on_copy_done)
 ```
 
@@ -4197,8 +4201,10 @@ and returning either the progress made or `BLOCKED`.
 ```python
   if not e.has_pending_event():
     if opts.sync:
+      e.state = CopyState.SYNC_COPYING
       thread.suspend_until(e.has_pending_event)
     else:
+      e.state = CopyState.ASYNC_COPYING
       return [BLOCKED]
   code,index,payload = e.get_pending_event()
   assert(code == event_code and index == i)
@@ -4240,7 +4246,7 @@ def cancel_copy(EndT, event_code, stream_or_future_t, sync, thread, i):
   e = thread.task.inst.table.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_or_future_t.t)
-  trap_if(e.state != CopyState.COPYING)
+  trap_if(e.state != CopyState.ASYNC_COPYING)
   if not e.has_pending_event():
     e.shared.cancel()
     if not e.has_pending_event():
@@ -4249,9 +4255,12 @@ def cancel_copy(EndT, event_code, stream_or_future_t, sync, thread, i):
       else:
         return [BLOCKED]
   code,index,payload = e.get_pending_event()
-  assert(e.state != CopyState.COPYING and code == event_code and index == i)
+  assert(not e.copying() and code == event_code and index == i)
   return [payload]
 ```
+Cancellation traps if there is not currently an async copy in progress (sync
+copies do not expect or check for cancellation and thus cannot be cancelled).
+
 The *first* check for `e.has_pending_event()` catches the case where the copy has
 already racily finished, in which case we must *not* call `cancel()`. Calling
 `cancel()` may, but is not required to, recursively call one of the `on_*`
