@@ -1796,6 +1796,10 @@ Otherwise, `subtask.cancel` returns the `subtask-state` that the subtask
 resolved to (which is one of `returned`, `cancelled-before-started` or
 `cancelled-before-returned`).
 
+The `async` immediate is gated on 🚝. Without `async`, the `none` case is not
+possible and `subtask.cancel` synchronously waits until the callee is
+resolved.
+
 For details, see [`canon_subtask_cancel`] in the Canonical ABI explainer.
 
 ###### 🔀 `subtask.drop`

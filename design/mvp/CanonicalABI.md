@@ -3818,10 +3818,11 @@ given waitable is already in one set, it will be transferred.
 
 For a canonical definition:
 ```wat
-(canon subtask.cancel (core func $f))
+(canon subtask.cancel async? (core func $f))
 ```
 validation specifies:
 * `$f` is given type `(func (param i32))`
+* 🚝 - `async` is allowed (otherwise it must be absent)
 
 Calling `$f` sends a request to the subtask at the given index to cancel its
 execution ASAP. This request is cooperative and the subtask may take arbitrarily
@@ -4134,7 +4135,7 @@ For canonical definitions:
 validation specifies:
 * `$f` is given type `(func (param i32) (result i32))`
 * `$stream_t`/`$future_t` must be a type of the form `(stream $t?)`/`(future $t?)`
-* 🚝 - `async` is allowed (otherwise it must be `false`)
+* 🚝 - `async` is allowed (otherwise it must be absent)
 
 The implementation of these four built-ins all funnel down to a single
 parameterized `cancel_copy` function:
