@@ -565,11 +565,11 @@ def test_async_to_async():
   fut1_2 = RacyBool(False)
   def core_toggle(task, args):
     assert(len(args) == 0)
-    [] = canon_backpressure_set(task, [1])
+    [] = canon_backpressure_inc(task)
     task.thread.suspend_until(fut1_1.is_set)
     [] = canon_task_return(task, [], producer_opts, [])
     task.thread.suspend_until(fut1_2.is_set)
-    [] = canon_backpressure_set(task, [0])
+    [] = canon_backpressure_dec(task)
     return []
   toggle_callee = partial(canon_lift, producer_opts, producer_inst, toggle_ft, core_toggle)
 
@@ -1038,9 +1038,9 @@ def test_async_backpressure():
   producer1_done = False
   def producer1_core(task, args):
     nonlocal producer1_done
-    canon_backpressure_set(task, [1])
+    canon_backpressure_inc(task)
     task.thread.suspend_until(fut.is_set)
-    canon_backpressure_set(task, [0])
+    canon_backpressure_dec(task)
     canon_task_return(task, [], producer_opts, [])
     producer1_done = True
     return []

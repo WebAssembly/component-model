@@ -466,9 +466,13 @@ export calls can start piling up, each consuming some of the component's finite
 private resources (like linear memory), requiring the component to be able to
 exert *backpressure* to allow some tasks to finish (and release private
 resources) before admitting new async export calls. To do this, a component may
-call the [`backpressure.set`] built-in to set a component-instance-wide
-"backpressure" flag that causes subsequent export calls to immediately return
-in the "starting" state without calling the component's Core WebAssembly code.
+call the [`backpressure.inc`] built-in to increment a component-instance-wide
+"backpressure" counter until resources are freed and then call
+[`backpressure.dec`] to decrement the counter. When the backpressure counter is
+greater than zero, new export calls immediately return in the "starting" state
+without calling the component's Core WebAssembly code. By using a counter
+instead of a boolean flag, unrelated pieces of code can report backpressure for
+distinct limited resources without prior coordination.
 
 In addition to *explicit* backpressure set by wasm code, there is also an
 *implicit* source of backpressure used to protect non-reentrant core wasm code.
@@ -1137,7 +1141,8 @@ comes after:
 [Canonical Built-in]: Explainer.md#canonical-built-ins
 [`context.get`]: Explainer.md#-contextget
 [`context.set`]: Explainer.md#-contextset
-[`backpressure.set`]: Explainer.md#-backpressureset
+[`backpressure.inc`]: Explainer.md#-backpressureinc-and-backpressuredec
+[`backpressure.dec`]: Explainer.md#-backpressureinc-and-backpressuredec
 [`task.return`]: Explainer.md#-taskreturn
 [`task.cancel`]: Explainer.md#-taskcancel
 [`subtask.cancel`]: Explainer.md#-subtaskcancel
@@ -1155,7 +1160,6 @@ comes after:
 [`unpack_callback_result`]: CanonicalABI.md#canon-lift
 [`canon_lower`]: CanonicalABI.md#canon-lower
 [`canon_context_get`]: CanonicalABI.md#-canon-contextget
-[`canon_backpressure_set`]: CanonicalABI.md#-canon-backpressureset
 [`canon_waitable_set_wait`]: CanonicalABI.md#-canon-waitable-setwait
 [`canon_task_return`]: CanonicalABI.md#-canon-taskreturn
 [`canon_task_cancel`]: CanonicalABI.md#-canon-taskcancel

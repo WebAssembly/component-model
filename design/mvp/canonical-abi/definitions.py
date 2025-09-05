@@ -251,7 +251,7 @@ class ComponentInstance:
   store: Store
   table: Table
   may_leave: bool
-  backpressure: bool
+  backpressure: int
   exclusive: bool
   num_waiting_to_enter: int
 
@@ -259,7 +259,7 @@ class ComponentInstance:
     self.store = store
     self.table = Table()
     self.may_leave = True
-    self.backpressure = False
+    self.backpressure = 0
     self.exclusive = False
     self.num_waiting_to_enter = 0
 
@@ -540,7 +540,7 @@ class Task(Call, Supertask):
   def enter(self):
     assert(self.thread is not None)
     def has_backpressure():
-      return self.inst.backpressure or (self.needs_exclusive() and self.inst.exclusive)
+      return self.inst.backpressure > 0 or (self.needs_exclusive() and self.inst.exclusive)
     if has_backpressure() or self.inst.num_waiting_to_enter > 0:
       self.inst.num_waiting_to_enter += 1
       completed = self.thread.suspend_until(lambda: not has_backpressure(), cancellable = True)
@@ -2125,9 +2125,22 @@ def canon_context_set(t, i, task, v):
 ### 🔀 `canon backpressure.set`
 
 def canon_backpressure_set(task, flat_args):
-  trap_if(task.opts.sync)
   assert(len(flat_args) == 1)
-  task.inst.backpressure = bool(flat_args[0])
+  task.inst.backpressure = int(bool(flat_args[0]))
+  return []
+
+### 🔀 `canon backpressure.{inc,dec}`
+
+def canon_backpressure_inc(task):
+  assert(0 <= task.inst.backpressure < 2**16)
+  task.inst.backpressure += 1
+  trap_if(task.inst.backpressure == 2**16)
+  return []
+
+def canon_backpressure_dec(task):
+  assert(0 <= task.inst.backpressure < 2**16)
+  task.inst.backpressure -= 1
+  trap_if(task.inst.backpressure < 0)
   return []
 
 ### 🔀 `canon task.return`
