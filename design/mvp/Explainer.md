@@ -1417,7 +1417,9 @@ canon ::= ...
         | (canon resource.rep <typeidx> (core func <id>?))
         | (canon context.get <valtype> <u32> (core func <id>?)) 🔀
         | (canon context.set <valtype> <u32> (core func <id>?)) 🔀
-        | (canon backpressure.set (core func <id>?)) 🔀
+        | (canon backpressure.set (core func <id>?)) 🔀✕
+        | (canon backpressure.inc (core func <id>?)) 🔀
+        | (canon backpressure.dec (core func <id>?)) 🔀
         | (canon task.return (result <valtype>)? <canonopt>* (core func <id>?)) 🔀
         | (canon task.cancel (core func <id>?)) 🔀
         | (canon yield cancellable? (core func <id>?)) 🔀
@@ -1580,7 +1582,10 @@ future (as described [here][context-local storage]).
 
 For details, see [`canon_context_set`] in the Canonical ABI explainer.
 
-###### 🔀 `backpressure.set`
+###### 🔀✕ `backpressure.set`
+
+> This built-in is deprecated in favor of `backpressure.{inc,dec}` and will be
+> removed once producer tools have transitioned.
 
 | Synopsis                   |                       |
 | -------------------------- | --------------------- |
@@ -1593,6 +1598,26 @@ to the component (until the flag is unset). This allows the component to exert
 [backpressure].
 
 For details, see [`canon_backpressure_set`] in the Canonical ABI explainer.
+
+###### 🔀 `backpressure.inc` and `backpressure.dec`
+
+| Synopsis                   |            |
+| -------------------------- | ---------- |
+| Approximate WIT signature  | `func()`   |
+| Canonical ABI signature    | `[] -> []` |
+
+The `backpressure.{inc,dec}` built-ins allow code running in a component to
+prevent new incoming export calls to the component by enabling [backpressure].
+These built-ins increment and decrement a per-component-instance counter that,
+when greater than zero, enables backpressure.
+
+If these built-ins would overflow or underflow a 16-bit unsigned integer, they
+trap instead. As a composable convention, each piece of code that calls
+`backpressure.inc` must take responsibility for calling `backpressure.dec`
+exactly once when the source of backpressure subsides.
+
+For details, see [`canon_backpressure_{inc,dec}`] in the Canonical ABI
+explainer.
 
 ###### 🔀 `task.return`
 
@@ -3047,6 +3072,7 @@ For some use-case-focused, worked examples, see:
 [`canon_context_get`]: CanonicalABI.md#-canon-contextget
 [`canon_context_set`]: CanonicalABI.md#-canon-contextset
 [`canon_backpressure_set`]: CanonicalABI.md#-canon-backpressureset
+[`canon_backpressure_{inc,dec}`]: CanonicalABI.md#-canon-backpressureincdec
 [`canon_task_return`]: CanonicalABI.md#-canon-taskreturn
 [`canon_task_cancel`]: CanonicalABI.md#-canon-taskcancel
 [`canon_yield`]: CanonicalABI.md#-canon-yield
