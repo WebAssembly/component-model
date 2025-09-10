@@ -167,7 +167,7 @@
         (i32.const 42)
       )
     )
-    (canon subtask.cancel (core func $subtask.cancel))
+    (canon subtask.cancel async (core func $subtask.cancel))
     (canon subtask.drop (core func $subtask.drop))
     (canon future.new $FT (core func $future.new))
     (canon future.write $FT async (memory $memory "mem") (core func $future.write))
