@@ -36,7 +36,7 @@
         (local.set $bufp (i32.const 16))
         (i32.store (local.get $bufp) (i32.const 0x01234567))
         (local.set $ret (call $stream.write (local.get $tx) (local.get $bufp) (i32.const 4)))
-        (if (i32.ne (i32.const 0x40 (; DROPPED=1 | (4<<4) ;)) (local.get $ret))
+        (if (i32.ne (i32.const 0x41 (; DROPPED=1 | (4<<4) ;)) (local.get $ret))
           (then unreachable))
 
         (call $stream.drop-writable (local.get $tx))
@@ -57,7 +57,7 @@
         ;; synchronously, switch to the caller who will write and rendezvous
         (local.set $bufp (i32.const 16))
         (local.set $ret (call $stream.read (local.get $rx) (local.get $bufp) (i32.const 4)))
-        (if (i32.ne (i32.const 0x40 (; DROPPED=1 | (4<<4) ;)) (local.get $ret))
+        (if (i32.ne (i32.const 0x41 (; DROPPED=1 | (4<<4) ;)) (local.get $ret))
           (then unreachable))
         (if (i32.ne (i32.const 0x89abcdef) (i32.load (local.get $bufp)))
           (then unreachable))

@@ -22,7 +22,7 @@
     (canon resource.drop $R (core func $resource.drop))
     (canon task.return (core func $task.return))
     (canon task.cancel (core func $task.cancel))
-    (canon yield (core func $yield))
+    (canon thread.yield (core func $yield))
     (canon waitable-set.new (core func $waitable-set.new))
     (canon waitable-set.wait (memory $memory "mem") (core func $waitable-set.wait))
     (canon waitable-set.poll (memory $memory "mem") (core func $waitable-set.poll))
