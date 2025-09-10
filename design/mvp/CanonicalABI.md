@@ -3760,11 +3760,11 @@ delivered at a later `cancellable` call.
 
 For a canonical definition:
 ```wat
-(canon waitable-set.poll $async? (memory $mem) (core func $f))
+(canon waitable-set.poll $cancellable? (memory $mem) (core func $f))
 ```
 validation specifies:
 * `$f` is given type `(func (param $si i32) (param $ptr i32) (result i32))`
-* 🚟 - `async` is allowed (otherwise it must be `false`)
+* 🚟 - `cancellable` is allowed (otherwise it must be absent)
 
 Calling `$f` invokes the following function, which returns `NONE` (`0`) instead
 of blocking if there is no event available, and otherwise returns the event the
