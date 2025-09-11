@@ -1411,17 +1411,8 @@ was first, the zero-length `write` always completes, leaving the zero-length
 *must* (eventually) follow a completed zero-length `write` with a
 non-zero-length `write` that is allowed to block. This will break the loop,
 notifying the reader end and allowing it to rendezvous with a non-zero-length
-`read` and make progress. Based on this rule, to implement a traditional
-`O_NONBLOCK` `write()` or `sendmsg()` API, a writer can use a buffering scheme
-in which, after `select()` (or a similar API) signals a file descriptor is
-ready to write, the next `O_NONBLOCK` `write()`/`sendmsg()` on that file
-descriptor copies to an internal buffer and suceeds, issuing an `async`
-`stream.write` in the background and waiting for completion before signalling
-readiness again. Note that buffering only occurs when streaming between two
-components using non-blocking I/O; if either side is the host or a component
-using blocking or completion-based I/O, no buffering is necessary. This
-buffering is analogous to the buffering performed in kernel memory by a
-`pipe()`.
+`read` and make progress. See the [stream readiness] section in the async
+explainer for more background on purpose of zero-length reads and writes.
 
 The two ends of a stream are stored as separate elements in the component
 instance's table and each end has a separate `CopyState` that reflects what
@@ -4486,6 +4477,7 @@ def canon_thread_available_parallelism():
 [Readable or Writable End]: Async.md#streams-and-futures
 [Context-Local Storage]: Async.md#context-local-storage
 [Subtask State Machine]: Async.md#cancellation
+[Stream Readiness]: Async.md#stream-readiness
 [Lazy Lowering]: https://github.com/WebAssembly/component-model/issues/383
 
 [Core WebAssembly Embedding]: https://webassembly.github.io/spec/core/appendix/embedding.html

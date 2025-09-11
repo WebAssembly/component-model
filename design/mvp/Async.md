@@ -18,6 +18,7 @@ summary of the motivation and animated sketch of the design in action.
   * [Context-Local Storage](#context-local-storage)
   * [Structured concurrency](#structured-concurrency)
   * [Streams and Futures](#streams-and-futures)
+  * [Stream Readiness](#stream-readiness)
   * [Waiting](#waiting)
   * [Backpressure](#backpressure)
   * [Returning](#returning)
@@ -407,6 +408,66 @@ successfully read, conveys the completion of a second event.
 
 The [Stream State] and [Future State] sections describe the runtime state
 maintained for streams and futures by the Canonical ABI.
+
+### Stream Readiness
+
+When passed a non-zero-length buffer, the `stream.read` and `stream.write`
+built-ins are "completion-based" (in the style of, e.g., [Overlapped I/O] or
+[`io_uring`]) in that they complete only once one or more values have been
+copied to or from the memory buffer passed in at the start of the operation.
+In a Component Model context, completion-based I/O avoids intermediate copies
+and enables a greater degree of concurrency in a number of cases and thus
+language producer toolchains should attempt to pass non-zero-length buffers
+whenever possible.
+
+Given completion-based `stream.{read,write}` built-ins, "readiness-based" APIs
+(in the style of, e.g., [`select`] or [`epoll`] used in combination with
+[`O_NONBLOCK`]) can be implemented by passing an intermediate non-zero-length
+memory buffer to `stream.{read,write}` and signalling "readiness" once the
+operation completes. However, this approach incurs extra copying overhead. To
+avoid this overhead in a best-effort mannner, `stream.{read,write}` allow the
+buffer length to also be zero in which case "completion" of the operation
+is allowed (but not required) to wait to complete until the other end is
+"ready" for the next non-zero-length `stream.{read,write}` to complete without
+blocking. As the "but not required" caveat suggests, after a zero-length
+`stream.{read,write}` completes, there is no guarantee that the next call won't
+block (due to any number of practical externalities or because readiness was
+simply not possible to implement with a given an underlying host API).
+
+As an example, to implement `select()` and non-blocking `write()` in
+[wasi-libc], the following implementation strategy could be used (and a
+symmetric scheme could be used for `read()`):
+* The libc-internal file descriptor table tracks whether there is currently a
+  pending write or whether a previous zero-length write has completed, both
+  initially false.
+* When `select()`ing a non-blocking file descriptor for writing, a zero-length
+  write is started if there is no write already pending and then the stream is
+  [waited](#waiting) upon along with all the other `select()` arguments.
+* If a pending write completes, `select()` updates the file descriptor to
+  record this fact and then indicates to the `select()` caller that this
+  file descriptor is ready.
+* When `write()` is called in non-blocking mode:
+  * If there is already a pending `stream.write` for this file descriptor,
+    `write()` immediately returns `EWOULDBLOCK`.
+  * Otherwise, `stream.write` is called, forwarding the buffer that was passed
+    to `write()`.
+    * If `stream.write` returns that it successfully copied some bytes without
+      blocking, then `write()` returns success. This is the fast path that we
+      hope hits most of the time.
+    * Otherwise, if `stream.write` blocks:
+      * `stream.cancel-write` is called to halt the async `stream.write` and
+        regain ownership of the `write()`-caller's buffer.
+      * The contents of the `write()`-caller's buffer are copied to a
+        wasi-libc-internal buffer and a new `stream.write` is issued for this
+        buffer (which will likely return that it blocked and proceed in the
+        background).
+      * `write()` returns success to the caller (similar to how the
+        kernel signals success even though the bytes have just been copied
+        to a kernel-internal buffer).
+* `fsync()` and `close()` wait for any pending non-zero-length write to
+  complete.
+
+TODO: describe component-to-component
 
 ### Waiting
 
@@ -1134,6 +1195,12 @@ comes after:
 [FS or GS Segment Base Address]: https://docs.kernel.org/arch/x86/x86_64/fsgs.html
 [Cooperative]: https://en.wikipedia.org/wiki/Cooperative_multitasking
 [Multithreading]: https://en.wikipedia.org/wiki/Multithreading_(computer_architecture)
+[Overlapped I/O]: https://en.wikipedia.org/wiki/Overlapped_I/O
+[`io_uring`]: https://en.wikipedia.org/wiki/Io_uring
+[`epoll`]: https://en.wikipedia.org/wiki/Epoll
+
+[`select`]: https://pubs.opengroup.org/onlinepubs/007908799/xsh/select.html
+[`O_NONBLOCK`]: https://pubs.opengroup.org/onlinepubs/7908799/xsh/open.html
 
 [AST Explainer]: Explainer.md
 [Lift and Lower Definitions]: Explainer.md#canonical-definitions
@@ -1152,6 +1219,7 @@ comes after:
 [`thread.spawn*`]: Explainer.md#-threadspawn_ref
 [`{stream,future}.new`]: Explainer.md#-streamnew-and-futurenew
 [`{stream,future}.{read,write}`]: Explainer.md#-streamread-and-streamwrite
+[`stream.cancel-read`]: Explainer.md#-streamcancel-read-streamcancel-write-futurecancel-read-and-futurecancel-write
 [ESM-integration]: Explainer.md#ESM-integration
 
 [Canonical ABI Explainer]: CanonicalABI.md
@@ -1190,6 +1258,7 @@ comes after:
 [shared-everything-threads]: https://github.com/webAssembly/shared-everything-threads
 [memory64]: https://github.com/webAssembly/memory64
 [wasm-gc]: https://github.com/WebAssembly/gc/blob/main/proposals/gc/MVP.md
+[wasi-libc]: https://github.com/WebAssembly/wasi-libc
 
 [WASI Preview 3]: https://github.com/WebAssembly/WASI/tree/main/wasip2#looking-forward-to-preview-3
 [`wasi:http/handler.handle`]: https://github.com/WebAssembly/wasi-http/blob/main/wit-0.3.0-draft/handler.wit
