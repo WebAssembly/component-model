@@ -425,7 +425,7 @@ Given completion-based `stream.{read,write}` built-ins, "readiness-based" APIs
 [`O_NONBLOCK`]) can be implemented by passing an intermediate non-zero-length
 memory buffer to `stream.{read,write}` and signalling "readiness" once the
 operation completes. However, this approach incurs extra copying overhead. To
-avoid this overhead in a best-effort mannner, `stream.{read,write}` allow the
+avoid this overhead in a best-effort manner, `stream.{read,write}` allow the
 buffer length to be zero in which case "completion" of the operation is allowed
 (but not required) to wait to complete until the other end is "ready". As the
 "but not required" caveat suggests, after a zero-length `stream.{read,write}`
