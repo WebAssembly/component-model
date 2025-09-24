@@ -4044,10 +4044,10 @@ until this point into a single `i32` payload for core wasm.
   e.copy(task.inst, buffer, on_copy, on_copy_done)
 ```
 
-When this `copy` makes progress, a `stream_event` is set on the stream end
-`Waitble`. If `stream.{read,write}` is called synchronously, the call suspends
-the current thread until an event is set, so that the event can be returned.
-Otherwise, asynchronous calls deliver the event if it was produced
+When this `copy` makes progress, a `stream_event` is set on the stream end's
+`Waitable` base object. If `stream.{read,write}` is called synchronously, the
+call suspends the current thread until an event is set, so that the event can
+be returned. Otherwise, asynchronous calls deliver the event if it was produced
 synchronously and return `BLOCKED` if not:
 ```python
   if not e.has_pending_event():
