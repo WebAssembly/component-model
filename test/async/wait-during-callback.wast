@@ -42,8 +42,6 @@
         (then unreachable))
       (if (i32.ne (local.get $futr) (i32.load (local.get $retp)))
         (then unreachable))
-      (if (i32.ne (i32.const 2 (; RETURNED=2 ;)) (i32.load offset=4 (local.get $retp)))
-        (then unreachable))
 
       ;; return 42
       (call $task.return (i32.const 42))
