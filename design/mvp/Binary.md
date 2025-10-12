@@ -297,7 +297,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x05                                                => (canon task.cancel (core func)) 🔀
            | 0x0a 0x7f i:<u32>                                   => (canon context.get i32 i (core func)) 🔀
            | 0x0b 0x7f i:<u32>                                   => (canon context.set i32 i (core func)) 🔀
-           | 0x0c cancel?:<cancel?>                              => (canon yield cancel? (core func)) 🔀
+           | 0x0c cancel?:<cancel?>                              => (canon thread.yield cancel? (core func)) 🔀
            | 0x06 async?:<async?>                                => (canon subtask.cancel async? (core func)) 🔀
            | 0x0d                                                => (canon subtask.drop (core func)) 🔀
            | 0x0e t:<typeidx>                                    => (canon stream.new t (core func)) 🔀
@@ -322,13 +322,21 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x21 cancel?:<cancel?> m:<core:memidx>              => (canon waitable-set.poll cancel? (memory m) (core func)) 🔀
            | 0x22                                                => (canon waitable-set.drop (core func)) 🔀
            | 0x23                                                => (canon waitable.join (core func)) 🔀
-           | 0x40 ft:<typeidx>                                   => (canon thread.spawn_ref ft (core func)) 🧵
-           | 0x41 ft:<typeidx> tbl:<core:tableidx>               => (canon thread.spawn_indirect ft tbl (core func)) 🧵
-           | 0x42                                                => (canon thread.available_parallelism (core func)) 🧵
+           | 0x26                                                => (canon thread.index (core func)) 🧵
+           | 0x27 ft:<typeidx> tbl:<core:tableidx>               => (canon thread.new_indirect ft tbl (core func)) 🧵
+           | 0x28 cancel?:<cancel?>                              => (canon thread.switch-to cancel? (core func)) 🧵
+           | 0x29 cancel?:<cancel?>                              => (canon thread.suspend cancel? (core func)) 🧵
+           | 0x2a                                                => (canon thread.resume-later (core func)) 🧵
+           | 0x2b cancel?:<cancel?>                              => (canon thread.yield-to cancel? (core func)) 🧵
+           | 0x40 shared?:<sh?> ft:<typeidx>                     => (canon thread.spawn_ref shared? ft (core func)) 🧵②
+           | 0x41 shared?:<sh?> ft:<typeidx> tbl:<core:tableidx> => (canon thread.spawn_indirect shared? ft tbl (core func)) 🧵②
+           | 0x42 shared?:<sh?>                                  => (canon thread.available-parallelism shared? (core func)) 🧵②
 async?   ::= 0x00                                                =>
            | 0x01                                                => async
 cancel?  ::= 0x00                                                =>
            | 0x01                                                => cancellable 🚟
+sh?      ::= 0x00                                                =>
+           | 0x01                                                => shared 🧵②
 opts     ::= opt*:vec(<canonopt>)                                => opt*
 canonopt ::= 0x00                                                => string-encoding=utf8
            | 0x01                                                => string-encoding=utf16
@@ -512,6 +520,8 @@ named once.
   repurposed.
 * Most built-ins should have a `<canonopt>*` immediate instead of an ad hoc
   subset of `canonopt`s.
+* Add optional `shared` immediate to all canonical definitions (explicitly or
+  via `<canonopt>`) when shared-everything-threads (🧵②) is added.
 
 
 [`core:byte`]: https://webassembly.github.io/spec/core/binary/values.html#binary-byte
