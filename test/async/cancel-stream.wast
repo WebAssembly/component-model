@@ -116,7 +116,7 @@
 
         ;; call 'start-stream' to get the stream we'll be working with
         (local.set $sr (call $start-stream))
-        (if (i32.ne (i32.const 1) (local.get $sr))
+        (if (i32.ne (i32.const 2) (local.get $sr))
           (then unreachable))
 
         ;; start read that will block
@@ -155,7 +155,7 @@
 
         ;; get a new $sr
         (local.set $sr (call $start-stream))
-        (if (i32.ne (i32.const 1) (local.get $sr))
+        (if (i32.ne (i32.const 2) (local.get $sr))
           (then unreachable))
 
         ;; start outstanding write in $C, read 4 of it, then call back into $C
