@@ -191,7 +191,7 @@ no prohibition against non-`async`-exported functions calling imported `async`
 functions. This does mean that non-`async` functions may end up blocking
 their caller, but (1) any loss in performance is the callee's "fault", (2) the
 caller can still lower `async` if they want to (overriding the default hint),
-(3) any *transitive* caller an lower `async` to avoid blocking.
+(3) any *transitive* caller can lower `async` to avoid blocking.
 
 For example, given this interface:
 ```wit
