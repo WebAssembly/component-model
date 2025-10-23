@@ -1458,8 +1458,8 @@ is just a hint and not enforced by the runtime, it is technically possible for
 a non-`async` callee to block. In that case, though, it is the *callee's* fault
 for any resultant loss of concurrency, not the caller's. Thus, `async` is
 primarily intended to document expectations in a way that can be taken
-advantage of by bindings generators. (For more details, see the [async
-explainer](Async.md#sync-and-async-functions).)
+advantage of by bindings generators. (For more details, see the [concurrency
+explainer](Concurrency.md).)
 
 
 ## Item: `use`
@@ -1780,8 +1780,8 @@ variant result {
 These types are so frequently used and frequently have language-specific
 meanings though so they're also provided as first-class types.
 
-The `future` and `stream` types are described as part of the [async
-explainer](Async.md#streams-and-futures).
+The `future` and `stream` types are described as part of the [concurrency
+explainer](Concurrency.md#streams-and-futures).
 
 Finally the last case of a `ty` is simply an `id` which is intended to refer to
 another type or resource defined in the document. Note that definitions can come

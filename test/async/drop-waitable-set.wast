@@ -59,7 +59,7 @@
         ;; start an async call to 'wait-on-set' which blocks, waiting on a
         ;; waitable-set.
         (local.set $ret (call $wait-on-set))
-        (if (i32.ne (i32.const 0x11) (local.get $ret))
+        (if (i32.ne (i32.const 0x21) (local.get $ret))
           (then unreachable))
 
         ;; this call will try to drop the same waitable-set, which should trap.

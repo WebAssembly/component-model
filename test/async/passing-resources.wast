@@ -121,7 +121,7 @@
 
         ;; get the readable end of a stream which has a pending write
         (local.set $rs (call $start-stream))
-        (if (i32.ne (local.get $rs) (i32.const 1))
+        (if (i32.ne (local.get $rs) (i32.const 2))
           (then unreachable))
 
         ;; read only 1 (of the 2 pending) elements, which won't block
