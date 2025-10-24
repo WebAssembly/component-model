@@ -1,0 +1,160 @@
+\section{Types}
+
+The component model introduces two new kinds of types: value types,
+which are used to classify shared-nothing interface values, and
+defined types, which are used to characterize the core and component
+modules, instances, and functions which form part of a a component's
+interface.
+
+\subsection{Value types}
+
+A \emph{value type} classifies a component-level abstract value.
+Unlike for Core WebAssembly values, no specified abstract syntax of
+component values exist; they serve simply to define the interface of
+lifted component functions (which currently may be produced only via
+canonical definitions).
+
+Value types are further divided into primitive value types, which have
+a compact representation and can be found in most places where types
+are allowed, and defined value types, which must appear in a type
+definition before they can be used (via a $\typeidx$ into the type
+index space):
+
+
+\begin{sum-productions}
+  \production{primvaltype}
+  \VTBOOL \alt
+  \VTS8 | \VTU8 | \VTS16 | \VTU16 | \VTS32 | \VTU32 | \VTS64 | \VTU64 \alt
+  \VTFLOAT32 | \VTFLOAT64 \alt
+  \VTCHAR | \VTSTRING
+
+  \production{defvaltype}
+  \VTPRIM~\primvaltype \alt
+  \VTRECORD~\recordfield^{+} \alt
+  \VTVARIANT~\variantcase^{+} \alt
+  \VTLIST~\valtype \alt
+  \VTTUPLE~\valtype^{*} \alt
+  \VTFLAGS~\name^{*} \alt
+  \VTENUM~\name^{+} \alt
+  \VTUNION~\valtype^{+} \alt
+  \VTOPTION~\valtype \alt
+  \VTRESULT~\valtype^{?}~\valtype^{?} \alt
+  \VTOWN~\typeidx \alt
+  \VTBORROW~\typeidx
+
+  \production{valtype}
+  \primvaltype | \typeidx
+\end{sum-productions}
+
+\begin{record-productions}
+  \production{recordfield}
+  \{ \RFNAME~\name, \RFTYPE~\valtype \}
+  \production{variantcase}
+  \{ \VCNAME~\name, \VCTYPE~\valtype^{?}, \VCREFINES~\u32^? \}
+\end{record-productions}
+
+\subsection{Resource Types}
+
+\begin{record-production}{resourcetype}
+  \{ \RTREP~\i32, \RTDTOR~\funcidx \}
+\end{record-production}
+
+\subsection{Function Types}
+
+A component-level shared-nothing function is classified by the types
+of its parameters and return values. Such a function may take as
+parameters zero or more named values, and will return as results zero
+or more namde values. If a function takes a single parameter, or
+returns a single result, said parameter or result may be unnamed:
+
+\begin{record-production}{functype}
+  \paramlist \to \resultlist
+\end{record-production}
+
+The input or output of a function is classified by a parameter or
+return list:
+
+\begin{sum-productions}
+ \production{paramlist}
+   \{ \PLNAME~\name, \PLTYPE~\valtype \}^{*}
+ \production{resultlist}
+   \valtype \alt
+   \{ \RLNAME~\name, \RLTYPE~\valtype \}^{*}
+\end{sum-productions}
+
+\subsection{Instance Types}
+
+A component instance is conceptually classified by the types of its
+exports. However, an instance's type is concretely represented as a
+series of \emph{declarations} manipulating index spaces (particular to
+the instance type; these index spaces are entirely unrelated to both
+the index spaces of any instance which has this type and those of any
+instance importing or exporting something of this type). This allows
+for better type sharing and, in the future, uses of private types from
+parent components.
+
+\begin{sum-productions}
+  \production{instancetype} \instancedecl^{*}
+  \production{instancedecl}
+    \IDALIAS~\alias \alt
+    \IDTYPE~\deftype \alt
+    \IDEXPORT~\exportdecl
+  \production{externdesc}
+    \EDTYPE~\typebound \alt
+    \EDCOREMODULE~\core:typeidx \alt
+    \EDFUNC~\typeidx \alt
+    \EDVALUE~\valtype \alt
+    \EDINSTANCE~\typeidx \alt
+    \EDCOMPONENT~\typeidx
+  \production{typebound}
+    \TBEQ~\typeidx \alt
+    \TBSUBR\\
+  \production{exportdecl} \{ \EDNAME~\name, \EDDESC~\externdesc \}
+\end{sum-productions}
+
+\subsection{Component Types}
+
+A component is conceptually classified by the types of its imports and
+exports. However, as in the case of instances, this is concretely
+represented as a series of declarations. Component types allow the
+same declarations used in instance types, but also import declarations.
+
+\begin{sum-productions}
+  \production{componenttype} \componentdecl^{*}\\
+  \production{componentdecl}
+    \instancedecl \alt
+    \CDIMPORT~\importdecl
+  \production{importdecl}
+    \{ \IDNAME~\name, \IDDESC~\externdesc \}
+\end{sum-productions}
+
+\subsection{Defined Types}
+
+A type definition may name a value, resource, function, component, or
+instance type:
+
+\begin{sum-production}{deftype}
+  \defvaltype \alt \resourcetype \alt \functype \alt \componenttype
+  \alt \instancetype
+\end{sum-production}
+
+\subsection{Core definition types}
+
+The component module specification also defines an expanded notion of
+what a core type is, which may eventually be subsumed by a core module
+linking extension.
+
+\begin{sum-productions}
+  \production{coredeftype}
+    \core:functype \alt \coremoduletype
+  \production{coremoduletype} \coremoduledecl^{*}
+  \production{coremoduledecl}
+    \coreimportdecl \alt
+    \coredeftype \alt
+    \corealias \alt
+    \coreexportdecl \alt
+  \production{corealias} \{ \CASORT~\coresort, \CATARGET~\corealiastarget \}
+  \production{corealiastarget} \CATOUTER~\u32~\u32
+  \production{coreimportdecl} \core:import
+  \production{coreexportdecl} \{ \CEDNAME~\name, \CEDDESC~\core:importdesc \}
+\end{sum-productions}
