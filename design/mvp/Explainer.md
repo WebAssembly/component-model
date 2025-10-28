@@ -2075,7 +2075,7 @@ dynamically checked to match the type `FuncT` (in the same manner as
 `call_indirect`). Lastly, the indexed function is called in the new thread
 with `c` as its first and only parameter.
 
-Currently, `FuncT` must be `(func (param i32))` and thus `c` must always an
+Currently, `FuncT` must be `(func (param i32))` and thus `c` must always be an
 `i32`, but this restriction can be loosened in the future as the Canonical
 ABI is extended for [memory64] and [GC].
 
