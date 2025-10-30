@@ -2481,7 +2481,7 @@ def canon_thread_index(thread):
   assert(thread.index is not None)
   return [thread.index]
 
-### 🧵 `canon thread.new_indirect`
+### 🧵 `canon thread.new-indirect`
 
 @dataclass
 class CoreFuncRef:

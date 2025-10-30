@@ -323,13 +323,13 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x22                                                => (canon waitable-set.drop (core func)) 🔀
            | 0x23                                                => (canon waitable.join (core func)) 🔀
            | 0x26                                                => (canon thread.index (core func)) 🧵
-           | 0x27 ft:<typeidx> tbl:<core:tableidx>               => (canon thread.new_indirect ft tbl (core func)) 🧵
+           | 0x27 ft:<typeidx> tbl:<core:tableidx>               => (canon thread.new-indirect ft tbl (core func)) 🧵
            | 0x28 cancel?:<cancel?>                              => (canon thread.switch-to cancel? (core func)) 🧵
            | 0x29 cancel?:<cancel?>                              => (canon thread.suspend cancel? (core func)) 🧵
            | 0x2a                                                => (canon thread.resume-later (core func)) 🧵
            | 0x2b cancel?:<cancel?>                              => (canon thread.yield-to cancel? (core func)) 🧵
-           | 0x40 shared?:<sh?> ft:<typeidx>                     => (canon thread.spawn_ref shared? ft (core func)) 🧵②
-           | 0x41 shared?:<sh?> ft:<typeidx> tbl:<core:tableidx> => (canon thread.spawn_indirect shared? ft tbl (core func)) 🧵②
+           | 0x40 shared?:<sh?> ft:<typeidx>                     => (canon thread.spawn-ref shared? ft (core func)) 🧵②
+           | 0x41 shared?:<sh?> ft:<typeidx> tbl:<core:tableidx> => (canon thread.spawn-indirect shared? ft tbl (core func)) 🧵②
            | 0x42 shared?:<sh?>                                  => (canon thread.available-parallelism shared? (core func)) 🧵②
 async?   ::= 0x00                                                =>
            | 0x01                                                => async

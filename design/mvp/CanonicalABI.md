@@ -59,7 +59,7 @@ specified here.
   * [`canon {stream,future}.cancel-{read,write}`](#-canon-streamfuturecancel-readwrite) 🔀
   * [`canon {stream,future}.drop-{readable,writable}`](#-canon-streamfuturedrop-readablewritable) 🔀
   * [`canon thread.index`](#-canon-threadindex) 🧵
-  * [`canon thread.new_indirect`](#-canon-threadnew_indirect) 🧵
+  * [`canon thread.new-indirect`](#-canon-threadnew-indirect) 🧵
   * [`canon thread.switch-to`](#-canon-threadswitch-to) 🧵
   * [`canon thread.suspend`](#-canon-threadsuspend) 🧵
   * [`canon thread.resume-later`](#-canon-threadresume-later) 🧵
@@ -68,8 +68,8 @@ specified here.
   * [`canon error-context.new`](#-canon-error-contextnew) 📝
   * [`canon error-context.debug-message`](#-canon-error-contextdebug-message) 📝
   * [`canon error-context.drop`](#-canon-error-contextdrop) 📝
-  * [`canon thread.spawn_ref`](#-canon-threadspawn_ref) 🧵②
-  * [`canon thread.spawn_indirect`](#-canon-threadspawn_indirect) 🧵②
+  * [`canon thread.spawn-ref`](#-canon-threadspawn-ref) 🧵②
+  * [`canon thread.spawn-indirect`](#-canon-threadspawn-indirect) 🧵②
   * [`canon thread.available-parallelism`](#-canon-threadavailable-parallelism) 🧵②
 
 ## Introduction
@@ -422,7 +422,7 @@ class ResourceType(Type):
 
 As described in the [concurrency explainer], threads are created both
 *implicitly*, when calling a component export (in `canon_lift` below), and
-*explicitly*, when core wasm code calls the `thread.new_indirect` built-in (in
+*explicitly*, when core wasm code calls the `thread.new-indirect` built-in (in
 `canon_thread_new_indirect` below). Threads are represented here by the
 `Thread` class and the [current thread] is represented by explicitly threading
 a reference to a `Thread` through all Core WebAssembly calls so that the
@@ -769,7 +769,7 @@ enforce the Canonical ABI rules associated with the callee as well as implement
 caller-requested cancellation. Each task contains 0..N threads that execute on
 behalf of the task, starting with the thread that is spawned to execute the
 exported function and transitively including additional threads spawned by that
-thread via `thread.new_indirect`.
+thread via `thread.new-indirect`.
 
 Tasks are represented here by the `Task` class and the [current task] is
 represented by the `Thread.task` field of the [current thread]. `Task`
@@ -4332,11 +4332,11 @@ def canon_thread_index(thread):
 ```
 
 
-### 🧵 `canon thread.new_indirect`
+### 🧵 `canon thread.new-indirect`
 
 For a canonical definition:
 ```wat
-(canon thread.new_indirect $ft $ftbl (core func $new_indirect))
+(canon thread.new-indirect $ft $ftbl (core func $new_indirect))
 ```
 validation specifies
 * `$ft` must refer to the type `(func (param $c i32))`
@@ -4623,11 +4623,11 @@ def canon_error_context_drop(thread, i):
 ```
 
 
-### 🧵② `canon thread.spawn_ref`
+### 🧵② `canon thread.spawn-ref`
 
 For a canonical definition:
 ```wat
-(canon thread.spawn_ref shared? $ft (core func $spawn_ref))
+(canon thread.spawn-ref shared? $ft (core func $spawn_ref))
 ```
 validation specifies:
 * `$ft` must refer to the type `(shared? (func (param $c i32)))` (see explanation below)
@@ -4642,7 +4642,7 @@ parallel with all other threads.
 > Note: ideally, a thread could be spawned with [arbitrary thread parameters].
 > Currently, that would require additional work in the toolchain to support so,
 > for simplicity, the current proposal simply fixes a single `i32` parameter
-> type. However, `thread.spawn_ref` could be extended to allow arbitrary thread
+> type. However, `thread.spawn-ref` could be extended to allow arbitrary thread
 > parameters in the future, once it's concretely beneficial to the toolchain.
 > The inclusion of `$ft` ensures backwards compatibility for when arbitrary
 > parameters are allowed.
@@ -4664,15 +4664,15 @@ part of adding a [GC ABI option] to the Canonical ABI and would work
 like `canon_thread_new_indirect` minus the table access and type check.
 
 
-### 🧵② `canon thread.spawn_indirect`
+### 🧵② `canon thread.spawn-indirect`
 
 For a canonical definition:
 ```wat
-(canon thread.spawn_indirect shared? $ft $tbl (core func $spawn_indirect))
+(canon thread.spawn-indirect shared? $ft $tbl (core func $spawn_indirect))
 ```
 validation specifies:
 * `$ft` must refer to the type `(shared? (func (param $c i32)))` is allowed
-  (see explanation in `thread.spawn_ref` above)
+  (see explanation in `thread.spawn-ref` above)
 * `$tbl` must refer to a shared table whose element type matches
   `(ref null (shared? func))`
 * `$spawn_indirect` is given type
@@ -4684,7 +4684,7 @@ immediate is present, the spawned thread is *preemptive* and able to execute in
 parallel with all other threads.
 
 Calling `$spawn_indirect` invokes the following function which simply fuses
-the `thread.new_indirect` and `thread.resume-later` built-ins, allowing
+the `thread.new-indirect` and `thread.resume-later` built-ins, allowing
 thread-creation to skip the intermediate "suspended" state transition.
 ```python
 def canon_thread_spawn_indirect(shared, ft, ftbl: Table[CoreFuncRef], thread, fi, c):

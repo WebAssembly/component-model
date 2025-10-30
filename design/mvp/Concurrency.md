@@ -116,7 +116,7 @@ the stack.
 
 In addition to the *implicit* threads logically created for export calls, Core
 WebAssembly code can also *explicitly* create new green threads by calling the
-[`thread.new_indirect`] built-in. Regardless of how they were created, all
+[`thread.new-indirect`] built-in. Regardless of how they were created, all
 threads can call a set of Component Model-defined `thread.*` built-in functions
 (listed [below](#waiting)) to suspend themselves and/or resume other threads.
 These built-ins provide sufficient functionality to implement both the
@@ -124,7 +124,7 @@ internally-scheduled "green thread" and the externally-scheduled "host thread"
 use cases mentioned in the [goals](#goals).
 
 Until the Core WebAssembly [shared-everything-threads] proposal allows Core
-WebAssembly function types to be annotated with `shared`, `thread.new_indirect`
+WebAssembly function types to be annotated with `shared`, `thread.new-indirect`
 can only call non-`shared` functions (via `i32` `(table funcref)` index, just
 like `call_indirect`) and thus currently all threads must execute
 [cooperatively] in a sequentially-interleaved fashion, switching between
@@ -237,7 +237,7 @@ where a **component store** is the top-level "thing" and analogous to a Core
 WebAssembly [store].
 
 The reason for the thread/task split is so that, when one thread creates a new
-thread by calling [`thread.new_indirect`], the new thread is contained by the
+thread by calling [`thread.new-indirect`], the new thread is contained by the
 task of the original thread. Thus there is an N:1 relationship between threads
 and tasks that ties N threads to the original export call (= "task") that
 transitively spawned those N threads. This relationship serves several purposes
@@ -275,9 +275,9 @@ natural place to store:
 2. a pointer to a struct used by the runtime to implement the language's
    thread-local features
 
-When threads are created explicitly by `thread.new_indirect`, the lifetime of
+When threads are created explicitly by `thread.new-indirect`, the lifetime of
 the thread-local storage array ends when the function passed to
-`thread.new_indirect` returns and thus any linear-memory allocations associated
+`thread.new-indirect` returns and thus any linear-memory allocations associated
 with the thread-local storage array should be eagerly freed by guest code right
 before returning. Similarly, since each call to an export logically creates a
 fresh thread, thread-local allocations can be eagerly released when this
@@ -502,7 +502,7 @@ will run out of other things to do and will need to wait for something else to
 happen by **suspending** itself until something else happens.
 
 The following three built-ins put threads into a suspended state:
-* [`thread.new_indirect`]: create a new thread that is initially suspended
+* [`thread.new-indirect`]: create a new thread that is initially suspended
   and continue executing the current thread
 * [`thread.switch-to`]: suspend the current thread and immediately resume a
   given thread
@@ -527,7 +527,7 @@ priority):
 
 These built-ins enable the "host thread" [use cases](#goals), allowing the
 embedder to nondeterministically control which thread is resumed when. In
-particular, [`pthread_create`] can be implemented using `thread.new_indirect`
+particular, [`pthread_create`] can be implemented using `thread.new-indirect`
 and either `thread.resume-later` or `thread.yield-to` (thereby allowing the
 pthreads implementation to choose whether to execute a new pthread eagerly or
 not).
@@ -549,7 +549,7 @@ In particular, the following built-ins allow building and using waitable sets:
   waitables in the given set has a pending event, return that event; otherwise
   return a sentinel "none" value
 
-Threads that are explicitly suspended (via `thread.new_indirect`,
+Threads that are explicitly suspended (via `thread.new-indirect`,
 `thread.switch-to` or `thread.suspend`) will stay suspended indefinitely until
 explicitly resumed (via `thread.switch-to`, `thread.resume-later`,
 `thread.yield-to`). Attempting to explicitly resume a thread that was *not*
@@ -1249,7 +1249,7 @@ comes after:
 [`waitable-set.wait`]: Explainer.md#-waitable-setwait
 [`waitable-set.poll`]: Explainer.md#-waitable-setpoll
 [`waitable.join`]: Explainer.md#-waitablejoin
-[`thread.new_indirect`]: Explainer.md#-threadnew_indirect
+[`thread.new-indirect`]: Explainer.md#-threadnew-indirect
 [`thread.index`]: Explainer.md#-threadindex
 [`thread.suspend`]: Explainer.md#-threadsuspend
 [`thread.switch-to`]: Explainer.md#-threadswitch-to

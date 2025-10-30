@@ -1445,7 +1445,7 @@ canon ::= ...
         | (canon future.drop-readable <typeidx> (core func <id>?)) 🔀
         | (canon future.drop-writable <typeidx> (core func <id>?)) 🔀
         | (canon thread.index (core func <id>?)) 🧵
-        | (canon thread.new_indirect <typeidx> <core:tableidx> (core func <id>?)) 🧵
+        | (canon thread.new-indirect <typeidx> <core:tableidx> (core func <id>?)) 🧵
         | (canon thread.switch-to cancellable? (core func <id>?)) 🧵
         | (canon thread.suspend cancellable? (core func <id>?)) 🧵
         | (canon thread.resume-later (core func <id>?) 🧵
@@ -1454,8 +1454,8 @@ canon ::= ...
         | (canon error-context.new <canonopt>* (core func <id>?)) 📝
         | (canon error-context.debug-message <canonopt>* (core func <id>?)) 📝
         | (canon error-context.drop (core func <id>?)) 📝
-        | (canon thread.spawn_ref shared? <typeidx> (core func <id>?)) 🧵②
-        | (canon thread.spawn_indirect shared? <typeidx> <core:tableidx> (core func <id>?)) 🧵②
+        | (canon thread.spawn-ref shared? <typeidx> (core func <id>?)) 🧵②
+        | (canon thread.spawn-indirect shared? <typeidx> <core:tableidx> (core func <id>?)) 🧵②
         | (canon thread.available-parallelism (core func <id>?)) 🧵②
 ```
 
@@ -2055,20 +2055,20 @@ For details, see [`canon_stream_drop_readable`] in the Canonical ABI explainer.
 | Canonical ABI signature    | `[] -> [i32]`   |
 
 The `thread.index` built-in returns the index of the [current thread] in the
-component instance's table. While `thread.new_indirect` also returns the index
+component instance's table. While `thread.new-indirect` also returns the index
 of newly-created threads, threads created implicitly for export calls can only
 learn their index via `thread.index`.
 
 For details, see [`canon_thread_index`] in the Canonical ABI explainer.
 
-###### 🧵 `thread.new_indirect`
+###### 🧵 `thread.new-indirect`
 
 | Synopsis                   |                                                               |
 | -------------------------- | ------------------------------------------------------------- |
 | Approximate WIT signature  | `func<FuncT,tableidx>(fi: u32, c: FuncT.params[0]) -> thread` |
 | Canonical ABI signature    | `[fi:i32 c:i32] -> [i32]`                                     |
 
-The `thread.new_indirect` built-in adds a new thread to the current component
+The `thread.new-indirect` built-in adds a new thread to the current component
 instance's table, returning the index of the new thread. The function table
 supplied via [`core:tableidx`] is indexed by the `fi` operand and then
 dynamically checked to match the type `FuncT` (in the same manner as
@@ -2080,7 +2080,7 @@ Currently, `FuncT` must be `(func (param i32))` and thus `c` must always be an
 ABI is extended for [memory64] and [GC].
 
 As explained in the [concurrency explainer][waiting], a thread created by
-`thread.new_indirect` is initially in a suspended state and must be resumed
+`thread.new-indirect` is initially in a suspended state and must be resumed
 eagerly or lazily by [`thread.yield-to`](#-threadyield-to) or
 [`thread.resume-later`](#-threadresume-later), resp., to begin execution.
 
@@ -2202,14 +2202,14 @@ threads and threads implicitly created by non-`callback` `async`-lifted
 For details, see [waiting] in the concurrency explainer and
 [`canon_thread_yield`] in the Canonical ABI explainer.
 
-###### 🧵② `thread.spawn_ref`
+###### 🧵② `thread.spawn-ref`
 
 | Synopsis                   |                                                                    |
 | -------------------------- | ------------------------------------------------------------------ |
 | Approximate WIT signature  | `func<shared?,FuncT>(f: FuncT, c: FuncT.params[0]) -> bool`        |
 | Canonical ABI signature    | `shared? [f:(ref null (shared (func (param i32))) c:i32] -> [i32]` |
 
-The `thread.spawn_ref` built-in is an optimization, fusing a call to
+The `thread.spawn-ref` built-in is an optimization, fusing a call to
 `thread.new_ref` (assuming `thread.new_ref` was added as part of adding a
 [GC ABI option] to the Canonical ABI) with a call to
 [`thread.resume-later`](#-threadresume-later). This optimization is more
@@ -2217,15 +2217,15 @@ impactful once given [shared-everything-threads] and thus gated on 🧵②.
 
 For details, see [`canon_thread_spawn_ref`] in the Canonical ABI explainer.
 
-###### 🧵② `thread.spawn_indirect`
+###### 🧵② `thread.spawn-indirect`
 
 | Synopsis                   |                                                                    |
 | -------------------------- | ------------------------------------------------------------------ |
 | Approximate WIT signature  | `func<shared?,FuncT,tableidx>(i: u32, c: FuncT.params[0]) -> bool` |
 | Canonical ABI signature    | `shared? [i:i32 c:i32] -> [i32]`                                   |
 
-The `thread.spawn_indirect` built-in is an optimization, fusing a call to
-[`thread.new_indirect`](#-threadnew_indirect) with a call to
+The `thread.spawn-indirect` built-in is an optimization, fusing a call to
+[`thread.new-indirect`](#-threadnew-indirect) with a call to
 [`thread.resume-later`](#-threadresume-later). This optimization is more
 impactful once given [shared-everything-threads] and thus gated on 🧵②.
 
@@ -3251,14 +3251,14 @@ For some use-case-focused, worked examples, see:
 [`canon_error_context_debug_message`]: CanonicalABI.md#-canon-error-contextdebug-message
 [`canon_error_context_drop`]: CanonicalABI.md#-canon-error-contextdrop
 [`canon_thread_index`]: CanonicalABI.md#-canon-threadindex
-[`canon_thread_new_indirect`]: CanonicalABI.md#-canon-threadnew_indirect
+[`canon_thread_new_indirect`]: CanonicalABI.md#-canon-threadnew-indirect
 [`canon_thread_suspend`]: CanonicalABI.md#-canon-threadsuspend
 [`canon_thread_switch_to`]: CanonicalABI.md#-canon-threadswitch-to
 [`canon_thread_resume_later`]: CanonicalABI.md#-canon-threadresume-later
 [`canon_thread_yield_to`]: CanonicalABI.md#-canon-threadyield-to
 [`canon_thread_yield`]: CanonicalABI.md#-canon-threadyield
-[`canon_thread_spawn_ref`]: CanonicalABI.md#-canon-threadspawn_ref
-[`canon_thread_spawn_indirect`]: CanonicalABI.md#-canon-threadspawn_indirect
+[`canon_thread_spawn_ref`]: CanonicalABI.md#-canon-threadspawn-ref
+[`canon_thread_spawn_indirect`]: CanonicalABI.md#-canon-threadspawn-indirect
 [`canon_thread_available_parallelism`]: CanonicalABI.md#-canon-threadavailable_parallelism
 [Shared-Nothing]: ../high-level/Choices.md
 [Use Cases]: ../high-level/UseCases.md
