@@ -497,7 +497,7 @@ def test_handles():
     assert((canon_resource_rep(rt, thread, h4))[0] == 45)
 
     dtor_value = None
-    canon_resource_drop(rt, False, thread, h1)
+    [] = canon_resource_drop(rt, thread, h1)
     assert(dtor_value == 42)
     assert(len(inst.table.array) == 6)
     assert(inst.table.array[h1] is None)
@@ -510,7 +510,7 @@ def test_handles():
     assert(len(inst.table.free) == 0)
 
     dtor_value = None
-    canon_resource_drop(rt, False, thread, h3)
+    [] = canon_resource_drop(rt, thread, h3)
     assert(dtor_value is None)
     assert(len(inst.table.array) == 6)
     assert(inst.table.array[h3] is None)
@@ -557,14 +557,14 @@ def test_async_to_async():
   store = Store()
   producer_inst = ComponentInstance(store)
 
-  eager_ft = FuncType([], [U8Type()])
+  eager_ft = FuncType([], [U8Type()], async_=True)
   def core_eager_producer(thread, args):
     assert(len(args) == 0)
     [] = canon_task_return(thread, [U8Type()], producer_opts, [43])
     return []
   eager_callee = partial(canon_lift, producer_opts, producer_inst, eager_ft, core_eager_producer)
 
-  toggle_ft = FuncType([], [])
+  toggle_ft = FuncType([], [], async_=True)
   fut1_1 = RacyBool(False)
   fut1_2 = RacyBool(False)
   def core_toggle(thread, args):
@@ -578,7 +578,7 @@ def test_async_to_async():
   toggle_callee = partial(canon_lift, producer_opts, producer_inst, toggle_ft, core_toggle)
 
   fut2, fut3, fut4 = RacyBool(False), RacyBool(False), RacyBool(False)
-  blocking_ft = FuncType([U8Type()], [U8Type()])
+  blocking_ft = FuncType([U8Type()], [U8Type()], async_=True)
   def core_blocking_producer(thread, args):
     [x] = args
     assert(x == 83)
@@ -645,34 +645,26 @@ def test_async_to_async():
     def dtor(thread, args):
       nonlocal dtor_value
       assert(len(args) == 1)
+      [] = canon_task_return(thread, [], CanonicalOptions(), [])
       thread.suspend_until(dtor_fut.is_set)
       dtor_value = args[0]
       return []
-    rt = ResourceType(producer_inst, dtor)
+    rt = ResourceType(producer_inst, dtor, dtor_async = True)
 
     [resi] = canon_resource_new(rt, thread, 50)
     assert(resi == 4)
     assert(dtor_value is None)
-    [ret] = canon_resource_drop(rt, True, thread, resi)
-    state,dtorsubi = unpack_result(ret)
-    assert(dtorsubi == 4)
-    assert(state == Subtask.State.STARTED)
+    [] = canon_resource_drop(rt, thread, resi)
     assert(dtor_value is None)
     dtor_fut.set()
-
-    [] = canon_waitable_join(thread, dtorsubi, seti)
-    [event] = canon_waitable_set_wait(True, consumer_heap.memory, thread, seti, waitretp)
-    assert(event == EventCode.SUBTASK)
-    assert(consumer_heap.memory[waitretp] == dtorsubi)
-    assert(consumer_heap.memory[waitretp+4] == Subtask.State.RETURNED)
+    while dtor_value is None:
+      canon_thread_yield(False, thread)
     assert(dtor_value == 50)
-    [] = canon_subtask_drop(thread, dtorsubi)
-    [] = canon_waitable_set_drop(thread, seti)
 
     [] = canon_task_return(thread, [U8Type()], consumer_opts, [42])
     return []
 
-  ft = FuncType([BoolType()],[U8Type()])
+  ft = FuncType([BoolType()],[U8Type()], async_=True)
 
   def on_start():
     return [ True ]
@@ -693,7 +685,7 @@ def test_async_callback():
   producer_inst = ComponentInstance(store)
   producer_opts = mk_opts()
   producer_opts.async_ = True
-  producer_ft = FuncType([], [])
+  producer_ft = FuncType([], [], async_ = True)
 
   def core_producer_pre(fut, thread, args):
     assert(len(args) == 0)
@@ -707,7 +699,7 @@ def test_async_callback():
   core_producer2 = partial(core_producer_pre, fut2)
   producer2 = partial(canon_lift, producer_opts, producer_inst, producer_ft, core_producer2)
 
-  consumer_ft = FuncType([],[U32Type()])
+  consumer_ft = FuncType([],[U32Type()], async_ = True)
   seti = 0
   def consumer(thread, args):
     assert(len(args) == 0)
@@ -781,7 +773,7 @@ def test_async_callback():
 def test_callback_interleaving():
   store = Store()
   producer_inst = ComponentInstance(store)
-  producer_ft = FuncType([U32Type(), FutureType(None),FutureType(None),FutureType(None)],[U32Type()])
+  producer_ft = FuncType([U32Type(), FutureType(None),FutureType(None),FutureType(None)],[U32Type()], async_ = True)
   fut3s = [None,None]
   def core_producer(thread, args):
     [i,fut1,fut2,fut3] = args
@@ -821,7 +813,7 @@ def test_callback_interleaving():
   producer_opts.callback = core_producer_callback
   producer_callee = partial(canon_lift, producer_opts, producer_inst, producer_ft, core_producer)
 
-  sync_callee_ft = FuncType([], [U32Type()])
+  sync_callee_ft = FuncType([], [U32Type()], async_ = True)
   def core_sync_callee(thread, args):
     assert(len(args) == 0)
     return [100]
@@ -829,7 +821,7 @@ def test_callback_interleaving():
   sync_callee = partial(canon_lift, sync_callee_opts, producer_inst, sync_callee_ft, core_sync_callee)
 
   consumer_inst = ComponentInstance(store)
-  consumer_ft = FuncType([], [])
+  consumer_ft = FuncType([], [], async_ = True)
   consumer_mem = bytearray(24)
   consumer_opts = mk_opts(consumer_mem, async_ = True)
   def core_consumer(thread, args):
@@ -954,7 +946,7 @@ def test_async_to_sync():
   producer_opts = CanonicalOptions()
   producer_inst = ComponentInstance(store)
 
-  producer_ft = FuncType([],[])
+  producer_ft = FuncType([],[], async_ = True)
   fut = RacyBool(False)
   producer1_done = False
   def producer1_core(thread, args):
@@ -979,7 +971,7 @@ def test_async_to_sync():
   consumer_opts = mk_opts(consumer_heap.memory)
   consumer_opts.async_ = True
 
-  consumer_ft = FuncType([],[U8Type()])
+  consumer_ft = FuncType([],[U8Type()], async_ = True)
   def consumer(thread, args):
     assert(len(args) == 0)
 
@@ -1039,7 +1031,7 @@ def test_async_backpressure():
   producer_opts.async_ = True
   producer_inst = ComponentInstance(store)
 
-  producer_ft = FuncType([],[])
+  producer_ft = FuncType([],[], async_ = True)
   fut = RacyBool(False)
   producer1_done = False
   def producer1_core(thread, args):
@@ -1065,7 +1057,7 @@ def test_async_backpressure():
   consumer_heap = Heap(20)
   consumer_opts = mk_opts(consumer_heap.memory, async_ = True)
 
-  consumer_ft = FuncType([],[U8Type()])
+  consumer_ft = FuncType([],[U8Type()], async_ = True)
   def consumer(thread, args):
     assert(len(args) == 0)
 
@@ -1122,7 +1114,7 @@ def test_sync_using_wait():
   hostcall_opts = mk_opts()
   hostcall_opts.async_ = True
   hostcall_inst = ComponentInstance(store)
-  ft = FuncType([], [])
+  ft = FuncType([], [], async_ = True)
 
   def core_hostcall_pre(fut, thread, args):
     thread.suspend_until(fut.is_set)
@@ -1597,16 +1589,15 @@ def test_receive_own_stream():
     assert(ret == Subtask.State.RETURNED)
     rsi2 = int.from_bytes(mem[retp : retp+4], 'little', signed=False)
     assert(rsi2 == 2)
-    try:
-      canon_stream_cancel_write(StreamType(U8Type()), False, thread, wsi)
-    except Trap:
-      pass
+    [ret] = canon_stream_cancel_write(StreamType(U8Type()), False, thread, wsi)
+    result,n = unpack_result(ret)
+    assert(result == CopyResult.CANCELLED and n == 0)
     [] = canon_stream_drop_writable(StreamType(U8Type()), thread, wsi)
     return []
 
   def on_start(): return []
   def on_resolve(results): assert(len(results) == 0)
-  ft = FuncType([],[])
+  ft = FuncType([],[], async_ = True)
   run_lift(mk_opts(), inst, ft, core_func, on_start, on_resolve)
 
 
@@ -1689,7 +1680,7 @@ def test_host_partial_reads_writes():
   inst = ComponentInstance(Store())
   def on_start(): return []
   def on_resolve(results): assert(len(results) == 0)
-  ft = FuncType([],[])
+  ft = FuncType([],[], async_ = True)
   run_lift(opts2, inst, ft, core_func, on_start, on_resolve)
 
 
@@ -2017,7 +2008,8 @@ def test_cancel_copy():
 
     return []
 
-  run_lift(lift_opts, inst, FuncType([],[]), core_func, lambda:[], lambda _:())
+  caller_ft = FuncType([], [], async_ = True)
+  run_lift(lift_opts, inst, caller_ft, core_func, lambda:[], lambda _:())
 
 
 class HostFutureSink:
@@ -2156,12 +2148,13 @@ def test_futures():
 
     return []
 
-  run_lift(lift_opts, inst, FuncType([],[]), core_func, lambda:[], lambda _:())
+  caller_ft = FuncType([], [], async_ = True)
+  run_lift(lift_opts, inst, caller_ft, core_func, lambda:[], lambda _:())
 
 
 def test_cancel_subtask():
   store = Store()
-  ft = FuncType([U8Type()], [U8Type()])
+  ft = FuncType([U8Type()], [U8Type()], async_ = True)
 
   callee_heap = Heap(10)
   callee_opts = mk_opts(callee_heap.memory, async_ = True)
@@ -2483,7 +2476,7 @@ def test_self_empty():
   sync_opts = mk_opts(memory=mem, async_=False)
   async_opts = mk_opts(memory=mem, async_=True)
 
-  ft = FuncType([],[])
+  ft = FuncType([], [], async_ = True)
   def core_func(thread, args):
     [seti] = canon_waitable_set_new(thread)
 
@@ -2652,13 +2645,14 @@ def test_threads():
     nonlocal result
     [result] = v
 
-  run_lift(opts, inst, FuncType([], [U8Type()]), core_func, lambda:[], on_resolve)
+  caller_ft = FuncType([], [U8Type()], async_ = True)
+  run_lift(opts, inst, caller_ft, core_func, lambda:[], on_resolve)
   assert(result == 42)
 
 def test_thread_cancel_callback():
   store = Store()
   producer_inst = ComponentInstance(store)
-  producer_ft = FuncType([],[U32Type()])
+  producer_ft = FuncType([], [U32Type()], async_ = True)
 
   producer_opts1 = mk_opts(async_ = True)
   def core_producer1(thread, args):
@@ -2685,7 +2679,7 @@ def test_thread_cancel_callback():
   producer_callee2 = partial(canon_lift, producer_opts2, producer_inst, producer_ft, core_producer2)
 
   consumer_inst = ComponentInstance(store)
-  consumer_ft = FuncType([], [])
+  consumer_ft = FuncType([], [], async_ = True)
   consumer_mem = bytearray(24)
   consumer_opts = mk_opts(consumer_mem, async_ = True)
 
@@ -2730,6 +2724,8 @@ test_handles()
 test_async_to_async()
 test_async_callback()
 test_callback_interleaving()
+# TODO: test that 'sync' on the type barges in
+# TODO: test that 'thread.yield' under sync function never yields
 test_async_to_sync()
 test_async_backpressure()
 test_sync_using_wait()

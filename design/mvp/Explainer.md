@@ -568,7 +568,7 @@ valtype       ::= <typeidx>
                 | <defvaltype>
 resourcetype  ::= (resource (rep i32) (dtor <funcidx>)?)
                 | (resource (rep i32) (dtor async <funcidx> (callback <funcidx>)?)?) 🚝
-functype      ::= (func (param "<label>" <valtype>)* (result <valtype>)?)
+functype      ::= (func async? (param "<label>" <valtype>)* (result <valtype>)?)
 componenttype ::= (component <componentdecl>*)
 instancetype  ::= (instance <instancedecl>*)
 componentdecl ::= <importdecl>
@@ -737,11 +737,8 @@ are useful for:
 
 A `future<T>` asynchronously delivers exactly one `T` value from a source to a
 destination, unless the destination signals that it doesn't want the `T` value
-any more. Because [all imports can be called asynchronously][summary], futures
-are not necessary to express a traditional `async` function -- all functions
-are effectively `async`. Instead futures are useful in more advanced scenarios
-where a parameter or result value may not be ready at the same time as the
-other synchronous parameters or results.
+any more. When function types are marked [`async`][summary] directly,
+...TODO... `future<T>` is only needed to express *additional* concurrency.
 
 The `T` element type of `stream` and `future` is an optional `valtype`. As with
 variant-case payloads and function results, when `T` is absent, the "value(s)"
@@ -793,7 +790,9 @@ shared-nothing functions, resources, components, and component instances:
 
 The `func` type constructor describes a component-level function definition
 that takes a list of `valtype` parameters with [strongly-unique] names and
-optionally returns a `valtype`.
+optionally returns a `valtype`. The optional `async` effect type indicates that
+the function may block (calling a blocking built-in like `waitable-set.wait` or
+synchronously calling an imported `async` function).
 
 The `resource` type constructor creates a fresh type for each instance of the
 containing component (with "freshness" and its interaction with general
@@ -1413,7 +1412,6 @@ dynamically interact with Canonical ABI entities like resources,
 canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
         | (canon resource.drop <typeidx> (core func <id>?))
-        | (canon resource.drop <typeidx> async (core func <id>?)) 🚝
         | (canon resource.rep <typeidx> (core func <id>?))
         | (canon context.get <valtype> <u32> (core func <id>?)) 🔀
         | (canon context.set <valtype> <u32> (core func <id>?)) 🔀
@@ -1482,31 +1480,15 @@ For details, see [`canon_resource_new`] in the Canonical ABI explainer.
 
 ###### `resource.drop`
 
-When the `async` immediate is false:
-
 | Synopsis                   |                                    |
 | -------------------------- | ---------------------------------- |
 | Approximate WIT signature  | `func<T>(t: T)`                    |
 | Canonical ABI signature    | `[t:i32] -> []`                    |
 
-🚝 When the `async` immediate is true:
-
-| Synopsis                   |                                    |
-| -------------------------- | ---------------------------------- |
-| Approximate WIT signature  | `func<T>(t: T) -> option<subtask>` |
-| Canonical ABI signature    | `[t:i32] -> [i32]`                 |
-
 The `resource.drop` built-in drops a resource handle `t` (with resource type
 `T`). If the dropped handle owns the resource, the resource's `dtor` is called,
 if present. Validation only allows `resource.rep T` to be used within the
 component that defined `T`.
-
-When the `async` immediate is true, the returned value indicates whether the
-drop completed eagerly, or if not, identifies the in-progress drop.
-
-In the Canonical ABI, the returned `i32` is either `0` (if the drop completed
-eagerly) or the index of the in-progress drop subtask (representing the
-in-progress `dtor` call).
 
 For details, see [`canon_resource_drop`] in the Canonical ABI explainer.
 
@@ -2521,12 +2503,9 @@ importname        ::= <exportname>
                     | <urlname>
                     | <hashname>
 plainname         ::= <label>
-                    | '[async]' <label> 🔀
                     | '[constructor]' <label>
                     | '[method]' <label> '.' <label>
-                    | '[async method]' <label> '.' <label> 🔀
                     | '[static]' <label> '.' <label>
-                    | '[async static]' <label> '.' <label> 🔀
 label             ::= <fragment>
                     | <label> '-' <fragment>
 fragment          ::= <word>
@@ -2671,10 +2650,10 @@ annotations trigger additional type-validation rules (listed in
 * Similarly, an import or export named `[method]R.foo` must be a function whose
   first parameter must be `(param "self" (borrow $R))`.
 
-When a function is annotated with `async`, bindings generators are expected to
+When a function's type is `async`, bindings generators are expected to
 emit whatever asynchronous language construct is appropriate (such as an
-`async` function in JS, Python or Rust). Note the absence of
-`[async constructor]`. See the [concurrency explainer] for more details.
+`async` function in JS, Python or Rust). See the [concurrency explainer] for
+more details.
 
 The `label` production used inside `plainname` as well as the labels of
 `record` and `variant` types are required to have [kebab case]. The reason for
@@ -2806,7 +2785,8 @@ Thus, the following names are strongly-unique:
 * `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[method]foo.baz`
 
 but attempting to add *any* of the following names would be a validation error:
-* `foo`, `foo-BAR`, `[constructor]foo-BAR`, `[method]foo.foo`, `[async]foo`, `[method]foo.BAR`
+* `foo`, `foo-BAR`, `[constructor]foo-BAR`, `[method]foo.foo`,
+  `[static]foo.foo`, `[method]foo.BAR`
 
 Note that additional validation rules involving types apply to names with
 annotations. For example, the validation rules for `[constructor]foo` require
