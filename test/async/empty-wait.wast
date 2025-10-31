@@ -53,10 +53,10 @@
         ;; create a future that will be used to unblock 'blocker', storing r/w ends in $futr/$futw
         (local.set $ret64 (call $future.new))
         (global.set $futr (i32.wrap_i64 (local.get $ret64)))
-        (if (i32.ne (i32.const 2) (global.get $futr))
+        (if (i32.ne (i32.const 4) (global.get $futr))
           (then unreachable))
         (local.set $futw (i32.wrap_i64 (i64.shr_u (local.get $ret64) (i64.const 32))))
-        (if (i32.ne (i32.const 3) (local.get $futw))
+        (if (i32.ne (i32.const 5) (local.get $futw))
           (then unreachable))
 
         ;; perform a future.read which will block, and add this future to the waitable-set
@@ -144,7 +144,7 @@
         (if (i32.ne (i32.const 1 (; STARTED ;)) (i32.and (local.get $ret) (i32.const 0xf)))
           (then unreachable))
         (local.set $subtask (i32.shr_u (local.get $ret) (i32.const 4)))
-        (if (i32.ne (i32.const 2 (; RETURNED=2 | (0<<4) ;)) (local.get $subtask))
+        (if (i32.ne (i32.const 3) (local.get $subtask))
           (then unreachable))
 
         ;; call 'unblocker' to unblock 'blocker'; it should complete eagerly

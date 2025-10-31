@@ -19,7 +19,7 @@
 
       (memory 1)
       (global $blocked (mut i32) (i32.const 1))
-      (global $counter (mut i32) (i32.const 2))
+      (global $counter (mut i32) (i32.const 3))
 
       ;; 'blocking-call' cooperatively "spin-waits" until $blocked is 0.
       (func $blocking-call (export "blocking-call") (result i32)
@@ -135,24 +135,24 @@
         ;; (on $AsyncInner.blocking-call). because 'sync-func1/2' are in different instances,
         ;; both calls will reach the STARTED state.
         (local.set $ret (call $sync-func1 (i32.const 8)))
-        (if (i32.ne (i32.const 0x21 (; STARTED=1 | (subtask=2 << 4) ;)) (local.get $ret))
-          (then unreachable))
-        (call $waitable.join (i32.const 2) (global.get $ws))
-        (local.set $ret (call $sync-func2 (i32.const 12)))
         (if (i32.ne (i32.const 0x31 (; STARTED=1 | (subtask=3 << 4) ;)) (local.get $ret))
           (then unreachable))
         (call $waitable.join (i32.const 3) (global.get $ws))
+        (local.set $ret (call $sync-func2 (i32.const 12)))
+        (if (i32.ne (i32.const 0x41 (; STARTED=1 | (subtask=4 << 4) ;)) (local.get $ret))
+          (then unreachable))
+        (call $waitable.join (i32.const 4) (global.get $ws))
 
         ;; now start another pair of 'sync-func1/2' calls, both of which should see auto
         ;; backpressure and get stuck in the STARTING state.
         (local.set $ret (call $sync-func1 (i32.const 16)))
-        (if (i32.ne (i32.const 0x40 (; STARTING=0 | (subtask=4 << 4) ;)) (local.get $ret))
-          (then unreachable))
-        (call $waitable.join (i32.const 4) (global.get $ws))
-        (local.set $ret (call $sync-func2 (i32.const 20)))
         (if (i32.ne (i32.const 0x50 (; STARTING=0 | (subtask=5 << 4) ;)) (local.get $ret))
           (then unreachable))
         (call $waitable.join (i32.const 5) (global.get $ws))
+        (local.set $ret (call $sync-func2 (i32.const 20)))
+        (if (i32.ne (i32.const 0x60 (; STARTING=0 | (subtask=6 << 4) ;)) (local.get $ret))
+          (then unreachable))
+        (call $waitable.join (i32.const 6) (global.get $ws))
 
         ;; this POLL should return that nothing is ready
         (i32.or (i32.const 3 (; POLL ;)) (i32.shl (global.get $ws) (i32.const 4)))
@@ -175,21 +175,21 @@
           (then unreachable))
 
         ;; if we receive a SUBTASK STARTED event, it should only be for the 3rd or
-        ;; 4th subtask (at indices 4/5, resp), so keep waiting for completion
+        ;; 4th subtask (at indices 5/6, resp), so keep waiting for completion
         (if (i32.eq (local.get $payload) (i32.const 1 (; STARTED ;))) (then
           (if (i32.and
-                (i32.ne (local.get $index) (i32.const 4))
-                (i32.ne (local.get $index) (i32.const 5)))
+                (i32.ne (local.get $index) (i32.const 5))
+                (i32.ne (local.get $index) (i32.const 6)))
             (then unreachable))
           (return (i32.or (i32.const 2 (; WAIT ;)) (i32.shl (global.get $ws) (i32.const 4))))
         ))
 
         ;; when we receive a SUBTASK RETURNED event, check the return value is equal to the
-        ;; subtask index (which we've ensured by having $AsyncInner.$counter start at 2, the
-        ;; first subtask index. The address of the return buffer is the index*4.
+        ;; subtask index (which we've ensured by having $AsyncInner.$counter start at 3, the
+        ;; first subtask index. The address of the return buffer is the index-1*4.
         (if (i32.ne (local.get $payload) (i32.const 2 (; RETURNED ;)))
           (then unreachable))
-        (if (i32.ne (local.get $index) (i32.load (i32.mul (local.get $index) (i32.const 4))))
+        (if (i32.ne (local.get $index) (i32.load (i32.mul (i32.sub (local.get $index) (i32.const 1)) (i32.const 4))))
           (then unreachable))
 
         ;; decrement $remain and exit if 0
