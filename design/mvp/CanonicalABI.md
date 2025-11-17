@@ -3110,7 +3110,12 @@ validation is performed:
 * requires options based on [`lift(param)`](#canonopt-validation) for all parameters in `ft`
 * requires options based on [`lower(result)`](#canonopt-validation) if `ft` has a result
 * if `len(flatten_types(ft.param_types())) > MAX_FLAT_PARAMS`, `realloc` is required
-* if `len(flatten_types(ft.result_type())) > MAX_FLAT_RESULTS`, `memory` is required
+* if `len(flatten_types(ft.result_type())) > max` (where `max = MAX_FLAT_RESULTS` for sync lifts, and `max = MAX_FLAT_PARAMS` for async lifts), `memory` is required
+
+Note that an `async`-lifted function whose result type requires a memory to lift
+(either because it contains lists or strings or because the number of flattened
+types exceeds `MAX_FLAT_PARAMS`) must include a `memory` option, and that option
+must exactly match that of the `task.return` built-in called at runtime.
 
 When instantiating component instance `$inst`, `$f` is defined to be the
 partially-bound closure `canon_lift($opts, $inst, $ft, $callee)` which has 3
