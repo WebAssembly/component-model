@@ -2261,11 +2261,11 @@ def test_cancel_subtask():
       [ret] = canon_thread_switch_to(True, thread, mainthreadi)
       assert(ret == SuspendResult.CANCELLED)
       [ret] = canon_thread_switch_to(True, thread, mainthreadi)
-      assert(ret == SuspendResult.COMPLETED)
+      assert(ret == SuspendResult.NOT_CANCELLED)
       [] = canon_task_return(thread, [U8Type()], callee_opts, [45])
     else:
       [ret] = canon_thread_switch_to(False, thread, mainthreadi)
-      assert(ret == SuspendResult.COMPLETED)
+      assert(ret == SuspendResult.NOT_CANCELLED)
     return []
   cthread_func = partial(thread_func, True)
   ncthread_func = partial(thread_func, False)
@@ -2280,18 +2280,18 @@ def test_cancel_subtask():
 
     [threadi1] = canon_thread_new_indirect(core_ft, core_ftbl, thread, ncfi, mainthreadi)
     [ret] = canon_thread_switch_to(True, thread, threadi1)
-    assert(ret == SuspendResult.COMPLETED)
+    assert(ret == SuspendResult.NOT_CANCELLED)
 
     [threadi2] = canon_thread_new_indirect(core_ft, core_ftbl, thread, cfi, mainthreadi)
     [ret] = canon_thread_switch_to(True, thread, threadi2)
-    assert(ret == SuspendResult.COMPLETED)
+    assert(ret == SuspendResult.NOT_CANCELLED)
 
     [threadi3] = canon_thread_new_indirect(core_ft, core_ftbl, thread, ncfi, mainthreadi)
     [ret] = canon_thread_switch_to(True, thread, threadi3)
-    assert(ret == SuspendResult.COMPLETED)
+    assert(ret == SuspendResult.NOT_CANCELLED)
 
     [ret] = canon_thread_suspend(False, thread)
-    assert(ret == SuspendResult.COMPLETED)
+    assert(ret == SuspendResult.NOT_CANCELLED)
 
     [] = canon_thread_resume_later(thread, threadi1)
     [] = canon_thread_resume_later(thread, threadi2)
@@ -2598,7 +2598,7 @@ def test_threads():
   def thread_func2(thread, args):
     [mainthreadi] = args
     [ret] = canon_thread_yield_to(True, thread, mainthreadi)
-    assert(ret == SuspendResult.COMPLETED)
+    assert(ret == SuspendResult.NOT_CANCELLED)
     return []
   fi2 = ftbl.add(CoreFuncRef(ft, thread_func2))
 
@@ -2611,10 +2611,10 @@ def test_threads():
   def thread_func4(thread, args):
     [ptr] = args
     [ret] = canon_thread_yield(False, thread)
-    assert(ret == SuspendResult.COMPLETED)
+    assert(ret == SuspendResult.NOT_CANCELLED)
     mem[ptr] = mem[ptr] + 1
     [ret] = canon_thread_yield(False, thread)
-    assert(ret == SuspendResult.COMPLETED)
+    assert(ret == SuspendResult.NOT_CANCELLED)
     mem[ptr] = mem[ptr] + 1
     return []
   fi4 = ftbl.add(CoreFuncRef(ft, thread_func4))
@@ -2626,16 +2626,16 @@ def test_threads():
 
     [threadi] = canon_thread_new_indirect(ft, ftbl, thread, fi1, 13)
     [ret] = canon_thread_yield_to(True, thread, threadi)
-    assert(ret == SuspendResult.COMPLETED)
+    assert(ret == SuspendResult.NOT_CANCELLED)
 
     [threadi] = canon_thread_new_indirect(ft, ftbl, thread, fi2, mainthreadi)
     [ret] = canon_thread_switch_to(True, thread, threadi)
-    assert(ret == SuspendResult.COMPLETED)
+    assert(ret == SuspendResult.NOT_CANCELLED)
 
     [threadi] = canon_thread_new_indirect(ft, ftbl, thread, fi3, mainthreadi)
     [] = canon_thread_resume_later(thread, threadi)
     [ret] = canon_thread_suspend(True, thread)
-    assert(ret == SuspendResult.COMPLETED)
+    assert(ret == SuspendResult.NOT_CANCELLED)
 
     ptr = 4
     mem[ptr] = 0
@@ -2676,7 +2676,7 @@ def test_thread_cancel_callback():
   def core_producer2(thread, args):
     assert(not args)
     [ret] = canon_thread_yield(False, thread)
-    assert(ret == SuspendResult.COMPLETED)
+    assert(ret == SuspendResult.NOT_CANCELLED)
     [] = canon_task_return(thread, [U32Type()], producer_opts2, [43])
     return [CallbackCode.EXIT]
   def core_producer_callback2(thread, args):
