@@ -514,6 +514,7 @@ named once.
 ## Binary Format Warts to Fix in a 1.0 Release
 
 * The opcodes (for types, canon built-ins, etc) should be re-sorted
+* The two `depname` cases should be merged into one (`dep=<...>`)
 * The two `list` type codes should be merged into one with an optional immediate.
 * The `0x00` variant of `importname'` and `exportname'` will be removed. Any
   remaining variant(s) will be renumbered or the prefix byte will be removed or
