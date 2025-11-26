@@ -3271,7 +3271,7 @@ For some use-case-focused, worked examples, see:
 [Current Thread]: Concurrency.md#current-thread-and-task
 [Current Task]: Concurrency.md#current-thread-and-task
 [Thread-Local Storage]: Concurrency.md#thread-local-storage
-[Subtask]: Concurrency.md#structured-concurrency
+[Subtask]: Concurrency.md#subtasks-and-supertasks
 [Stream or Future]: Concurrency.md#streams-and-futures
 [Readable and Writable Ends]: Concurrency.md#streams-and-futures
 [Readable or Writable End]: Concurrency.md#streams-and-futures

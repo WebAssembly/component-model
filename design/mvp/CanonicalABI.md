@@ -4742,11 +4742,11 @@ def canon_thread_available_parallelism():
 [Shared-Everything Dynamic Linking]: examples/SharedEverythingDynamicLinking.md
 [Concurrency Explainer]: Concurrency.md
 [Suspended]: Concurrency#waiting
-[Structured Concurrency]: Concurrency.md#structured-concurrency
+[Structured Concurrency]: Concurrency.md#subtasks-and-supertasks
 [Backpressure]: Concurrency.md#backpressure
 [Current Thread]: Concurrency.md#current-thread-and-task
 [Current Task]: Concurrency.md#current-thread-and-task
-[Subtasks]: Concurrency.md#structured-concurrency
+[Subtasks]: Concurrency.md#subtasks-and-supertasks
 [Readable and Writable Ends]: Concurrency.md#streams-and-futures
 [Readable or Writable End]: Concurrency.md#streams-and-futures
 [Thread-Local Storage]: Concurrency.md#thread-local-storage

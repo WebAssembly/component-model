@@ -11,9 +11,9 @@ emojis. For an even higher-level introduction, see [these][wasmio-2024]
 * [Summary](#summary)
 * [Concepts](#concepts)
   * [Threads and Tasks](#threads-and-tasks)
+  * [Subtasks and Supertasks](#subtasks-and-supertasks)
   * [Current Thread and Task](#current-thread-and-task)
   * [Thread-Local Storage](#thread-local-storage)
-  * [Structured concurrency](#structured-concurrency)
   * [Streams and Futures](#streams-and-futures)
   * [Stream Readiness](#stream-readiness)
   * [Waiting](#waiting)
@@ -236,76 +236,17 @@ Thread
 where a **component store** is the top-level "thing" and analogous to a Core
 WebAssembly [store].
 
-The reason for the thread/task split is so that, when one thread creates a new
-thread by calling [`thread.new-indirect`], the new thread is contained by the
-task of the original thread. Thus there is an N:1 relationship between threads
-and tasks that ties N threads to the original export call (= "task") that
-transitively spawned those N threads. This relationship serves several purposes
-described in the following sections.
+The reason for the thread/task split is that, when one thread creates a new
+thread, the new thread is contained by the task of the original thread which
+creates an N:1 relationship between threads and tasks that ties N threads to
+the original export call (= "task") that transitively spawned those N threads.
+This relationship serves several purposes described in the following sections.
 
 In the Canonical ABI explainer, threads, tasks, component instances and
 component stores are represented by the [`Thread`], [`Task`],
 [`ComponentInstance`] and [`Store`] classes, resp.
 
-### Current Thread and Task
-
-At any point in time while executing Core WebAssembly code or a [canonical
-built-in] called by Core WebAssembly code, there is a well-defined **current
-thread** whose containing task is the **current task**. The "current thread" is
-modelled in the Canonical ABI's Python code by explicitly passing a [`Thread`]
-object as an argument to all function calls so that the semantic "current
-thread" is always the value of the `thread` parameter. Threads store their
-containing task so that the "current task" is always `thread.task`.
-
-### Thread-Local Storage
-
-Each thread contains a distinct mutable **thread-local storage** array. The
-current thread's thread-local storage can be read and written from core wasm
-code by calling the [`context.get`] and [`context.set`] built-ins.
-
-The thread-local storage array's length is currently fixed to contain exactly
-2 `i32`s with the goal of allowing this array to be stored inline in whatever
-existing runtime data structure is already efficiently reachable from ambient
-compiled wasm code. Because module instantiation is declarative in the
-Component Model, the imported `context.{get,set}` built-ins can be inlined by
-the core wasm compiler as-if they were instructions, allowing the generated
-machine code to be a single load or store. This makes thread-local storage a
-natural place to store:
-1. a pointer to the linear-memory "shadow stack" pointer
-2. a pointer to a struct used by the runtime to implement the language's
-   thread-local features
-
-When threads are created explicitly by `thread.new-indirect`, the lifetime of
-the thread-local storage array ends when the function passed to
-`thread.new-indirect` returns and thus any linear-memory allocations associated
-with the thread-local storage array should be eagerly freed by guest code right
-before returning. Similarly, since each call to an export logically creates a
-fresh thread, thread-local allocations can be eagerly released when this
-implicit thread exits by returning from the exported function or, if the
-stackless async ABI is used, returning the "exit" code to the event loop. This
-non-reuse of thread-local storage between distinct export calls avoids what
-would otherwise be a likely source of TLS-related memory leaks.
-
-When [memory64] is integrated into the Component Model's Canonical ABI,
-`context.{get,set}` will be backwards-compatibly relaxed to allow `i64`
-pointers (overlaying the `i32` values like hardware 32/64-bit registers). When
-[wasm-gc] is integrated, these integral context values can serve as indices
-into guest-managed tables of typed GC references.
-
-Since the same mutable thread-local storage cells are shared by all core wasm
-running under the same thread in the same component, the cells' contents must
-be carefully coordinated in the same way as native code has to carefully
-coordinate native ISA state (e.g., the [FS or GS segment base address]). In the
-common case, thread-local storage is only `context.set` by the entry trampoline
-invoked by [`canon_lift`] and then all transitively reachable core wasm code
-(including from any `callback`) assumes `context.get` returns the same value.
-Thus, if any *non*-entry-trampoline code calls `context.set`, it is the
-responsibility of *that code* to restore this default assumption before
-allowing control flow to escape into the wild.
-
-For more information, see [`context.get`] in the AST explainer.
-
-### Structured concurrency
+### Subtasks and Supertasks
 
 As mentioned above, calling a component export creates a task to track the
 state used to enforce Canonical ABI rules that apply to the callee (an example
@@ -374,6 +315,64 @@ they complete, but not consuming real resources.
 For scenarios where one component wants to *non-cooperatively* put an upper
 bound on execution of a call into another component, a separate "[blast zone]"
 feature is necessary in any case (due to iloops and traps).
+
+### Current Thread and Task
+
+At any point in time while executing Core WebAssembly code or a [canonical
+built-in] called by Core WebAssembly code, there is a well-defined **current
+thread** whose containing task is the **current task**. The "current thread" is
+modelled in the Canonical ABI's Python code by explicitly passing a [`Thread`]
+object as an argument to all function calls so that the semantic "current
+thread" is always the value of the `thread` parameter. Threads store their
+containing task so that the "current task" is always `thread.task`.
+
+### Thread-Local Storage
+
+Each thread contains a distinct mutable **thread-local storage** array. The
+current thread's thread-local storage can be read and written from core wasm
+code by calling the [`context.get`] and [`context.set`] built-ins.
+
+The thread-local storage array's length is currently fixed to contain exactly
+2 `i32`s with the goal of allowing this array to be stored inline in whatever
+existing runtime data structure is already efficiently reachable from ambient
+compiled wasm code. Because module instantiation is declarative in the
+Component Model, the imported `context.{get,set}` built-ins can be inlined by
+the core wasm compiler as-if they were instructions, allowing the generated
+machine code to be a single load or store. This makes thread-local storage a
+natural place to store:
+1. a pointer to the linear-memory "shadow stack" pointer
+2. a pointer to a struct used by the runtime to implement the language's
+   thread-local features
+
+When threads are created explicitly by `thread.new-indirect`, the lifetime of
+the thread-local storage array ends when the function passed to
+`thread.new-indirect` returns and thus any linear-memory allocations associated
+with the thread-local storage array should be eagerly freed by guest code right
+before returning. Similarly, since each call to an export logically creates a
+fresh thread, thread-local allocations can be eagerly released when this
+implicit thread exits by returning from the exported function or, if the
+stackless async ABI is used, returning the "exit" code to the event loop. This
+non-reuse of thread-local storage between distinct export calls avoids what
+would otherwise be a likely source of TLS-related memory leaks.
+
+When [memory64] is integrated into the Component Model's Canonical ABI,
+`context.{get,set}` will be backwards-compatibly relaxed to allow `i64`
+pointers (overlaying the `i32` values like hardware 32/64-bit registers). When
+[wasm-gc] is integrated, these integral context values can serve as indices
+into guest-managed tables of typed GC references.
+
+Since the same mutable thread-local storage cells are shared by all core wasm
+running under the same thread in the same component, the cells' contents must
+be carefully coordinated in the same way as native code has to carefully
+coordinate native ISA state (e.g., the [FS or GS segment base address]). In the
+common case, thread-local storage is only `context.set` by the entry trampoline
+invoked by [`canon_lift`] and then all transitively reachable core wasm code
+(including from any `callback`) assumes `context.get` returns the same value.
+Thus, if any *non*-entry-trampoline code calls `context.set`, it is the
+responsibility of *that code* to restore this default assumption before
+allowing control flow to escape into the wild.
+
+For more information, see [`context.get`] in the AST explainer.
 
 ### Streams and Futures
 
