@@ -39,19 +39,19 @@
       (export "mem" (memory $memory "mem"))
       (export "task.return" (func $task.return))
     ))))
-    (func (export "loop") (canon lift
+    (func (export "loop") async (canon lift
       (core func $core_looper "loop")
       async (callback (func $core_looper "loop_cb"))
     ))
-    (func (export "return") (canon lift
+    (func (export "return") async (canon lift
       (core func $core_looper "return")
     ))
   )
 
   (component $Caller
     (import "looper" (instance $looper
-      (export "loop" (func))
-      (export "return" (func))
+      (export "loop" (func async))
+      (export "return" (func async))
     ))
 
     (core module $Memory (memory (export "mem") 1))
@@ -122,10 +122,10 @@
       (export "loop" (func $loop'))
       (export "return" (func $return'))
     ))))
-    (func (export "drop-after-return") (result u32) (canon lift
+    (func (export "drop-after-return") async (result u32) (canon lift
       (core func $core_caller "drop-after-return")
     ))
-    (func (export "drop-before-return") (result u32) (canon lift
+    (func (export "drop-before-return") async (result u32) (canon lift
       (core func $core_caller "drop-before-return")
     ))
   )
