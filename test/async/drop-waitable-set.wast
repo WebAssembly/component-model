@@ -31,11 +31,11 @@
       (export "waitable-set.new" (func $waitable-set.new))
       (export "waitable-set.drop" (func $waitable-set.drop))
     ))))
-    (func (export "wait-on-set") (canon lift
+    (func (export "wait-on-set") async (canon lift
       (core func $core "wait-on-set")
       async (callback (func $core "unreachable-cb"))
     ))
-    (func (export "drop-while-waiting") (canon lift
+    (func (export "drop-while-waiting") async (canon lift
       (core func $core "drop-while-waiting")
       async (callback (func $core "unreachable-cb"))
     ))
@@ -43,8 +43,8 @@
 
   (component $D
     (import "c" (instance $c
-      (export "wait-on-set" (func))
-      (export "drop-while-waiting" (func))
+      (export "wait-on-set" (func async))
+      (export "drop-while-waiting" (func async))
     ))
 
     (core module $Memory (memory (export "mem") 1))
@@ -74,7 +74,7 @@
       (export "wait-on-set" (func $wait-on-set'))
       (export "drop-while-waiting" (func $drop-while-waiting'))
     ))))
-    (func (export "run") (result u32) (canon lift (core func $core "run")))
+    (func (export "run") async (result u32) (canon lift (core func $core "run")))
   )
 
   (instance $c (instantiate $C))

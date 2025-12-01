@@ -53,18 +53,18 @@
       (export "context.set" (func $context.set))
       (export "context.get" (func $context.get))
     ))))
-    (func (export "blocking-call") (result u32) (canon lift
+    (func (export "blocking-call") async (result u32) (canon lift
       (core func $core_async_inner "blocking-call")
       async (callback (func $core_async_inner "blocking-call-cb"))
     ))
-    (func (export "unblock") (canon lift
+    (func (export "unblock") async (canon lift
       (core func $core_async_inner "unblock")
       async (callback (func $core_async_inner "unblock-cb"))
     ))
   )
 
   (component $SyncMiddle
-    (import "blocking-call" (func $blocking-call (result u32)))
+    (import "blocking-call" (func $blocking-call async (result u32)))
     (core module $CoreSyncMiddle
       (import "" "blocking-call" (func $blocking-call (result i32)))
       (func $sync-func (export "sync-func") (result i32)
@@ -75,13 +75,13 @@
     (core instance $core_sync_middle (instantiate $CoreSyncMiddle (with "" (instance
       (export "blocking-call" (func $blocking-call'))
     ))))
-    (func (export "sync-func") (result u32) (canon lift
+    (func (export "sync-func") async (result u32) (canon lift
       (core func $core_sync_middle "sync-func")
     ))
   )
 
   (component $AsyncMiddle
-    (import "blocking-call" (func $blocking-call (result u32)))
+    (import "blocking-call" (func $blocking-call async (result u32)))
     (core module $CoreSyncMiddle
       (import "" "task.return" (func $task.return (param i32)))
       (import "" "blocking-call" (func $blocking-call (result i32)))
@@ -99,16 +99,16 @@
       (export "task.return" (func $task.return))
       (export "blocking-call" (func $blocking-call'))
     ))))
-    (func (export "sync-func") (result u32) (canon lift
+    (func (export "sync-func") async (result u32) (canon lift
       (core func $core_sync_middle "sync-func")
       async (callback (func $core_sync_middle "sync-func-cb"))
     ))
   )
 
   (component $AsyncOuter
-    (import "unblock" (func $unblock))
-    (import "sync-func1" (func $sync-func1 (result u32)))
-    (import "sync-func2" (func $sync-func2 (result u32)))
+    (import "unblock" (func $unblock async))
+    (import "sync-func1" (func $sync-func1 async (result u32)))
+    (import "sync-func2" (func $sync-func2 async (result u32)))
 
     (core module $Memory (memory (export "mem") 1))
     (core instance $memory (instantiate $Memory))
@@ -219,7 +219,7 @@
       (export "sync-func1" (func $sync-func1'))
       (export "sync-func2" (func $sync-func2'))
     ))))
-    (func (export "run") (result u32) (canon lift
+    (func (export "run") async (result u32) (canon lift
       (core func $em "run")
       async (callback (func $em "run-cb"))
     ))
