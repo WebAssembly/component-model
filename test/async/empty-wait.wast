@@ -102,11 +102,11 @@
       (export "future.drop-readable" (func $future.drop-readable))
       (export "future.drop-writable" (func $future.drop-writable))
     ))))
-    (func (export "blocker") (result u32) (canon lift
+    (func (export "blocker") async (result u32) (canon lift
       (core func $cm "blocker")
       async (callback (func $cm "blocker_cb"))
     ))
-    (func (export "unblocker") (result u32) (canon lift
+    (func (export "unblocker") async (result u32) (canon lift
       (core func $cm "unblocker")
       async (callback (func $cm "unblocker_cb"))
     ))
@@ -114,8 +114,8 @@
 
   (component $D
     (import "c" (instance $c
-      (export "blocker" (func (result u32)))
-      (export "unblocker" (func (result u32)))
+      (export "blocker" (func async (result u32)))
+      (export "unblocker" (func async (result u32)))
     ))
 
     (core module $Memory (memory (export "mem") 1))
@@ -189,7 +189,7 @@
       (export "blocker" (func $blocker'))
       (export "unblocker" (func $unblocker'))
     ))))
-    (func (export "run") (result u32) (canon lift (core func $dm "run")))
+    (func (export "run") async (result u32) (canon lift (core func $dm "run")))
   )
 
   (instance $c (instantiate $C))

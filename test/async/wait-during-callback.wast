@@ -69,7 +69,7 @@
     (export "future.read" (func $future.read))
     (export "future.write" (func $future.write))
   ))))
-  (func (export "run") (result u32) (canon lift
+  (func (export "run") async (result u32) (canon lift
     (core func $cm "run")
     async (callback (func $cm "run_cb"))
   ))

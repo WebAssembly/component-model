@@ -104,7 +104,7 @@
       (export "stream.write" (func $stream.write))
       (export "stream.drop-writable" (func $stream.drop-writable))
     ))))
-    (func (export "produce") (result (stream u8)) (canon lift
+    (func (export "produce") async (result (stream u8)) (canon lift
       (core func $core_producer "produce")
       async (callback (func $core_producer "produce_cb"))
     ))
@@ -184,15 +184,15 @@
       (export "stream.read" (func $stream.read))
       (export "stream.drop-readable" (func $stream.drop-readable))
     ))))
-    (func (export "consume") (param "in" (stream u8)) (result u32) (canon lift
+    (func (export "consume") async (param "in" (stream u8)) (result u32) (canon lift
       (core func $core_consumer "consume")
       async (callback (func $core_consumer "consume_cb"))
     ))
   )
 
   (component $Parent
-    (import "produce" (func $produce (result (stream u8))))
-    (import "consume" (func $consume (param "in" (stream u8)) (result u32)))
+    (import "produce" (func $produce async (result (stream u8))))
+    (import "consume" (func $consume async (param "in" (stream u8)) (result u32)))
 
     (core module $CoreParent
       (import "" "produce" (func $produce (result i32)))
@@ -209,7 +209,7 @@
       (export "produce" (func $produce'))
       (export "consume" (func $consume'))
     ))))
-    (func (export "run") (result u32) (canon lift (core func $core_parent "run")))
+    (func (export "run") async (result u32) (canon lift (core func $core_parent "run")))
   )
 
   (instance $producer (instantiate $Producer))
