@@ -1739,25 +1739,14 @@ For details, see [Waitables and Waitable Sets] in the concurrency explainer and
 
 where `event` is defined as in [`waitable-set.wait`](#-waitable-setwait).
 
-The `waitable-set.poll` built-in suspends the [current thread] in
-the "ready" state (like `thread.yield`). Once nondeterministically resumed,
-`waitable-set.poll` will return either an event from one of the waitables in
-`s` or, if there is none, the `none` `event`. Thus, repeatedly calling
-`waitable-set.poll` in a loop allows other tasks to execute.
+The `waitable-set.poll` built-in returns either an event from one of the
+waitables in `s` or, if there is none, the `none` `event`.
 
 If `cancellable` is set, `waitable-set.poll` may return `task-cancelled`
 (`6`) if the caller requests [cancellation] of the [current task]. If
 `cancellable` is not set, `task-cancelled` is never returned.
 `task-cancelled` is returned at most once for a given task and thus must be
 propagated once received.
-
-If `waitable-set.poll` is called from a synchronous- or `async callback`-lifted
-export, no other threads that were implicitly created by a separate
-synchronous- or `async callback`-lifted export call can start or progress in
-the current component instance until `waitable-set.poll` returns (thereby
-ensuring non-reentrance of the core wasm code). However, explicitly-created
-threads and threads implicitly created by non-`callback` `async`-lifted
-("stackful async") exports may start or progress at any time.
 
 The Canonical ABI of `waitable-set.poll` is the same as `waitable-set.wait`
 (with the `none` case indicated by returning `0`).

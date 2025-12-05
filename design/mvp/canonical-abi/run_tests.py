@@ -1031,6 +1031,8 @@ def test_async_to_sync():
 
     remain = [subi1, subi2]
     while remain:
+      [ret] = canon_thread_yield(True, thread)
+      assert(ret == 0)
       retp = 8
       [event] = canon_waitable_set_poll(True, consumer_heap.memory, thread, seti, retp)
       if event == EventCode.NONE:

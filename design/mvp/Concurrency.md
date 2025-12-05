@@ -474,7 +474,7 @@ all of which are described above or below in more detail:
 * cooperatively yielding (e.g., during a long-running computation) via the
   [`thread.yield`](#thread-built-ins) built-in
 * waiting for one of a set of concurrent operations to complete via the
-  [`waitable-set.{wait,poll}`](#waitables-and-waitable-sets) built-ins
+  [`waitable-set.wait`](#waitables-and-waitable-sets) built-in
 * waiting for a stream or future operation to complete via the
   [`{stream,future}.{,cancel-}{read,write}`](#streams-and-futures) built-ins
 * waiting for a subtask to cooperatively cancel itself via the
@@ -509,9 +509,8 @@ Specifically, waitable sets are created and used via the following built-ins:
   waitable set
 * [`waitable-set.wait`]: suspend until one of the waitables in the given set
   has a pending event and then return that event
-* [`waitable-set.poll`]: first `thread.yield` and, once resumed, if any of the
-  waitables in the given set has a pending event, return that event; otherwise
-  return a sentinel "none" value
+* [`waitable-set.poll`]: if any of the waitables in the given set has a pending
+  event, return that event; otherwise return a sentinel "none" value
 
 In addition to subtasks, (the readable and writable ends of) [streams and
 futures](#streams-and-futures) are *also* waitables, which means that a single
@@ -813,7 +812,7 @@ defined by the Component Model:
   waitable's event is delivered first.
 * If multiple threads wait on or poll the same waitable set at the same time,
   the distribution of events to threads is nondeterministic.
-* Whenever a thread yields or waits on (or polls) a waitable set with an already
+* Whenever a thread yields or waits on a waitable set with an already
   pending event, whether the thread suspends and transfers execution to an
   async caller is nondeterministic.
 * If multiple threads that previously suspended can be resumed at the same
@@ -1054,8 +1053,6 @@ The `(result i32)` lets the core function return what it wants the runtime to do
   to run, but resuming thereafter without waiting on anything else.
 * If the low 4 bits are `2`, the callee wants to wait for an event to occur in
   the waitable set whose index is stored in the high 28 bits.
-* If the low 4 bits are `3`, the callee wants to poll for any events that have
-  occurred in the waitable set whose index is stored in the high 28 bits.
 
 When an async stackless function is exported, a companion "callback" function
 must also be exported with signature:

@@ -651,20 +651,6 @@ class Task(Call, Supertask):
     wset.num_waiting -= 1
     return event
 
-  def poll_until(self, ready_func, thread, wset, cancellable) -> Optional[EventTuple]:
-    assert(thread in self.threads and thread.task is self)
-    wset.num_waiting += 1
-    match self.suspend_until(ready_func, thread, cancellable):
-      case SuspendResult.CANCELLED:
-        event = (EventCode.TASK_CANCELLED, 0, 0)
-      case SuspendResult.NOT_CANCELLED:
-        if wset.has_pending_event():
-          event = wset.get_pending_event()
-        else:
-          event = (EventCode.NONE, 0, 0)
-    wset.num_waiting -= 1
-    return event
-
   def yield_until(self, ready_func, thread, cancellable) -> EventTuple:
     assert(thread in self.threads and thread.task is self)
     match self.suspend_until(ready_func, thread, cancellable):
@@ -2047,11 +2033,8 @@ def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
           wset = inst.table.get(si)
           trap_if(not isinstance(wset, WaitableSet))
           event = task.wait_until(lambda: not inst.exclusive, thread, wset, cancellable = True)
-        case CallbackCode.POLL:
-          trap_if(not task.may_block())
-          wset = inst.table.get(si)
-          trap_if(not isinstance(wset, WaitableSet))
-          event = task.poll_until(lambda: not inst.exclusive, thread, wset, cancellable = True)
+        case _:
+          trap()
       thread.in_event_loop = False
       inst.exclusive = True
       event_code, p1, p2 = event
@@ -2068,8 +2051,7 @@ class CallbackCode(IntEnum):
   EXIT = 0
   YIELD = 1
   WAIT = 2
-  POLL = 3
-  MAX = 3
+  MAX = 2
 
 def unpack_callback_result(packed):
   code = packed & 0xf
@@ -2283,10 +2265,14 @@ def unpack_event(mem, thread, ptr, e: EventTuple):
 
 def canon_waitable_set_poll(cancellable, mem, thread, si, ptr):
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block())
   wset = thread.task.inst.table.get(si)
   trap_if(not isinstance(wset, WaitableSet))
-  event = thread.task.poll_until(lambda: True, thread, wset, cancellable)
+  if thread.task.deliver_pending_cancel(cancellable):
+    event = (EventCode.TASK_CANCELLED, 0, 0)
+  elif not wset.has_pending_event():
+    event = (EventCode.NONE, 0, 0)
+  else:
+    event = wset.get_pending_event()
   return unpack_event(mem, thread, ptr, event)
 
 ### 🔀 `canon waitable-set.drop`
