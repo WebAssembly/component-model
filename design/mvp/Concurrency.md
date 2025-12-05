@@ -841,42 +841,22 @@ Despite the above, the following scenarios do behave deterministically:
 
 ## Interaction with the start function
 
-Since any component-level function with an empty signature can be used as a
-[`start`] function, there's nothing to stop an `async`-lifted function from
-being used as a `start` function. Async start functions are useful when
-executing general-purpose code at initialization time, e.g.:
-* If the top-level scripts of a scripting language are executed by the `start`
-  function, asychrony arises from regular use of the language's concurrency
-  features. For example, in JS, this takes the form of [top-level `await`].
-* If C++ or other OOPLs global object constructors are executed by the `start`
-  function, these can execute general-purpose code which may use concurrent
-  I/O APIs.
+All start functions (both component-level and Core WebAssembly start functions
+called via `core instance` definition) implicitly have the component-level
+function type `func()`, i.e., they are synchronous and take and return no
+arguments. Based on the above description of synchronous functions, this means
+that start functions may not block before returning. However, if a
+component-level start function is lifted using the async ABI, it *may* block
+after calling `task.return`, and may thus serve as a long-running "background
+task" to which work can be dispatched (e.g., via the `setInterval()` or
+`requestIdleCallback()` JavaScript APIs). From the perspective of [structured
+concurrency], these background tasks are new task tree roots (siblings to the
+roots created when component exports are called by the host).
 
-Since component `start` functions are already defined to be executed
-synchronously before the component is considered initialized and ready for its
-exports to be called, the natural thing for `start` to do when calling an
-`async`-lifted function is wait for the callee to reach the ["returned"
-state](#returning). This gives `async` `start` functions a simple way to do
-concurrent initialization and signal completion using the same language
-bindings as regular `async` `export` functions.
-
-However, as explained above, an async task can always continue executing after
-reaching the "returned" state and thus an async task spawned by `start` may
-continue executing even after the component instance is initialized and
-receiving export calls. These post-return `start`-tasks can be used by the
-language toolchain to implement traditional "background tasks" (e.g., the
-`setInterval()` or `requestIdleCallback()` JavaScript APIs). From the
-perspective of [structured concurrency], these background tasks are new task
-tree roots (siblings to the roots created when component exports are
-called by the host). Thus, subtasks and threads spawned by the background task
-will have proper async callstacks as used to define reentrancy and support
-debugging/profiling/tracing.
-
-In future, when [runtime instantiation] is added to the Component Model, the
-component-level function used to create a component instance could be lowered
-with `async` to allow a parent component to instantiate child components
-concurrently, relaxing the fully synchronous model of instantiation supported
-by declarative instantiation and `start` above.
+As a Preview 3 follow-up [TODO](#TODO), component type definitions should be
+extended to allow an `async` effect that declares that component instantiation
+is allowed to [block](#blocking). This would be necessary to implement, e.g.,
+JS [top-level `await`] or I/O in C++ constructors executing during `start`.
 
 
 ## Async ABI
@@ -1280,6 +1260,10 @@ comes after:
   `write` of a stream/future happen from within the same component instance
 * zero-copy forwarding/splicing
 * some way to say "no more elements are coming for a while"
+* add an `async` effect on `component` type definitions allowing a component
+  type to block during instantiation
+* add an `async` effect on `resource` type definitions allowing a resource
+  type to block during its destructor
 * `recursive` function type attribute: allow a function to opt in to
   recursive [reentrance], extending the ABI to link the inner and
   outer activations
