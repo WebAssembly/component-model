@@ -1042,31 +1042,10 @@ trap if another task tries to drop the waitable set being used.
     return event
 ```
 
-The `Task.poll_until` method is called by `canon_waitable_set_poll` and from
-the event loop in `canon_lift` when `CallbackCode.POLL` is returned. Unlike
-`wait_until`, `poll_until` does not wait for the given waitable set to have a
-pending event, returning `EventCode.NONE` if there is none already. However,
-`poll_until` *does* call `suspsend_until` to allow the runtime to
-nondeterministically switch to another task (or not).
-```python
-  def poll_until(self, ready_func, thread, wset, cancellable) -> Optional[EventTuple]:
-    assert(thread in self.threads and thread.task is self)
-    wset.num_waiting += 1
-    match self.suspend_until(ready_func, thread, cancellable):
-      case SuspendResult.CANCELLED:
-        event = (EventCode.TASK_CANCELLED, 0, 0)
-      case SuspendResult.NOT_CANCELLED:
-        if wset.has_pending_event():
-          event = wset.get_pending_event()
-        else:
-          event = (EventCode.NONE, 0, 0)
-    wset.num_waiting -= 1
-    return event
-```
-
 The `Task.yield_until` method is called by `canon_thread_yield` and from
-the event loop in `canon_lift` when `CallbackCode.YIELD` is returned.
-`yield_until` works like `poll_until` if given a fresh empty waitable set.
+the event loop in `canon_lift` when `CallbackCode.YIELD` is returned and
+calls `suspend_until` to allow the runtime to nondeterministically switch to
+another task (or not).
 ```python
   def yield_until(self, ready_func, thread, cancellable) -> EventTuple:
     assert(thread in self.threads and thread.task is self)
@@ -3277,11 +3256,8 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
           wset = inst.table.get(si)
           trap_if(not isinstance(wset, WaitableSet))
           event = task.wait_until(lambda: not inst.exclusive, thread, wset, cancellable = True)
-        case CallbackCode.POLL:
-          trap_if(not task.may_block())
-          wset = inst.table.get(si)
-          trap_if(not isinstance(wset, WaitableSet))
-          event = task.poll_until(lambda: not inst.exclusive, thread, wset, cancellable = True)
+        case _:
+          trap()
       thread.in_event_loop = False
       inst.exclusive = True
       event_code, p1, p2 = event
@@ -3290,11 +3266,11 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
     task.exit()
     return
 ```
-The `Task.{wait,poll,yield}_until` methods called by the event loop are the
-same methods called by the `yield`, `waitable-set.wait` and `waitable-set.poll`
-built-ins. Thus, the main difference between stackful and stackless async is
-whether these suspending operations are performed from an empty or non-empty
-core wasm callstack (with the former allowing additional engine optimization).
+The `Task.{wait,yield}_until` methods called by the event loop are the same
+methods called by the `yield` and `waitable-set.wait` built-ins. Thus, the
+main difference between stackful and stackless async is whether these
+suspending operations are performed from an empty or non-empty core wasm
+callstack (with the former allowing additional engine optimization).
 
 If a `Task` is not allowed to block (because it was created for a non-`async`-
 typed function call and has not yet returned a value), `YIELD` is always a
@@ -3336,8 +3312,7 @@ class CallbackCode(IntEnum):
   EXIT = 0
   YIELD = 1
   WAIT = 2
-  POLL = 3
-  MAX = 3
+  MAX = 2
 
 def unpack_callback_result(packed):
   code = packed & 0xf
@@ -3347,7 +3322,7 @@ def unpack_callback_result(packed):
   waitable_set_index = packed >> 4
   return (CallbackCode(code), waitable_set_index)
 ```
-The ability to asynchronously wait, poll, yield and exit is thus available to
+The ability to asynchronously wait, yield and exit is thus available to
 both the `callback` and non-`callback` cases, making `callback` just an
 optimization to avoid allocating stacks for async languages that have avoided
 the need for stackful coroutines by design (e.g., `async`/`await` in JS,
@@ -3878,26 +3853,22 @@ validation specifies:
 * `$f` is given type `(func (param $si i32) (param $ptr i32) (result i32))`
 * 🚟 - `cancellable` is allowed (otherwise it must be absent)
 
-Calling `$f` invokes the following function, which returns `NONE` (`0`) instead
-of blocking if there is no event available, and otherwise returns the event the
-same way as `wait`.
+Calling `$f` invokes the following function, which either returns an event that
+was pending on one of the waitables in the given waitable set (the same way as
+`waitable-set.wait`) or, if there is none, returns `0`.
 ```python
 def canon_waitable_set_poll(cancellable, mem, thread, si, ptr):
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block())
   wset = thread.task.inst.table.get(si)
   trap_if(not isinstance(wset, WaitableSet))
-  event = thread.task.poll_until(lambda: True, thread, wset, cancellable)
+  if thread.task.deliver_pending_cancel(cancellable):
+    event = (EventCode.TASK_CANCELLED, 0, 0)
+  elif not wset.has_pending_event():
+    event = (EventCode.NONE, 0, 0)
+  else:
+    event = wset.get_pending_event()
   return unpack_event(mem, thread, ptr, event)
 ```
-Even though `waitable-set.poll` doesn't block until the given waitable set has
-a pending event, `poll_until` does transitively perform a `Thread.suspend`
-which allows the embedder to nondeterministically switch to executing another
-task (like `thread.yield`). To avoid encouraging spin-waiting and to support
-hosts like browsers that require returning to the event loop for async I/O to
-resolve, a non-`async`-typed function export that has not yet returned a value
-unconditionally traps if it transitively attempts to call `poll`.
-
 If `cancellable` is set, then `waitable-set.poll` will return whether the
 supertask has already or concurrently requested cancellation.
 `waitable-set.poll` (and other cancellable operations) will only indicate
