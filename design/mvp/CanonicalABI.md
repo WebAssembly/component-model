@@ -3918,7 +3918,7 @@ For a canonical definition:
 (canon subtask.cancel async? (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param i32))`
+* `$f` is given type `(func (param i32) (result i32))`
 * 🚝 - `async` is allowed (otherwise it must be absent)
 
 Calling `$f` sends a request to a nondeterministically-chosen thread of the
