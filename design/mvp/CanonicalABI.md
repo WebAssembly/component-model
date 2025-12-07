@@ -1450,7 +1450,7 @@ remains blocked:
       self.set_pending(inst, dst_buffer, on_copy, on_copy_done)
     else:
       assert(self.t == dst_buffer.t == self.pending_buffer.t)
-      trap_if(inst is self.pending_inst and self.t is not None) # temporary
+      trap_if(inst is self.pending_inst and not none_or_number_type(self.t)) # temporary
       if self.pending_buffer.remain() > 0:
         if dst_buffer.remain() > 0:
           n = min(dst_buffer.remain(), self.pending_buffer.remain())
@@ -1462,11 +1462,12 @@ remains blocked:
         self.set_pending(inst, dst_buffer, on_copy, on_copy_done)
 ```
 Currently, there is a trap when both the `read` and `write` come from the same
-component instance and there is a non-empty element type. This trap will be
-removed in a subsequent release; the reason for the trap is that when lifting
-and lowering can alias the same memory, interleavings can be complex and must
-be handled carefully. Future improvements to the Canonical ABI ([lazy lowering])
-can greatly simplify this interleaving and be more practical to implement.
+component instance and there is a non-empty, non-number element type. This trap
+will be removed in a subsequent release; the reason for the trap is that when
+lifting and lowering can alias the same memory, interleavings can be complex
+and must be handled carefully. Future improvements to the Canonical ABI ([lazy
+lowering]) can greatly simplify this interleaving and be more practical to
+implement.
 
 The `write` method implements `WritableStream.write` and is called by the
 `stream.write` built-in (noting that the host cannot be passed the writable end
@@ -1483,7 +1484,7 @@ pending:
       self.set_pending(inst, src_buffer, on_copy, on_copy_done)
     else:
       assert(self.t == src_buffer.t == self.pending_buffer.t)
-      trap_if(inst is self.pending_inst and self.t is not None) # temporary
+      trap_if(inst is self.pending_inst and not none_or_number_type(self.t)) # temporary
       if self.pending_buffer.remain() > 0:
         if src_buffer.remain() > 0:
           n = min(src_buffer.remain(), self.pending_buffer.remain())
@@ -1505,6 +1506,15 @@ non-zero-length `write` that is allowed to block. This will break the loop,
 notifying the reader end and allowing it to rendezvous with a non-zero-length
 `read` and make progress. See the [stream readiness] section in the async
 explainer for more background on purpose of zero-length reads and writes.
+
+The `none_or_number_type` predicate used above includes both the integer and
+floating point number types:
+```python
+def none_or_number_type(t):
+  return t is None or isinstance(t, U8Type | U16Type | U32Type | U64Type |
+                                    S8Type | S16Type | S32Type | S64Type |
+                                    F32Type | F64Type)
+```
 
 The two ends of a stream are stored as separate elements in the component
 instance's table and each end has a separate `CopyState` that reflects what
@@ -1649,7 +1659,7 @@ end was dropped before receiving a value.
     if not self.pending_buffer:
       self.set_pending(inst, dst_buffer, on_copy_done)
     else:
-      trap_if(inst is self.pending_inst and self.t is not None) # temporary
+      trap_if(inst is self.pending_inst and not none_or_number_type(self.t)) # temporary
       dst_buffer.write(self.pending_buffer.read(1))
       self.reset_and_notify_pending(CopyResult.COMPLETED)
       on_copy_done(CopyResult.COMPLETED)
@@ -1661,14 +1671,14 @@ end was dropped before receiving a value.
     elif not self.pending_buffer:
       self.set_pending(inst, src_buffer, on_copy_done)
     else:
-      trap_if(inst is self.pending_inst and self.t is not None) # temporary
+      trap_if(inst is self.pending_inst and not none_or_number_type(self.t)) # temporary
       self.pending_buffer.write(src_buffer.read(1))
       self.reset_and_notify_pending(CopyResult.COMPLETED)
       on_copy_done(CopyResult.COMPLETED)
 ```
 As with streams, the `# temporary` limitation shown above is that a future
 cannot be read and written from the same component instance when it has a
-non-empty value type.
+non-empty, non-number value type.
 
 Lastly, the `{Readable,Writable}FutureEnd` classes are mostly symmetric with
 `{Readable,Writable}StreamEnd`, with the only difference being that
