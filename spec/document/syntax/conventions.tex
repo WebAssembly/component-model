@@ -1,0 +1,47 @@
+\section{Conventions}
+
+The WebAssembly component specification defines a language for
+specifying components, which, like the WebAssembly core language, may
+be represented by multiple complete representations (e.g. the
+\hyperref[sec:binary-format]{binary format} and the
+\hyperref[sec:text-format]{text format}). In order to avoid
+duplication, the static and dynamic semantics of the WebAssembly
+component model are instead defined over an abstract syntax.
+
+The following conventions are adopted in defining grammar rules for abstract syntax.
+
+\begin{itemize}
+\item Terminal symbols (atoms) are written in sans-serif font:
+  $\K{i32}, \K{end}$.
+
+\item Nonterminal symbols are written in italic font:
+  $\X{valtype}, \X{instr}$.
+
+\item $A^n$ is a sequence of $n\geq 0$ iterations of $A$.
+
+\item $A^\ast$ is a possibly empty sequence of iterations of $A$.
+  (This is a shorthand for $A^n$ used where $n$ is not relevant.)
+
+\item $A^+$ is a non-empty sequence of iterations of $A$. (This is a
+  shorthand for $A^n$ where $n \geq 1$.)
+
+\item $A^?$ is an optional occurrence of $A$. (This is a shorthand for
+  $A^n$ where $n \leq 1$.)
+
+\item Productions are written $\X{sym} ::= A_1 ~|~ \dots ~|~ A_n$.
+
+\item Large productions may be split into multiple definitions,
+  indicated by ending the first one with explicit ellipses,
+  $\X{sym} ::= A_1 ~|~ \dots$, and starting continuations with
+  ellipses, $\X{sym} ::= \dots ~|~ A_2$.
+
+\item Some productions are augmented with side conditions in
+  parentheses, ``$(\iff \X{condition})$'', that provide a shorthand for
+  a combinatorial expansion of the production into many separate
+  cases.
+
+\item If the same meta variable or non-terminal symbol appears
+  multiple times in a production, then all those occurrences must
+  have the same instantiation. (This is a shorthand for a side
+  condition requiring multiple different variables to be equal.)
+\end{itemize}
