@@ -568,7 +568,7 @@ valtype       ::= <typeidx>
                 | <defvaltype>
 resourcetype  ::= (resource (rep i32) (dtor <funcidx>)?)
                 | (resource (rep i32) (dtor async <funcidx> (callback <funcidx>)?)?) 🚝
-functype      ::= (func (param "<label>" <valtype>)* (result <valtype>)?)
+functype      ::= (func async? (param "<label>" <valtype>)* (result <valtype>)?)
 componenttype ::= (component <componentdecl>*)
 instancetype  ::= (instance <instancedecl>*)
 componentdecl ::= <importdecl>
@@ -737,11 +737,10 @@ are useful for:
 
 A `future<T>` asynchronously delivers exactly one `T` value from a source to a
 destination, unless the destination signals that it doesn't want the `T` value
-any more. Because [all imports can be called asynchronously][summary], futures
-are not necessary to express a traditional `async` function -- all functions
-are effectively `async`. Instead futures are useful in more advanced scenarios
-where a parameter or result value may not be ready at the same time as the
-other synchronous parameters or results.
+any more. When function types contain the [`async`][summary] effect, the return
+value is returned asynchronously if the call blocks (and is returned
+synchronously otherwise) and thus there is no need to *additionally* return a
+`future<T>` value unless *additional* asynchronous signalling is required.
 
 The `T` element type of `stream` and `future` is an optional `valtype`. As with
 variant-case payloads and function results, when `T` is absent, the "value(s)"
@@ -793,7 +792,10 @@ shared-nothing functions, resources, components, and component instances:
 
 The `func` type constructor describes a component-level function definition
 that takes a list of `valtype` parameters with [strongly-unique] names and
-optionally returns a `valtype`.
+optionally returns a `valtype`. The optional `async` effect type indicates that
+calling the function may block (because the function transitively calls a
+blocking built-in like `waitable-set.wait` or blocks on an imported `async`
+function).
 
 The `resource` type constructor creates a fresh type for each instance of the
 containing component (with "freshness" and its interaction with general
@@ -1413,7 +1415,6 @@ dynamically interact with Canonical ABI entities like resources,
 canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
         | (canon resource.drop <typeidx> (core func <id>?))
-        | (canon resource.drop <typeidx> async (core func <id>?)) 🚝
         | (canon resource.rep <typeidx> (core func <id>?))
         | (canon context.get <valtype> <u32> (core func <id>?)) 🔀
         | (canon context.set <valtype> <u32> (core func <id>?)) 🔀
@@ -1482,31 +1483,15 @@ For details, see [`canon_resource_new`] in the Canonical ABI explainer.
 
 ###### `resource.drop`
 
-When the `async` immediate is false:
-
 | Synopsis                   |                                    |
 | -------------------------- | ---------------------------------- |
 | Approximate WIT signature  | `func<T>(t: T)`                    |
 | Canonical ABI signature    | `[t:i32] -> []`                    |
 
-🚝 When the `async` immediate is true:
-
-| Synopsis                   |                                    |
-| -------------------------- | ---------------------------------- |
-| Approximate WIT signature  | `func<T>(t: T) -> option<subtask>` |
-| Canonical ABI signature    | `[t:i32] -> [i32]`                 |
-
 The `resource.drop` built-in drops a resource handle `t` (with resource type
 `T`). If the dropped handle owns the resource, the resource's `dtor` is called,
 if present. Validation only allows `resource.rep T` to be used within the
 component that defined `T`.
-
-When the `async` immediate is true, the returned value indicates whether the
-drop completed eagerly, or if not, identifies the in-progress drop.
-
-In the Canonical ABI, the returned `i32` is either `0` (if the drop completed
-eagerly) or the index of the in-progress drop subtask (representing the
-in-progress `dtor` call).
 
 For details, see [`canon_resource_drop`] in the Canonical ABI explainer.
 
@@ -1573,7 +1558,8 @@ The `context.get` built-in returns the `i`th element of the [current thread]'s
 than 2 and `t` to be `i32`, but these restrictions may be relaxed in the
 future.
 
-For details, see [`canon_context_get`] in the Canonical ABI explainer.
+For details, see [Thread-Local Storage] in the concurrency explainer and
+[`canon_context_get`] in the Canonical ABI explainer.
 
 ###### 🔀 `context.set`
 
@@ -1587,7 +1573,8 @@ The `context.set` built-in sets the `i`th element of the [current thread]'s
 `i` to be less than 2 and `t` to be `i32`, but these restrictions may be
 relaxed in the future.
 
-For details, see [`canon_context_set`] in the Canonical ABI explainer.
+For details, see [Thread-Local Storage] in the concurrency explainer and
+[`canon_context_set`] in the Canonical ABI explainer.
 
 ###### 🔀✕ `backpressure.set`
 
@@ -1623,8 +1610,8 @@ trap instead. As a composable convention, each piece of code that calls
 `backpressure.inc` must take responsibility for calling `backpressure.dec`
 exactly once when the source of backpressure subsides.
 
-For details, see [`canon_backpressure_{inc,dec}`] in the Canonical ABI
-explainer.
+For details, see [Backpressure] in the concurrency explainer and
+[`canon_backpressure_{inc,dec}`] in the Canonical ABI explainer.
 
 ###### 🔀 `task.return`
 
@@ -1675,7 +1662,8 @@ set]. The `waitable-set` type is not a true WIT-level type but instead serves
 to document associated built-ins below. Waitable sets start out empty and are
 populated explicitly with [waitables] by `waitable.join`.
 
-For details, see [`canon_waitable_set_new`] in the Canonical ABI explainer.
+For details, see [Waitables and Waitable Sets] in the concurrency explainer and
+[`canon_waitable_set_new`] in the Canonical ABI explainer.
 
 ###### 🔀 `waitable-set.wait`
 
@@ -1704,7 +1692,7 @@ enum subtask-state {
     cancelled-before-returned,
 }
 ```
-The `waitable-set.wait` built-in [suspends][waiting] the [current thread] in
+The `waitable-set.wait` built-in suspends the [current thread] in
 a "pending" state until any one of the [waitables] in the given [waitable set]
 `s` has an event to deliver. At that point, the thread is in the "ready" state
 and can be nondeterministically resumed by the runtime's scheduler at which
@@ -1739,7 +1727,8 @@ In the Canonical ABI, the `event-code` return value provides the `event`
 discriminant and the case payloads are stored as two contiguous `i32`s at the
 8-byte-aligned address `payload-addr`.
 
-For details, see [`canon_waitable_set_wait`] in the Canonical ABI explainer.
+For details, see [Waitables and Waitable Sets] in the concurrency explainer and
+[`canon_waitable_set_wait`] in the Canonical ABI explainer.
 
 ###### 🔀 `waitable-set.poll`
 
@@ -1750,11 +1739,8 @@ For details, see [`canon_waitable_set_wait`] in the Canonical ABI explainer.
 
 where `event` is defined as in [`waitable-set.wait`](#-waitable-setwait).
 
-The `waitable-set.poll` built-in [suspends][waiting] the [current thread] in
-the "ready" state (like `thread.yield`). Once nondeterministically resumed,
-`waitable-set.poll` will return either an event from one of the waitables in
-`s` or, if there is none, the `none` `event`. Thus, repeatedly calling
-`waitable-set.poll` in a loop allows other tasks to execute.
+The `waitable-set.poll` built-in returns either an event from one of the
+waitables in `s` or, if there is none, the `none` `event`.
 
 If `cancellable` is set, `waitable-set.poll` may return `task-cancelled`
 (`6`) if the caller requests [cancellation] of the [current task]. If
@@ -1762,18 +1748,11 @@ If `cancellable` is set, `waitable-set.poll` may return `task-cancelled`
 `task-cancelled` is returned at most once for a given task and thus must be
 propagated once received.
 
-If `waitable-set.poll` is called from a synchronous- or `async callback`-lifted
-export, no other threads that were implicitly created by a separate
-synchronous- or `async callback`-lifted export call can start or progress in
-the current component instance until `waitable-set.poll` returns (thereby
-ensuring non-reentrance of the core wasm code). However, explicitly-created
-threads and threads implicitly created by non-`callback` `async`-lifted
-("stackful async") exports may start or progress at any time.
-
 The Canonical ABI of `waitable-set.poll` is the same as `waitable-set.wait`
 (with the `none` case indicated by returning `0`).
 
-For details, see [`canon_waitable_set_poll`] in the Canonical ABI explainer.
+For details, see [Waitables and Waitable Sets] in the concurrency explainer and
+[`canon_waitable_set_poll`] in the Canonical ABI explainer.
 
 ###### 🔀 `waitable-set.drop`
 
@@ -1786,7 +1765,8 @@ The `waitable-set.drop` built-in removes the indicated [waitable set] from the
 current component instance's table, trapping if the waitable set is not empty
 or if another thread is concurrently `wait`ing on it.
 
-For details, see [`canon_waitable_set_drop`] in the Canonical ABI explainer.
+For details, see [Waitables and Waitable Sets] in the concurrency explainer and
+[`canon_waitable_set_drop`] in the Canonical ABI explainer.
 
 ###### 🔀 `waitable.join`
 
@@ -1807,7 +1787,8 @@ table and can be any type of waitable (`subtask` or
 `{readable,writable}-{stream,future}-end`). A value of `0` represents a `none`
 `maybe_set`, since `0` is not a valid table index.
 
-For details, see [`canon_waitable_join`] in the Canonical ABI explainer.
+For details, see [Waitables and Waitable Sets] in the concurrency explainer and
+[`canon_waitable_join`] in the Canonical ABI explainer.
 
 ###### 🔀 `subtask.cancel`
 
@@ -1827,7 +1808,8 @@ The `async` immediate is gated on 🚝. Without `async`, the `none` case is not
 possible and `subtask.cancel` synchronously waits until the callee is
 resolved.
 
-For details, see [`canon_subtask_cancel`] in the Canonical ABI explainer.
+For details, see [Cancellation] in the concurrency explainer and
+[`canon_subtask_cancel`] in the Canonical ABI explainer.
 
 ###### 🔀 `subtask.drop`
 
@@ -1862,7 +1844,8 @@ canonical built-ins use the readable and writable ends of a `stream<T?>`.
 An analogous relationship exists among `readable-future-end<T?>`,
 `writable-future-end<T?>`, and the WIT `future<T?>`.
 
-For details, see [`canon_stream_new`] in the Canonical ABI explainer.
+For details, see [Streams and Futures] in the concurrency explainer and
+[`canon_stream_new`] in the Canonical ABI explainer.
 
 ###### 🔀 `stream.read` and `stream.write`
 
@@ -1917,9 +1900,9 @@ into the given buffer before the writer end dropped the stream. The `cancelled`
 case can only arise as the result of a call to `stream.cancel-{read,write}`.
 
 If the return value is `none`, then the operation blocked and the caller needs
-to [wait] for progress (via `waitable-set.{wait,poll}` or, if using a
-`callback`, by returning to the event loop) which will asynchronously produce
-an `event` containing a `stream-result`.
+to wait for progress (via [waitable set] and `waitable-set.{wait,poll}` or, if
+using a `callback`, by returning to the event loop) which will asynchronously
+produce an `event` containing a `stream-result`.
 
 If `stream.{read,write}` return `dropped` (synchronously or asynchronously),
 any subsequent operation on the stream other than `stream.drop-{readable,writable}`
@@ -1934,7 +1917,8 @@ bit-packed into a single `i32` where:
 * Otherwise, the `result` is in the low 4 bits and the `progress` is in the
   high 28 bits.
 
-For details, see [`canon_stream_read`] in the Canonical ABI explainer.
+For details, see [Streams and Futures] in the concurrency explainer and
+[`canon_stream_read`] in the Canonical ABI explainer.
 
 ###### 🔀 `future.read` and `future.write`
 
@@ -1979,9 +1963,9 @@ future as the first parameter and, if `T` is present, a single-element buffer
 that can be used to write or read a single `T` value.
 
 If the return value is `none`, then the call blocked and the caller needs
-to [wait] for progress (via `waitable-set.{wait,poll}` or, if using a
-`callback`, by returning to the event loop) which will asynchronously produce
-an `event` containing a `future-{read,write}-result`.
+to wait for progress (via [waitable set] and `waitable-set.{wait,poll}` or, if
+using a `callback`, by returning to the event loop) which will asynchronously
+produce an `event` containing a `future-{read,write}-result`.
 
 If `future.{read,write}` return `completed` or `dropped` (synchronously or
 asynchronously), any subsequent operation on the future other than
@@ -2000,7 +1984,8 @@ return value is bit-packed into the single `i32` return value where
 as the value of `future-write-result.cancelled`, rather than the value implied
 by the `enum` definition above.
 
-For details, see [`canon_future_read`] in the Canonical ABI explainer.
+For details, see [Streams and Futures] in the concurrency explainer and
+[`canon_future_read`] in the Canonical ABI explainer.
 
 ###### 🔀 `stream.cancel-read`, `stream.cancel-write`, `future.cancel-read`, and `future.cancel-write`
 
@@ -2027,7 +2012,8 @@ happened first.
 In the Canonical ABI, the optional result value is bit-packed into the single
 `i32` result in the same way as `{stream,future}.{read,write}`.
 
-For details, see [`canon_stream_cancel_read`] in the Canonical ABI explainer.
+For details, see [Streams and Futures] in the concurrency explainer and
+[`canon_stream_cancel_read`] in the Canonical ABI explainer.
 
 ###### 🔀 `stream.drop-readable`, `stream.drop-writable`, `future.drop-readable`, and `future.drop-writable`
 
@@ -2045,7 +2031,8 @@ stream or future has a mismatched direction or type or are in the middle of a
 `read` or `write` or, in the special case of `future.drop-writable`, if a
 value has not already been written.
 
-For details, see [`canon_stream_drop_readable`] in the Canonical ABI explainer.
+For details, see [Streams and Futures] in the concurrency explainer and
+[`canon_stream_drop_readable`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.index`
 
@@ -2059,7 +2046,8 @@ component instance's table. While `thread.new-indirect` also returns the index
 of newly-created threads, threads created implicitly for export calls can only
 learn their index via `thread.index`.
 
-For details, see [`canon_thread_index`] in the Canonical ABI explainer.
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_thread_index`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.new-indirect`
 
@@ -2079,12 +2067,13 @@ Currently, `FuncT` must be `(func (param i32))` and thus `c` must always be an
 `i32`, but this restriction can be loosened in the future as the Canonical
 ABI is extended for [memory64] and [GC].
 
-As explained in the [concurrency explainer][waiting], a thread created by
+As explained in the [concurrency explainer], a thread created by
 `thread.new-indirect` is initially in a suspended state and must be resumed
 eagerly or lazily by [`thread.yield-to`](#-threadyield-to) or
 [`thread.resume-later`](#-threadresume-later), resp., to begin execution.
 
-For details, see [`canon_thread_new_indirect`] in the Canonical ABI explainer.
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_thread_new_indirect`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.switch-to`
 
@@ -2098,7 +2087,7 @@ where `suspend-result` is defined in WIT as:
 enum suspend-result { completed, cancelled }
 ```
 
-The `thread.switch-to` built-in [suspends][waiting] the [current thread] and
+The `thread.switch-to` built-in suspends the [current thread] and
 immediately resumes execution of the thread `t`, trapping if `t` is not in a
 "suspended" state. When the current thread is resumed by some other thread or,
 if `cancellable` was set, [cancellation], `thread.switch-to` will return,
@@ -2112,7 +2101,8 @@ ensuring non-reentrance of the core wasm code). However, explicitly-created
 threads and threads implicitly created by non-`callback` `async`-lifted
 ("stackful async") exports may start or progress at any time.
 
-For details, see [`canon_thread_switch_to`] in the Canonical ABI explainer.
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_thread_switch_to`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.suspend`
 
@@ -2121,7 +2111,7 @@ For details, see [`canon_thread_switch_to`] in the Canonical ABI explainer.
 | Approximate WIT signature  | `func<cancellable?>() -> suspend-result` |
 | Canonical ABI signature    | `[] -> i32`                              |
 
-The `thread.suspend` built-in [suspends][waiting] the [current thread] which,
+The `thread.suspend` built-in suspends the [current thread] which,
 depending on the calling context, will either immediately switch control flow
 to an `async`-lowered caller or, if the current task has already suspended
 before, switch to the runtime's scheduler to find something else to do. When
@@ -2136,7 +2126,8 @@ ensuring non-reentrance of the core wasm code). However, explicitly-created
 threads and threads implicitly created by non-`callback` `async`-lifted
 ("stackful async") exports may start or progress at any time.
 
-For details, see [`canon_thread_suspend`] in the Canonical ABI explainer.
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_thread_suspend`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.resume-later`
 
@@ -2149,7 +2140,7 @@ The `thread.resume-later` built-in changes the state of thread `t` from
 "suspended" to "ready" (trapping if `t` is not in a "suspended" state) so that
 the runtime can nondeterministically resume `t` at some point in the future.
 
-For details, see [waiting] in the concurrency explainer and
+For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_resume_later`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.yield-to`
@@ -2174,7 +2165,7 @@ ensuring non-reentrance of the core wasm code). However, explicitly-created
 threads and threads implicitly created by non-`callback` `async`-lifted
 ("stackful async") exports may start or progress at any time.
 
-For details, see [waiting] in the concurrency explainer and
+For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield_to`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.yield`
@@ -2199,7 +2190,7 @@ ensuring non-reentrance of the core wasm code). However, explicitly-created
 threads and threads implicitly created by non-`callback` `async`-lifted
 ("stackful async") exports may start or progress at any time.
 
-For details, see [waiting] in the concurrency explainer and
+For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield`] in the Canonical ABI explainer.
 
 ###### 🧵② `thread.spawn-ref`
@@ -2521,12 +2512,9 @@ importname        ::= <exportname>
                     | <urlname>
                     | <hashname>
 plainname         ::= <label>
-                    | '[async]' <label> 🔀
                     | '[constructor]' <label>
                     | '[method]' <label> '.' <label>
-                    | '[async method]' <label> '.' <label> 🔀
                     | '[static]' <label> '.' <label>
-                    | '[async static]' <label> '.' <label> 🔀
 label             ::= <fragment>
                     | <label> '-' <fragment>
 fragment          ::= <word>
@@ -2671,10 +2659,10 @@ annotations trigger additional type-validation rules (listed in
 * Similarly, an import or export named `[method]R.foo` must be a function whose
   first parameter must be `(param "self" (borrow $R))`.
 
-When a function is annotated with `async`, bindings generators are expected to
+When a function's type is `async`, bindings generators are expected to
 emit whatever asynchronous language construct is appropriate (such as an
-`async` function in JS, Python or Rust). Note the absence of
-`[async constructor]`. See the [concurrency explainer] for more details.
+`async` function in JS, Python or Rust). See the [concurrency explainer] for
+more details.
 
 The `label` production used inside `plainname` as well as the labels of
 `record` and `variant` types are required to have [kebab case]. The reason for
@@ -2806,7 +2794,7 @@ Thus, the following names are strongly-unique:
 * `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[method]foo.baz`
 
 but attempting to add *any* of the following names would be a validation error:
-* `foo`, `foo-BAR`, `[constructor]foo-BAR`, `[method]foo.foo`, `[async]foo`, `[method]foo.BAR`
+* `foo`, `foo-BAR`, `[constructor]foo-BAR`, `[method]foo.foo`, `[method]foo.BAR`
 
 Note that additional validation rules involving types apply to names with
 annotations. For example, the validation rules for `[constructor]foo` require
@@ -3273,12 +3261,13 @@ For some use-case-focused, worked examples, see:
 [Thread-Local Storage]: Concurrency.md#thread-local-storage
 [Subtask]: Concurrency.md#subtasks-and-supertasks
 [Stream or Future]: Concurrency.md#streams-and-futures
+[Streams and Futures]: Concurrency.md#streams-and-futures
 [Readable and Writable Ends]: Concurrency.md#streams-and-futures
 [Readable or Writable End]: Concurrency.md#streams-and-futures
-[Wait]: Concurrency.md#waiting
-[Waiting]: Concurrency.md#waiting
-[Waitables]: Concurrency.md#waiting
-[Waitable Set]: Concurrency.md#waiting
+[Thread Built-ins]: Concurrency.md#thread-built-ins
+[Waitables and Waitable Sets]: Concurrency.md#waitables-and-waitable-sets
+[Waitables]: Concurrency.md#waitables-and-waitable-sets
+[Waitable Set]: Concurrency.md#waitables-and-waitable-sets
 [Backpressure]: Concurrency.md#backpressure
 [Returning]: Concurrency.md#returning
 [Resolved]: Concurrency.md#cancellation
