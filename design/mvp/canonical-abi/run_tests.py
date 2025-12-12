@@ -2476,10 +2476,10 @@ def test_cancel_subtask():
   assert(got[0] == 42)
 
 
-def test_self_empty():
+def test_self_copy(elemt):
   store = Store()
   inst = ComponentInstance(store)
-  mem = bytearray(24)
+  mem = bytearray(40)
   sync_opts = mk_opts(memory=mem, async_=False)
   async_opts = mk_opts(memory=mem, async_=True)
 
@@ -2487,35 +2487,35 @@ def test_self_empty():
   def core_func(thread, args):
     [seti] = canon_waitable_set_new(thread)
 
-    [packed] = canon_future_new(FutureType(None), thread)
+    [packed] = canon_future_new(FutureType(elemt), thread)
     rfi,wfi = unpack_new_ends(packed)
 
-    [ret] = canon_future_write(FutureType(None), async_opts, thread, wfi, 0xdeadbeef)
+    [ret] = canon_future_write(FutureType(elemt), async_opts, thread, wfi, 0)
     assert(ret == definitions.BLOCKED)
 
-    [ret] = canon_future_read(FutureType(None), async_opts, thread, rfi, 0xdeadbeef)
+    [ret] = canon_future_read(FutureType(elemt), async_opts, thread, rfi, 0)
     assert(ret == CopyResult.COMPLETED)
-    [] = canon_future_drop_readable(FutureType(None), thread, rfi)
+    [] = canon_future_drop_readable(FutureType(elemt), thread, rfi)
 
     [] = canon_waitable_join(thread, wfi, seti)
     [event] = canon_waitable_set_wait(True, mem, thread, seti, 0)
     assert(event == EventCode.FUTURE_WRITE)
     assert(mem[0] == wfi)
     assert(mem[4] == CopyResult.COMPLETED)
-    [] = canon_future_drop_writable(FutureType(None), thread, wfi)
+    [] = canon_future_drop_writable(FutureType(elemt), thread, wfi)
 
-    [packed] = canon_stream_new(StreamType(None), thread)
+    [packed] = canon_stream_new(StreamType(elemt), thread)
     rsi,wsi = unpack_new_ends(packed)
-    [ret] = canon_stream_write(StreamType(None), async_opts, thread, wsi, 10000, 3)
+    [ret] = canon_stream_write(StreamType(elemt), async_opts, thread, wsi, 0, 3)
     assert(ret == definitions.BLOCKED)
 
-    [ret] = canon_stream_read(StreamType(None), async_opts, thread, rsi, 2000, 1)
+    [ret] = canon_stream_read(StreamType(elemt), async_opts, thread, rsi, 0, 1)
     result,n = unpack_result(ret)
     assert(n == 1 and result == CopyResult.COMPLETED)
-    [ret] = canon_stream_read(StreamType(None), async_opts, thread, rsi, 2000, 4)
+    [ret] = canon_stream_read(StreamType(elemt), async_opts, thread, rsi, 0, 4)
     result,n = unpack_result(ret)
     assert(n == 2 and result == CopyResult.COMPLETED)
-    [] = canon_stream_drop_readable(StreamType(None), thread, rsi)
+    [] = canon_stream_drop_readable(StreamType(elemt), thread, rsi)
 
     [] = canon_waitable_join(thread, wsi, seti)
     [event] = canon_waitable_set_wait(True, mem, thread, seti, 0)
@@ -2524,7 +2524,7 @@ def test_self_empty():
     result,n = unpack_result(mem[4])
     assert(result == CopyResult.DROPPED)
     assert(n == 3)
-    [] = canon_stream_drop_writable(StreamType(None), thread, wsi)
+    [] = canon_stream_drop_writable(StreamType(elemt), thread, wsi)
 
     [] = canon_waitable_set_drop(thread, seti)
     return []
@@ -2743,7 +2743,9 @@ test_wasm_to_wasm_stream_empty()
 test_cancel_copy()
 test_futures()
 test_cancel_subtask()
-test_self_empty()
+test_self_copy(None)
+test_self_copy(U8Type())
+test_self_copy(F64Type())
 test_async_flat_params()
 test_threads()
 test_thread_cancel_callback()
