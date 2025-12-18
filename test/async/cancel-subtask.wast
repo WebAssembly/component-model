@@ -70,19 +70,19 @@
       (export "waitable-set.new" (func $waitable-set.new))
       (export "waitable-set.wait" (func $waitable-set.wait))
     ))))
-    (func (export "f") (result u32) (canon lift
+    (func (export "f") async (result u32) (canon lift
       (core func $cm "f")
       async (callback (func $cm "f_cb"))
     ))
-    (func (export "g") (param "fut" $FT) (result u32) (canon lift
+    (func (export "g") async (param "fut" $FT) (result u32) (canon lift
       (core func $cm "g")
     ))
   )
 
   (component $D
     (type $FT (future))
-    (import "f" (func $f (result u32)))
-    (import "g" (func $g (param "fut" $FT) (result u32)))
+    (import "f" (func $f async (result u32)))
+    (import "g" (func $g async (param "fut" $FT) (result u32)))
 
     (core module $Memory (memory (export "mem") 1))
     (core instance $memory (instantiate $Memory))
@@ -188,7 +188,7 @@
       (export "f" (func $f'))
       (export "g" (func $g'))
     ))))
-    (func (export "run") (result u32) (canon lift (core func $dm "run")))
+    (func (export "run") async (result u32) (canon lift (core func $dm "run")))
   )
 
   (instance $c (instantiate $C))

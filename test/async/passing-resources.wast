@@ -91,18 +91,18 @@
       (export "stream.drop-writable" (func $stream.drop-writable))
     ))))
     (export $R' "R" (type $R))
-    (func (export "[method]R.foo") (param "self" (borrow $R')) (result u32) (canon lift (core func $core "R.foo")))
-    (func (export "start-stream") (result (stream (own $R'))) (canon lift (core func $core "start-stream")))
-    (func (export "cancel-write") (canon lift (core func $core "cancel-write")))
-    (func (export "fail-accessing-res1") (canon lift (core func $core "fail-accessing-res1")))
+    (func (export "[method]R.foo") async (param "self" (borrow $R')) (result u32) (canon lift (core func $core "R.foo")))
+    (func (export "start-stream") async (result (stream (own $R'))) (canon lift (core func $core "start-stream")))
+    (func (export "cancel-write") async (canon lift (core func $core "cancel-write")))
+    (func (export "fail-accessing-res1") async (canon lift (core func $core "fail-accessing-res1")))
   )
 
   (component $Consumer
     (import "producer" (instance $producer
       (export "R" (type $R (sub resource)))
-      (export "[method]R.foo" (func (param "self" (borrow $R)) (result u32)))
-      (export "start-stream" (func (result (stream (own $R)))))
-      (export "cancel-write" (func))
+      (export "[method]R.foo" (func async (param "self" (borrow $R)) (result u32)))
+      (export "start-stream" (func async (result (stream (own $R)))))
+      (export "cancel-write" (func async))
     ))
 
     (core module $Memory (memory (export "mem") 1))
@@ -162,7 +162,7 @@
       (export "start-stream" (func $start-stream'))
       (export "cancel-write" (func $cancel-write'))
     ))))
-    (func (export "run") (result u32) (canon lift
+    (func (export "run") async (result u32) (canon lift
       (core func $core "run")
     ))
   )
