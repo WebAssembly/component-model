@@ -847,7 +847,7 @@ class SharedStreamImpl(ReadableStream, WritableStream):
       self.set_pending(inst, dst_buffer, on_copy, on_copy_done)
     else:
       assert(self.t == dst_buffer.t == self.pending_buffer.t)
-      trap_if(inst is self.pending_inst and not none_or_number_type(self.t)) # temporary
+      trap_if(inst is self.pending_inst and not none_or_primitive_type(self.t)) # temporary
       if self.pending_buffer.remain() > 0:
         if dst_buffer.remain() > 0:
           n = min(dst_buffer.remain(), self.pending_buffer.remain())
@@ -865,7 +865,7 @@ class SharedStreamImpl(ReadableStream, WritableStream):
       self.set_pending(inst, src_buffer, on_copy, on_copy_done)
     else:
       assert(self.t == src_buffer.t == self.pending_buffer.t)
-      trap_if(inst is self.pending_inst and not none_or_number_type(self.t)) # temporary
+      trap_if(inst is self.pending_inst and not none_or_primitive_type(self.t)) # temporary
       if self.pending_buffer.remain() > 0:
         if src_buffer.remain() > 0:
           n = min(src_buffer.remain(), self.pending_buffer.remain())
@@ -878,10 +878,11 @@ class SharedStreamImpl(ReadableStream, WritableStream):
         self.reset_and_notify_pending(CopyResult.COMPLETED)
         self.set_pending(inst, src_buffer, on_copy, on_copy_done)
 
-def none_or_number_type(t):
+def none_or_primitive_type(t):
   return t is None or isinstance(t, U8Type | U16Type | U32Type | U64Type |
                                     S8Type | S16Type | S32Type | S64Type |
-                                    F32Type | F64Type)
+                                    F32Type | F64Type |
+                                    BoolType | CharType)
 
 class CopyState(Enum):
   IDLE = 1
@@ -984,7 +985,7 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
     if not self.pending_buffer:
       self.set_pending(inst, dst_buffer, on_copy_done)
     else:
-      trap_if(inst is self.pending_inst and not none_or_number_type(self.t)) # temporary
+      trap_if(inst is self.pending_inst and not none_or_primitive_type(self.t)) # temporary
       dst_buffer.write(self.pending_buffer.read(1))
       self.reset_and_notify_pending(CopyResult.COMPLETED)
       on_copy_done(CopyResult.COMPLETED)
@@ -996,7 +997,7 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
     elif not self.pending_buffer:
       self.set_pending(inst, src_buffer, on_copy_done)
     else:
-      trap_if(inst is self.pending_inst and not none_or_number_type(self.t)) # temporary
+      trap_if(inst is self.pending_inst and not none_or_primitive_type(self.t)) # temporary
       self.pending_buffer.write(src_buffer.read(1))
       self.reset_and_notify_pending(CopyResult.COMPLETED)
       on_copy_done(CopyResult.COMPLETED)
