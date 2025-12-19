@@ -1721,8 +1721,7 @@ ty ::= 'u8' | 'u16' | 'u32' | 'u64'
      | id
 
 tuple ::= 'tuple' '<' tuple-list '>'
-tuple-list ::= ty
-             | ty ',' tuple-list?
+tuple-list ::= ty ( ',' ty )*
 
 list ::= 'list' '<' ty '>'
        | 'list' '<' ty ',' uint '>' 🔧
