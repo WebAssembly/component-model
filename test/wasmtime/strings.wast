@@ -34,7 +34,7 @@
     (instance $c (instantiate $c))
     (instance $c2 (instantiate $c2 (with "a" (func $c "a"))))
   )
-  "unreachable")
+  "unaligned pointer")
 
 ;; unaligned latin1+utf16 string, even with the latin1 encoding
 (assert_trap
@@ -70,7 +70,7 @@
     (instance $c (instantiate $c))
     (instance $c2 (instantiate $c2 (with "a" (func $c "a"))))
   )
-  "unreachable")
+  "unaligned pointer")
 
 ;; out of bounds utf8->utf8 string
 (assert_trap
@@ -107,4 +107,4 @@
     (instance $c (instantiate $c))
     (instance $c2 (instantiate $c2 (with "a" (func $c "a"))))
   )
-  "unreachable")
+  "string content out-of-bounds")

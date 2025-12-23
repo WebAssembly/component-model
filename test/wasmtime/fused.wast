@@ -502,7 +502,7 @@
     (instance $c1 (instantiate $c1))
     (instance $c2 (instantiate $c2 (with "r" (func $c1 "r"))))
   )
-  "unreachable")
+  "unaligned pointer")
 
 ;; caller retptr misaligned
 (assert_trap
@@ -538,7 +538,7 @@
     (instance $c1 (instantiate $c1))
     (instance $c2 (instantiate $c2 (with "r" (func $c1 "r"))))
   )
-  "unreachable")
+  "unaligned pointer")
 
 ;; callee argptr misaligned
 (assert_trap
@@ -586,7 +586,7 @@
     (instance $c1 (instantiate $c1))
     (instance $c2 (instantiate $c2 (with "r" (func $c1 "r"))))
   )
-  "unreachable")
+  "unaligned pointer")
 
 ;; caller argptr misaligned
 (assert_trap
@@ -635,7 +635,7 @@
     (instance $c1 (instantiate $c1))
     (instance $c2 (instantiate $c2 (with "r" (func $c1 "r"))))
   )
-  "unreachable")
+  "unaligned pointer")
 
 ;; simple variant translation
 (component
@@ -722,7 +722,7 @@
       (with "r" (func $c1 "r"))
     ))
   )
-  "unreachable")
+  "invalid variant discriminant")
 
 ;; invalid variant discriminant in a result
 (assert_trap
@@ -757,7 +757,7 @@
       (with "r" (func $c1 "r"))
     ))
   )
-  "unreachable")
+  "invalid variant discriminant")
 
 
 ;; extra bits are chopped off
@@ -1160,7 +1160,7 @@
     (instance $c1 (instantiate $c1))
     (instance $c2 (instantiate $c2 (with "a" (instance $c1))))
   )
-  "unreachable")
+  "invalid `char` bit pattern")
 (assert_trap
   (component
     (component $c1
@@ -1181,7 +1181,7 @@
     (instance $c1 (instantiate $c1))
     (instance $c2 (instantiate $c2 (with "a" (instance $c1))))
   )
-  "unreachable")
+  "invalid `char` bit pattern")
 (assert_trap
   (component
     (component $c1
@@ -1202,7 +1202,7 @@
     (instance $c1 (instantiate $c1))
     (instance $c2 (instantiate $c2 (with "a" (instance $c1))))
   )
-  "unreachable")
+  "invalid `char` bit pattern")
 
 ;; test that flags get their upper bits all masked off
 (component
