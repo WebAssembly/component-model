@@ -476,7 +476,7 @@
   (func (export "f") (canon lift (core func $i "f")))
 )
 
-(assert_trap (invoke "f") "unknown handle index 1")
+(assert_trap (invoke "f") "index 1 is not a resource")
 
 ;; Each instantiation of a component generates a unique resource type, so
 ;; allocating in one component and deallocating in another should fail.
