@@ -2762,6 +2762,50 @@ def test_thread_cancel_callback():
 
   run_lift(mk_opts(), consumer_inst, consumer_ft, core_consumer, lambda:[], lambda _:())
 
+def test_reentrance():
+  def mk_task(supertask, inst):
+    t = Supertask()
+    t.supertask = supertask
+    t.inst = inst
+    return t
+
+  store = Store()
+  root_task = mk_task(None, None)
+
+  c1 = ComponentInstance(store, None)
+  c2 = ComponentInstance(store, None)
+  c1_task = mk_task(root_task, c1)
+  assert(call_is_recursive(mk_task(c1_task, None), c1))
+  assert(not call_is_recursive(mk_task(c1_task, None), c2))
+  c1c2_task = mk_task(c1_task, c2)
+  assert(call_is_recursive(mk_task(c1c2_task, None), c1))
+  assert(call_is_recursive(mk_task(c1c2_task, None), c2))
+  c1host_task = mk_task(c1_task, None)
+  assert(call_is_recursive(mk_task(c1host_task, None), c1))
+  assert(not call_is_recursive(mk_task(c1host_task, None), c2))
+
+  p = ComponentInstance(store, None)
+  c1 = ComponentInstance(store, p)
+  c2 = ComponentInstance(store, p)
+  c3 = ComponentInstance(store, None)
+  c1_task = mk_task(root_task, c1)
+  c1c2_task = mk_task(c1_task, c2)
+  c1c2host_task = mk_task(c1c2_task, None)
+  assert(call_is_recursive(c1c2host_task, p))
+  assert(call_is_recursive(c1c2host_task, c1))
+  assert(call_is_recursive(c1c2host_task, c2))
+  c1c2p_task = mk_task(c1c2_task, p)
+  assert(call_is_recursive(c1c2p_task, p))
+  assert(call_is_recursive(c1c2p_task, c1))
+  assert(call_is_recursive(c1c2p_task, c2))
+  p_task = mk_task(root_task, p)
+  pc1_task = mk_task(p_task, c1)
+  pc1host_task = mk_task(pc1_task, None)
+  assert(call_is_recursive(pc1host_task, p))
+  assert(call_is_recursive(pc1host_task, c1))
+  assert(call_is_recursive(pc1host_task, c2))
+
+
 test_roundtrips()
 test_handles()
 test_async_to_async()
@@ -2787,5 +2831,6 @@ test_self_copy(F64Type())
 test_async_flat_params()
 test_threads()
 test_thread_cancel_callback()
+test_reentrance()
 
 print("All tests passed")
