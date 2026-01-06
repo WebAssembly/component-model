@@ -1525,7 +1525,8 @@ class CopyState(Enum):
   IDLE = 1
   SYNC_COPYING = 2
   ASYNC_COPYING = 3
-  DONE = 4
+  CANCELLING_COPY = 4
+  DONE = 5
 
 class CopyEnd(Waitable):
   state: CopyState
@@ -1537,7 +1538,12 @@ class CopyEnd(Waitable):
     self.shared = shared
 
   def copying(self):
-    return self.state == CopyState.SYNC_COPYING or self.state == CopyState.ASYNC_COPYING
+    match self.state:
+      case CopyState.IDLE | CopyState.DONE:
+        return False
+      case CopyState.SYNC_COPYING | CopyState.ASYNC_COPYING | CopyState.CANCELLING_COPY:
+        return True
+    assert(False)
 
   def drop(self):
     trap_if(self.copying())
@@ -1553,11 +1559,11 @@ class WritableStreamEnd(CopyEnd):
     self.shared.write(inst, src, on_copy, on_copy_done)
 ```
 As shown in `drop`, attempting to drop a readable or writable end while a copy
-is in progress traps. This means that client code must take care to wait for
-these operations to finish (potentially cancelling them via
-`stream.cancel-{read,write}`) before dropping. The `SYNC_COPY` vs. `ASYNC_COPY`
-distinction is tracked in the state to determine whether the copy operation can
-be cancelled.
+is in progress or in the process of being cancelled traps. This means that
+client code must take care to wait for these operations to finish (potentially
+cancelling them via `stream.cancel-{read,write}`) before dropping. The
+`SYNC_COPY` vs. `ASYNC_COPY` distinction is tracked in the state to determine
+whether the copy operation can be cancelled.
 
 The polymorphic `copy` method dispatches to either `ReadableStream.read` or
 `WritableStream.write` and allows the implementations of `stream.{read,write}`
@@ -4270,6 +4276,7 @@ def cancel_copy(EndT, event_code, stream_or_future_t, async_, thread, i):
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_or_future_t.t)
   trap_if(e.state != CopyState.ASYNC_COPYING)
+  e.state = CopyState.CANCELLING_COPY
   if not e.has_pending_event():
     e.shared.cancel()
     if not e.has_pending_event():
@@ -4286,7 +4293,8 @@ unconditionally traps if it transitively attempts to make a synchronous call to
 `cancel-read` or `cancel-write` (regardless of whether the cancellation would
 have completed without blocking). There is also a trap if there is not
 currently an async copy in progress (sync copies do not expect or check for
-cancellation and thus cannot be cancelled).
+cancellation and thus cannot be cancelled and repeatedly cancelling the same
+async copy after the first call blocked is not allowed).
 
 The *first* check for `e.has_pending_event()` catches the case where the copy has
 already racily finished, in which case we must *not* call `cancel()`. Calling
