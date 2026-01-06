@@ -22,11 +22,8 @@
   "instance 0 has no export named `Xml`"
 )
 
-(assert_invalid
-  (component
-    (type (flags "a-1-c"))
-  )
-  "flag name `a-1-c` is not in kebab case"
+(component definition
+  (type (flags "a-1-c"))
 )
 
 (assert_invalid
