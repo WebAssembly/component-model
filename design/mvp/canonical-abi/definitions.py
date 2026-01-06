@@ -793,17 +793,16 @@ ReclaimBuffer = Callable[[], None]
 OnCopy = Callable[[ReclaimBuffer], None]
 OnCopyDone = Callable[[CopyResult], None]
 
-class ReadableStream:
+class SharedBase:
   t: ValType
-  read: Callable[[ComponentInstance, WritableBuffer, OnCopy, OnCopyDone], None]
   cancel: Callable[[], None]
   drop: Callable[[], None]
 
-class WritableStream:
-  t: ValType
+class ReadableStream(SharedBase):
+  read: Callable[[ComponentInstance, WritableBuffer, OnCopy, OnCopyDone], None]
+
+class WritableStream(SharedBase):
   write: Callable[[ComponentInstance, ReadableBuffer, OnCopy, OnCopyDone], None]
-  cancel: Callable[[], None]
-  drop: Callable[[], None]
 
 class SharedStreamImpl(ReadableStream, WritableStream):
   dropped: bool
@@ -891,59 +890,36 @@ class CopyState(Enum):
 
 class CopyEnd(Waitable):
   state: CopyState
+  shared: SharedBase
 
-  def __init__(self):
+  def __init__(self, shared):
     Waitable.__init__(self)
     self.state = CopyState.IDLE
+    self.shared = shared
 
   def copying(self):
     return self.state == CopyState.SYNC_COPYING or self.state == CopyState.ASYNC_COPYING
 
   def drop(self):
     trap_if(self.copying())
+    self.shared.drop()
     Waitable.drop(self)
 
 class ReadableStreamEnd(CopyEnd):
-  shared: ReadableStream
-
-  def __init__(self, shared):
-    CopyEnd.__init__(self)
-    self.shared = shared
-
   def copy(self, inst, dst, on_copy, on_copy_done):
     self.shared.read(inst, dst, on_copy, on_copy_done)
 
-  def drop(self):
-    self.shared.drop()
-    CopyEnd.drop(self)
-
 class WritableStreamEnd(CopyEnd):
-  shared: WritableStream
-
-  def __init__(self, shared):
-    CopyEnd.__init__(self)
-    self.shared = shared
-
   def copy(self, inst, src, on_copy, on_copy_done):
     self.shared.write(inst, src, on_copy, on_copy_done)
 
-  def drop(self):
-    self.shared.drop()
-    CopyEnd.drop(self)
-
 #### Future State
 
-class ReadableFuture:
-  t: ValType
+class ReadableFuture(SharedBase):
   read: Callable[[ComponentInstance, WritableBuffer, OnCopyDone], None]
-  cancel: Callable[[], None]
-  drop: Callable[[], None]
 
-class WritableFuture:
-  t: ValType
+class WritableFuture(SharedBase):
   write: Callable[[ComponentInstance, ReadableBuffer, OnCopyDone], None]
-  cancel: Callable[[], None]
-  drop: Callable[[], None]
 
 class SharedFutureImpl(ReadableFuture, WritableFuture):
   dropped: bool
@@ -973,11 +949,11 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
     self.reset_pending_and_notify_pending(CopyResult.CANCELLED)
 
   def drop(self):
-    assert(not self.dropped)
-    self.dropped = True
-    if self.pending_buffer:
-      assert(isinstance(self.pending_buffer, WritableBuffer))
-      self.reset_and_notify_pending(CopyResult.DROPPED)
+    if not self.dropped:
+      self.dropped = True
+      if self.pending_buffer:
+        assert(isinstance(self.pending_buffer, WritableBuffer))
+        self.reset_and_notify_pending(CopyResult.DROPPED)
 
   def read(self, inst, dst_buffer, on_copy_done):
     assert(not self.dropped and dst_buffer.remain() == 1)
@@ -1002,26 +978,10 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
       on_copy_done(CopyResult.COMPLETED)
 
 class ReadableFutureEnd(CopyEnd):
-  shared: ReadableFuture
-
-  def __init__(self, shared):
-    CopyEnd.__init__(self)
-    self.shared = shared
-
   def copy(self, inst, src_buffer, on_copy_done):
     self.shared.read(inst, src_buffer, on_copy_done)
 
-  def drop(self):
-    self.shared.drop()
-    CopyEnd.drop(self)
-
 class WritableFutureEnd(CopyEnd):
-  shared: WritableFuture
-
-  def __init__(self, shared):
-    CopyEnd.__init__(self)
-    self.shared = shared
-
   def copy(self, inst, dst_buffer, on_copy_done):
     self.shared.write(inst, dst_buffer, on_copy_done)
 

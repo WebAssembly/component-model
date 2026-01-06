@@ -1326,17 +1326,16 @@ ReclaimBuffer = Callable[[], None]
 OnCopy = Callable[[ReclaimBuffer], None]
 OnCopyDone = Callable[[CopyResult], None]
 
-class ReadableStream:
+class SharedBase:
   t: ValType
-  read: Callable[[ComponentInstance, WritableBuffer, OnCopy, OnCopyDone], None]
   cancel: Callable[[], None]
   drop: Callable[[], None]
 
-class WritableStream:
-  t: ValType
+class ReadableStream(SharedBase):
+  read: Callable[[ComponentInstance, WritableBuffer, OnCopy, OnCopyDone], None]
+
+class WritableStream(SharedBase):
   write: Callable[[ComponentInstance, ReadableBuffer, OnCopy, OnCopyDone], None]
-  cancel: Callable[[], None]
-  drop: Callable[[], None]
 ```
 The key operations in these interfaces are `read` and `write` which work as
 follows:
@@ -1516,8 +1515,11 @@ def none_or_number_type(t):
 
 The two ends of a stream are stored as separate elements in the component
 instance's table and each end has a separate `CopyState` that reflects what
-*that end* is currently doing or has done. This `state` field is factored
-out into the `CopyEnd` class that is derived below:
+*that end* is currently doing or has done. This `state` field is factored out
+into the `CopyEnd` class that is derived below. The two ends also share some
+state which is referenced by the `shared` field and either points to a
+`SharedStreamImpl` (for component-created streams) or something host-defined for
+(host-created streams).
 ```python
 class CopyState(Enum):
   IDLE = 1
@@ -1527,17 +1529,28 @@ class CopyState(Enum):
 
 class CopyEnd(Waitable):
   state: CopyState
+  shared: SharedBase
 
-  def __init__(self):
+  def __init__(self, shared):
     Waitable.__init__(self)
     self.state = CopyState.IDLE
+    self.shared = shared
 
   def copying(self):
     return self.state == CopyState.SYNC_COPYING or self.state == CopyState.ASYNC_COPYING
 
   def drop(self):
     trap_if(self.copying())
+    self.shared.drop()
     Waitable.drop(self)
+
+class ReadableStreamEnd(CopyEnd):
+  def copy(self, inst, dst, on_copy, on_copy_done):
+    self.shared.read(inst, dst, on_copy, on_copy_done)
+
+class WritableStreamEnd(CopyEnd):
+  def copy(self, inst, src, on_copy, on_copy_done):
+    self.shared.write(inst, src, on_copy, on_copy_done)
 ```
 As shown in `drop`, attempting to drop a readable or writable end while a copy
 is in progress traps. This means that client code must take care to wait for
@@ -1546,38 +1559,9 @@ these operations to finish (potentially cancelling them via
 distinction is tracked in the state to determine whether the copy operation can
 be cancelled.
 
-Given the above, we can define the concrete `{Readable,Writable}StreamEnd`
-classes which are almost entirely symmetric, with the only difference being
-whether the polymorphic `copy` method (used below) calls `read` or `write`:
-```python
-class ReadableStreamEnd(CopyEnd):
-  shared: ReadableStream
-
-  def __init__(self, shared):
-    CopyEnd.__init__(self)
-    self.shared = shared
-
-  def copy(self, inst, dst, on_copy, on_copy_done):
-    self.shared.read(inst, dst, on_copy, on_copy_done)
-
-  def drop(self):
-    self.shared.drop()
-    CopyEnd.drop(self)
-
-class WritableStreamEnd(CopyEnd):
-  shared: WritableStream
-
-  def __init__(self, shared):
-    CopyEnd.__init__(self)
-    self.shared = shared
-
-  def copy(self, inst, src, on_copy, on_copy_done):
-    self.shared.write(inst, src, on_copy, on_copy_done)
-
-  def drop(self):
-    self.shared.drop()
-    CopyEnd.drop(self)
-```
+The polymorphic `copy` method dispatches to either `ReadableStream.read` or
+`WritableStream.write` and allows the implementations of `stream.{read,write}`
+to share a single definition (in `stream_copy` below).
 
 
 #### Future State
@@ -1589,17 +1573,11 @@ reader end is explicitly dropped first.
 Futures are defined in terms of abstract `ReadableFuture` and `WritableFuture`
 interfaces:
 ```python
-class ReadableFuture:
-  t: ValType
+class ReadableFuture(SharedBase):
   read: Callable[[ComponentInstance, WritableBuffer, OnCopyDone], None]
-  cancel: Callable[[], None]
-  drop: Callable[[], None]
 
-class WritableFuture:
-  t: ValType
+class WritableFuture(SharedBase):
   write: Callable[[ComponentInstance, ReadableBuffer, OnCopyDone], None]
-  cancel: Callable[[], None]
-  drop: Callable[[], None]
 ```
 These interfaces work like `ReadableStream` and `WritableStream` except that
 there is no `OnCopy` callback passed to `read` or `write` to report partial
@@ -1636,16 +1614,16 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
   def cancel(self):
     self.reset_pending_and_notify_pending(CopyResult.CANCELLED)
 ```
-Dropping works almost the same in futures as streams, except that a future
+Dropping works the same in futures as in streams, except that a future
 writable end cannot be dropped without having written a value. This is guarded
 by `WritableFutureEnd.drop` so it can be asserted here:
 ```python
   def drop(self):
-    assert(not self.dropped)
-    self.dropped = True
-    if self.pending_buffer:
-      assert(isinstance(self.pending_buffer, WritableBuffer))
-      self.reset_and_notify_pending(CopyResult.DROPPED)
+    if not self.dropped:
+      self.dropped = True
+      if self.pending_buffer:
+        assert(isinstance(self.pending_buffer, WritableBuffer))
+        self.reset_and_notify_pending(CopyResult.DROPPED)
 ```
 Lastly, `read` and `write` work mostly like streams, but simplified based on
 the fact that we're copying at most 1 value. The only asymmetric difference is
@@ -1679,31 +1657,18 @@ cannot be read and written from the same component instance when it has a
 non-empty, non-number value type.
 
 Lastly, the `{Readable,Writable}FutureEnd` classes are mostly symmetric with
-`{Readable,Writable}StreamEnd`, with the only difference being that
-`WritableFutureEnd.drop` traps if the writer hasn't successfully written a
-value or been notified of the reader dropping their end:
+`{Readable,Writable}StreamEnd`, defining a polymorphic `copy` method that
+dispatches to either `ReadableFuture.read` or `WritableFuture.write`, which
+allows the implementation of `future.{read,write}` to share a single
+definition (in `future_copy` below). The only difference is that
+`WritableFutureEnd.drop` traps if the writer hasn't successfully written a value
+or been notified of the reader dropping their end:
 ```python
 class ReadableFutureEnd(CopyEnd):
-  shared: ReadableFuture
-
-  def __init__(self, shared):
-    CopyEnd.__init__(self)
-    self.shared = shared
-
   def copy(self, inst, src_buffer, on_copy_done):
     self.shared.read(inst, src_buffer, on_copy_done)
 
-  def drop(self):
-    self.shared.drop()
-    CopyEnd.drop(self)
-
 class WritableFutureEnd(CopyEnd):
-  shared: WritableFuture
-
-  def __init__(self, shared):
-    CopyEnd.__init__(self)
-    self.shared = shared
-
   def copy(self, inst, dst_buffer, on_copy_done):
     self.shared.write(inst, dst_buffer, on_copy_done)
 
