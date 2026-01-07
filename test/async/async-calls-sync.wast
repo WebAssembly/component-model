@@ -126,7 +126,8 @@
       (func $start (global.set $ws (call $waitable-set.new)))
       (start $start)
 
-      (global $remain (mut i32) (i32.const -1))
+      ;; set $remain to the number of tasks to wait to complete
+      (global $remain (mut i32) (i32.const 4))
 
       (func $run (export "run") (result i32)
         (local $ret i32)
@@ -154,23 +155,14 @@
           (then unreachable))
         (call $waitable.join (i32.const 6) (global.get $ws))
 
-        ;; this POLL should return that nothing is ready
-        (i32.or (i32.const 3 (; POLL ;)) (i32.shl (global.get $ws) (i32.const 4)))
+        ;; unblock all the tasks and start waiting to complete
+        (call $unblock)
+        (i32.or (i32.const 2 (; WAIT ;)) (i32.shl (global.get $ws) (i32.const 4)))
       )
       (func $run-cb (export "run-cb") (param $event_code i32) (param $index i32) (param $payload i32) (result i32)
         (local $ret i32)
 
-        ;; $remain is initially -1, so confirm that POLL found nothing was ready and then
-        ;; unblock all the subtasks and set $remain to 4 to count how many to wait for.
-        (if (i32.eq (global.get $remain) (i32.const -1)) (then
-          (if (i32.ne (local.get $event_code) (i32.const 0 (; NONE ;)))
-            (then unreachable))
-          (call $unblock)
-          (global.set $remain (i32.const 4))
-          (return (i32.or (i32.const 2 (; WAIT ;)) (i32.shl (global.get $ws) (i32.const 4))))
-        ))
-
-        ;; confirm we only receive SUBTASK events after the first NONE event.
+        ;; confirm we only receive SUBTASK events.
         (if (i32.ne (local.get $event_code) (i32.const 1 (; SUBTASK ;)))
           (then unreachable))
 
