@@ -4293,7 +4293,7 @@ unconditionally traps if it transitively attempts to make a synchronous call to
 `cancel-read` or `cancel-write` (regardless of whether the cancellation would
 have completed without blocking). There is also a trap if there is not
 currently an async copy in progress (sync copies do not expect or check for
-cancellation and thus cannot be cancelled and repeatedly cancelling the same
+cancellation and thus cannot be cancelled, and repeatedly cancelling the same
 async copy after the first call blocked is not allowed).
 
 The *first* check for `e.has_pending_event()` catches the case where the copy has
