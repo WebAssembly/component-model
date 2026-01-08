@@ -2515,12 +2515,13 @@ plainname         ::= <label>
                     | '[constructor]' <label>
                     | '[method]' <label> '.' <label>
                     | '[static]' <label> '.' <label>
-label             ::= <fragment>
-                    | <label> '-' <fragment>
+label             ::= <first-fragment> ( '-' <fragment> )*
+first-fragment    ::= [a-z] <word>
+                    | [A-Z] <acronym>
 fragment          ::= <word>
                     | <acronym>
-word              ::= [a-z] [0-9a-z]*
-acronym           ::= [A-Z] [0-9A-Z]*
+word              ::= [0-9a-z]*
+acronym           ::= [0-9A-Z]*
 interfacename     ::= <namespace> <label> <projection> <interfaceversion>?
                     | <namespace>+ <label> <projection>+ <interfaceversion>? 🪺
 namespace         ::= <words> ':'
@@ -2674,6 +2675,16 @@ bindings to make such a conversion.) For example, the `label` `is-XML` could be
 mapped to `isXML`, `IsXml`, `is_XML` or `is_xml`, depending on the target
 language/convention. The highly-restricted character set ensures that
 capitalization is trivial and does not require consulting Unicode tables.
+
+Based on the lexical definition of `label` above, the following are all valid
+labels:
+* `a`, `a-b-c`, `a1-2-3`, `A`, `A-B-C` and `A1-2-3` (but not `1-2-3`, since the
+  first fragment must start with a letter)
+* `a11-w0rds`, `A11-4CR0NYMS` and `m1x3d-4CR0NYMS`
+
+Technically, based on the definitions given, the `fragment` `2` (and `3`) in
+`a1-2-3` is ambiguously either a `word` or an `acronym`, but the distinction
+only relates to casing and numbers aren't cased.
 
 Components provide two options for naming exports, symmetric to the first two
 options for naming imports:
