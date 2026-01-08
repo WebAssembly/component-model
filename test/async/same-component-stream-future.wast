@@ -216,8 +216,8 @@
   (canon future.read $FT async (core func $future.read))
   (canon future.write $FT async (core func $future.write))
   (canon stream.new $ST (core func $stream.new))
-  (canon stream.read $ST async (memory $memory "mem") (core func $stream.read)) ;; TODO: shouldn't need (memory) immediate
-  (canon stream.write $ST async (memory $memory "mem") (core func $stream.write)) ;; TODO: shouldn't need (memory) immediate
+  (canon stream.read $ST async (core func $stream.read))
+  (canon stream.write $ST async (core func $stream.write))
   (canon future.new $FTB (core func $future.newb))
   (canon future.read $FTB async (memory $memory "mem") (core func $future.readb))
   (canon future.write $FTB async (memory $memory "mem") (core func $future.writeb))
