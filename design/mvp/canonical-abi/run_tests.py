@@ -2031,6 +2031,11 @@ def test_cancel_copy():
     host_source.block_cancel()
     [ret] = canon_stream_cancel_read(StreamType(U8Type()), True, thread, rsi)
     assert(ret == definitions.BLOCKED)
+    try:
+      canon_stream_cancel_read(StreamType(U8Type()), True, thread, rsi)
+      assert(False)
+    except Trap:
+      pass
     host_source.write([7,8])
     host_source.unblock_cancel()
     [seti] = canon_waitable_set_new(thread)

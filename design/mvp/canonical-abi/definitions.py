@@ -886,7 +886,8 @@ class CopyState(Enum):
   IDLE = 1
   SYNC_COPYING = 2
   ASYNC_COPYING = 3
-  DONE = 4
+  CANCELLING_COPY = 4
+  DONE = 5
 
 class CopyEnd(Waitable):
   state: CopyState
@@ -898,7 +899,12 @@ class CopyEnd(Waitable):
     self.shared = shared
 
   def copying(self):
-    return self.state == CopyState.SYNC_COPYING or self.state == CopyState.ASYNC_COPYING
+    match self.state:
+      case CopyState.IDLE | CopyState.DONE:
+        return False
+      case CopyState.SYNC_COPYING | CopyState.ASYNC_COPYING | CopyState.CANCELLING_COPY:
+        return True
+    assert(False)
 
   def drop(self):
     trap_if(self.copying())
@@ -2431,6 +2437,7 @@ def cancel_copy(EndT, event_code, stream_or_future_t, async_, thread, i):
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_or_future_t.t)
   trap_if(e.state != CopyState.ASYNC_COPYING)
+  e.state = CopyState.CANCELLING_COPY
   if not e.has_pending_event():
     e.shared.cancel()
     if not e.has_pending_event():
