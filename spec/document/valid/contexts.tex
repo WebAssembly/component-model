@@ -1,0 +1,72 @@
+\section{Contexts}
+
+Validation rules for individual definitions are interpreted within a
+particular \emph{context}, which contains the information about the
+surrounding component and environment needed to validate a particular
+definition. The validation contexts used in the component model
+contain the types of every definition in every index space currently
+accessible.
+
+Notably, this includes the index spaces of parent components, which
+may be accessed via $\ATOUTER$ aliases. Since child components' outer
+aliases are only allowed to access locally-defined components and core
+modules from their parents' index spaces, we record whether or not we
+are in a child component in $\TCOB$, and the set of locally-defined
+index space items in $\TCLD$. We write $\tyctx.\TCPARENT[\u32]$ to
+mean the result of walking up the chain of $\TCPARENT$ members $\u32$
+times.
+
+Concretely, a validation context is defined as a record with the
+following abstract syntax:
+
+\begin{record-productions}
+  \production{coretyctx}
+    \{
+      \begin{array}[t]{l@{~}ll}
+        \CTCTYPES & \ecoredeftype^\ast, \\
+        \CTCFUNCS & \core:functype^\ast, \\
+        \CTCMODULES & \ecoremoduletype^\ast, \\
+        \CTCINSTANCES & \ecoreinstancetype^\ast, \\
+        \CTCTABLES & \core:tabletype^\ast, \\
+        \CTCMEMS & \core:memtype^\ast, \\
+        \CTCGLOBALS & \core:globaltype^\ast\} \\
+      \end{array}\\
+  \production{tyctx}
+    \{
+      \begin{array}[t]{l@{~}ll}
+        \TCPARENT & \tyctx^{?}, \\
+        \TCOB & \bool,\\
+        \TCLD & \sortidx^\ast \\
+        \TCCORE & \coretyctx, \\
+        \TCVARS & (\boundedtyvar, \edeftype^?)^\ast \\
+        \TCRTYPES & \eresourcetype^\ast, \\
+        \TCTYPES & \edeftype^\ast, \\
+        \TCCOMPONENTS & \ecomponenttype^\ast, \\
+        \TCINSTANCES & \einstancetypead^\ast, \\
+        \TCFUNCS & \efunctype^\ast, \\
+        \TCVALUES & \evaltypead^\ast, \} \\
+      \end{array}\\
+\end{record-productions}
+
+\subsection{Resolving type variables}
+
+It is occasionally useful to produce a substitution which eliminates
+all of the variables in a context whose definitions are (locally)
+known. To this end, we define a metafunction $\resolveVars{\Gamma}$,
+which produces such a substitution.
+
+\[
+  \frac{
+    \begin{array}{@{}c@{}}
+      \subst_0 = \varnothing\\
+      \forall i, \subst_i =
+      \begin{cases}
+        \subst_{i-1}[\edeftype_i] & \text{if } \edeftype^?_i = \edeftype_i\\
+        \subst_{i-1}[\edeftype/\alpha] & \text{if } \boundedtyvar_i = (\alpha : \TBEQ~\edeftype)\\
+        \subst_{i-1} & \text{otherwise}
+      \end{cases}
+    \end{array}
+  }{
+    \subst_n \cup \resolveVars{\Gamma} = \resolveVars{\{ \TCPARENT~\Gamma, \TCVARS~\overline{(\boundedtyvar_i, \edeftype^?_i)}^n \}}
+  }
+\]

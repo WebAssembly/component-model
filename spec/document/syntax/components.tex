@@ -1,0 +1,161 @@
+\section{Components}
+
+\subsection{Sorts}
+
+A component's definitions define objects, each of which is of one of
+the following \emph{sort}s:
+
+\begin{sum-productions}
+  \production{coresort}
+    \CSFUNC | \CSTABLE | \CSMEMORY | \CSGLOBAL | \CSTYPE | \CSMODULE |
+    \CSINSTANCE
+  \production{sort}
+    \SCORE~\coresort \alt
+    \SFUNC | \SVALUE | \STYPE | \SCOMPONENT | \SINSTANCE
+\end{sum-productions}
+
+\subsection{Indices}
+
+Each object defined by a component exists within an \emph{index space}
+made up of all objects of the same sort. Unlike in Core WebAssembly, a
+component definition may only refer to objects that were defined prior
+to it in the current component. Future definitions refer to past
+definitions by means of an \emph{index} into the appropriate index
+space:
+
+\begin{record-productions}
+  \production{coremoduleidx} \u32
+  \production{coreinstanceidx} \u32
+  \production{componentidx} \u32
+  \production{instanceidx} \u32
+  \production{funcidx} \u32
+  \production{corefuncidx} \u32
+  \production{valueidx} \u32
+  \production{typeidx} \u32
+  \production{coretypeidx} \u32
+\end{record-productions}
+
+\begin{record-productions}
+  \production{coresortidx} \{ \CSISORT~\coresort, \CSIIDX~\u32 \}\\
+  \production{sortidx} \{ \SISORT~\sort, \SIIDX~\u32 \}
+\end{record-productions}
+
+\subsection{Definitions}
+
+\begin{sum-productions}
+  \production{definition}
+    \DCOREMODULE~\core:module \alt
+    \DCOREINSTANCE~\coreinstance \alt
+    \DCORETYPE~\coredeftype \alt
+    \DCOMPONENT~\component \alt
+    \DINSTANCE~\instance \alt
+    \DALIAS~\alias \alt
+    \DTYPE~\deftype \alt
+    \DCANON~\canon \alt
+    \DSTART~\start \alt
+    \DIMPORT~\import \alt
+    \DEXPORT~\export
+\end{sum-productions}
+
+\subsection{Core Instances}
+
+A core instance may be defined either by instantiating a core module
+with other core instances taking the place of its first-level imports,
+or by creating a core instance from whole cloth by combining core
+definitions already present in our index space:
+
+\begin{sum-productions}
+  \production{coreinstance}
+    \CIINSTANTIATE~\coremoduleidx~\coreinstantiatearg^{*} \alt
+    \CIEXPORTS~\coreexport^{*}
+  \production{coreinstantiatearg}
+    \{ \CIANAME~\name, \CIAINSTANCE~\coreinstanceidx \}
+  \production{coreexport} \{ \CENAME~\name, \CEDEF~\coresortidx \}
+\end{sum-productions}
+
+\subsection{Components}
+
+A component is merely a sequence of definitions:
+
+\begin{record-production}{component}
+  \definition^{*}
+\end{record-production}
+
+\subsection{Instances}
+
+Component-level instance declarations are nearly identical to
+core-level instance declarations, with the caveat that more sorts of
+definitions may be supplied as imports:
+
+\begin{sum-productions}
+  \production{instance}
+    \IINSTANTIATE~\componentidx~\instantiatearg^{*}\\&&|&
+    \IEXPORTS~\export^{*}\\
+  \production{instantiatearg}
+    \{ \IANAME~\name, \IAARG~\sortidx \}
+\end{sum-productions}
+
+\subsection{Aliases}
+
+An alias definition copies a definition from some other module,
+component, or instance into an index space of the current component:
+
+\begin{sum-productions}
+  \production{alias} \{ \ASORT~\sort, \ATARGET~\aliastarget \}
+  \production{aliastarget}
+    \ATEXPORT~\instanceidx~\name \alt
+    \ATCOREEXPORT~\coreinstanceidx~\name \alt
+    \ATOUTER~\u32~\u32
+\end{sum-productions}
+
+\subsection{Canonical Definitions}
+
+Canonical definitions are the only way to convert between Core
+WebAssembly functions and component-level shared-nothing functions
+which produce and consume values of type $\valtype$. A \emph{canon
+  lift} definition converts a core WebAssembly function into a
+component-level function which may be exported or used to satisfy the
+imports of another component; a \emph{canon lower} definition converts
+an lifted function (often imported) into a core function.
+
+\begin{sum-productions}
+  \production{canon}
+    \CLIFT~\core:funcidx~\canonopt^{*}~\typeidx \alt
+    \CLOWER~\funcidx~\canonopt^{*}
+  \production{canonopt}
+    \COSTRINGENCODINGUTFEIGHT \alt
+    \COSTRINGENCODINGUTFSIXTEEN \alt
+    \COSTRINGENCODINGLATINONEUTFSIXTEEN \alt
+    \COMEMORY~\core:memidx \alt
+    \COREALLOC~\core:funcidx \alt
+    \COPOSTRETURN~\core:funcidx
+\end{sum-productions}
+
+\subsection{Start definitions}
+
+A start definition specifies a component function which this component
+would like to see called at instantiation type in order to do some
+sort of initialization.
+
+\begin{record-production}{start}
+  \{ \FFUNC~\funcidx, \FARGS~\valueidx^{*} \}
+\end{record-production}
+
+\subsection{Imports}
+
+Since an imported value is described entirely by its type, an actual
+import definition is effectively the same thing as an import
+declaration:
+
+\begin{record-production}{import}
+  \importdecl
+\end{record-production}
+
+\subsection{Exports}
+
+An export definition is simply a name and a reference to another
+definition to export:
+
+\begin{record-production}{export}
+  \{ \ENAME~\name, \EDEF~\sortidx \}
+\end{record-production}
