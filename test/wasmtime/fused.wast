@@ -2,16 +2,21 @@
 
 ;; smoke test with no arguments and no results
 (component
-  (core module $m
-    (func (export ""))
+  (component $a
+    (core module $m
+      (func (export ""))
+    )
+    (core instance $m (instantiate $m))
+    (func (export "foo") (canon lift (core func $m "")))
   )
-  (core instance $m (instantiate $m))
-  (func $foo (canon lift (core func $m "")))
+  (instance $a (instantiate $a))
 
   (component $c
-    (import "a" (func $foo))
+    (import "a" (instance $a
+       (export "foo" (func))
+    ))
 
-    (core func $foo (canon lower (func $foo)))
+    (core func $foo (canon lower (func $a "foo")))
     (core module $m2
       (import "" "" (func))
       (start 0)
@@ -19,40 +24,45 @@
     (core instance $m2 (instantiate $m2 (with "" (instance (export "" (func $foo))))))
   )
 
-  (instance $c (instantiate $c (with "a" (func $foo))))
+  (instance $c (instantiate $c (with "a" (instance $a))))
 )
 
 ;; boolean parameters
 (component
-  (core module $m
-    (func (export "assert_true") (param i32)
-      local.get 0
-      i32.const 1
-      i32.eq
-      i32.eqz
-      if unreachable end
+  (component $a
+    (core module $m
+      (func (export "assert_true") (param i32)
+        local.get 0
+        i32.const 1
+        i32.eq
+        i32.eqz
+        if unreachable end
+      )
+      (func (export "assert_false") (param i32)
+        local.get 0
+        if unreachable end
+      )
+      (func (export "ret-bool") (param i32) (result i32)
+        local.get 0
+      )
     )
-    (func (export "assert_false") (param i32)
-      local.get 0
-      if unreachable end
-    )
-    (func (export "ret-bool") (param i32) (result i32)
-      local.get 0
-    )
+    (core instance $m (instantiate $m))
+    (func (export "assert-true") (param "a" bool) (canon lift (core func $m "assert_true")))
+    (func (export "assert-false") (param "a" bool) (canon lift (core func $m "assert_false")))
+    (func (export "ret-bool") (param "a" u32) (result bool) (canon lift (core func $m "ret-bool")))
   )
-  (core instance $m (instantiate $m))
-  (func $assert_true (param "a" bool) (canon lift (core func $m "assert_true")))
-  (func $assert_false (param "a" bool) (canon lift (core func $m "assert_false")))
-  (func $ret_bool (param "a" u32) (result bool) (canon lift (core func $m "ret-bool")))
+  (instance $a (instantiate $a))
 
   (component $c
-    (import "assert-true" (func $assert_true (param "a" bool)))
-    (import "assert-false" (func $assert_false (param "a" bool)))
-    (import "ret-bool" (func $ret_bool (param "a" u32) (result bool)))
+    (import "a" (instance $a
+      (export "assert-true" (func (param "a" bool)))
+      (export "assert-false" (func (param "a" bool)))
+      (export "ret-bool" (func (param "a" u32) (result bool)))
+    ))
 
-    (core func $assert_true (canon lower (func $assert_true)))
-    (core func $assert_false (canon lower (func $assert_false)))
-    (core func $ret_bool (canon lower (func $ret_bool)))
+    (core func $assert_true (canon lower (func $a "assert-true")))
+    (core func $assert_false (canon lower (func $a "assert-false")))
+    (core func $ret_bool (canon lower (func $a "ret-bool")))
 
     (core module $m2
       (import "" "assert-true" (func $assert_true (param i32)))
@@ -85,82 +95,94 @@
     ))
   )
 
-  (instance $c (instantiate $c
-    (with "assert-true" (func $assert_true))
-    (with "assert-false" (func $assert_false))
-    (with "ret-bool" (func $ret_bool))
-  ))
+  (instance $c (instantiate $c (with "a" (instance $a))))
 )
 
 ;; lots of parameters and results
 (component
-  (type $roundtrip (func
-    ;; 20 u32 params
-    (param "a1" u32) (param "a2" u32) (param "a3" u32) (param "a4" u32) (param "a5" u32)
-    (param "a6" u32) (param "a7" u32) (param "a8" u32) (param "a9" u32) (param "a10" u32)
-    (param "a11" u32) (param "a12" u32) (param "a13" u32) (param "a14" u32) (param "a15" u32)
-    (param "a16" u32) (param "a17" u32) (param "a18" u32) (param "a19" u32) (param "a20" u32)
+  (component $a
+    (type $roundtrip (func
+      ;; 20 u32 params
+      (param "a1" u32) (param "a2" u32) (param "a3" u32) (param "a4" u32) (param "a5" u32)
+      (param "a6" u32) (param "a7" u32) (param "a8" u32) (param "a9" u32) (param "a10" u32)
+      (param "a11" u32) (param "a12" u32) (param "a13" u32) (param "a14" u32) (param "a15" u32)
+      (param "a16" u32) (param "a17" u32) (param "a18" u32) (param "a19" u32) (param "a20" u32)
 
-    ;; 10 u32 results
-    (result (tuple u32 u32 u32 u32 u32 u32 u32 u32 u32 u32))
-  ))
+      ;; 10 u32 results
+      (result (tuple u32 u32 u32 u32 u32 u32 u32 u32 u32 u32))
+    ))
 
-  (core module $m
-    (memory (export "memory") 1)
-    (func (export "roundtrip") (param $src i32) (result i32)
-      (local $dst i32)
-      (if (i32.ne (local.get $src) (i32.const 16))
-        (then (unreachable)))
+    (core module $m
+      (memory (export "memory") 1)
+      (func (export "roundtrip") (param $src i32) (result i32)
+        (local $dst i32)
+        (if (i32.ne (local.get $src) (i32.const 16))
+          (then (unreachable)))
 
-      (if (i32.ne (i32.load offset=0 (local.get $src)) (i32.const 1)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=4 (local.get $src)) (i32.const 2)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=8 (local.get $src)) (i32.const 3)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=12 (local.get $src)) (i32.const 4)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=16 (local.get $src)) (i32.const 5)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=20 (local.get $src)) (i32.const 6)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=24 (local.get $src)) (i32.const 7)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=28 (local.get $src)) (i32.const 8)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=32 (local.get $src)) (i32.const 9)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=36 (local.get $src)) (i32.const 10)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=40 (local.get $src)) (i32.const 11)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=44 (local.get $src)) (i32.const 12)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=48 (local.get $src)) (i32.const 13)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=52 (local.get $src)) (i32.const 14)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=56 (local.get $src)) (i32.const 15)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=60 (local.get $src)) (i32.const 16)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=64 (local.get $src)) (i32.const 17)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=68 (local.get $src)) (i32.const 18)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=72 (local.get $src)) (i32.const 19)) (then (unreachable)))
-      (if (i32.ne (i32.load offset=76 (local.get $src)) (i32.const 20)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=0 (local.get $src)) (i32.const 1)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=4 (local.get $src)) (i32.const 2)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=8 (local.get $src)) (i32.const 3)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=12 (local.get $src)) (i32.const 4)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=16 (local.get $src)) (i32.const 5)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=20 (local.get $src)) (i32.const 6)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=24 (local.get $src)) (i32.const 7)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=28 (local.get $src)) (i32.const 8)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=32 (local.get $src)) (i32.const 9)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=36 (local.get $src)) (i32.const 10)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=40 (local.get $src)) (i32.const 11)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=44 (local.get $src)) (i32.const 12)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=48 (local.get $src)) (i32.const 13)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=52 (local.get $src)) (i32.const 14)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=56 (local.get $src)) (i32.const 15)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=60 (local.get $src)) (i32.const 16)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=64 (local.get $src)) (i32.const 17)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=68 (local.get $src)) (i32.const 18)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=72 (local.get $src)) (i32.const 19)) (then (unreachable)))
+        (if (i32.ne (i32.load offset=76 (local.get $src)) (i32.const 20)) (then (unreachable)))
 
-      (local.set $dst (i32.const 500))
+        (local.set $dst (i32.const 500))
 
-      (i32.store offset=0 (local.get $dst) (i32.const 21))
-      (i32.store offset=4 (local.get $dst) (i32.const 22))
-      (i32.store offset=8 (local.get $dst) (i32.const 23))
-      (i32.store offset=12 (local.get $dst) (i32.const 24))
-      (i32.store offset=16 (local.get $dst) (i32.const 25))
-      (i32.store offset=20 (local.get $dst) (i32.const 26))
-      (i32.store offset=24 (local.get $dst) (i32.const 27))
-      (i32.store offset=28 (local.get $dst) (i32.const 28))
-      (i32.store offset=32 (local.get $dst) (i32.const 29))
-      (i32.store offset=36 (local.get $dst) (i32.const 30))
+        (i32.store offset=0 (local.get $dst) (i32.const 21))
+        (i32.store offset=4 (local.get $dst) (i32.const 22))
+        (i32.store offset=8 (local.get $dst) (i32.const 23))
+        (i32.store offset=12 (local.get $dst) (i32.const 24))
+        (i32.store offset=16 (local.get $dst) (i32.const 25))
+        (i32.store offset=20 (local.get $dst) (i32.const 26))
+        (i32.store offset=24 (local.get $dst) (i32.const 27))
+        (i32.store offset=28 (local.get $dst) (i32.const 28))
+        (i32.store offset=32 (local.get $dst) (i32.const 29))
+        (i32.store offset=36 (local.get $dst) (i32.const 30))
 
-      local.get $dst
+        local.get $dst
+      )
+
+      (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+        i32.const 16)
     )
+    (core instance $m (instantiate $m))
 
-    (func (export "realloc") (param i32 i32 i32 i32) (result i32)
-      i32.const 16)
+    (func (export "roundtrip") (type $roundtrip)
+      (canon lift (core func $m "roundtrip") (memory $m "memory")
+        (realloc (func $m "realloc")))
+    )
   )
-  (core instance $m (instantiate $m))
-
-  (func $roundtrip (type $roundtrip)
-    (canon lift (core func $m "roundtrip") (memory $m "memory")
-      (realloc (func $m "realloc")))
-  )
+  (instance $a (instantiate $a))
 
   (component $c
-    (import "roundtrip" (func $roundtrip (type $roundtrip)))
+    (type $roundtrip (func
+      ;; 20 u32 params
+      (param "a1" u32) (param "a2" u32) (param "a3" u32) (param "a4" u32) (param "a5" u32)
+      (param "a6" u32) (param "a7" u32) (param "a8" u32) (param "a9" u32) (param "a10" u32)
+      (param "a11" u32) (param "a12" u32) (param "a13" u32) (param "a14" u32) (param "a15" u32)
+      (param "a16" u32) (param "a17" u32) (param "a18" u32) (param "a19" u32) (param "a20" u32)
+
+      ;; 10 u32 results
+      (result (tuple u32 u32 u32 u32 u32 u32 u32 u32 u32 u32))
+    ))
+
+    (import "a" (instance $a
+      (export "roundtrip" (func (type $roundtrip)))
+    ))
 
     (core module $libc
       (memory (export "memory") 1)
@@ -168,7 +190,7 @@
     )
     (core instance $libc (instantiate $libc))
     (core func $roundtrip
-      (canon lower (func $roundtrip)
+      (canon lower (func $a "roundtrip")
         (memory $libc "memory")
         (realloc (func $libc "realloc")) ;; FIXME(wasm-tools#693) should not be necessary
       )
@@ -218,22 +240,25 @@
     ))
   )
 
-  (instance $c (instantiate $c
-    (with "roundtrip" (func $roundtrip))
-  ))
+  (instance $c (instantiate $c (with "a" (instance $a))))
 )
 
 ;; this will require multiple adapter modules to get generated
 (component
-  (core module $root (func (export "") (result i32)
-    i32.const 0
-  ))
-  (core instance $root (instantiate $root))
-  (func $root (result u32) (canon lift (core func $root "")))
+  (component $c0
+    (core module $root (func (export "") (result i32)
+      i32.const 0
+    ))
+    (core instance $root (instantiate $root))
+    (func (export "thunk") (result u32) (canon lift (core func $root "")))
+  )
+  (instance $c0 (instantiate $c0))
 
   (component $c
-    (import "thunk" (func $import (result u32)))
-    (core func $import (canon lower (func $import)))
+    (import "thunk" (instance $thunk
+      (export "thunk" (func (result u32)))
+    ))
+    (core func $import (canon lower (func $thunk "thunk")))
     (core module $reexport
       (import "" "" (func $thunk (result i32)))
       (func (export "thunk") (result i32)
@@ -246,21 +271,23 @@
         (export "" (func $import))
       ))
     ))
-    (func $export (export "thunk2") (result u32)
+    (func $export (export "thunk") (result u32)
       (canon lift (core func $reexport "thunk"))
     )
   )
 
-  (instance $c1 (instantiate $c (with "thunk" (func $root))))
-  (instance $c2 (instantiate $c (with "thunk" (func $c1 "thunk2"))))
-  (instance $c3 (instantiate $c (with "thunk" (func $c2 "thunk2"))))
-  (instance $c4 (instantiate $c (with "thunk" (func $c3 "thunk2"))))
-  (instance $c5 (instantiate $c (with "thunk" (func $c4 "thunk2"))))
-  (instance $c6 (instantiate $c (with "thunk" (func $c5 "thunk2"))))
+  (instance $c1 (instantiate $c (with "thunk" (instance $c0))))
+  (instance $c2 (instantiate $c (with "thunk" (instance $c1))))
+  (instance $c3 (instantiate $c (with "thunk" (instance $c2))))
+  (instance $c4 (instantiate $c (with "thunk" (instance $c3))))
+  (instance $c5 (instantiate $c (with "thunk" (instance $c4))))
+  (instance $c6 (instantiate $c (with "thunk" (instance $c5))))
 
   (component $verify
-    (import "thunk" (func $thunk (result u32)))
-    (core func $thunk (canon lower (func $thunk)))
+    (import "thunk" (instance $thunk
+      (export "thunk" (func (result u32)))
+    ))
+    (core func $thunk (canon lower (func $thunk "thunk")))
     (core module $verify
       (import "" "" (func $thunk (result i32)))
 
@@ -278,7 +305,7 @@
       ))
     ))
   )
-  (instance (instantiate $verify (with "thunk" (func $c6 "thunk2"))))
+  (instance (instantiate $verify (with "thunk" (instance $c6))))
 )
 
 ;; Fancy case of an adapter using an adapter. Note that this is silly and
@@ -377,41 +404,46 @@
 
 ;; post-return should get invoked by the generated adapter, if specified
 (component
-  (core module $m
-    (global $post_called (mut i32) (i32.const 0))
-    (func (export "foo")
-      ;; assert `foo-post` not called yet
-      global.get $post_called
-      i32.const 1
-      i32.eq
-      if unreachable end
+  (component $a
+    (core module $m
+      (global $post_called (mut i32) (i32.const 0))
+      (func (export "foo")
+        ;; assert `foo-post` not called yet
+        global.get $post_called
+        i32.const 1
+        i32.eq
+        if unreachable end
+      )
+      (func (export "foo-post")
+        ;; assert `foo-post` not called before
+        global.get $post_called
+        i32.const 1
+        i32.eq
+        if unreachable end
+        ;; ... then flag as called
+        i32.const 1
+        global.set $post_called
+      )
+      (func (export "assert-post")
+        global.get $post_called
+        i32.const 1
+        i32.ne
+        if unreachable end
+      )
     )
-    (func (export "foo-post")
-      ;; assert `foo-post` not called before
-      global.get $post_called
-      i32.const 1
-      i32.eq
-      if unreachable end
-      ;; ... then flag as called
-      i32.const 1
-      global.set $post_called
-    )
-    (func (export "assert-post")
-      global.get $post_called
-      i32.const 1
-      i32.ne
-      if unreachable end
-    )
+    (core instance $m (instantiate $m))
+    (func (export "foo") (canon lift (core func $m "foo") (post-return (func $m "foo-post"))))
+    (func (export "assert-post") (canon lift (core func $m "assert-post")))
   )
-  (core instance $m (instantiate $m))
-  (func $foo (canon lift (core func $m "foo") (post-return (func $m "foo-post"))))
-  (func $assert_post (canon lift (core func $m "assert-post")))
+  (instance $a (instantiate $a))
 
   (component $c
-    (import "foo" (func $foo))
-    (import "assert-post" (func $assert_post))
-    (core func $foo (canon lower (func $foo)))
-    (core func $assert_post (canon lower (func $assert_post)))
+    (import "a" (instance $a
+      (export "foo" (func))
+      (export "assert-post" (func))
+    ))
+    (core func $foo (canon lower (func $a "foo")))
+    (core func $assert_post (canon lower (func $a "assert-post")))
 
     (core module $something
       (import "" "foo" (func $foo))
@@ -430,26 +462,28 @@
       ))
     ))
   )
-  (instance (instantiate $c
-    (with "foo" (func $foo))
-    (with "assert-post" (func $assert_post))
-  ))
+  (instance (instantiate $c (with "a" (instance $a))))
 )
 
 ;; post-return passes the results
 (component
-  (core module $m
-    (func (export "foo") (result i32) i32.const 100)
-    (func (export "foo-post") (param i32)
-      (if (i32.ne (local.get 0) (i32.const 100)) (then (unreachable))))
+  (component $a
+    (core module $m
+      (func (export "foo") (result i32) i32.const 100)
+      (func (export "foo-post") (param i32)
+        (if (i32.ne (local.get 0) (i32.const 100)) (then (unreachable))))
+    )
+    (core instance $m (instantiate $m))
+    (func (export "foo") (result u32)
+      (canon lift (core func $m "foo") (post-return (func $m "foo-post"))))
   )
-  (core instance $m (instantiate $m))
-  (func $foo (result u32)
-    (canon lift (core func $m "foo") (post-return (func $m "foo-post"))))
+  (instance $a (instantiate $a))
 
   (component $c
-    (import "foo" (func $foo (result u32)))
-    (core func $foo (canon lower (func $foo)))
+    (import "a" (instance $a
+      (export "foo" (func (result u32)))
+    ))
+    (core func $foo (canon lower (func $a "foo")))
 
     (core module $something
       (import "" "foo" (func $foo (result i32)))
@@ -463,9 +497,7 @@
       ))
     ))
   )
-  (instance (instantiate $c
-    (with "foo" (func $foo))
-  ))
+  (instance (instantiate $c (with "a" (instance $a))))
 )
 
 ;; callee retptr misaligned
