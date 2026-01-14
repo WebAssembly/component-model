@@ -360,7 +360,7 @@ Recursive component calls are technically possible using either host powers (as
 mentioned above) or via a parent component lowering a child component's export
 to a `funcref` and then recursively calling this `funcref` from a lifted parent
 function passed as an import to the child. However, for the time being, both
-cases are prevent via trap for several reasons:
+cases are prevented via trap for several reasons:
 * automatic [backpressure] would otherwise deadlock in unpredictable and
   surprising ways;
 * by default, most code does not expect [recursive reentrance] and will break
@@ -384,9 +384,9 @@ def call_might_be_recursive(caller: Supertask, callee_inst: ComponentInstance):
     return (caller.inst.is_reflexive_ancestor_of(callee_inst) or
             callee_inst.is_reflexive_ancestor_of(caller.inst))
 ```
-The first case covers host-to-component calls (when `caller.inst` is `None`).
-By testing the intersection (`&`) of all caller's reflexive anecestor sets, the
-following case is considered recursive:
+The first case (where `caller.inst` is `None`) covers host-to-component calls.
+By testing whether any of the callers' reflexive anecestor sets intersect the
+callee's ancestor set, the following case is considered recursive:
 ```
      +-------+
      |   A   |<-.
@@ -405,10 +405,10 @@ while `A` does not appear as the `inst` of any `Supertask` on this stack,
 `A` is being reentered. This ensures that child components are kept an
 encapsulated detail of the parent.
 
-The second case covers component-to-component calls by conservatively rejecting
-any call from a component to its anecestor or descendant (thereby preventing any
-possible recursion via ancestor `funcref`). Thus, while the following
-sibling-to-sibling component call is allowed:
+The second case (where `caller.inst` is not `None`) covers component-to-
+component calls by conservatively rejecting any call from a component to its
+anecestor or descendant (thereby preventing any possible recursion via ancestor
+`funcref`). Thus, the following sibling-to-sibling component call is allowed:
 ```
      +----------------+
      |      P         |
@@ -417,7 +417,7 @@ host-->| C1 |->| C2 | |
      | +----+  +----+ |
      +----------------+
 ```
-the following child-to-parent and parent-to-child calls are disallowed:
+while the following child-to-parent and parent-to-child calls are disallowed:
 ```
      +----------+        +----------+
      | +---+    |        |    +---+ |
