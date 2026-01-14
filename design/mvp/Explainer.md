@@ -2881,7 +2881,7 @@ three runtime invariants:
    component instance.
 2. The Component Model disallows reentrance by trapping if a callee's
    component-instance is already on the stack when the call starts.
-   (For details, see [`call_is_recursive`](CanonicalABI.md#component-instance-state)
+   (For details, see [`call_might_be_recursive`](CanonicalABI.md#component-instance-state)
    in the Canonical ABI explainer.) This default prevents obscure
    composition-time bugs and also enables more-efficient non-reentrant
    runtime glue code. This rule will be relaxed by an opt-in

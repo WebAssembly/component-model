@@ -197,9 +197,9 @@ The optional `Supertask.inst` field either points to the `ComponentInstance`
 containing the supertask or, if `None`, indicates that the supertask is a host
 function. Because `Store.invoke` unconditionally appends a host `Supertask`,
 every callstack is rooted by a host `Supertask`. There is no prohibition on
-component-to-host-to-component calls (as long as the recursive call condition
-checked by `call_is_recursive` are satisfied) and thus host `Supertask`s may
-also appear anywhere else in the callstack.
+component-to-host-to-component calls (as long as the conditions checked by
+`call_might_be_recursive` are satisfied) and thus host `Supertask`s may also
+appear anywhere else in the callstack.
 
 
 ## Supporting definitions
@@ -318,14 +318,33 @@ instantiated directly by the host, the `parent` field is `None`. Thus, the set
 of component instances in a store forms a forest rooted by the component
 instances that were instantiated directly by the host.
 
+Based on this, the "reflexive ancestors" of a component (i.e., all parent
+component instances up to the root component including the component itself) can
+be enumerated and tested via these two helper functions:
+```python
+  def reflexive_ancestors(self) -> set[ComponentInstance]:
+    s = set()
+    inst = self
+    while inst is not None:
+      s.add(inst)
+      inst = inst.parent
+    return s
+
+  def is_reflexive_ancestor_of(self, other):
+    while other is not None:
+      if self is other:
+        return True
+      other = other.parent
+    return False
+```
+
 How the host instantiates and invokes root components is up to the host and not
 specified by the Component Model. Exports of previously-instantiated root
 components *may* be supplied as the imports of subsequently-instantiated root
 components. Due to the ordered nature of instantiation, root components cannot
 directly import each others' exports in cyclic manner. However, the host *may*
-perform cyclic component-to-host-to-component calls, in the same way that a
-parent component can use `call_indirect` and a table of mutable `funcref`s to
-make cyclic child-to-parent-to-child calls.
+attempt to perform cyclic component-to-host-to-component calls using host
+powers.
 
 Because a child component is fully encapsulated by its parent component (with
 all child imports specified by the parent's `instantiate` expression and access
@@ -335,78 +354,82 @@ instantiated or invoked. However, if a child's ancestors transitively forward
 the root component's host-supplied imports to the child, direct child-to-host
 calls are possible. Symmetrically, if a child's ancestors transitively
 re-export the child's exports from the root component, direct host-to-child
-calls are possible. Consequently, direct calls between child components of
-distinct parent components are also possible.
+calls are possible.
 
-As mentioned above, cyclic calls between components are made possible by
-indirecting through a parent component or the host. However, for the time
-being, a "recursive" call in which a single component instance is entered
-multiple times on the same `Supertask` callstack is well-defined to trap upon
-attempted reentry. There are several reasons for this trapping behavior:
+Recursive component calls are technically possible using either host powers (as
+mentioned above) or via a parent component lowering a child component's export
+to a `funcref` and then recursively calling this `funcref` from a lifted parent
+function passed as an import to the child. However, for the time being, both
+cases are prevent via trap for several reasons:
 * automatic [backpressure] would otherwise deadlock in unpredictable and
   surprising ways;
 * by default, most code does not expect [recursive reentrance] and will break
   in subtle and potentially security sensitive ways if allowed;
 * to properly handle recursive reentrance, an extra ABI parameter is required
-  to link recursive calls on the same stack and this requires opting in via
-  some [TBD](Concurrency.md#TODO) function effect type or canonical ABI option
+  to link recursive calls and this requires opting in via some
+  [TBD](Concurrency.md#TODO) function effect type or canonical ABI option.
 
-The `call_is_recursive` predicate is used by `canon_lift` and
-`canon_resource_drop` (defined below) to detect recursive reentrance and
-subsequently trap. The supporting `ancestors` function enumerates all
-transitive parents of a node, *including the node itself*, in a Python `set`,
-thereby allowing set-wise union (`|`), intersection (`&`) and difference (`-`).
+The `call_might_be_recursive` predicate is used by `canon_lift` and
+`canon_resource_drop` (defined below) to conservatively detect recursive
+reentrance and subsequently trap.
 ```python
-def call_is_recursive(caller: Supertask, callee_inst: ComponentInstance):
-  callee_insts = { callee_inst } | (ancestors(callee_inst) - ancestors(caller.inst))
-  while caller is not None:
-    if callee_insts & ancestors(caller.inst):
-      return True
-    caller = caller.supertask
-  return False
-
-def ancestors(inst: Optional[ComponentInstance]) -> set[ComponentInstance]:
-  s = set()
-  while inst is not None:
-    s.add(inst)
-    inst = inst.parent
-  return s
+def call_might_be_recursive(caller: Supertask, callee_inst: ComponentInstance):
+  if caller.inst is None:
+    while caller is not None:
+      if caller.inst and caller.inst.reflexive_ancestors() & callee_inst.reflexive_ancestors():
+        return True
+      caller = caller.supertask
+    return False
+  else:
+    return (caller.inst.is_reflexive_ancestor_of(callee_inst) or
+            callee_inst.is_reflexive_ancestor_of(caller.inst))
 ```
-The `callee_insts` set contains all the component instances being freshly
-entered by the call, always including the `callee_inst` itself. The subsequent
-loop then tests whether *any* of the `callee_insts` is already on the stack.
-This set-wise definition considers cases like the following to be recursive:
+The first case covers host-to-component calls (when `caller.inst` is `None`).
+By testing the intersection (`&`) of all caller's reflexive anecestor sets, the
+following case is considered recursive:
 ```
-  +-------+
-  |   A   |<-.
-  | +---+ |  |
---->| B |----'
-  | +---+ |
-  +-------+
+     +-------+
+     |   A   |<-.
+     | +---+ |  |
+host-->| B |-->host
+     | +---+ |
+     +-------+
 ```
-At the point when recursively calling back into `A`, `callee_inst` is `A`
-and `caller` points to the following stack:
+Here, when attempting to recursively call back into `A`, `caller` points to the
+following stack:
 ```
-caller --> |inst=None| --supertask--> |inst=B| --supertask--> |inst=None| --supertask--> None
+|inst=None| --supertask--> |inst=B| --supertask--> |inst=None| --supertask--> None
 ```
 while `A` does not appear as the `inst` of any `Supertask` on this stack,
-`callee_insts` is `{ A }` and `ancestors(B)` is `{ B, A }`, so the second iteration
-of the loop sees a non-empty intersection and correctly determines that `A` is
-being reentered.
+`B.reflexive_ancestors()` is `{ B, A }`, so the loop correctly determines that
+`A` is being reentered. This ensures that child components are kept an
+encapsulated detail of the parent.
 
-An optimizing implementation can avoid the overhead of sets and loops in
-several ways:
-* In the quite-common case that a component does not contain *both* core module
-  instances *and* component instances, inter-component recursion is not possible
-  and can thus be statically eliminated from the generated inter-component
-  trampolines.
-* If the runtime imposes a modest per-store upper-bound on the number of
-  component instances, like 64, then an `i64` can be used to represent the
-  `set[ComponentInstance]`, assigning each component instance a bit. Then,
-  the `i64` representing the transitive union of all `supertask`'s
-  `ancestor(inst)`s can be propagated from caller to callee, allowing the
-  `while` loop to be replaced by a single bitwise-and of the callee's
-  `i64` with the transitive callers' `i64`.
+The second case covers component-to-component calls by conservatively rejecting
+any call from a component to its anecestor or descendant (thereby preventing any
+possible recursion via ancestor `funcref`). Thus, while the following
+sibling-to-sibling component call is allowed:
+```
+     +----------------+
+     |      P         |
+     | +----+  +----+ |
+host-->| C1 |->| C2 | |
+     | +----+  +----+ |
+     +----------------+
+```
+the following child-to-parent and parent-to-child calls are disallowed:
+```
+     +----------+        +----------+
+     | +---+    |        |    +---+ |
+host-->| C |->P |  host->| P->| C | |
+     | +---+    |        |    +---+ |
+     +----------+        +----------+
+```
+This conservative approximation allows `call_might_be_recursive` to be computed
+ahead-of-time when compiling a fused component-to-component adapter (where both
+caller and callee intances and their relationship are statically known). In the
+future this check will be relaxed and more sophisticated optimizations can be
+used to statically eliminate the check in common cases.
 
 The other fields of `ComponentInstance` are described below as they are used.
 
@@ -3212,7 +3235,7 @@ Based on this, `canon_lift` is defined in chunks as follows, starting with how
 a `lift`ed function starts executing:
 ```python
 def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
-  trap_if(call_is_recursive(caller, inst))
+  trap_if(call_might_be_recursive(caller, inst))
   task = Task(opts, inst, ft, caller, on_resolve)
   def thread_func(thread):
     if not task.enter(thread):
@@ -3227,8 +3250,8 @@ def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
     flat_ft = flatten_functype(opts, ft, 'lift')
     assert(types_match_values(flat_ft.params, flat_args))
 ```
-Each lifted function call starts by immediately trapping on recursive
-reentrance (as defined by `call_is_recursive` above).
+Each lifted function call starts by immediately trapping on possible recursive
+reentrance (as defined by `call_might_be_recursive` above).
 
 The `thread_func` is immediately called from a new `Thread` created and resumed
 at the end of `canon_lift` and so control flow proceeds directly to the `enter`.
@@ -3621,7 +3644,7 @@ def canon_resource_drop(rt, thread, i):
         callee = partial(canon_lift, callee_opts, rt.impl, ft, rt.dtor)
         [] = canon_lower(caller_opts, ft, callee, thread, [h.rep])
       else:
-        trap_if(call_is_recursive(thread.task, rt.impl))
+        trap_if(call_might_be_recursive(thread.task, rt.impl))
   else:
     h.borrow_scope.num_borrows -= 1
   return []

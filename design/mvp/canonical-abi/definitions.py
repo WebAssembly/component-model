@@ -272,20 +272,31 @@ class ComponentInstance:
     self.exclusive = False
     self.num_waiting_to_enter = 0
 
-def call_is_recursive(caller: Supertask, callee_inst: ComponentInstance):
-  callee_insts = { callee_inst } | (ancestors(callee_inst) - ancestors(caller.inst))
-  while caller is not None:
-    if callee_insts & ancestors(caller.inst):
-      return True
-    caller = caller.supertask
-  return False
+  def reflexive_ancestors(self) -> set[ComponentInstance]:
+    s = set()
+    inst = self
+    while inst is not None:
+      s.add(inst)
+      inst = inst.parent
+    return s
 
-def ancestors(inst: Optional[ComponentInstance]) -> set[ComponentInstance]:
-  s = set()
-  while inst is not None:
-    s.add(inst)
-    inst = inst.parent
-  return s
+  def is_reflexive_ancestor_of(self, other):
+    while other is not None:
+      if self is other:
+        return True
+      other = other.parent
+    return False
+
+def call_might_be_recursive(caller: Supertask, callee_inst: ComponentInstance):
+  if caller.inst is None:
+    while caller is not None:
+      if caller.inst and caller.inst.reflexive_ancestors() & callee_inst.reflexive_ancestors():
+        return True
+      caller = caller.supertask
+    return False
+  else:
+    return (caller.inst.is_reflexive_ancestor_of(callee_inst) or
+            callee_inst.is_reflexive_ancestor_of(caller.inst))
 
 #### Table State
 
@@ -1965,7 +1976,7 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
 ### `canon lift`
 
 def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
-  trap_if(call_is_recursive(caller, inst))
+  trap_if(call_might_be_recursive(caller, inst))
   task = Task(opts, inst, ft, caller, on_resolve)
   def thread_func(thread):
     if not task.enter(thread):
@@ -2148,7 +2159,7 @@ def canon_resource_drop(rt, thread, i):
         callee = partial(canon_lift, callee_opts, rt.impl, ft, rt.dtor)
         [] = canon_lower(caller_opts, ft, callee, thread, [h.rep])
       else:
-        trap_if(call_is_recursive(thread.task, rt.impl))
+        trap_if(call_might_be_recursive(thread.task, rt.impl))
   else:
     h.borrow_scope.num_borrows -= 1
   return []
