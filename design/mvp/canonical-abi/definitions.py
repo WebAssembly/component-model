@@ -189,8 +189,11 @@ class Store:
   def __init__(self):
     self.pending = []
 
-  def invoke(self, f: FuncInst, caller, on_start, on_resolve) -> Call:
-    return f(caller, on_start, on_resolve)
+  def invoke(self, f: FuncInst, caller: Optional[Supertask], on_start, on_resolve) -> Call:
+    host_caller = Supertask()
+    host_caller.inst = None
+    host_caller.supertask = caller
+    return f(host_caller, on_start, on_resolve)
 
   def tick(self):
     random.shuffle(self.pending)
@@ -205,7 +208,7 @@ OnStart = Callable[[], list[any]]
 OnResolve = Callable[[Optional[list[any]]], None]
 
 class Supertask:
-  inst: ComponentInstance
+  inst: Optional[ComponentInstance]
   supertask: Optional[Supertask]
 
 class Call:
@@ -252,19 +255,48 @@ class CanonicalOptions(LiftLowerOptions):
 
 class ComponentInstance:
   store: Store
+  parent: Optional[ComponentInstance]
   table: Table
   may_leave: bool
   backpressure: int
   exclusive: bool
   num_waiting_to_enter: int
 
-  def __init__(self, store):
+  def __init__(self, store, parent = None):
+    assert(parent is None or parent.store is store)
     self.store = store
+    self.parent = parent
     self.table = Table()
     self.may_leave = True
     self.backpressure = 0
     self.exclusive = False
     self.num_waiting_to_enter = 0
+
+  def reflexive_ancestors(self) -> set[ComponentInstance]:
+    s = set()
+    inst = self
+    while inst is not None:
+      s.add(inst)
+      inst = inst.parent
+    return s
+
+  def is_reflexive_ancestor_of(self, other):
+    while other is not None:
+      if self is other:
+        return True
+      other = other.parent
+    return False
+
+def call_might_be_recursive(caller: Supertask, callee_inst: ComponentInstance):
+  if caller.inst is None:
+    while caller is not None:
+      if caller.inst and caller.inst.reflexive_ancestors() & callee_inst.reflexive_ancestors():
+        return True
+      caller = caller.supertask
+    return False
+  else:
+    return (caller.inst.is_reflexive_ancestor_of(callee_inst) or
+            callee_inst.is_reflexive_ancestor_of(caller.inst))
 
 #### Table State
 
@@ -534,7 +566,7 @@ class Task(Call, Supertask):
   opts: CanonicalOptions
   inst: ComponentInstance
   ft: FuncType
-  supertask: Optional[Task]
+  supertask: Supertask
   on_resolve: OnResolve
   num_borrows: int
   threads: list[Thread]
@@ -559,12 +591,6 @@ class Task(Call, Supertask):
     if len(self.threads) == 0:
       trap_if(self.state != Task.State.RESOLVED)
       assert(self.num_borrows == 0)
-
-  def trap_if_on_the_stack(self, inst):
-    c = self.supertask
-    while c is not None:
-      trap_if(c.inst is inst)
-      c = c.supertask
 
   def needs_exclusive(self):
     return not self.opts.async_ or self.opts.callback
@@ -1950,8 +1976,8 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
 ### `canon lift`
 
 def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
+  trap_if(call_might_be_recursive(caller, inst))
   task = Task(opts, inst, ft, caller, on_resolve)
-  task.trap_if_on_the_stack(inst)
   def thread_func(thread):
     if not task.enter(thread):
       return
@@ -2133,7 +2159,7 @@ def canon_resource_drop(rt, thread, i):
         callee = partial(canon_lift, callee_opts, rt.impl, ft, rt.dtor)
         [] = canon_lower(caller_opts, ft, callee, thread, [h.rep])
       else:
-        thread.task.trap_if_on_the_stack(rt.impl)
+        trap_if(call_might_be_recursive(thread.task, rt.impl))
   else:
     h.borrow_scope.num_borrows -= 1
   return []

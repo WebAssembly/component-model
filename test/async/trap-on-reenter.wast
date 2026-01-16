@@ -63,3 +63,48 @@
   ))
 )
 (assert_trap (invoke "c") "wasm trap: cannot enter component instance")
+
+;; also, for now, trap on parent-to-child
+(component $Parent
+  (component $Child
+    (core module $CoreChild
+      (func (export "f"))
+    )
+    (core instance $core_child (instantiate $CoreChild))
+    (func (export "f") (canon lift (core func $core_child "f")))
+  )
+  (instance $child (instantiate $Child))
+  (canon lower (func $child "f") (core func $f))
+
+  (core module $CoreOuter
+    (import "" "f" (func $f))
+    (func (export "g") (call $f))
+  )
+  (core instance $core_outer (instantiate $CoreOuter (with "" (instance (export "f" (func $f))))))
+  (func $g (export "g") (canon lift (core func $core_outer "g")))
+)
+(assert_trap (invoke "g") "wasm trap: cannot enter component instance")
+
+;; also, for now, trap on child-to-parent
+(component $Parent
+  (core module $CoreInner
+    (func (export "f"))
+  )
+  (core instance $core_inner (instantiate $CoreInner))
+  (func $f (canon lift (core func $core_inner "f")))
+
+  (component $Child
+    (import "f" (func $f))
+    (canon lower (func $f) (core func $f'))
+    (core module $CoreChild
+      (import "" "f" (func $f))
+      (func (export "g") (call $f))
+    )
+    (core instance $core_child (instantiate $CoreChild (with "" (instance (export "f" (func $f'))))))
+    (func (export "g") (canon lift (core func $core_child "g")))
+  )
+  (instance $child (instantiate $Child (with "f" (func $f))))
+  (alias export $child "g" (func $g))
+  (export "g" (func $g))
+)
+(assert_trap (invoke "g") "wasm trap: cannot enter component instance")
