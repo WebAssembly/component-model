@@ -173,4 +173,4 @@
   (func (export "fail-accessing-res1") (alias export $producer "fail-accessing-res1"))
 )
 (assert_return (invoke "run") (u32.const 42))
-(assert_trap (invoke "fail-accessing-res1") "unknown handle index")
+(assert_trap (invoke "fail-accessing-res1") "index is not a resource")
