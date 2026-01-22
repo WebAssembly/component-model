@@ -369,8 +369,8 @@ creating and running threads.
 New threads are created with the [`thread.new-indirect`] built-in. As mentioned
 [above](#threads-and-tasks), a spawned thread inherits the task of the spawning
 thread which is why threads and tasks are N:1. `thread.new-indirect` adds a new
-thread to the component instance's table and returns the `i32` index of this
-table entry to the Core WebAssembly caller. Like [`pthread_create`],
+thread to the component instance's threads table and returns the `i32` index of
+this table entry to the Core WebAssembly caller. Like [`pthread_create`],
 `thread.new-indirect` takes a Core WebAssembly function (via `i32` index into a
 `funcref` table) and a "closure" parameter to pass to the function when called
 on the new thread. However, unlike `pthread_create`, the new thread is
@@ -378,7 +378,7 @@ initially in a "suspended" state and must be explicitly "resumed" using one of
 the following 3 thread built-ins. Once the thread is resumed, the thread can
 learn its own index by calling the [`thread.index`] built-in.
 
-A suspended thread (identified by table index) can be resumed at some
+A suspended thread (identified by thread-table index) can be resumed at some
 non-deterministic point in future via the [`thread.resume-later`] built-in. In
 contrast, the [`thread.yield-to`] built-in switches execution to the given
 thread immediately, leaving the *calling* thread to be resumed at some
