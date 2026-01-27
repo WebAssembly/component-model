@@ -292,7 +292,8 @@ behavior and enforce invariants.
 class ComponentInstance:
   store: Store
   parent: Optional[ComponentInstance]
-  table: Table
+  handles: Table[ResourceHandle | Waitable | WaitableSet | ErrorContext]
+  threads: Table[Thread]
   may_leave: bool
   backpressure: int
   exclusive: bool
@@ -302,7 +303,8 @@ class ComponentInstance:
     assert(parent is None or parent.store is store)
     self.store = store
     self.parent = parent
-    self.table = Table()
+    self.handles = Table()
+    self.threads = Table()
     self.may_leave = True
     self.backpressure = 0
     self.exclusive = False
@@ -436,9 +438,12 @@ The other fields of `ComponentInstance` are described below as they are used.
 #### Table State
 
 The `Table` class encapsulates a mutable, growable array of opaque elements
-that are represented in Core WebAssembly as `i32` indices into the array. There
-is one `Table` object per `ComponentInstance` object and  "the current
-component instance's table" refers to this object.
+that are represented in Core WebAssembly as `i32` indices into the array.
+Currently, every component instance contains two tables: a `threads` table
+containing all the component's [threads](#thread-state) and a `handles`
+table containing everything else ([resource handles](#resource-state),
+[waitables and waitable sets](#waitable-state) and
+[error contexts](#-canon-error-contextnew)).
 ```python
 class Table:
   array: list[any]
@@ -493,7 +498,7 @@ sentinel values).
 #### Resource State
 
 The `ResourceHandle` class defines the elements of the component instance's
-table used to represent handles to resources:
+`handles` table used to represent handles to resources:
 ```python
 class ResourceHandle:
   rt: ResourceType
@@ -561,6 +566,15 @@ a reference to a `Thread` through all Core WebAssembly calls so that the
 provides a set of primitive control-flow operations that are used by the rest
 of the Canonical ABI definitions.
 
+While `Thread`s are semantically created for each component export call by the
+Python `canon_lift` code, an optimizing runtime should be able to allocate
+`Thread`s lazily, only when needed for actual thread switching operations,
+thereby avoiding cross-component call overhead for simple, short-running
+cross-component calls. To assist in this optimization, `Thread`s are put into
+their own per-component-instance `threads` table so that thread table indices
+and elements can be more-readily reused between calls without interference from
+the other kinds of handles.
+
 `Thread` is implemented using the Python standard library's [`threading`]
 module. While a Python [`threading.Thread`] is a preemptively-scheduled [kernel
 thread], it is coerced to behave like a cooperatively-scheduled [fiber] by
@@ -617,11 +631,11 @@ class Thread:
 ```
 The `in_event_loop` field is used by `Task.request_cancellation` to prevent
 unexpected reentrance of `callback` functions. The `index` field stores the
-index of the thread in the component instance's table and is initialized only
-once a thread is allowed to start executing (after the backpressure gate). The
-`context` field holds the [thread-local storage] accessed by the
-`context.{get,set}` built-ins. All the other fields are used directly by
-`Thread` methods as shown next.
+index of the thread in its containing component instance's `threads` table and
+is initialized only once a thread is allowed to start executing (after the
+backpressure gate). The `context` field holds the [thread-local storage]
+accessed by the `context.{get,set}` built-ins. All the other fields are used
+directly by `Thread` methods as shown next.
 
 When a `Thread` is created, an internal `threading.Thread` is started and
 immediately blocked `acquire()`ing `fiber_lock` (which will be `release()`ed by
@@ -646,7 +660,7 @@ immediately blocked `acquire()`ing `fiber_lock` (which will be `release()`ed by
       assert(self.running())
       self.task.thread_stop(self)
       if self.index is not None:
-        self.task.inst.table.remove(self.index)
+        self.task.inst.threads.remove(self.index)
       self.parent_lock.release()
     self.fiber = threading.Thread(target = fiber_func)
     self.fiber.start()
@@ -660,8 +674,9 @@ is used for delivering cancellation requests sent to the `Task` by the caller
 when the last `Thread` in a `Task` exits.
 
 If a `Thread` was not cancelled while waiting for backpressure, it will be
-allocated an `index` in the component instance table and, when the `Thread`'s
-root function returns, this `index` is deallocated by the code above.
+allocated an `index` in its containing component instance's `threads` table and,
+when the `Thread`'s root function returns, this `index` is deallocated by the
+code above.
 
 Once a `Thread` is created, it will only start `running` when `Thread.resume`
 is called. Once a thread is `running` it can then be `suspended` again by
@@ -1267,8 +1282,8 @@ function signature has `borrow`s in `list`s or `stream`s) and thus can be
 stored inline in the native stack frame.
 
 The `Subtask.drop` method is only called for `Subtask`s that have been added to
-the current component instance's table and checks that the callee has been
-allowed to resolve and explicitly relinquish any borrowed handles.
+the current component instance's `handles` table and checks that the callee has
+been allowed to resolve and explicitly relinquish any borrowed handles.
 ```python
   def drop(self):
     trap_if(not self.resolve_delivered())
@@ -1389,7 +1404,7 @@ and lowering and defined below.
 #### Stream State
 
 Values of `stream` type are represented in the Canonical ABI as `i32` indices
-into the current component instance's table referring to either the
+into the current component instance's `handles` table referring to either the
 [readable or writable end] of a stream. Reading from the readable end of a
 stream is achieved by calling `stream.read` and supplying a `WritableBuffer`.
 Conversely, writing to the writable end of a stream is achieved by calling
@@ -1617,9 +1632,9 @@ def none_or_number_type(t):
 ```
 
 The two ends of a stream are stored as separate elements in the component
-instance's table and each end has a separate `CopyState` that reflects what
-*that end* is currently doing or has done. This `state` field is factored out
-into the `CopyEnd` class that is derived below. The two ends also share some
+instance `handles` table and each end has a separate `CopyState` that reflects
+what *that end* is currently doing or has done. This `state` field is factored
+out into the `CopyEnd` class that is derived below. The two ends also share some
 state which is referenced by the `shared` field and either points to a
 `SharedStreamImpl` (for component-created streams) or something host-defined for
 (host-created streams).
@@ -2132,10 +2147,10 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
 ```
 
 Error context values are lifted directly from the current component instance's
-table:
+`handles` table:
 ```python
 def lift_error_context(cx, i):
-  errctx = cx.inst.table.get(i)
+  errctx = cx.inst.handles.get(i)
   trap_if(not isinstance(errctx, ErrorContext))
   return errctx
 ```
@@ -2207,13 +2222,13 @@ def unpack_flags_from_int(i, labels):
 ```
 
 `own` handles are lifted by removing the handle from the current component
-instance's table so that ownership is *transferred* to the lowering component.
-The lifting operation fails if unique ownership of the handle isn't possible,
-for example if the index was actually a `borrow` or if the `own` handle is
-currently being lent out as borrows.
+instance's `handles` table so that ownership is *transferred* to the lowering
+component.  The lifting operation fails if unique ownership of the handle isn't
+possible, for example if the index was actually a `borrow` or if the `own`
+handle is currently being lent out as borrows.
 ```python
 def lift_own(cx, i, t):
-  h = cx.inst.table.remove(i)
+  h = cx.inst.handles.remove(i)
   trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not t.rt)
   trap_if(h.num_lends != 0)
@@ -2222,18 +2237,18 @@ def lift_own(cx, i, t):
 ```
 The abstract lifted value for handle types is currently just the internal
 resource representation `i32`, which is kept opaque from the receiving
-component (it's stored in the handle table and only accessed indirectly via
+component (it's stored in the `handles` table and only accessed indirectly via
 index). (This assumes that resource representations are immutable. If
 representations were to become mutable, the address of the mutable cell would
 be passed as the lifted value instead.)
 
 In contrast to `own`, `borrow` handles are lifted by reading the representation
 from the source handle, leaving the source handle intact in the current
-component instance's table:
+component instance's `handles` table:
 ```python
 def lift_borrow(cx, i, t):
   assert(isinstance(cx.borrow_scope, Subtask))
-  h = cx.inst.table.get(i)
+  h = cx.inst.handles.get(i)
   trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not t.rt)
   cx.borrow_scope.add_lender(h)
@@ -2261,7 +2276,7 @@ def lift_future(cx, i, t):
 
 def lift_async_value(ReadableEndT, cx, i, t):
   assert(not contains_borrow(t))
-  e = cx.inst.table.remove(i)
+  e = cx.inst.handles.remove(i)
   trap_if(not isinstance(e, ReadableEndT))
   trap_if(e.shared.t != t)
   trap_if(e.state != CopyState.IDLE)
@@ -2580,10 +2595,10 @@ def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
 ```
 
 Error context values are lowered by storing them directly into the current
-component instance's table and passing the `i32` index to wasm:
+component instance's `handles` table and passing the `i32` index to wasm:
 ```python
 def lower_error_context(cx, v):
-  return cx.inst.table.add(v)
+  return cx.inst.handles.add(v)
 ```
 
 Lists and records are stored by recursively storing their elements and
@@ -2666,13 +2681,13 @@ def pack_flags_into_int(v, labels):
 ```
 
 Finally, `own` and `borrow` handles are lowered by initializing new handle
-elements in the current component instance's table. The increment of
+elements in the current component instance's `handles` table. The increment of
 `num_borrows` is complemented by a decrement in `canon_resource_drop` and
 ensures that all borrowed handles are dropped before the end of the task.
 ```python
 def lower_own(cx, rep, t):
   h = ResourceHandle(t.rt, rep, own = True)
-  return cx.inst.table.add(h)
+  return cx.inst.handles.add(h)
 
 def lower_borrow(cx, rep, t):
   assert(isinstance(cx.borrow_scope, Task))
@@ -2680,7 +2695,7 @@ def lower_borrow(cx, rep, t):
     return rep
   h = ResourceHandle(t.rt, rep, own = False, borrow_scope = cx.borrow_scope)
   h.borrow_scope.num_borrows += 1
-  return cx.inst.table.add(h)
+  return cx.inst.handles.add(h)
 ```
 The special case in `lower_borrow` is an optimization, recognizing that, when
 a borrowed handle is passed to the component that implemented the resource
@@ -2689,18 +2704,18 @@ type, the only thing the borrowed handle is good for is calling
 intermediate borrow handle.
 
 Lowering a `stream` or `future` is entirely symmetric and simply adds a new
-readable end to the current component instance's table, passing the index of
-the new element to core wasm:
+readable end to the current component instance's `handles` table, passing the
+index of the new element to core wasm:
 ```python
 def lower_stream(cx, v, t):
   assert(isinstance(v, ReadableStream))
   assert(not contains_borrow(t))
-  return cx.inst.table.add(ReadableStreamEnd(v))
+  return cx.inst.handles.add(ReadableStreamEnd(v))
 
 def lower_future(cx, v, t):
   assert(isinstance(v, ReadableFuture))
   assert(not contains_borrow(t))
-  return cx.inst.table.add(ReadableFutureEnd(v))
+  return cx.inst.handles.add(ReadableFutureEnd(v))
 ```
 
 
@@ -3242,7 +3257,7 @@ def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
       return
 
     assert(thread.index is None)
-    thread.index = inst.table.add(thread)
+    thread.index = inst.threads.add(thread)
 
     cx = LiftLowerContext(opts, inst, task)
     args = on_start()
@@ -3262,10 +3277,10 @@ the arguments are lowered (which means that owned-handle arguments are not
 transferred).
 
 Once the backpressure gate is cleared, the `Thread` is added to the callee's
-component instance's table (storing the index for later retrieval by the
-`thread.index` built-in) and the arguments are lowered into core wasm values
-and memory according to the `canonopt` immediates of `canon lift` (as defined
-by `lower_flat_values` above).
+component instance's `threads` table (storing the index for later retrieval by
+the `thread.index` built-in) and the arguments are lowered into core wasm values
+and memory according to the `canonopt` immediates of `canon lift` (as defined by
+`lower_flat_values` above).
 
 If the `async` `canonopt` is *not* specified, a `lift`ed function then calls
 the core wasm callee, passing the lowered arguments in core function parameters
@@ -3337,7 +3352,7 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
             event = (EventCode.NONE, 0, 0)
         case CallbackCode.WAIT:
           trap_if(not task.may_block())
-          wset = inst.table.get(si)
+          wset = inst.handles.get(si)
           trap_if(not isinstance(wset, WaitableSet))
           event = task.wait_until(lambda: not inst.exclusive, thread, wset, cancellable = True)
         case _:
@@ -3462,10 +3477,10 @@ blocked at runtime). It is however fine to make an `async`-lowered call to an
 to, e.g., `waitable-set.wait` would block).
 
 Each call to `canon_lower` creates a new `Subtask`. However, this `Subtask` is
-only added to the current component instance's table (below) if `async` is
-specified *and* `callee` blocks. In any case, this `Subtask` is used as the
-`LiftLowerContext.borrow_scope` for `borrow` arguments, ensuring that owned
-handles are not dropped before `Subtask.deliver_return` is called (below).
+only added to the current component instance's `handles` table (below) if
+`async` is specified *and* `callee` blocks. In any case, this `Subtask` is used
+as the `LiftLowerContext.borrow_scope` for `borrow` arguments, ensuring that
+owned handles are not dropped before `Subtask.deliver_return` is called (below).
 ```python
   subtask = Subtask()
   cx = LiftLowerContext(opts, thread.task.inst, subtask)
@@ -3551,12 +3566,13 @@ from dropping lent handles while the synchronous call is blocked.
 
 In the `async` case, if the `callee` already called `on_resolve`, then the
 `RETURNED` code is eagerly returned to the core wasm caller without needing to
-add a `Subtask` to the component instance's table. Otherwise, the index of a
-new `Subtask` is returned, bit-packed with the current state of the `Subtask`
-(which will either be `STARTING` or `STARTED`). `STARTING` tells the caller
-that they need to keep the memory for both the arguments and results allocated;
-`STARTED` tells the caller that the arguments have been ready and thus any
-argument memory can be reused, but the result buffer has to be kept reserved.
+add a `Subtask` to the current component instance's `handles` table. Otherwise,
+the index of a new `Subtask` is returned, bit-packed with the current state of
+the `Subtask` (which will either be `STARTING` or `STARTED`). `STARTING` tells
+the caller that they need to keep the memory for both the arguments and results
+allocated; `STARTED` tells the caller that the arguments have been ready and
+thus any argument memory can be reused, but the result buffer has to be kept
+reserved.
 ```python
   else:
     if subtask.resolved():
@@ -3564,7 +3580,7 @@ argument memory can be reused, but the result buffer has to be kept reserved.
       subtask.deliver_resolve()
       return [Subtask.State.RETURNED]
     else:
-      subtaski = thread.task.inst.table.add(subtask)
+      subtaski = thread.task.inst.handles.add(subtask)
       def on_progress():
         def subtask_event():
           if subtask.resolved():
@@ -3600,12 +3616,12 @@ validation specifies:
 
 Calling `$f` invokes the following function, which adds an owning handle
 containing the given resource representation to the current component
-instance's table:
+instance's `handles` table:
 ```python
 def canon_resource_new(rt, thread, rep):
   trap_if(not thread.task.inst.may_leave)
   h = ResourceHandle(rt, rep, own = True)
-  i = thread.task.inst.table.add(h)
+  i = thread.task.inst.handles.add(h)
   return [i]
 ```
 
@@ -3621,13 +3637,13 @@ validation specifies:
 * `$f` is given type `(func (param i32))`
 
 Calling `$f` invokes the following function, which removes the handle from the
-current component instance's table and, if the handle was owning, calls the
-resource's destructor.
+current component instance's `handles` table and, if the handle was owning,
+calls the resource's destructor.
 ```python
 def canon_resource_drop(rt, thread, i):
   trap_if(not thread.task.inst.may_leave)
   inst = thread.task.inst
-  h = inst.table.remove(i)
+  h = inst.handles.remove(i)
   trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not rt)
   trap_if(h.num_lends != 0)
@@ -3678,10 +3694,11 @@ validation specifies:
   currently fixed to be `i32`.
 
 Calling `$f` invokes the following function, which extracts the resource
-representation from the handle in the current component instance's table:
+representation from the handle in the current component instance's `handles`
+table:
 ```python
 def canon_resource_rep(rt, thread, i):
-  h = thread.task.inst.table.get(i)
+  h = thread.task.inst.handles.get(i)
   trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not rt)
   return [h.rep]
@@ -3875,11 +3892,11 @@ validation specifies:
 * `$f` is given type `(func (result i32))`
 
 Calling `$f` invokes the following function, which adds an empty waitable set
-to the current component instance's table:
+to the current component instance's `handles` table:
 ```python
 def canon_waitable_set_new(thread):
   trap_if(not thread.task.inst.may_leave)
-  return [ thread.task.inst.table.add(WaitableSet()) ]
+  return [ thread.task.inst.handles.add(WaitableSet()) ]
 ```
 
 
@@ -3900,7 +3917,7 @@ returning its `EventCode` and writing the payload values into linear memory:
 def canon_waitable_set_wait(cancellable, mem, thread, si, ptr):
   trap_if(not thread.task.inst.may_leave)
   trap_if(not thread.task.may_block())
-  wset = thread.task.inst.table.get(si)
+  wset = thread.task.inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
   event = thread.task.wait_until(lambda: True, thread, wset, cancellable)
   return unpack_event(mem, thread, ptr, event)
@@ -3943,7 +3960,7 @@ was pending on one of the waitables in the given waitable set (the same way as
 ```python
 def canon_waitable_set_poll(cancellable, mem, thread, si, ptr):
   trap_if(not thread.task.inst.may_leave)
-  wset = thread.task.inst.table.get(si)
+  wset = thread.task.inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
   if thread.task.deliver_pending_cancel(cancellable):
     event = (EventCode.TASK_CANCELLED, 0, 0)
@@ -3971,12 +3988,12 @@ validation specifies:
 * `$f` is given type `(func (param i32))`
 
 Calling `$f` invokes the following function, which removes the indicated
-waitable set from the current component instance's table, performing the guards
-defined by `WaitableSet.drop` above:
+waitable set from the current component instance's `handles` table, performing
+the guards defined by `WaitableSet.drop` above:
 ```python
 def canon_waitable_set_drop(thread, i):
   trap_if(not thread.task.inst.may_leave)
-  wset = thread.task.inst.table.remove(i)
+  wset = thread.task.inst.handles.remove(i)
   trap_if(not isinstance(wset, WaitableSet))
   wset.drop()
   return []
@@ -4001,12 +4018,12 @@ waitable from any waitable set that it is currently a member of.
 ```python
 def canon_waitable_join(thread, wi, si):
   trap_if(not thread.task.inst.may_leave)
-  w = thread.task.inst.table.get(wi)
+  w = thread.task.inst.handles.get(wi)
   trap_if(not isinstance(w, Waitable))
   if si == 0:
     w.join(None)
   else:
-    wset = thread.task.inst.table.get(si)
+    wset = thread.task.inst.handles.get(si)
     trap_if(not isinstance(wset, WaitableSet))
     w.join(wset)
   return []
@@ -4051,7 +4068,7 @@ BLOCKED = 0xffff_ffff
 def canon_subtask_cancel(async_, thread, i):
   trap_if(not thread.task.inst.may_leave)
   trap_if(not thread.task.may_block() and not async_)
-  subtask = thread.task.inst.table.get(i)
+  subtask = thread.task.inst.handles.get(i)
   trap_if(not isinstance(subtask, Subtask))
   trap_if(subtask.resolve_delivered())
   trap_if(subtask.cancellation_requested)
@@ -4095,12 +4112,12 @@ validation specifies:
 * `$f` is given type `(func (param i32))`
 
 Calling `$f` removes the subtask at the given index from the current component
-instance's table, performing the guards and bookkeeping defined by
+instance's `handles` table, performing the guards and bookkeeping defined by
 `Subtask.drop()`.
 ```python
 def canon_subtask_drop(thread, i):
   trap_if(not thread.task.inst.may_leave)
-  s = thread.task.inst.table.remove(i)
+  s = thread.task.inst.handles.remove(i)
   trap_if(not isinstance(s, Subtask))
   s.drop()
   return []
@@ -4119,25 +4136,26 @@ validation specifies:
 * `$stream_t`/`$future_t` must be a type of the form `(stream $t?)`/`(future $t?)`
 
 Calling `$f` calls `canon_{stream,future}_new` which adds two elements to the
-current component instance's table and returns their indices packed into a
-single `i64`. The first element (in the low 32 bits) is the readable end (of
-the new {stream, future}) and the second element (in the high 32 bits) is the
-writable end. The expectation is that, after calling `{stream,future}.new`, the
-readable end is subsequently transferred to another component (or the host) via
-`stream` or `future` parameter/result type (see `lift_{stream,future}` above).
+current component instance's `handles` table and returns their indices packed
+into a single `i64`. The first element (in the low 32 bits) is the readable end
+(of the new {stream, future}) and the second element (in the high 32 bits) is
+the writable end. The expectation is that, after calling `{stream,future}.new`,
+the readable end is subsequently transferred to another component (or the host)
+via `stream` or `future` parameter/result type (see `lift_{stream,future}`
+above).
 ```python
 def canon_stream_new(stream_t, thread):
   trap_if(not thread.task.inst.may_leave)
   shared = SharedStreamImpl(stream_t.t)
-  ri = thread.task.inst.table.add(ReadableStreamEnd(shared))
-  wi = thread.task.inst.table.add(WritableStreamEnd(shared))
+  ri = thread.task.inst.handles.add(ReadableStreamEnd(shared))
+  wi = thread.task.inst.handles.add(WritableStreamEnd(shared))
   return [ ri | (wi << 32) ]
 
 def canon_future_new(future_t, thread):
   trap_if(not thread.task.inst.may_leave)
   shared = SharedFutureImpl(future_t.t)
-  ri = thread.task.inst.table.add(ReadableFutureEnd(shared))
-  wi = thread.task.inst.table.add(WritableFutureEnd(shared))
+  ri = thread.task.inst.handles.add(ReadableFutureEnd(shared))
+  wi = thread.task.inst.handles.add(WritableFutureEnd(shared))
   return [ ri | (wi << 32) ]
 ```
 
@@ -4184,7 +4202,7 @@ Next, `stream_copy` checks that the element at index `i` is of the right type
 and allowed to start a new copy. (In the future, the "trap if not `IDLE`"
 condition could be relaxed to allow multiple pipelined reads or writes.)
 ```python
-  e = thread.task.inst.table.get(i)
+  e = thread.task.inst.handles.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_t.t)
   trap_if(e.state != CopyState.IDLE)
@@ -4291,7 +4309,7 @@ def future_copy(EndT, BufferT, event_code, future_t, opts, thread, i, ptr):
   trap_if(not thread.task.inst.may_leave)
   trap_if(not thread.task.may_block() and not opts.async_)
 
-  e = thread.task.inst.table.get(i)
+  e = thread.task.inst.handles.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != future_t.t)
   trap_if(e.state != CopyState.IDLE)
@@ -4375,7 +4393,7 @@ def canon_future_cancel_write(future_t, async_, thread, i):
 def cancel_copy(EndT, event_code, stream_or_future_t, async_, thread, i):
   trap_if(not thread.task.inst.may_leave)
   trap_if(not thread.task.may_block() and not async_)
-  e = thread.task.inst.table.get(i)
+  e = thread.task.inst.handles.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_or_future_t.t)
   trap_if(e.state != CopyState.ASYNC_COPYING)
@@ -4435,9 +4453,9 @@ validation specifies:
 * `$stream_t`/`$future_t` must be a type of the form `(stream $t?)`/`(future $t?)`
 
 Calling `$f` removes the readable or writable end of the stream or future at
-the given index from the current component instance's table, performing the
-guards and bookkeeping defined by `{Readable,Writable}{Stream,Future}End.drop()`
-above.
+the given index from the current component instance's `handles` table,
+performing the guards and bookkeeping defined by
+`{Readable,Writable}{Stream,Future}End.drop()` above.
 ```python
 def canon_stream_drop_readable(stream_t, thread, i):
   return drop(ReadableStreamEnd, stream_t, thread, i)
@@ -4453,7 +4471,7 @@ def canon_future_drop_writable(future_t, thread, hi):
 
 def drop(EndT, stream_or_future_t, thread, hi):
   trap_if(not thread.task.inst.may_leave)
-  e = thread.task.inst.table.remove(hi)
+  e = thread.task.inst.handles.remove(hi)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_or_future_t.t)
   e.drop()
@@ -4493,7 +4511,7 @@ validation specifies
 Calling `$new_indirect` invokes the following function which reads a `funcref`
 from `$ftbl` (trapping if out-of-bounds, null or the wrong type), calls the
 `funcref` passing the closure parameter `$c`, and returns the index of the new
-thread in the current component instance's table.
+thread in the current component instance's `threads` table.
 ```python
 @dataclass
 class CoreFuncRef:
@@ -4509,7 +4527,7 @@ def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], thread, fi, c):
     [] = call_and_trap_on_throw(f.callee, thread, [c])
   new_thread = Thread(thread.task, thread_func)
   assert(new_thread.suspended())
-  new_thread.index = thread.task.inst.table.add(new_thread)
+  new_thread.index = thread.task.inst.threads.add(new_thread)
   return [new_thread.index]
 ```
 The newly-created thread starts out in a "suspended" state and so, to
@@ -4527,14 +4545,13 @@ validation specifies:
 * `$switch-to` is given type `(func (param $i i32) (result i32))`
 
 Calling `$switch-to` invokes the following function which loads a thread at
-index `$i` from the current component instance's table, traps if it's not
-[suspended], and then switches to that thread, leaving the [current thread]
+index `$i` from the current component instance's `threads` table, traps if it's
+not [suspended], and then switches to that thread, leaving the [current thread]
 suspended.
 ```python
 def canon_thread_switch_to(cancellable, thread, i):
   trap_if(not thread.task.inst.may_leave)
-  other_thread = thread.task.inst.table.get(i)
-  trap_if(not isinstance(other_thread, Thread))
+  other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
   suspend_result = thread.task.switch_to(thread, cancellable, other_thread)
   return [suspend_result]
@@ -4587,14 +4604,13 @@ validation specifies:
 * `$resume-later` is given type `(func (param $i i32))`
 
 Calling `$resume-later` invokes the following function which loads a thread at
-index `$i` from the current component instance's table, traps if it's not
-[suspended], and then marks that thread as ready to run at some
+index `$i` from the current component instance's `threads` table, traps if it's
+not [suspended], and then marks that thread as ready to run at some
 nondeterministic point in the future chosen by the embedder.
 ```python
 def canon_thread_resume_later(thread, i):
   trap_if(not thread.task.inst.may_leave)
-  other_thread = thread.task.inst.table.get(i)
-  trap_if(not isinstance(other_thread, Thread))
+  other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
   other_thread.resume_later()
   return []
@@ -4614,15 +4630,14 @@ validation specifies:
 * 🚟 - `cancellable` is allowed (otherwise it must be absent)
 
 Calling `$yield-to` invokes the following function which loads a thread at
-index `$i` from the current component instance's table, traps if it's not
-[suspended], and then switches to that thread, leaving the [current thread]
+index `$i` from the current component instance's `threads` table, traps if it's
+not [suspended], and then switches to that thread, leaving the [current thread]
 ready to run at some nondeterministic point in the future chosen by the
 embedder.
 ```python
 def canon_thread_yield_to(cancellable, thread, i):
   trap_if(not thread.task.inst.may_leave)
-  other_thread = thread.task.inst.table.get(i)
-  trap_if(not isinstance(other_thread, Thread))
+  other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
   suspend_result = thread.task.yield_to(thread, cancellable, other_thread)
   return [suspend_result]
@@ -4693,8 +4708,8 @@ validation specifies:
 
 Calling `$f` calls the following function which uses the `$opts` immediate to
 (non-deterministically) lift the debug message, create a new `ErrorContext`
-value, store it in the current component instance's table and returns its
-index.
+value, store it in the current component instance's `handles` table and returns
+its index.
 ```python
 @dataclass
 class ErrorContext:
@@ -4708,7 +4723,7 @@ def canon_error_context_new(opts, thread, ptr, tagged_code_units):
     cx = LiftLowerContext(opts, thread.task.inst)
     s = load_string_from_range(cx, ptr, tagged_code_units)
     s = host_defined_transformation(s)
-  i = thread.task.inst.table.add(ErrorContext(s))
+  i = thread.task.inst.handles.add(ErrorContext(s))
   return [i]
 ```
 Supporting the requirement (introduced in the
@@ -4741,7 +4756,7 @@ single `error-context` value must return the same debug message from
 ```python
 def canon_error_context_debug_message(opts, thread, i, ptr):
   trap_if(not thread.task.inst.may_leave)
-  errctx = thread.task.inst.table.get(i)
+  errctx = thread.task.inst.handles.get(i)
   trap_if(not isinstance(errctx, ErrorContext))
   cx = LiftLowerContext(opts, thread.task.inst)
   store_string(cx, errctx.debug_message, ptr)
@@ -4761,11 +4776,11 @@ validation specifies:
 * `$f` is given type `(func (param i32))`
 
 Calling `$f` calls the following function, which drops the error context value
-at the given index from the current component instance's table:
+at the given index from the current component instance's `handles` table:
 ```python
 def canon_error_context_drop(thread, i):
   trap_if(not thread.task.inst.may_leave)
-  errctx = thread.task.inst.table.remove(i)
+  errctx = thread.task.inst.handles.remove(i)
   trap_if(not isinstance(errctx, ErrorContext))
   return []
 ```

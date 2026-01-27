@@ -467,11 +467,11 @@ def test_handles():
     nonlocal dtor_value
 
     assert(len(args) == 4)
-    assert(len(inst.table.array) == 5)
-    assert(inst.table.array[0] is None)
-    assert(args[0] == 2)
-    assert(args[1] == 3)
-    assert(args[2] == 4)
+    assert(len(inst.handles.array) == 4)
+    assert(inst.handles.array[0] is None)
+    assert(args[0] == 1)
+    assert(args[1] == 2)
+    assert(args[2] == 3)
     assert(args[3] == 13)
     h1 = args[0]
     h2 = args[1]
@@ -492,29 +492,29 @@ def test_handles():
     ]
     results = canon_lower(opts, host_ft, host_import, thread, args)
     assert(len(results) == 1)
-    assert(results[0] == 5)
+    assert(results[0] == 4)
     h4 = results[0]
     assert((canon_resource_rep(rt, thread, h4))[0] == 45)
 
     dtor_value = None
     [] = canon_resource_drop(rt, thread, h1)
     assert(dtor_value == 42)
-    assert(len(inst.table.array) == 6)
-    assert(inst.table.array[h1] is None)
-    assert(len(inst.table.free) == 1)
+    assert(len(inst.handles.array) == 5)
+    assert(inst.handles.array[h1] is None)
+    assert(len(inst.handles.free) == 1)
 
     h = (canon_resource_new(rt, thread, 46))[0]
     assert(h == h1)
-    assert(len(inst.table.array) == 6)
-    assert(inst.table.array[h] is not None)
-    assert(len(inst.table.free) == 0)
+    assert(len(inst.handles.array) == 5)
+    assert(inst.handles.array[h] is not None)
+    assert(len(inst.handles.free) == 0)
 
     dtor_value = None
     [] = canon_resource_drop(rt, thread, h3)
     assert(dtor_value is None)
-    assert(len(inst.table.array) == 6)
-    assert(inst.table.array[h3] is None)
-    assert(len(inst.table.free) == 1)
+    assert(len(inst.handles.array) == 5)
+    assert(inst.handles.array[h3] is None)
+    assert(len(inst.handles.free) == 1)
 
     return [h, h2, h4]
 
@@ -543,9 +543,9 @@ def test_handles():
   assert(got[0] == 46)
   assert(got[1] == 43)
   assert(got[2] == 45)
-  assert(len(inst.table.array) == 6)
-  assert(all(inst.table.array[i] is None for i in range(4)))
-  assert(len(inst.table.free) == 5)
+  assert(len(inst.handles.array) == 5)
+  assert(all(inst.handles.array[i] is None for i in range(4)))
+  assert(len(inst.handles.free) == 4)
   definitions.MAX_FLAT_RESULTS = before
 
 
@@ -603,14 +603,14 @@ def test_async_to_async():
     assert(u8 == 43)
     [ret] = canon_lower(consumer_opts, toggle_ft, toggle_callee, thread, [])
     state,subi1 = unpack_result(ret)
-    assert(subi1 == 3)
+    assert(subi1 == 2)
     assert(state == Subtask.State.STARTED)
     [] = canon_waitable_join(thread, subi1, seti)
     retp = ptr
     consumer_heap.memory[retp] = 13
     [ret] = canon_lower(consumer_opts, blocking_ft, blocking_callee, thread, [83, retp])
     state,subi2 = unpack_result(ret)
-    assert(subi2 == 4)
+    assert(subi2 == 3)
     assert(state == Subtask.State.STARTING)
     assert(consumer_heap.memory[retp] == 13)
     [] = canon_waitable_join(thread, subi2, seti)
@@ -685,17 +685,17 @@ def test_async_callback():
 
     [ret] = canon_lower(opts, producer_ft, producer1, thread, [])
     state,subi1 = unpack_result(ret)
-    assert(subi1 == 2)
+    assert(subi1 == 1)
     assert(state == Subtask.State.STARTED)
 
     [ret] = canon_lower(opts, producer_ft, producer2, thread, [])
     state,subi2 = unpack_result(ret)
-    assert(subi2 == 3)
+    assert(subi2 == 2)
     assert(state == Subtask.State.STARTED)
 
     nonlocal seti
     [seti] = canon_waitable_set_new(thread)
-    assert(seti == 4)
+    assert(seti == 3)
     [] = canon_waitable_join(thread, subi1, seti)
     [] = canon_waitable_join(thread, subi2, seti)
 
@@ -709,7 +709,7 @@ def test_async_callback():
     match ctx:
       case 42:
         assert(args[0] == EventCode.SUBTASK)
-        assert(args[1] == 2)
+        assert(args[1] == 1)
         assert(args[2] == Subtask.State.RETURNED)
         subi = args[1]
         canon_subtask_drop(thread, subi)
@@ -724,7 +724,7 @@ def test_async_callback():
         return [definitions.CallbackCode.WAIT | (seti << 4)]
       case 62:
         assert(args[0] == EventCode.SUBTASK)
-        assert(args[1] == 3)
+        assert(args[1] == 2)
         assert(args[2] == Subtask.State.RETURNED)
         subi = args[1]
         canon_subtask_drop(thread, subi)
@@ -1013,12 +1013,12 @@ def test_async_to_sync():
 
     [ret] = canon_lower(consumer_opts, producer_ft, producer1, thread, [])
     state,subi1 = unpack_result(ret)
-    assert(subi1 == 2)
+    assert(subi1 == 1)
     assert(state == Subtask.State.STARTED)
 
     [ret] = canon_lower(consumer_opts, producer_ft, producer2, thread, [])
     state,subi2 = unpack_result(ret)
-    assert(subi2 == 3)
+    assert(subi2 == 2)
     assert(state == Subtask.State.STARTING)
 
     [seti] = canon_waitable_set_new(thread)
@@ -1101,12 +1101,12 @@ def test_async_backpressure():
 
     [ret] = canon_lower(consumer_opts, producer_ft, producer1, thread, [])
     state,subi1 = unpack_result(ret)
-    assert(subi1 == 2)
+    assert(subi1 == 1)
     assert(state == Subtask.State.STARTED)
 
     [ret] = canon_lower(consumer_opts, producer_ft, producer2, thread, [])
     state,subi2 = unpack_result(ret)
-    assert(subi2 == 3)
+    assert(subi2 == 2)
     assert(state == Subtask.State.STARTING)
 
     [seti] = canon_waitable_set_new(thread)
@@ -1172,11 +1172,11 @@ def test_sync_using_wait():
   def core_func(thread, args):
     [ret] = canon_lower(lower_opts, ft, hostcall1, thread, [])
     state,subi1 = unpack_result(ret)
-    assert(subi1 == 2)
+    assert(subi1 == 1)
     assert(state == Subtask.State.STARTED)
     [ret] = canon_lower(lower_opts, ft, hostcall2, thread, [])
     state,subi2 = unpack_result(ret)
-    assert(subi2 == 3)
+    assert(subi2 == 2)
     assert(state == Subtask.State.STARTED)
 
     [seti] = canon_waitable_set_new(thread)
@@ -1403,7 +1403,7 @@ def test_eager_stream_completion():
   def core_func(thread, args):
     assert(len(args) == 1)
     rsi1 = args[0]
-    assert(rsi1 == 2)
+    assert(rsi1 == 1)
     [packed] = canon_stream_new(StreamType(U8Type()), thread)
     rsi2,wsi2 = unpack_new_ends(packed)
     [] = canon_task_return(thread, [StreamType(U8Type())], opts, [rsi2])
@@ -1499,7 +1499,7 @@ def test_async_stream_ops():
 
   def core_func(thread, args):
     [rsi1] = args
-    assert(rsi1 == 2)
+    assert(rsi1 == 1)
     [packed] = canon_stream_new(StreamType(U8Type()), thread)
     rsi2,wsi2 = unpack_new_ends(packed)
     [] = canon_task_return(thread, [StreamType(U8Type())], opts, [rsi2])
@@ -1521,7 +1521,7 @@ def test_async_stream_ops():
     [ret] = canon_lower(opts, ft, host_import, thread, [rsi3, retp])
     assert(ret == Subtask.State.RETURNED)
     rsi4 = mem[16]
-    assert(rsi4 == 5)
+    assert(rsi4 == 4)
     [ret] = canon_stream_write(StreamType(U8Type()), opts, thread, wsi3, 0, 4)
     assert(ret == definitions.BLOCKED)
     host_import_incoming.set_remain(100)
@@ -1590,7 +1590,7 @@ def test_stream_forward():
   def core_func(thread, args):
     assert(len(args) == 1)
     rsi1 = args[0]
-    assert(rsi1 == 2)
+    assert(rsi1 == 1)
     return [rsi1]
 
   opts = mk_opts()
@@ -1618,15 +1618,15 @@ def test_receive_own_stream():
     assert(len(args) == 0)
     [packed] = canon_stream_new(StreamType(U8Type()), thread)
     rsi,wsi = unpack_new_ends(packed)
-    assert(rsi == 2)
-    assert(wsi == 3)
+    assert(rsi == 1)
+    assert(wsi == 2)
     [ret] = canon_stream_write(StreamType(U8Type()), opts, thread, wsi, 0, 4)
     assert(ret == definitions.BLOCKED)
     retp = 8
     [ret] = canon_lower(opts, host_ft, host_import, thread, [rsi, retp])
     assert(ret == Subtask.State.RETURNED)
     rsi2 = int.from_bytes(mem[retp : retp+4], 'little', signed=False)
-    assert(rsi2 == 2)
+    assert(rsi2 == 1)
     [ret] = canon_stream_cancel_write(StreamType(U8Type()), False, thread, wsi)
     result,n = unpack_result(ret)
     assert(result == CopyResult.CANCELLED and n == 0)
@@ -1666,7 +1666,7 @@ def test_host_partial_reads_writes():
     [ret] = canon_lower(opts, source_ft, host_source, thread, [retp])
     assert(ret == Subtask.State.RETURNED)
     rsi = mem[retp]
-    assert(rsi == 2)
+    assert(rsi == 1)
     [ret] = canon_stream_read(StreamType(U8Type()), opts, thread, rsi, 0, 4)
     result,n = unpack_result(ret)
     assert(n == 2 and result == CopyResult.COMPLETED)
@@ -1690,8 +1690,8 @@ def test_host_partial_reads_writes():
 
     [packed] = canon_stream_new(StreamType(U8Type()), thread)
     rsi,wsi = unpack_new_ends(packed)
-    assert(rsi == 2)
-    assert(wsi == 4)
+    assert(rsi == 1)
+    assert(wsi == 3)
     [ret] = canon_lower(opts, sink_ft, host_sink, thread, [rsi])
     assert(ret == Subtask.State.RETURNED)
     mem[0:6] = b'\x01\x02\x03\x04\x05\x06'
@@ -1803,7 +1803,7 @@ def test_wasm_to_wasm_stream():
     [ret] = canon_lower(opts2, ft1, func1, thread, [retp])
     assert(ret == Subtask.State.RETURNED)
     rsi = mem2[retp]
-    assert(rsi == 2)
+    assert(rsi == 1)
 
     [ret] = canon_stream_read(StreamType(U8Type()), opts2, thread, rsi, 0, 8)
     assert(ret == definitions.BLOCKED)
@@ -1914,7 +1914,7 @@ def test_wasm_to_wasm_stream_empty():
     [ret] = canon_lower(opts2, ft1, func1, thread, [retp])
     assert(ret == Subtask.State.RETURNED)
     rsi = mem2[0]
-    assert(rsi == 2)
+    assert(rsi == 1)
 
     [ret] = canon_stream_read(StreamType(None), opts2, thread, rsi, 0, 8)
     assert(ret == definitions.BLOCKED)
@@ -2170,7 +2170,7 @@ def test_futures():
     [ret] = canon_future_write(FutureType(U8Type()), lower_opts, thread, wfi, writep)
     assert(ret == CopyResult.COMPLETED)
 
-    while not thread.task.inst.table.get(rfi).has_pending_event():
+    while not thread.task.inst.handles.get(rfi).has_pending_event():
       canon_thread_yield(True, thread)
 
     [ret] = canon_future_cancel_read(FutureType(U8Type()), False, thread, rfi)
@@ -2430,7 +2430,7 @@ def test_cancel_subtask():
     [ret] = canon_lower(caller_opts, ft, callee3, thread, [0, 0])
     state,subi = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
-    while caller_inst.table.get(subi).state == Subtask.State.STARTED:
+    while caller_inst.handles.get(subi).state == Subtask.State.STARTED:
       [_] = canon_thread_yield(True, thread)
     [ret] = canon_subtask_cancel(True, thread, subi)
     assert(ret == Subtask.State.RETURNED)
