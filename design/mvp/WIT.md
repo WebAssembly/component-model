@@ -380,7 +380,7 @@ world world-using-a {
 }
 
 world invalid-union-world {
-    include my-using-a with { a as b }  // invalid: 'a', which is short for 'local:demo/a', is an interface name
+    include world-using-a with { a as b }  // invalid: 'a', which is short for 'local:demo/a', is an interface name
 }
 
 ```
