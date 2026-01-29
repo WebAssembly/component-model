@@ -4,7 +4,11 @@
 ;; $Tester is created to run each test.
 (component definition $Tester
   (component $C
+    (core module $Memory (memory (export "mem") 1))
+    (core instance $memory (instantiate $Memory))
     (core module $CM
+      (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
+      (import "" "waitable-set.wait" (func $waitable-set.wait (param i32 i32) (result i32)))
       (func (export "sync-async-func")
         unreachable
       )
@@ -14,15 +18,26 @@
       (func (export "async-async-func-cb") (param i32 i32 i32) (result i32)
         unreachable
       )
+      (func (export "sync-blocks-and-traps")
+        (call $waitable-set.wait (call $waitable-set.new) (i32.const 0xdeadbeef))
+        unreachable
+      )
     )
-    (core instance $cm (instantiate $CM))
+    (canon waitable-set.new (core func $waitable-set.new))
+    (canon waitable-set.wait (memory $memory "mem") (core func $waitable-set.wait))
+    (core instance $cm (instantiate $CM (with "" (instance
+      (export "waitable-set.new" (func $waitable-set.new))
+      (export "waitable-set.wait" (func $waitable-set.wait))
+    ))))
     (func (export "sync-async-func") async (canon lift (core func $cm "sync-async-func")))
     (func (export "async-async-func") async (canon lift (core func $cm "async-async-func") async (callback (func $cm "async-async-func-cb"))))
+    (func (export "sync-blocks-and-traps") (canon lift (core func $cm "sync-blocks-and-traps")))
   )
   (component $D
     (import "c" (instance $c
       (export "sync-async-func" (func async))
       (export "async-async-func" (func async))
+      (export "sync-blocks-and-traps" (func))
     ))
 
     (core module $Memory (memory (export "mem") 1))
@@ -55,6 +70,7 @@
       (import "" "future.cancel-write" (func $future.cancel-write (param i32) (result i32)))
       (import "" "await-sync-async-func" (func $await-sync-async-func))
       (import "" "await-async-async-func" (func $await-async-async-func))
+      (import "" "sync-blocks-and-traps" (func $sync-blocks-and-traps))
       (import "" "__indirect_function_table" (table $indirect-function-table 2 funcref))
 
       (func (export "unreachable-cb") (param i32 i32 i32) (result i32)
@@ -70,6 +86,10 @@
       )
       (func (export "trap-if-sync-call-async2")
         (call $await-async-async-func)
+      )
+      (func (export "trap-if-async-calls-sync-and-blocks") (result i32)
+        (call $sync-blocks-and-traps)
+        unreachable
       )
       (func (export "trap-if-suspend")
         (call $thread.suspend)
@@ -192,6 +212,7 @@
     (canon future.cancel-write $FT (core func $future.cancel-write))
     (canon lower (func $c "sync-async-func") (core func $await-sync-async-func'))
     (canon lower (func $c "async-async-func") (core func $await-async-async-func'))
+    (canon lower (func $c "sync-blocks-and-traps") (core func $sync-blocks-and-traps'))
     (core instance $core (instantiate $Core (with "" (instance
       (export "mem" (memory $memory "mem"))
       (export "task.return" (func $task.return))
@@ -217,6 +238,7 @@
       (export "future.cancel-write" (func $future.cancel-write))
       (export "await-sync-async-func" (func $await-sync-async-func'))
       (export "await-async-async-func" (func $await-async-async-func'))
+      (export "sync-blocks-and-traps" (func $sync-blocks-and-traps'))
       (export "__indirect_function_table" (table $indirect-function-table))
     ))))
     (func (export "trap-if-suspend") (canon lift (core func $core "trap-if-suspend")))
@@ -231,6 +253,7 @@
     (func (export "resume-later-is-fine") (result u32) (canon lift (core func $core "resume-later-is-fine")))
     (func (export "trap-if-sync-call-async1") (canon lift (core func $core "trap-if-sync-call-async1")))
     (func (export "trap-if-sync-call-async2") (canon lift (core func $core "trap-if-sync-call-async2")))
+    (func (export "trap-if-async-calls-sync-and-blocks") (canon lift (core func $core "trap-if-async-calls-sync-and-blocks") async (callback (func $core "unreachable-cb"))))
     (func (export "trap-if-sync-cancel") (canon lift (core func $core "trap-if-sync-cancel")))
     (func (export "trap-if-sync-stream-read") (canon lift (core func $core "trap-if-sync-stream-read")))
     (func (export "trap-if-sync-stream-write") (canon lift (core func $core "trap-if-sync-stream-write")))
@@ -245,6 +268,7 @@
   (instance $d (instantiate $D (with "c" (instance $c))))
   (func (export "trap-if-sync-call-async1") (alias export $d "trap-if-sync-call-async1"))
   (func (export "trap-if-sync-call-async2") (alias export $d "trap-if-sync-call-async2"))
+  (func (export "trap-if-async-calls-sync-and-blocks") (alias export $d "trap-if-async-calls-sync-and-blocks"))
   (func (export "trap-if-suspend") (alias export $d "trap-if-suspend"))
   (func (export "trap-if-wait") (alias export $d "trap-if-wait"))
   (func (export "trap-if-wait-cb") (alias export $d "trap-if-wait-cb"))
@@ -270,6 +294,8 @@
 (assert_trap (invoke "trap-if-sync-call-async1") "cannot block a synchronous task before returning")
 (component instance $i $Tester)
 (assert_trap (invoke "trap-if-sync-call-async2") "cannot block a synchronous task before returning")
+(component instance $i $Tester)
+(assert_trap (invoke "trap-if-async-calls-sync-and-blocks") "cannot block a synchronous task before returning")
 (component instance $i $Tester)
 (assert_trap (invoke "trap-if-suspend") "cannot block a synchronous task before returning")
 (component instance $i $Tester)
