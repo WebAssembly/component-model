@@ -121,7 +121,7 @@
 
         ;; get the readable end of a stream which has a pending write
         (local.set $rs (call $start-stream))
-        (if (i32.ne (local.get $rs) (i32.const 2))
+        (if (i32.ne (local.get $rs) (i32.const 1))
           (then unreachable))
 
         ;; read only 1 (of the 2 pending) elements, which won't block
@@ -143,7 +143,7 @@
         ;; drop the stream and then let $C run and assert stuff
         (call $stream.drop-readable (local.get $rs))
         (call $cancel-write)
-        
+
         (i32.const 42)
       )
     )
@@ -173,4 +173,4 @@
   (func (export "fail-accessing-res1") (alias export $producer "fail-accessing-res1"))
 )
 (assert_return (invoke "run") (u32.const 42))
-(assert_trap (invoke "fail-accessing-res1") "index is not a resource")
+(assert_trap (invoke "fail-accessing-res1") "unknown handle index 3")

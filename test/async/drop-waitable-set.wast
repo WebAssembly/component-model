@@ -11,7 +11,7 @@
       (global $ws (mut i32) (i32.const 0))
       (func $start (global.set $ws (call $waitable-set.new)))
       (start $start)
-      
+
       (func $wait-on-set (export "wait-on-set") (result i32)
         ;; wait on $ws
         (i32.or (i32.const 2 (; WAIT ;)) (i32.shl (global.get $ws) (i32.const 4)))
@@ -59,7 +59,7 @@
         ;; start an async call to 'wait-on-set' which blocks, waiting on a
         ;; waitable-set.
         (local.set $ret (call $wait-on-set))
-        (if (i32.ne (i32.const 0x21) (local.get $ret))
+        (if (i32.ne (i32.const 0x11) (local.get $ret))
           (then unreachable))
 
         ;; this call will try to drop the same waitable-set, which should trap.
