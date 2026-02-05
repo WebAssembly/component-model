@@ -2362,6 +2362,7 @@ def stream_copy(EndT, BufferT, event_code, stream_t, opts, thread, i, ptr, n):
   trap_if(e.shared.t != stream_t.t)
   trap_if(e.state != CopyState.IDLE)
 
+  assert(not isinstance(stream_t, CharType))
   assert(not contains_borrow(stream_t))
   cx = LiftLowerContext(opts, thread.task.inst, borrow_scope = None)
   buffer = BufferT(stream_t.t, cx, ptr, n)

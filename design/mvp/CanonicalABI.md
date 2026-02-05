@@ -4212,8 +4212,11 @@ Then a readable or writable buffer is created which (in `Buffer`'s constructor)
 eagerly checks the alignment and bounds of (`i`, `n`). (In the future, the
 restriction on futures/streams containing `borrow`s could be relaxed by
 maintaining sufficient bookkeeping state to ensure that borrowed handles *or
-streams/futures of borrowed handles* could not outlive their originating call.)
+streams/futures of borrowed handles* could not outlive their originating call.
+Additionally, `stream<char>` will be allowed and defined to encode and decode
+according to the `string-encoding`.)
 ```python
+  assert(not isinstance(stream_t, CharType))
   assert(not contains_borrow(stream_t))
   cx = LiftLowerContext(opts, thread.task.inst, borrow_scope = None)
   buffer = BufferT(stream_t.t, cx, ptr, n)

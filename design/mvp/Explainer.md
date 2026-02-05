@@ -753,6 +753,9 @@ empty futures and streams can be useful for timing-related APIs.
 Currently, validation rejects `(stream T)` and `(future T)` when `T`
 transitively contains a `borrow`. This restriction could be relaxed in the
 future by extending the call-scoping rules of `borrow` to streams and futures.
+Additionally, `(stream char)` is temporarily rejected with a future
+[TODO](Concurrency.md) to allow and properly use the `string-encoding`,
+taking care to not split code points.
 
 #### Specialized value types
 
