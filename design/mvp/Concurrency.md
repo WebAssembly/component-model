@@ -1259,6 +1259,8 @@ comes after:
 * remove the temporary trap mentioned above that occurs when a `read` and
   `write` of a stream/future happen from within the same component instance
 * zero-copy forwarding/splicing
+* allow the `stream<char>` type to validate; make it use `string-encoding`
+  and not split code points
 * some way to say "no more elements are coming for a while"
 * add an `async` effect on `component` type definitions allowing a component
   type to block during instantiation
@@ -1270,8 +1272,6 @@ comes after:
 * add a `strict-callback` option that adds extra trapping conditions to
   provide the semantic guarantees needed for engines to statically avoid
   fiber creation at component-to-component `async` call boundaries
-* add `stringstream` specialization of `stream<char>` (just like `string` is
-  a specialization of `list<char>`)
 * allow pipelining multiple `stream.read`/`write` calls
 * allow chaining multiple async calls together ("promise pipelining")
 * integrate with `shared`: define how to lift and lower functions `async` *and*
