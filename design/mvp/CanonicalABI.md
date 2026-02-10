@@ -3908,7 +3908,6 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func (param $si) (param $ptr i32) (result i32))`
-* 🚟 - `cancellable` is allowed (otherwise it must be absent)
 
 Calling `$f` invokes the following function which waits for progress to be made
 on a `Waitable` in the given waitable set (indicated by index `$si`) and then
@@ -3952,7 +3951,6 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func (param $si i32) (param $ptr i32) (result i32))`
-* 🚟 - `cancellable` is allowed (otherwise it must be absent)
 
 Calling `$f` invokes the following function, which either returns an event that
 was pending on one of the waitables in the given waitable set (the same way as
@@ -4627,7 +4625,6 @@ For a canonical definition:
 ```
 validation specifies:
 * `$yield-to` is given type `(func (param $i i32) (result i32))`
-* 🚟 - `cancellable` is allowed (otherwise it must be absent)
 
 Calling `$yield-to` invokes the following function which loads a thread at
 index `$i` from the current component instance's `threads` table, traps if it's
