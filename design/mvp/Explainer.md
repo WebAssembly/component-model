@@ -164,7 +164,7 @@ definition to be referred to by subsequent definitions (in the text and binary
 format) via a nonnegative integral *index*. When defining, validating and
 executing a component, there are 5 component-level index spaces:
 * (component) functions
-* (component) values
+* (component) values 🪙
 * (component) types
 * component instances
 * components
@@ -2481,14 +2481,33 @@ of core linear memory.
 
 ### Import and Export Definitions
 
-Both import and export definitions append a new element to the index space of
-the imported/exported `sort` which can be optionally bound to an identifier in
-the text format. In the case of imports, the identifier is bound just like Core
-WebAssembly, as part of the `externdesc` (e.g., `(import "x" (func $x))` binds
-the identifier `$x`). In the case of exports, the `<id>?` right after the
-`export` is bound while the `<id>` inside the `<sortidx>` is a reference to the
-preceding definition being exported (e.g., `(export $x "x" (func $f))` binds a
-new identifier `$x`).
+Import and export definitions are similar to Core Webssembly import and export
+definitions, but different in a few ways.
+
+The first is that component-level imports have only a single name. (Two- and
+even N-level imports can be achieved by importing `instance` types).
+
+Second, component-level imports and exports can use all of the [component-level
+sorts](#index-spaces) (`func`, `value` 🪙, `type`, `instance`, `component`) but
+just 1 core sort: `module`. This restriction is enforced by validation which
+assigns every component a [`componenttype`](#type-definitions) (which similarly
+only allows core types of the `module` type constructor). This restriction
+ensures that all cross-component calls transit through a [lift/lower
+trampoline](#canonical-abi), which allows the Component Model to create a
+"membrane" around all the core module instances contained by a component
+instance in order to provide various structural guarantees to the Core
+WebAssembly code running inside.
+
+A third difference is that not only import definitions, but also export
+definitions append a new element to the index space of the imported/exported
+`sort` which can be optionally bound to an identifier in the text format. In the
+case of imports, the identifier is bound just like Core WebAssembly, as part of
+the `externdesc` (e.g., `(import "x" (func $x))` binds the identifier `$x`). In
+the case of exports, the `<id>?` right after the `export` is bound while the
+`<id>` inside the `<sortidx>` is a reference to the preceding definition being
+exported (e.g., `(export $x "x" (func $f))` binds a new identifier `$x`).
+
+Given this, the syntax of imports and exports are defined as follows:
 ```ebnf
 import        ::= (import "<importname>" bind-id(<externdesc>))
                 | (import "<importname>" <versionsuffix> bind-id(<externdesc>)) 🔗
@@ -2496,6 +2515,7 @@ export        ::= (export <id>? "<exportname>" <sortidx> <externdesc>?)
                 | (export <id>? "<exportname>" <versionsuffix> <sortidx> <externdesc>?) 🔗
 versionsuffix ::= (versionsuffix "<semversuffix>") 🔗
 ```
+
 All import names are required to be [strongly-unique]. Separately, all export
 names are also required to be [strongly-unique]. The rest of the grammar for
 imports and exports defines a structured syntax for the contents of import and
