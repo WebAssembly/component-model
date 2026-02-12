@@ -2872,7 +2872,7 @@ of core module instances contained by a component instance, allowing the
 Component Model to establish invariants that increase optimizability and
 composability in ways not otherwise possible in the shared-everything setting
 of Core WebAssembly. The Component Model proposes establishing the following
-three runtime invariants:
+two runtime invariants:
 1. Components define a "lockdown" state that prevents continued execution
    after a trap. This both prevents continued execution with corrupt state and
    also allows more-aggressive compiler optimizations (e.g., store reordering).
