@@ -117,11 +117,11 @@ the [Core WebAssembly Embedding]. However, for the purpose of defining the
 runtime behavior of the Canonical ABI, the Embedding interface here just
 includes functions for the embedder to:
 1. construct a Component Model `Store`, analogous to [`store_init`]ing a Core
-   WebAssembly [`store`]);
+   WebAssembly [`store`];
 2. `invoke` a Component Model `FuncInst`, analogous to [`func_invoke`]ing a
-   Core WebAssembly [`funcinst`]); and
+   Core WebAssembly [`funcinst`]; and
 3. allow a cooperative thread (created during a previous call to to `invoke`)
-   to execute until suspending or exiting.
+   to execute until blocking or exiting.
 
 ```python
 class Store:
