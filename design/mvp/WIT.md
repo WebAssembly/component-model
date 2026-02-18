@@ -1372,22 +1372,74 @@ world-items ::= gate world-definition
 
 world-definition ::= export-item
                    | import-item
-                   | use-item
+                   | world-use-item
                    | typedef-item
                    | include-item
 
 export-item ::= 'export' id ':' extern-type
-              | 'export' use-path ';'
+              | 'export' use-path using-clause? ';'
 import-item ::= 'import' id ':' extern-type
-              | 'import' use-path ';'
+              | 'import' use-path using-clause? ';'
 
-extern-type ::= func-type ';' | 'interface' '{' interface-items* '}'
+extern-type ::= func-type ';' | 'interface' '{' interface-items* '}' using-clause?
+
+using-clause ::= 'using' '{' using-item (',' using-item)* '}'
+using-item ::= use-path '=' world-use-path
+world-use-path ::= 'import' use-path
+                 | 'export' use-path
+
+world-use-item ::= 'use' world-use-path use-projection ';'
+use-projection ::= '.' '{' projection-item (',' projection-item)* '}'
+projection-item ::= id
+                  | id 'as' id
 ```
 
 Note that worlds can import types and define their own types to be exported
 from the root of a component and used within functions imported and exported.
 The `interface` item here additionally defines the grammar for IDs used to refer
 to `interface` items.
+
+The `use` items work just like `use` inside an `interface` except that they can
+explicitly prefix the `use-path` with `export` or `import`, allowing a world
+to import and export the same interface and independently refer to both. An
+unqualified `use-path` may not be used if `use-path` is both imported and
+exported. For example:
+```wit
+interface i {
+  resource r;
+}
+
+world w {
+  import i;
+  export i;
+  use import i.{r as r1};
+  use export i.{r as r2};
+  export transform: func(in: r1) -> r2;
+}
+```
+
+A `using` clause may be added after imports or exports of interfaces to
+override the default type-sharing behavior within the imported `interface` and
+all `interface`s transitively `use`d by it. For example:
+```wit
+interface blob-store {
+  resource blob { ... }
+}
+
+interface blob-transform {
+  use blob-store.{blob};
+  transform: func(in: blob) -> blob;
+}
+
+interface compressed-blob-store {
+  resource blob { ... }
+}
+
+world w {
+  import compressed-blob-store;
+  export blob-transform using { blob-store = import compressed-blob-store };
+}
+```
 
 [`componenttype`]: Explainer.md#type-definitions
 
@@ -1470,13 +1522,7 @@ use my:dependency/the-interface.{more, names as foo}
 Specifically the structure of this is:
 
 ```ebnf
-use-item ::= 'use' use-path '.' '{' use-names-list '}' ';'
-
-use-names-list ::= use-names-item
-                 | use-names-item ',' use-names-list?
-
-use-names-item ::= id
-                 | id 'as' id
+use-item ::= 'use' use-path use-projection ';'
 ```
 
 Note: Here `use-names-list?` means at least one `use-name-list` term.
