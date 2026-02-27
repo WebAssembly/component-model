@@ -408,11 +408,15 @@ Notes:
   [text format](Explainer.md#import-and-export-definitions).
 * The `<importname>`s of a component must all be [strongly-unique]. Separately,
   the `<exportname>`s of a component must also all be [strongly-unique].
-* Validation requires that annotated `plainname`s only occur on `func` imports
-  or exports and that the first label of a `[constructor]`, `[method]` or
-  `[static]` matches the `plainname` of a preceding `resource` import or
-  export, respectively, in the same scope (component, component type or
-  instance type).
+* Validation requires that `[constructor]`, `[method]` and `[static]` annotated
+  `plainname`s only occur on `func` imports or exports and that the first label
+  of a `[constructor]`, `[method]` or `[static]` matches the `plainname` of a
+  preceding `resource` import or export, respectively, in the same scope
+  (component, component type or instance type).
+* Validation requires that `[implements=<I>]` annotated `plainname`s only
+  occur on `instance` imports or exports.
+* Validation requires that `interfacename`-named imports or exports are
+  `instance`-typed.
 * Validation of `[constructor]` names requires a `func` type whose result type
   is either `(own $R)` or `(result (own $R) E?)` where `$R` is a resource type
   labeled `r`.

@@ -366,6 +366,31 @@ world union-my-world-b {
 }
 ```
 
+When a world being included contains plain-named imports or exports that
+reference a named interface (using the `id: use-path` syntax), the `with`
+keyword renames the plain-name label while preserving the underlying
+`[implements=<I>]` annotation in the encoding. For example:
+
+```wit
+package local:demo;
+
+interface store {
+    get: func(key: string) -> option<string>;
+}
+
+world base {
+    import cache: store;
+}
+
+world extended {
+    include base with { cache as my-cache }
+}
+```
+
+In this case, `extended` has a single import with the plain name `my-cache`
+that implements `local:demo/store`, equivalent to writing
+`import my-cache: store;` directly.
+
 `with` cannot be used to rename interface names, however, so the following
 world would be invalid:
 ```wit
@@ -1381,8 +1406,29 @@ export-item ::= 'export' id ':' extern-type
 import-item ::= 'import' id ':' extern-type
               | 'import' use-path ';'
 
-extern-type ::= func-type ';' | 'interface' '{' interface-items* '}'
+extern-type ::= func-type ';' | 'interface' '{' interface-items* '}' | use-path ';'
 ```
+
+The third case of `extern-type` allows a named interface to be imported or
+exported with a custom [plain name]. For example:
+
+```wit
+world my-world {
+    import primary: wasi:keyvalue/store;
+    import secondary: wasi:keyvalue/store;
+    export my-handler: wasi:http/handler;
+}
+```
+
+Here, `primary` and `secondary` are two distinct imports that both have the
+instance type of the `wasi:keyvalue/store` interface. The plain name of the
+import is the `id` before the colon (e.g., `primary`), not the interface name.
+This contrasts with `import wasi:keyvalue/store;` (without the `id :` prefix),
+which would create a single import using the full interface name
+`wasi:keyvalue/store`. Similarly, the export `my-handler` has the instance type
+of `wasi:http/handler` but uses the plain name `my-handler` instead of the full
+interface name, which is useful when a component wants to export the same
+interface multiple times or simply use a more descriptive name.
 
 Note that worlds can import types and define their own types to be exported
 from the root of a component and used within functions imported and exported.
@@ -2060,6 +2106,52 @@ is encoded as:
 This duplication is useful in the case of cross-package references or split
 packages, allowing a compiled `world` definition to be fully self-contained and
 able to be used to compile a component without additional type information.
+
+When a world imports or exports a named interface with a custom plain name
+(using the `id: use-path` syntax), the encoding uses the `[implements=<I>]`
+annotation defined in [Explainer.md](Explainer.md#import-and-export-definitions) to indicate which
+interface the instance implements. For example, the following WIT:
+
+```wit
+package local:demo;
+
+interface store {
+    get: func(key: string) -> option<string>;
+}
+
+world w {
+    import one: store;
+    import two: store;
+}
+```
+
+is encoded as:
+
+```wat
+(component
+  (type (export "w") (component
+    (export "local:demo/w" (component
+      (import "[implements=<local:demo/store>]one" (instance
+        (export "get" (func (param "key" string) (result (option string))))
+      ))
+      (import "[implements=<local:demo/store>]two" (instance
+        (export "get" (func (param "key" string) (result (option string))))
+      ))
+    ))
+  ))
+  (type (export "store") (component
+    (export "local:demo/store" (instance
+      (export "get" (func (param "key" string) (result (option string))))
+    ))
+  ))
+)
+```
+
+The `[implements=<local:demo/store>]` prefix tells bindings generators and
+toolchains which interface each plain-named instance import implements, while
+the labels `one` and `two` provide distinct plain names. This is a case of
+the general `[implements=<interfacename>]label` pattern described in
+[Explainer.md](Explainer.md#import-and-export-definitions).
 
 Putting this all together, the following WIT definitions:
 
