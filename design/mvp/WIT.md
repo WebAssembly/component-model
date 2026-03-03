@@ -25,7 +25,7 @@ document, a pseudo-formal [grammar specification][lexical-structure], and
 additionally a specification of the [package format][package-format] of a WIT
 package suitable for distribution.
 
-See [Gated Features] for an explanation of 🔧.
+See [Gated Features] for an explanation of 🔧 and 🏷️.
 
 [IDL]: https://en.wikipedia.org/wiki/Interface_description_language
 [components]: https://github.com/webassembly/component-model
@@ -366,7 +366,7 @@ world union-my-world-b {
 }
 ```
 
-When a world being included contains plain-named imports or exports that
+🏷️ When a world being included contains plain-named imports or exports that
 reference a named interface (using the `id: use-path` syntax), the `with`
 keyword renames the plain-name label while preserving the underlying
 `[implements=<I>]` annotation in the encoding. For example:
@@ -390,6 +390,30 @@ world extended {
 In this case, `extended` has a single import with the plain name `my-cache`
 that implements `local:demo/store`, equivalent to writing
 `import my-cache: store;` directly.
+
+Unlike interface names (which are automatically de-duplicated when two
+`include`s import the same interface), plain names cannot be de-duplicated
+and will conflict. For example:
+
+```wit
+world base-a {
+    import cache: store;
+}
+
+world base-b {
+    import cache: store;
+}
+
+world conflict {
+    include base-a;
+    include base-b;  // error: plain name 'cache' conflicts
+}
+
+world resolved {
+    include base-a;
+    include base-b with { cache as other-cache }  // ok: renamed to avoid conflict
+}
+```
 
 `with` cannot be used to rename interface names, however, so the following
 world would be invalid:
@@ -1406,10 +1430,10 @@ export-item ::= 'export' id ':' extern-type
 import-item ::= 'import' id ':' extern-type
               | 'import' use-path ';'
 
-extern-type ::= func-type ';' | 'interface' '{' interface-items* '}' | use-path ';'
+extern-type ::= func-type ';' | 'interface' '{' interface-items* '}' | use-path ';' 🏷️
 ```
 
-The third case of `extern-type` allows a named interface to be imported or
+🏷️ The third case of `extern-type` allows a named interface to be imported or
 exported with a custom [plain name]. For example:
 
 ```wit
@@ -2107,7 +2131,7 @@ This duplication is useful in the case of cross-package references or split
 packages, allowing a compiled `world` definition to be fully self-contained and
 able to be used to compile a component without additional type information.
 
-When a world imports or exports a named interface with a custom plain name
+🏷️ When a world imports or exports a named interface with a custom plain name
 (using the `id: use-path` syntax), the encoding uses the `[implements=<I>]`
 annotation defined in [Explainer.md](Explainer.md#import-and-export-definitions) to indicate which
 interface the instance implements. For example, the following WIT:

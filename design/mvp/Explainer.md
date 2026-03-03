@@ -57,6 +57,7 @@ implemented, considered stable and included in a future milestone:
 * 🔧: fixed-length lists
 * 📝: the `error-context` type
 * 🔗: canonical interface names
+* 🏷️: `[implements]` annotations for plain-named interface imports/exports
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
 this repo merges and supersedes the [module-linking] and [interface-types]
@@ -2538,7 +2539,7 @@ plainname         ::= <label>
                     | '[constructor]' <label>
                     | '[method]' <label> '.' <label>
                     | '[static]' <label> '.' <label>
-                    | '[implements=<' <interfacename> '>]' <label>
+                    | '[implements=<' <interfacename> '>]' <label> 🏷️
 label             ::= <first-fragment> ( '-' <fragment> )*
 first-fragment    ::= [a-z] <word>
                     | [A-Z] <acronym>
@@ -2684,7 +2685,7 @@ annotations trigger additional type-validation rules (listed in
 * Similarly, an import or export named `[method]R.foo` must be a function whose
   first parameter must be `(param "self" (borrow $R))`.
 
-When an instance import or export is annotated with `[implements=<I>]L`, it
+🏷️ When an instance import or export is annotated with `[implements=<I>]L`, it
 indicates that the instance implements interface `I` but is given the plain
 name `L`. This enables a component to import or export the same interface
 multiple times with different plain names. For example:
