@@ -2539,17 +2539,18 @@ plainname         ::= <label>
                     | '[method]' <label> '.' <label>
                     | '[static]' <label> '.' <label>
 label             ::= <first-fragment> ( '-' <fragment> )*
-first-fragment    ::= [a-z] <word>
-                    | [A-Z] <acronym>
+first-fragment    ::= <first-word>
+                    | <first-acronym>
+first-word        ::= [a-z] [0-9a-z]*
+first-acronym     ::= [A-Z] [0-9A-Z]*
 fragment          ::= <word>
                     | <acronym>
-word              ::= [0-9a-z]*
-acronym           ::= [0-9A-Z]*
+word              ::= [0-9a-z]+
+acronym           ::= [0-9A-Z]+
 interfacename     ::= <namespace> <label> <projection> <interfaceversion>?
                     | <namespace>+ <label> <projection>+ <interfaceversion>? 🪺
 namespace         ::= <words> ':'
-words             ::= <word>
-                    | <words> '-' <word>
+words             ::= <first-word> ( '-' <word> )*
 projection        ::= '/' <label>
 interfaceversion  ::= '@' <valid semver>
                     | '@' <canonversion> 🔗
