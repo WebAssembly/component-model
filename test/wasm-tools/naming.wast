@@ -125,3 +125,34 @@
     (import "[static]a.a" (func))
   )
   "import name `[static]a.a` conflicts with previous name `a`")
+
+;; [implements=<...>] strong-uniqueness tests
+
+;; Valid: two [implements=<...>] with different labels are strongly-unique
+(component definition
+  (import "[implements=<a:b/c>]one" (instance))
+  (import "[implements=<a:b/c>]two" (instance))
+)
+
+;; Valid: [implements=<...>] and a bare interface name are strongly-unique
+;; (different name kinds: plainname vs interfacename)
+(component definition
+  (import "a:b/c" (instance))
+  (import "[implements=<a:b/c>]alt" (instance))
+)
+
+;; Invalid: two [implements=<...>] with the same label conflict
+(assert_invalid
+  (component
+    (import "[implements=<a:b/c>]name" (instance))
+    (import "[implements=<x:y/z>]name" (instance))
+  )
+  "conflicts with previous name")
+
+;; Invalid: [implements=<...>] label conflicts with a bare plain name
+(assert_invalid
+  (component
+    (import "name" (func))
+    (import "[implements=<a:b/c>]name" (instance))
+  )
+  "conflicts with previous name")
