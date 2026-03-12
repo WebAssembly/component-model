@@ -413,10 +413,10 @@ Each thread contains a distinct mutable **thread-local storage** array. The
 current thread's thread-local storage can be read and written from core wasm
 code by calling the [`context.get`] and [`context.set`] built-ins.
 
-The thread-local storage array's length is currently fixed to contain exactly
-2 `i32`s with the goal of allowing this array to be stored inline in whatever
-existing runtime data structure is already efficiently reachable from ambient
-compiled wasm code. Because module instantiation is declarative in the
+The thread-local storage array's length is currently fixed to contain exactly 2
+`i32`s or `i64`s with the goal of allowing this array to be stored inline in
+whatever existing runtime data structure is already efficiently reachable from
+ambient compiled wasm code. Because module instantiation is declarative in the
 Component Model, the imported `context.{get,set}` built-ins can be inlined by
 the core wasm compiler as-if they were instructions, allowing the generated
 machine code to be a single load or store. This makes thread-local storage a
