@@ -259,10 +259,10 @@ The `equal` static method is used by `task.return` below to dynamically
 compare equality of just this subset of `canonopt`.
 
 The `addr_type` is `'i32'` when the `memory` canonopt refers to a memory32
-and `'i64'` when it refers to a memory64. The `tbl_idx_type` is `'i32'` when
-the `table` canonopt refers to a table32 and `'i64'` when it refers to a
-table64. These two dimensions are independent (e.g., a 64-bit memory with
-32-bit table indices is valid).
+and `'i64'` when it refers to a memory64. The `tbl_idx_type` is `'i32'` by
+default and `'i64'` when the `table64` canonopt is present. These two
+dimensions are independent (e.g., a 64-bit memory with 32-bit table indices
+is valid).
 
 The following helper functions return the byte size and core value type of
 memory pointers and table indices, based on the options:
@@ -468,11 +468,10 @@ The other fields of `ComponentInstance` are described below as they are used.
 #### Table State
 
 The `Table` class encapsulates a mutable, growable array of opaque elements
-that are represented in Core WebAssembly as `i32` or `i64` indices into the
-array (based on the `tbl_idx_type` canonopt). Currently, every component
-instance contains two tables: a `threads` table containing all the
-component's [threads](#thread-state) and a `handles` table containing
-everything else ([resource handles](#resource-state),
+that are represented in Core WebAssembly as `i32` indices into the array.
+Currently, every component instance contains two tables: a `threads` table
+containing all the component's [threads](#thread-state) and a `handles`
+table containing everything else ([resource handles](#resource-state),
 [waitables and waitable sets](#waitable-state) and
 [error contexts](#-canon-error-contextnew)).
 ```python
@@ -521,9 +520,9 @@ that are used in preference to growing the table. The free list is represented
 as a Python list here, but an optimizing implementation could instead store the
 free list in the free elements of `array`.
 
-The limit of `2**28` ensures that the high 4 bits of `i32` table indices are
-unset and available for other use in guest code (e.g., for tagging, packed
-words or sentinel values).
+The limit of `2**28` ensures that the high 2 bits of table indices are unset
+and available for other use in guest code (e.g., for tagging, packed words or
+sentinel values).
 
 
 #### Resource State
@@ -1902,13 +1901,13 @@ def alignment(t, opts):
     case F64Type()                   : return 8
     case CharType()                  : return 4
     case StringType()                : return ptr_size(opts)
-    case ErrorContextType()          : return idx_size(opts)
+    case ErrorContextType()          : return 4
     case ListType(t, l)              : return alignment_list(t, l, opts)
     case RecordType(fields)          : return alignment_record(fields, opts)
     case VariantType(cases)          : return alignment_variant(cases, opts)
     case FlagsType(labels)           : return alignment_flags(labels)
-    case OwnType() | BorrowType()    : return idx_size(opts)
-    case StreamType() | FutureType() : return idx_size(opts)
+    case OwnType() | BorrowType()    : return 4
+    case StreamType() | FutureType() : return 4
 ```
 
 List alignment is the same as tuple alignment when the length is fixed and
@@ -1988,13 +1987,13 @@ def elem_size(t, opts):
     case F64Type()                   : return 8
     case CharType()                  : return 4
     case StringType()                : return 2 * ptr_size(opts)
-    case ErrorContextType()          : return idx_size(opts)
+    case ErrorContextType()          : return 4
     case ListType(t, l)              : return elem_size_list(t, l, opts)
     case RecordType(fields)          : return elem_size_record(fields, opts)
     case VariantType(cases)          : return elem_size_variant(cases, opts)
     case FlagsType(labels)           : return elem_size_flags(labels)
-    case OwnType() | BorrowType()    : return idx_size(opts)
-    case StreamType() | FutureType() : return idx_size(opts)
+    case OwnType() | BorrowType()    : return 4
+    case StreamType() | FutureType() : return 4
 
 def elem_size_list(elem_type, maybe_length, opts):
   if maybe_length is not None:
@@ -2054,15 +2053,15 @@ def load(cx, ptr, t):
     case F64Type()          : return decode_i64_as_float(load_int(cx, ptr, 8))
     case CharType()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
     case StringType()       : return load_string(cx, ptr)
-    case ErrorContextType() : return lift_error_context(cx, load_int(cx, ptr, idx_size(cx.opts)))
+    case ErrorContextType() : return lift_error_context(cx, load_int(cx, ptr, 4))
     case ListType(t, l)     : return load_list(cx, ptr, t, l)
     case RecordType(fields) : return load_record(cx, ptr, fields)
     case VariantType(cases) : return load_variant(cx, ptr, cases)
     case FlagsType(labels)  : return load_flags(cx, ptr, labels)
-    case OwnType()          : return lift_own(cx, load_int(cx, ptr, idx_size(cx.opts)), t)
-    case BorrowType()       : return lift_borrow(cx, load_int(cx, ptr, idx_size(cx.opts)), t)
-    case StreamType(t)      : return lift_stream(cx, load_int(cx, ptr, idx_size(cx.opts)), t)
-    case FutureType(t)      : return lift_future(cx, load_int(cx, ptr, idx_size(cx.opts)), t)
+    case OwnType()          : return lift_own(cx, load_int(cx, ptr, 4), t)
+    case BorrowType()       : return lift_borrow(cx, load_int(cx, ptr, 4), t)
+    case StreamType(t)      : return lift_stream(cx, load_int(cx, ptr, 4), t)
+    case FutureType(t)      : return lift_future(cx, load_int(cx, ptr, 4), t)
 ```
 
 Integers are loaded directly from memory, with their high-order bit interpreted
@@ -2149,9 +2148,6 @@ def load_string(cx, ptr) -> String:
 
 def utf16_tag(opts):
   return 1 << (ptr_size(opts) * 8 - 1)
-
-def max_string_byte_length(opts):
-  return (1 << (ptr_size(opts) * 8 - 1)) - 1
 
 def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   match cx.opts.string_encoding:
@@ -2343,15 +2339,15 @@ def store(cx, v, t, ptr):
     case F64Type()          : store_int(cx, encode_float_as_i64(v), ptr, 8)
     case CharType()         : store_int(cx, char_to_i32(v), ptr, 4)
     case StringType()       : store_string(cx, v, ptr)
-    case ErrorContextType() : store_int(cx, lower_error_context(cx, v), ptr, idx_size(cx.opts))
+    case ErrorContextType() : store_int(cx, lower_error_context(cx, v), ptr, 4)
     case ListType(t, l)     : store_list(cx, v, ptr, t, l)
     case RecordType(fields) : store_record(cx, v, ptr, fields)
     case VariantType(cases) : store_variant(cx, v, ptr, cases)
     case FlagsType(labels)  : store_flags(cx, v, ptr, labels)
-    case OwnType()          : store_int(cx, lower_own(cx, v, t), ptr, idx_size(cx.opts))
-    case BorrowType()       : store_int(cx, lower_borrow(cx, v, t), ptr, idx_size(cx.opts))
-    case StreamType(t)      : store_int(cx, lower_stream(cx, v, t), ptr, idx_size(cx.opts))
-    case FutureType(t)      : store_int(cx, lower_future(cx, v, t), ptr, idx_size(cx.opts))
+    case OwnType()          : store_int(cx, lower_own(cx, v, t), ptr, 4)
+    case BorrowType()       : store_int(cx, lower_borrow(cx, v, t), ptr, 4)
+    case StreamType(t)      : store_int(cx, lower_stream(cx, v, t), ptr, 4)
+    case FutureType(t)      : store_int(cx, lower_future(cx, v, t), ptr, 4)
 ```
 
 Integers are stored directly into memory. Because the input domain is exactly
@@ -2487,6 +2483,9 @@ The simplest 4 cases above can compute the exact destination size and then copy
 with a simply loop (that possibly inflates Latin-1 to UTF-16 by injecting a 0
 byte after every Latin-1 byte).
 ```python
+def max_string_byte_length(opts):
+  return (1 << (ptr_size(opts) * 8 - 1)) - 1
+
 def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment, dst_encoding):
   dst_byte_length = dst_code_unit_size * src_code_units
   trap_if(dst_byte_length > max_string_byte_length(cx.opts))
@@ -2836,13 +2835,13 @@ def flatten_type(t, opts):
     case F64Type()                        : return ['f64']
     case CharType()                       : return ['i32']
     case StringType()                     : return [ptr_type(opts), ptr_type(opts)]
-    case ErrorContextType()               : return [idx_type(opts)]
+    case ErrorContextType()               : return ['i32']
     case ListType(t, l)                   : return flatten_list(t, l, opts)
     case RecordType(fields)               : return flatten_record(fields, opts)
     case VariantType(cases)               : return flatten_variant(cases, opts)
     case FlagsType(labels)                : return ['i32']
-    case OwnType() | BorrowType()         : return [idx_type(opts)]
-    case StreamType() | FutureType()      : return [idx_type(opts)]
+    case OwnType() | BorrowType()         : return ['i32']
+    case StreamType() | FutureType()      : return ['i32']
 ```
 
 List flattening of a fixed-length list uses the same flattening as a tuple
@@ -2938,15 +2937,15 @@ def lift_flat(cx, vi, t):
     case F64Type()          : return canonicalize_nan64(vi.next('f64'))
     case CharType()         : return convert_i32_to_char(cx, vi.next('i32'))
     case StringType()       : return lift_flat_string(cx, vi)
-    case ErrorContextType() : return lift_error_context(cx, vi.next(idx_type(cx.opts)))
+    case ErrorContextType() : return lift_error_context(cx, vi.next('i32'))
     case ListType(t, l)     : return lift_flat_list(cx, vi, t, l)
     case RecordType(fields) : return lift_flat_record(cx, vi, fields)
     case VariantType(cases) : return lift_flat_variant(cx, vi, cases)
     case FlagsType(labels)  : return lift_flat_flags(vi, labels)
-    case OwnType()          : return lift_own(cx, vi.next(idx_type(cx.opts)), t)
-    case BorrowType()       : return lift_borrow(cx, vi.next(idx_type(cx.opts)), t)
-    case StreamType(t)      : return lift_stream(cx, vi.next(idx_type(cx.opts)), t)
-    case FutureType(t)      : return lift_future(cx, vi.next(idx_type(cx.opts)), t)
+    case OwnType()          : return lift_own(cx, vi.next('i32'), t)
+    case BorrowType()       : return lift_borrow(cx, vi.next('i32'), t)
+    case StreamType(t)      : return lift_stream(cx, vi.next('i32'), t)
+    case FutureType(t)      : return lift_future(cx, vi.next('i32'), t)
 ```
 
 Integers are lifted from core `i32` or `i64` values using the signedness of the
@@ -2972,8 +2971,8 @@ def lift_flat_signed(vi, core_width, t_width):
 
 The contents of strings and variable-length lists are stored in memory so
 lifting these types is essentially the same as loading them from memory; the
-only difference is that the pointer and length come from `i32` values instead
-of from linear memory. Fixed-length lists are lifted the same way as a
+only difference is that the pointer and length come from ptr-sized values
+instead of from linear memory. Fixed-length lists are lifted the same way as a
 tuple (via `lift_flat_record` below).
 ```python
 def lift_flat_string(cx, vi):
@@ -3222,15 +3221,17 @@ present, is validated as such:
 
 * `string-encoding=N` - can be passed at most once, regardless of `N`.
 * `memory` - this is a subtype of `(memory 1)`
-* `realloc` - the function has type `(func (param i32 i32 i32 i32) (result i32))`
+* `realloc` - the function has type `(func (param T T i32 T) (result T))`
+  where `T` is `i32` or `i64` determined by `memory` as described [above](#canonopt)
 * if `realloc` is present, then `memory` must be present
 * `post-return` - only allowed on [`canon lift`](#canon-lift), which has rules
   for validation
 * 🔀 `async` - cannot be present with `post-return`
 * 🔀,not(🚟) `async` - `callback` must also be present. Note that with the 🚟
   feature (the "stackful" ABI), this restriction is lifted.
-* 🔀 `callback` - the function has type `(func (param i32 i32 i32) (result i32))`
-  and cannot be present without `async` and is only allowed with
+* 🔀 `callback` - the function has type `(func (param i32 i32 T) (result i32))`
+  where the `T` parameter is the payload address and cannot be present
+  without `async` and is only allowed with
   [`canon lift`](#canon-lift)
 
 Additionally some options are required depending on lift/lower operations
@@ -3941,7 +3942,8 @@ For a canonical definition:
 (canon waitable-set.wait $cancellable? (memory $mem) (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param $si) (param $ptr i32) (result i32))`
+* `$f` is given type `(func (param $si i32) (param $ptr T) (result i32))` where
+  `T` is the address type of `$mem`.
 
 Calling `$f` invokes the following function which waits for progress to be made
 on a `Waitable` in the given waitable set (indicated by index `$si`) and then
@@ -3984,7 +3986,8 @@ For a canonical definition:
 (canon waitable-set.poll $cancellable? (memory $mem) (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param $si i32) (param $ptr i32) (result i32))`
+* `$f` is given type `(func (param $si i32) (param $ptr T) (result i32))` where
+  `T` is the address type of `$mem`.
 
 Calling `$f` invokes the following function, which either returns an event that
 was pending on one of the waitables in the given waitable set (the same way as
@@ -4201,7 +4204,8 @@ For canonical definitions:
 ```
 In addition to [general validation of `$opts`](#canonopt-validation) validation
 specifies:
-* `$f` is given type `(func (param i32 i32 i32) (result i32))`
+* `$f` is given type `(func (param i32 T T) (result T))` where `T` is `i32` or
+  `i64` determined by the `memory` from `$opts`
 * `$stream_t` must be a type of the form `(stream $t?)`
 * If `$t` is present:
   * [`lower($t)` above](#canonopt-validation) defines required options for `stream.write`
@@ -4266,7 +4270,7 @@ context switches. Next, the stream's `state` is updated based on the result
 being delivered to core wasm so that, once a stream end has been notified that
 the other end dropped, calling anything other than `stream.drop-*` traps.
 Lastly, `stream_event` packs the `CopyResult` and number of elements copied up
-until this point into a single `i32` payload for core wasm.
+until this point into a single `T`-sized payload for core wasm.
 ```python
   def stream_event(result, reclaim_buffer):
     reclaim_buffer()
@@ -4316,7 +4320,8 @@ For canonical definitions:
 ```
 In addition to [general validation of `$opts`](#canonopt-validation) validation
 specifies:
-* `$f` is given type `(func (param i32 i32) (result i32))`
+* `$f` is given type `(func (param i32 T) (result i32))` where `T` is `i32` or
+  `i64` determined by the `memory` from `$opts`
 * `$future_t` must be a type of the form `(future $t?)`
 * If `$t` is present:
   * [`lift($t)` above](#canonopt-validation) defines required options for `future.read`
@@ -4363,7 +4368,7 @@ state (in which the only valid operation is to call `future.drop-*`) on
 read/written at most once and futures are only passed to other components in a
 state where they are ready to be read/written. Another important difference is
 that, since the buffer length is always implied by the `CopyResult`, the number
-of elements copied is not packed in the high 28 bits; they're always zero.
+of elements copied is not packed in the high bits; they're always zero.
 ```python
   def future_event(result):
     assert((buffer.remain() == 0) == (result == CopyResult.COMPLETED))
@@ -4539,9 +4544,11 @@ For a canonical definition:
 (canon thread.new-indirect $ft $ftbl (core func $new_indirect))
 ```
 validation specifies
-* `$ft` must refer to the type `(func (param $c i32))`
+* `$ft` must refer to the type `(func (param $c T))` where `T` is `i32` or
+  `i64` determined by the linear memory of the component instance
 * `$ftbl` must refer to a table whose element type matches `funcref`
-* `$new_indirect` is given type `(func (param $fi i32) (param $c i32) (result i32))`
+* `$new_indirect` is given type `(func (param $fi I) (param $c T) (result i32))`
+  where `I` is `i32` or `i64` determined by `$ftbl`'s table type
 
 Calling `$new_indirect` invokes the following function which reads a `funcref`
 from `$ftbl` (trapping if out-of-bounds, null or the wrong type), calls the
@@ -4556,7 +4563,7 @@ class CoreFuncRef:
 def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], thread, fi, c):
   trap_if(not thread.task.inst.may_leave)
   f = ftbl.get(fi)
-  assert(ft == CoreFuncType(['i32'], []))
+  assert(ft == CoreFuncType(['i32'], []) or ft == CoreFuncType(['i64'], []))
   trap_if(f.t != ft)
   def thread_func(thread):
     [] = call_and_trap_on_throw(f.callee, thread, [c])
@@ -4736,7 +4743,8 @@ For a canonical definition:
 (canon error-context.new $opts (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param i32 i32) (result i32))`
+* `$f` is given type `(func (param T T) (result i32))` where `T` is `i32` or
+  `i64` determined by the `memory` from `$opts`
 * `async` is not present
 * `memory` must be present
 
@@ -4777,7 +4785,8 @@ For a canonical definition:
 (canon error-context.debug-message $opts (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param i32 i32))`
+* `$f` is given type `(func (param i32 T))` where `T` is `i32` or `i64`
+  determined by the `memory` from `$opts`
 * `async` is not present
 * `memory` must be present
 * `realloc` must be present
@@ -4796,8 +4805,9 @@ def canon_error_context_debug_message(opts, thread, i, ptr):
   store_string(cx, errctx.debug_message, ptr)
   return []
 ```
-Note that `ptr` points to an 8-byte region of memory into which will be stored
-the pointer and length of the debug string (allocated via `opts.realloc`).
+Note that `ptr` points to a region of memory (8 bytes for memory32, 16 bytes
+for memory64) into which will be stored the pointer and length of the debug
+string (allocated via `opts.realloc`).
 
 
 ### 📝 `canon error-context.drop`
@@ -4827,9 +4837,11 @@ For a canonical definition:
 (canon thread.spawn-ref shared? $ft (core func $spawn_ref))
 ```
 validation specifies:
-* `$ft` must refer to the type `(shared? (func (param $c i32)))` (see explanation below)
+* `$ft` must refer to the type `(shared? (func (param $c T)))` where `T` is
+  `i32` or `i64` determined by the linear memory of the component instance
+  (see explanation below)
 * `$spawn_ref` is given type
-  `(shared? (func (param $f (ref null $ft)) (param $c i32) (result $e i32)))`
+  `(shared? (func (param $f (ref null $ft)) (param $c T) (result $e i32)))`
 
 When the `shared` immediate is not present, the spawned thread is
 *cooperative*, only switching at specific program points. When the `shared`
@@ -4838,7 +4850,7 @@ parallel with all other threads.
 
 > Note: ideally, a thread could be spawned with [arbitrary thread parameters].
 > Currently, that would require additional work in the toolchain to support so,
-> for simplicity, the current proposal simply fixes a single `i32` parameter
+> for simplicity, the current proposal simply fixes a single `T` parameter
 > type. However, `thread.spawn-ref` could be extended to allow arbitrary thread
 > parameters in the future, once it's concretely beneficial to the toolchain.
 > The inclusion of `$ft` ensures backwards compatibility for when arbitrary
@@ -4868,12 +4880,14 @@ For a canonical definition:
 (canon thread.spawn-indirect shared? $ft $tbl (core func $spawn_indirect))
 ```
 validation specifies:
-* `$ft` must refer to the type `(shared? (func (param $c i32)))` is allowed
-  (see explanation in `thread.spawn-ref` above)
+* `$ft` must refer to the type `(shared? (func (param $c T)))` is allowed
+  where `T` is `i32` or `i64` determined by the linear memory of the component
+  instance (see explanation in `thread.spawn-ref` above)
 * `$tbl` must refer to a shared table whose element type matches
   `(ref null (shared? func))`
 * `$spawn_indirect` is given type
-  `(shared? (func (param $i i32) (param $c i32) (result $e i32)))`
+  `(shared? (func (param $i I) (param $c T) (result $e i32)))` where `I` is
+  `i32` or `i64` determined by `$tbl`'s table type
 
 When the `shared` immediate is not present, the spawned thread is
 *cooperative*, only switching at specific program points. When the `shared`

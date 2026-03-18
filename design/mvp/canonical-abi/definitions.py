@@ -1093,13 +1093,13 @@ def alignment(t, opts):
     case F64Type()                   : return 8
     case CharType()                  : return 4
     case StringType()                : return ptr_size(opts)
-    case ErrorContextType()          : return idx_size(opts)
+    case ErrorContextType()          : return 4
     case ListType(t, l)              : return alignment_list(t, l, opts)
     case RecordType(fields)          : return alignment_record(fields, opts)
     case VariantType(cases)          : return alignment_variant(cases, opts)
     case FlagsType(labels)           : return alignment_flags(labels)
-    case OwnType() | BorrowType()    : return idx_size(opts)
-    case StreamType() | FutureType() : return idx_size(opts)
+    case OwnType() | BorrowType()    : return 4
+    case StreamType() | FutureType() : return 4
 
 def alignment_list(elem_type, maybe_length, opts):
   if maybe_length is not None:
@@ -1151,13 +1151,13 @@ def elem_size(t, opts):
     case F64Type()                   : return 8
     case CharType()                  : return 4
     case StringType()                : return 2 * ptr_size(opts)
-    case ErrorContextType()          : return idx_size(opts)
+    case ErrorContextType()          : return 4
     case ListType(t, l)              : return elem_size_list(t, l, opts)
     case RecordType(fields)          : return elem_size_record(fields, opts)
     case VariantType(cases)          : return elem_size_variant(cases, opts)
     case FlagsType(labels)           : return elem_size_flags(labels)
-    case OwnType() | BorrowType()    : return idx_size(opts)
-    case StreamType() | FutureType() : return idx_size(opts)
+    case OwnType() | BorrowType()    : return 4
+    case StreamType() | FutureType() : return 4
 
 def elem_size_list(elem_type, maybe_length, opts):
   if maybe_length is not None:
@@ -1211,15 +1211,15 @@ def load(cx, ptr, t):
     case F64Type()          : return decode_i64_as_float(load_int(cx, ptr, 8))
     case CharType()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
     case StringType()       : return load_string(cx, ptr)
-    case ErrorContextType() : return lift_error_context(cx, load_int(cx, ptr, idx_size(cx.opts)))
+    case ErrorContextType() : return lift_error_context(cx, load_int(cx, ptr, 4))
     case ListType(t, l)     : return load_list(cx, ptr, t, l)
     case RecordType(fields) : return load_record(cx, ptr, fields)
     case VariantType(cases) : return load_variant(cx, ptr, cases)
     case FlagsType(labels)  : return load_flags(cx, ptr, labels)
-    case OwnType()          : return lift_own(cx, load_int(cx, ptr, idx_size(cx.opts)), t)
-    case BorrowType()       : return lift_borrow(cx, load_int(cx, ptr, idx_size(cx.opts)), t)
-    case StreamType(t)      : return lift_stream(cx, load_int(cx, ptr, idx_size(cx.opts)), t)
-    case FutureType(t)      : return lift_future(cx, load_int(cx, ptr, idx_size(cx.opts)), t)
+    case OwnType()          : return lift_own(cx, load_int(cx, ptr, 4), t)
+    case BorrowType()       : return lift_borrow(cx, load_int(cx, ptr, 4), t)
+    case StreamType(t)      : return lift_stream(cx, load_int(cx, ptr, 4), t)
+    case FutureType(t)      : return lift_future(cx, load_int(cx, ptr, 4), t)
 
 def load_int(cx, ptr, nbytes, signed = False):
   return int.from_bytes(cx.opts.memory[ptr : ptr+nbytes], 'little', signed = signed)
@@ -1402,15 +1402,15 @@ def store(cx, v, t, ptr):
     case F64Type()          : store_int(cx, encode_float_as_i64(v), ptr, 8)
     case CharType()         : store_int(cx, char_to_i32(v), ptr, 4)
     case StringType()       : store_string(cx, v, ptr)
-    case ErrorContextType() : store_int(cx, lower_error_context(cx, v), ptr, idx_size(cx.opts))
+    case ErrorContextType() : store_int(cx, lower_error_context(cx, v), ptr, 4)
     case ListType(t, l)     : store_list(cx, v, ptr, t, l)
     case RecordType(fields) : store_record(cx, v, ptr, fields)
     case VariantType(cases) : store_variant(cx, v, ptr, cases)
     case FlagsType(labels)  : store_flags(cx, v, ptr, labels)
-    case OwnType()          : store_int(cx, lower_own(cx, v, t), ptr, idx_size(cx.opts))
-    case BorrowType()       : store_int(cx, lower_borrow(cx, v, t), ptr, idx_size(cx.opts))
-    case StreamType(t)      : store_int(cx, lower_stream(cx, v, t), ptr, idx_size(cx.opts))
-    case FutureType(t)      : store_int(cx, lower_future(cx, v, t), ptr, idx_size(cx.opts))
+    case OwnType()          : store_int(cx, lower_own(cx, v, t), ptr, 4)
+    case BorrowType()       : store_int(cx, lower_borrow(cx, v, t), ptr, 4)
+    case StreamType(t)      : store_int(cx, lower_stream(cx, v, t), ptr, 4)
+    case FutureType(t)      : store_int(cx, lower_future(cx, v, t), ptr, 4)
 
 def store_int(cx, v, ptr, nbytes, signed = False):
   cx.opts.memory[ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed = signed)
@@ -1734,13 +1734,13 @@ def flatten_type(t, opts):
     case F64Type()                        : return ['f64']
     case CharType()                       : return ['i32']
     case StringType()                     : return [ptr_type(opts), ptr_type(opts)]
-    case ErrorContextType()               : return [idx_type(opts)]
+    case ErrorContextType()               : return ['i32']
     case ListType(t, l)                   : return flatten_list(t, l, opts)
     case RecordType(fields)               : return flatten_record(fields, opts)
     case VariantType(cases)               : return flatten_variant(cases, opts)
     case FlagsType(labels)                : return ['i32']
-    case OwnType() | BorrowType()         : return [idx_type(opts)]
-    case StreamType() | FutureType()      : return [idx_type(opts)]
+    case OwnType() | BorrowType()         : return ['i32']
+    case StreamType() | FutureType()      : return ['i32']
 
 def flatten_list(elem_type, maybe_length, opts):
   if maybe_length is not None:
@@ -1808,15 +1808,15 @@ def lift_flat(cx, vi, t):
     case F64Type()          : return canonicalize_nan64(vi.next('f64'))
     case CharType()         : return convert_i32_to_char(cx, vi.next('i32'))
     case StringType()       : return lift_flat_string(cx, vi)
-    case ErrorContextType() : return lift_error_context(cx, vi.next(idx_type(cx.opts)))
+    case ErrorContextType() : return lift_error_context(cx, vi.next('i32'))
     case ListType(t, l)     : return lift_flat_list(cx, vi, t, l)
     case RecordType(fields) : return lift_flat_record(cx, vi, fields)
     case VariantType(cases) : return lift_flat_variant(cx, vi, cases)
     case FlagsType(labels)  : return lift_flat_flags(vi, labels)
-    case OwnType()          : return lift_own(cx, vi.next(idx_type(cx.opts)), t)
-    case BorrowType()       : return lift_borrow(cx, vi.next(idx_type(cx.opts)), t)
-    case StreamType(t)      : return lift_stream(cx, vi.next(idx_type(cx.opts)), t)
-    case FutureType(t)      : return lift_future(cx, vi.next(idx_type(cx.opts)), t)
+    case OwnType()          : return lift_own(cx, vi.next('i32'), t)
+    case BorrowType()       : return lift_borrow(cx, vi.next('i32'), t)
+    case StreamType(t)      : return lift_stream(cx, vi.next('i32'), t)
+    case FutureType(t)      : return lift_future(cx, vi.next('i32'), t)
 
 def lift_flat_unsigned(vi, core_width, t_width):
   i = vi.next('i' + str(core_width))
@@ -2538,7 +2538,7 @@ class CoreFuncRef:
 def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], thread, fi, c):
   trap_if(not thread.task.inst.may_leave)
   f = ftbl.get(fi)
-  assert(ft == CoreFuncType(['i32'], []))
+  assert(ft == CoreFuncType(['i32'], []) or ft == CoreFuncType(['i64'], []))
   trap_if(f.t != ft)
   def thread_func(thread):
     [] = call_and_trap_on_throw(f.callee, thread, [c])

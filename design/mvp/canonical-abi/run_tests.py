@@ -2844,8 +2844,8 @@ def test_mixed_table_memory_types():
   opts64_tbl = LiftLowerOptions(addr_type='i32', tbl_idx_type='i64')
   assert(alignment(StringType(), opts64_tbl) == 4)
   assert(elem_size(StringType(), opts64_tbl) == 8)
-  assert(alignment(OwnType(rt), opts64_tbl) == 8)
-  assert(elem_size(OwnType(rt), opts64_tbl) == 8)
+  assert(alignment(OwnType(rt), opts64_tbl) == 4)
+  assert(elem_size(OwnType(rt), opts64_tbl) == 4)
 
   # Round-trip a type exercising both memory pointers and table pointers
   before = definitions.MAX_FLAT_RESULTS
