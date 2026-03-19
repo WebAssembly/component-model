@@ -436,10 +436,9 @@ stackless async ABI is used, returning the "exit" code to the event loop. This
 non-reuse of thread-local storage between distinct export calls avoids what
 would otherwise be a likely source of TLS-related memory leaks.
 
-The type of `context.{get,set}` values (`i32` or `i64`) is determined by the
-`memory` canonopt (matching the pointer size of the linear memory). When
-[wasm-gc] is integrated, these integral context values can serve as indices
-into guest-managed tables of typed GC references.
+When [wasm-gc] is integrated into the Canonical ABI, `context.{get,set}` will be
+relaxed so that these integral context values can serve as indices into
+guest-managed tables of typed GC references.
 
 Since the same mutable thread-local storage cells are shared by all core wasm
 running under the same thread in the same component, the cells' contents must
@@ -885,7 +884,7 @@ world w {
   import quux: async func(t: list<u32; 17>) -> string;
 }
 ```
-the default/synchronous lowered import function signatures are:
+the default/synchronous lowered import function signatures (assuming 32-bit memories) are:
 ```wat
 ;; sync
 (func $foo (param $s-ptr i32) (param $s-len i32) (result i32))

@@ -718,11 +718,11 @@ Just like with handles, in the Component Model, async value types are
 lifted-from and lowered-into `i32` values that index an encapsulated
 per-component-instance table that is maintained by the canonical ABI built-ins
 [below](#canonical-definitions). The Component-Model-defined ABI for creating,
-writing-to and reading-from `stream` and `future` values is meant to be bound to
-analogous source-language features like promises, futures, streams, iterators,
-generators and channels so that developers can use these familiar high-level
-concepts when working directly with component types, without the need to
-manually write low-level async glue code. For languages like C without
+writing-to and reading-from `stream` and `future` values is meant to be bound
+to analogous source-language features like promises, futures, streams,
+iterators, generators and channels so that developers can use these familiar
+high-level concepts when working directly with component types, without the
+need to manually write low-level async glue code. For languages like C without
 language-level concurrency support, these ABIs (described in detail in the
 [Canonical ABI explainer]) can be exposed directly as function imports and used
 like normal low-level Operation System I/O APIs.
@@ -1281,7 +1281,6 @@ canonopt ::= string-encoding=utf8
            | (memory <core:memidx>)
            | (realloc <core:funcidx>)
            | (post-return <core:funcidx>)
-           | table64
            | async 🔀
            | (callback <core:funcidx>) 🔀
 ```
@@ -1300,22 +1299,24 @@ default is `utf8`. It is a validation error to include more than one
 
 The `(memory ...)` option specifies the memory that the Canonical ABI will
 use to load and store values. If the Canonical ABI needs to load or store,
-validation requires this option to be present (there is no default).
+validation requires this option to be present (there is no default). The types
+of lowered functions may also depend on whether this memory is a 32-bit or
+64-bit memory if pointers are transitively contained in parameters or results.
+In what follows the notation `PTR` will refer to the core Wasm type `i32` or
+`i64` corresponding to the type of the `(memory ...)` option.
 
 The `(realloc ...)` option specifies a core function that is validated to
 have the following core function type:
 ```wat
-(func (param $originalPtr $addr)
-      (param $originalSize $addr)
-      (param $alignment i32)
-      (param $newSize $addr)
-      (result $addr))
+(func (param $originalPtr PTR)
+      (param $originalSize PTR)
+      (param $alignment PTR)
+      (param $newSize PTR)
+      (result PTR))
 ```
-where `$addr` is `i32` when the `memory` canonopt refers to a 32-bit memory or
-`i64` when it refers to a 64-bit memory. The Canonical ABI will use `realloc`
-both to allocate (passing `0` for the first two parameters) and reallocate. If
-the Canonical ABI needs `realloc`, validation requires this option to be
-present (there is no default).
+The Canonical ABI will use `realloc` both to allocate (passing `0` for the first
+two parameters) and reallocate. If the Canonical ABI needs `realloc`, validation
+requires this option to be present (there is no default).
 
 The `(post-return ...)` option may only be present in `canon lift` when
 `async` is not present and specifies a core function to be called with the
@@ -1338,10 +1339,10 @@ validated to have the following core function type:
 ```wat
 (func (param $ctx i32)
       (param $event i32)
-      (param $payload $addr)
+      (param $payload PTR)
       (result $done i32))
 ```
-where `$addr` is determined by the `memory` canonopt as described above.
+where `PTR` is determined by the `memory` canonopt as described above.
 Again, see the [concurrency explainer] for more details.
 
 Based on this description of the AST, the [Canonical ABI explainer] gives a
@@ -1474,17 +1475,17 @@ canon ::= ...
 | Synopsis                   |                            |
 | -------------------------- | -------------------------- |
 | Approximate WIT signature  | `func<T>(rep: T.rep) -> T` |
-| Canonical ABI signature    | `[rep:i32] -> [i32]`       |
+| Canonical ABI signature    | `[rep: T.rep] -> [i32]`     |
 
 The `resource.new` built-in creates a new resource (of resource type `T`) with
 `rep` as its representation, and returns a new handle pointing to the new
 resource. Validation only allows `resource.rep T` to be used within the
 component that defined `T`.
 
-In the Canonical ABI, `T.rep` is defined to be the `$rep` in the
-`(type $T (resource (rep $rep) ...))` type definition that defined `T`. While
-it's designed to allow different types in the future, it is currently
-hard-coded to always be `i32` or `i64`.
+In the Canonical ABI, `T.rep` is defined to be the `$rep` in the `(type $T
+(resource (rep $rep) ...))` type definition that defined `T`. While it's
+designed to allow different types in the future, it is currently fixed to be
+`i32` or `i64`.
 
 For details, see [`canon_resource_new`] in the Canonical ABI explainer.
 
@@ -1507,7 +1508,7 @@ For details, see [`canon_resource_drop`] in the Canonical ABI explainer.
 | Synopsis                   |                          |
 | -------------------------- | ------------------------ |
 | Approximate WIT signature  | `func<T>(t: T) -> T.rep` |
-| Canonical ABI signature    | `[t:i32] -> [i32]`       |
+| Canonical ABI signature    | `[t:i32] -> [T.rep]`     |
 
 The `resource.rep` built-in returns the representation of the resource (with
 resource type `T`) pointed to by the handle `t`. Validation only allows
@@ -1516,7 +1517,7 @@ resource type `T`) pointed to by the handle `t`. Validation only allows
 In the Canonical ABI, `T.rep` is defined to be the `$rep` in the
 `(type $T (resource (rep $rep) ...))` type definition that defined `T`. While
 it's designed to allow different types in the future, it is currently
-hard-coded to always be `i32`.
+fixed to be `i32` or `i64`.
 
 As an example, the following component imports the `resource.new` built-in,
 allowing it to create and return new resources to its client:
@@ -1558,12 +1559,12 @@ See the [concurrency explainer] for background.
 | Synopsis                   |                    |
 | -------------------------- | ------------------ |
 | Approximate WIT signature  | `func<T,i>() -> T` |
-| Canonical ABI signature    | `[] -> [$T]`          |
+| Canonical ABI signature    | `[] -> [T]`          |
 
 The `context.get` built-in returns the `i`th element of the [current thread]'s
 [thread-local storage] array. Validation currently restricts `i` to be less
-than 2 and `T` to be `i32` or `i64` (determined by the `memory` canonopt), but
-these restrictions may be relaxed in the future.
+than 2 and `T` to be `i32` or `i64`, but these restrictions may be relaxed in
+the future.
 
 For details, see [Thread-Local Storage] in the concurrency explainer and
 [`canon_context_get`] in the Canonical ABI explainer.
@@ -1573,12 +1574,12 @@ For details, see [Thread-Local Storage] in the concurrency explainer and
 | Synopsis                   |                   |
 | -------------------------- | ----------------- |
 | Approximate WIT signature  | `func<T,i>(v: T)` |
-| Canonical ABI signature    | `[$T] -> []`         |
+| Canonical ABI signature    | `[T] -> []`         |
 
 The `context.set` built-in sets the `i`th element of the [current thread]'s
 [thread-local storage] array to the value `v`. Validation currently restricts
-`i` to be less than 2 and `T` to be `i32` or `i64` (determined by the `memory`
-canonopt), but these restrictions may be relaxed in the future.
+`i` to be less than 2 and `T` to be `i32` or `i64`, but these restrictions may
+be relaxed in the future.
 
 For details, see [Thread-Local Storage] in the concurrency explainer and
 [`canon_context_set`] in the Canonical ABI explainer.
@@ -1677,7 +1678,7 @@ For details, see [Waitables and Waitable Sets] in the concurrency explainer and
 | Synopsis                   |                                                |
 | -------------------------- | ---------------------------------------------- |
 | Approximate WIT signature  | `func<cancellable?>(s: waitable-set) -> event` |
-| Canonical ABI signature    | `[s:i32 payload-addr:$addr] -> [event-code:i32]` |
+| Canonical ABI signature    | `[s:i32 payload-addr:PTR] -> [event-code:i32]` |
 
 where `event` is defined in WIT as:
 ```wit
@@ -1742,7 +1743,7 @@ For details, see [Waitables and Waitable Sets] in the concurrency explainer and
 | Synopsis                   |                                                |
 | -------------------------- | ---------------------------------------------- |
 | Approximate WIT signature  | `func<cancellable?>(s: waitable-set) -> event` |
-| Canonical ABI signature    | `[s:i32 payload-addr:$addr] -> [event-code:i32]` |
+| Canonical ABI signature    | `[s:i32 payload-addr:PTR] -> [event-code:i32]` |
 
 where `event` is defined as in [`waitable-set.wait`](#-waitable-setwait).
 
@@ -1860,7 +1861,7 @@ For details, see [Streams and Futures] in the concurrency explainer and
 | -------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | Approximate WIT signature for `stream.read`  | `func<stream<T?>>(e: readable-stream-end<T?>, b: writable-buffer<T>?) -> option<stream-result>` |
 | Approximate WIT signature for `stream.write` | `func<stream<T?>>(e: writable-stream-end<T?>, b: readable-buffer<T>?) -> option<stream-result>` |
-| Canonical ABI signature                      | `[stream-end:i32 ptr:$addr num:$addr] -> [$addr]`                                               |
+| Canonical ABI signature                      | `[stream-end:i32 ptr:PTR num:PTR] -> [PTR]`                                               |
 
 where `stream-result` is defined in WIT as:
 ```wit
@@ -1916,10 +1917,10 @@ any subsequent operation on the stream other than `stream.drop-{readable,writabl
 traps.
 
 In the Canonical ABI, the `{readable,writable}-stream-end` is passed as an
-`i32` index into the component instance's table followed by a pair of `$addr`s
+`i32` index into the component instance's table followed by a pair of `PTR`s
 describing the linear memory offset and size-in-elements of the
 `{readable,writable}-buffer<T>`. The `option<stream-result>` return value is
-bit-packed into a single `$addr` where:
+bit-packed into a single `PTR` where:
 * all-ones represents `none`.
 * Otherwise, the `result` is in the low 4 bits and the `progress` is in the
   remaining high bits.
@@ -1933,7 +1934,7 @@ For details, see [Streams and Futures] in the concurrency explainer and
 | -------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | Approximate WIT signature for `future.read`  | `func<future<T?>>(e: readable-future-end<T?>, b: writable-buffer<T; 1>?) -> option<future-read-result>`  |
 | Approximate WIT signature for `future.write` | `func<future<T?>>(e: writable-future-end<T?>, v: readable-buffer<T; 1>?) -> option<future-write-result>` |
-| Canonical ABI signature                      | `[readable-future-end:i32 ptr:$addr] -> [i32]`                                                           |
+| Canonical ABI signature                      | `[readable-future-end:i32 ptr:PTR] -> [i32]`                                                           |
 
 where `future-{read,write}-result` are defined in WIT as:
 ```wit
@@ -1984,7 +1985,7 @@ called before successfully writing a value.
 
 In the Canonical ABI, the `{readable,writable}-future-end` is passed as an
 `i32` index into the component instance's table followed by a single
-`$addr` describing the linear memory offset of the
+`PTR` describing the linear memory offset of the
 `{readable,writable}-buffer<T; 1>`. The `option<future-{read,write}-result>`
 return value is bit-packed into the single `i32` return value where all-ones
 represents `none`. And, `future-read-result.cancelled` is encoded
@@ -2060,19 +2061,21 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 
 | Synopsis                   |                                                               |
 | -------------------------- | ------------------------------------------------------------- |
-| Approximate WIT signature  | `func<FuncT,tableidx>(fi: u32, c: FuncT.params[0]) -> thread` |
-| Canonical ABI signature    | `[fi:$idx c:$addr] -> [i32]`                                  |
+| Approximate WIT signature  | `func<FuncT,tableidx>(fi: uIDX, c: FuncT.params[0]) -> thread` |
+| Canonical ABI signature    | `[fi:iIDX c: FuncT.params[0]] -> [i32]`                                  |
 
 The `thread.new-indirect` built-in adds a new thread to the current component
 instance's table, returning the index of the new thread. The function table
 supplied via [`core:tableidx`] is indexed by the `fi` operand and then
 dynamically checked to match the type `FuncT` (in the same manner as
-`call_indirect`). Lastly, the indexed function is called in the new thread
-with `c` as its first and only parameter.
+`call_indirect`). The types `uIDX` and `iIDX` of `fi` are `u32`/`i32` or
+`u64`/`i64` as determined by the table supplied by [`core:tableidx`]. Lastly,
+the indexed function is called in the new thread with `c` as its first and only
+parameter.
 
-Currently, `FuncT` must be `(func (param $addr))` and thus `c` must always be
-an `$addr`, but this restriction can be loosened in the future as the Canonical
-ABI is extended for [GC].
+Currently, `FuncT` must be `(func (param i32))` or `(func (param i64))` and thus
+`c` must always be an `i32` or `i64`, but this restriction can be loosened in
+the future as the Canonical ABI is extended for [GC].
 
 As explained in the [concurrency explainer], a thread created by
 `thread.new-indirect` is initially in a suspended state and must be resumed
@@ -2205,7 +2208,7 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 | Synopsis                   |                                                                    |
 | -------------------------- | ------------------------------------------------------------------ |
 | Approximate WIT signature  | `func<shared?,FuncT>(f: FuncT, c: FuncT.params[0]) -> bool`        |
-| Canonical ABI signature    | `shared? [f:(ref null (shared (func (param $addr))) c:$addr] -> [i32]` |
+| Canonical ABI signature    | `shared? [f:(ref null (shared (func (param FuncT.params[0]))) c:FuncT.params[0]] -> [i32]` |
 
 The `thread.spawn-ref` built-in is an optimization, fusing a call to
 `thread.new_ref` (assuming `thread.new_ref` was added as part of adding a
@@ -2219,8 +2222,8 @@ For details, see [`canon_thread_spawn_ref`] in the Canonical ABI explainer.
 
 | Synopsis                   |                                                                    |
 | -------------------------- | ------------------------------------------------------------------ |
-| Approximate WIT signature  | `func<shared?,FuncT,tableidx>(i: u32, c: FuncT.params[0]) -> bool` |
-| Canonical ABI signature    | `shared? [i:$idx c:$addr] -> [i32]`                                |
+| Approximate WIT signature  | `func<shared?,FuncT,tableidx>(i: uIDX, c: FuncT.params[0]) -> bool` |
+| Canonical ABI signature    | `shared? [i:iIDX c:FuncT.params[0]] -> [i32]`                                |
 
 The `thread.spawn-indirect` built-in is an optimization, fusing a call to
 [`thread.new-indirect`](#-threadnew-indirect) with a call to
@@ -2255,7 +2258,7 @@ explainer.
 | Synopsis                         |                                          |
 | -------------------------------- | ---------------------------------------- |
 | Approximate WIT signature        | `func(message: string) -> error-context` |
-| Canonical ABI signature          | `[ptr:$addr len:$addr] -> [i32]`         |
+| Canonical ABI signature          | `[ptr:PTR len:PTR] -> [i32]`         |
 
 The `error-context.new` built-in returns a new `error-context` value. The given
 string is non-deterministically transformed to produce the `error-context`'s
@@ -2271,7 +2274,7 @@ For details, see [`canon_error_context_new`] in the Canonical ABI explainer.
 | Synopsis                         |                                         |
 | -------------------------------- | --------------------------------------- |
 | Approximate WIT signature        | `func(errctx: error-context) -> string` |
-| Canonical ABI signature          | `[errctxi:i32 ptr:$addr] -> []`         |
+| Canonical ABI signature          | `[errctxi:i32 ptr:PTR] -> []`         |
 
 The `error-context.debug-message` built-in returns the
 [debug message](#error-context-type) of the given `error-context`.

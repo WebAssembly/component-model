@@ -245,43 +245,29 @@ when lifting individual parameters and results:
 @dataclass
 class LiftOptions:
   string_encoding: str = 'utf8'
-  memory: Optional[bytearray] = None
-  addr_type: str = 'i32'
-  tbl_idx_type: str = 'i32'
+  memory: Optional[tuple[bytearray, str]] = None
 
   def equal(lhs, rhs):
     return lhs.string_encoding == rhs.string_encoding and \
-           lhs.memory is rhs.memory and \
-           lhs.addr_type == rhs.addr_type and \
-           lhs.tbl_idx_type == rhs.tbl_idx_type
+           lhs.memory is rhs.memory
 ```
 The `equal` static method is used by `task.return` below to dynamically
 compare equality of just this subset of `canonopt`.
 
-The `addr_type` is `'i32'` when the `memory` canonopt refers to a memory32
-and `'i64'` when it refers to a memory64. The `tbl_idx_type` is `'i32'` by
-default and `'i64'` when the `table64` canonopt is present. These two
-dimensions are independent (e.g., a 64-bit memory with 32-bit table indices
-is valid).
+The `str` field in `memory` is `'i32'` or `'i64'` to indicate whether type of the core Wasm `memory`.
 
 The following helper functions return the byte size and core value type of
-memory pointers and table indices, based on the options:
+memory pointers: 
 ```python
-def ptr_size(opts):
-  match opts.addr_type:
-    case 'i32': return 4
-    case 'i64': return 8
-
 def ptr_type(opts):
-  return opts.addr_type
+  if opts.memory is None:
+    return 'i32'
+  return opts.memory[1]
 
-def idx_size(opts):
-  match opts.tbl_idx_type:
+def ptr_size(opts):
+  match ptr_type(opts):
     case 'i32': return 4
     case 'i64': return 8
-
-def idx_type(opts):
-  return opts.tbl_idx_type
 ```
 
 The `LiftLowerOptions` class contains the subset of [`canonopt`] which are
@@ -1386,7 +1372,7 @@ class BufferGuestImpl(Buffer):
     trap_if(length > Buffer.MAX_LENGTH)
     if t and length > 0:
       trap_if(ptr != align_to(ptr, alignment(t, cx.opts)))
-      trap_if(ptr + length * elem_size(t, cx.opts) > len(cx.opts.memory))
+      trap_if(ptr + length * elem_size(t, cx.opts) > len(cx.opts.memory[0]))
     self.cx = cx
     self.t = t
     self.ptr = ptr
@@ -2038,7 +2024,7 @@ the top-level case analysis:
 ```python
 def load(cx, ptr, t):
   assert(ptr == align_to(ptr, alignment(t, cx.opts)))
-  assert(ptr + elem_size(t, cx.opts) <= len(cx.opts.memory))
+  assert(ptr + elem_size(t, cx.opts) <= len(cx.opts.memory[0]))
   match despecialize(t):
     case BoolType()         : return convert_int_to_bool(load_int(cx, ptr, 1))
     case U8Type()           : return load_int(cx, ptr, 1)
@@ -2068,7 +2054,7 @@ Integers are loaded directly from memory, with their high-order bit interpreted
 according to the signedness of the type.
 ```python
 def load_int(cx, ptr, nbytes, signed = False):
-  return int.from_bytes(cx.opts.memory[ptr : ptr+nbytes], 'little', signed = signed)
+  return int.from_bytes(cx.opts.memory[0][ptr : ptr+nbytes], 'little', signed = signed)
 ```
 
 Integer-to-boolean conversions treats `0` as `false` and all other bit-patterns
@@ -2169,9 +2155,9 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
         encoding = 'latin-1'
 
   trap_if(ptr != align_to(ptr, alignment))
-  trap_if(ptr + byte_length > len(cx.opts.memory))
+  trap_if(ptr + byte_length > len(cx.opts.memory[0]))
   try:
-    s = cx.opts.memory[ptr : ptr+byte_length].decode(encoding)
+    s = cx.opts.memory[0][ptr : ptr+byte_length].decode(encoding)
   except UnicodeError:
     trap()
 
@@ -2198,7 +2184,7 @@ def load_list(cx, ptr, elem_type, maybe_length):
 
 def load_list_from_range(cx, ptr, length, elem_type):
   trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts)))
-  trap_if(ptr + length * elem_size(elem_type, cx.opts) > len(cx.opts.memory))
+  trap_if(ptr + length * elem_size(elem_type, cx.opts) > len(cx.opts.memory[0]))
   return load_list_from_valid_range(cx, ptr, length, elem_type)
 
 def load_list_from_valid_range(cx, ptr, length, elem_type):
@@ -2324,7 +2310,7 @@ The `store` function defines how to write a value `v` of a given value type
 ```python
 def store(cx, v, t, ptr):
   assert(ptr == align_to(ptr, alignment(t, cx.opts)))
-  assert(ptr + elem_size(t, cx.opts) <= len(cx.opts.memory))
+  assert(ptr + elem_size(t, cx.opts) <= len(cx.opts.memory[0]))
   match despecialize(t):
     case BoolType()         : store_int(cx, int(bool(v)), ptr, 1)
     case U8Type()           : store_int(cx, v, ptr, 1)
@@ -2356,7 +2342,7 @@ the `signed` parameter is only present to ensure that the internal range checks
 of `int.to_bytes` are satisfied.
 ```python
 def store_int(cx, v, ptr, nbytes, signed = False):
-  cx.opts.memory[ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed = signed)
+  cx.opts.memory[0][ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed = signed)
 ```
 
 Floats are stored directly into memory, with the sign and payload bits of NaN
@@ -2491,10 +2477,10 @@ def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment
   trap_if(dst_byte_length > max_string_byte_length(cx.opts))
   ptr = cx.opts.realloc(0, 0, dst_alignment, dst_byte_length)
   trap_if(ptr != align_to(ptr, dst_alignment))
-  trap_if(ptr + dst_byte_length > len(cx.opts.memory))
+  trap_if(ptr + dst_byte_length > len(cx.opts.memory[0]))
   encoded = src.encode(dst_encoding)
   assert(dst_byte_length == len(encoded))
-  cx.opts.memory[ptr : ptr+len(encoded)] = encoded
+  cx.opts.memory[0][ptr : ptr+len(encoded)] = encoded
   return (ptr, src_code_units)
 ```
 The `max_string_byte_length` function ensures that the high bit of a
@@ -2516,19 +2502,19 @@ def store_latin1_to_utf8(cx, src, src_code_units):
 def store_string_to_utf8(cx, src, src_code_units, worst_case_size):
   assert(src_code_units <= max_string_byte_length(cx.opts))
   ptr = cx.opts.realloc(0, 0, 1, src_code_units)
-  trap_if(ptr + src_code_units > len(cx.opts.memory))
+  trap_if(ptr + src_code_units > len(cx.opts.memory[0]))
   for i,code_point in enumerate(src):
     if ord(code_point) < 2**7:
-      cx.opts.memory[ptr + i] = ord(code_point)
+      cx.opts.memory[0][ptr + i] = ord(code_point)
     else:
       trap_if(worst_case_size > max_string_byte_length(cx.opts))
       ptr = cx.opts.realloc(ptr, src_code_units, 1, worst_case_size)
-      trap_if(ptr + worst_case_size > len(cx.opts.memory))
+      trap_if(ptr + worst_case_size > len(cx.opts.memory[0]))
       encoded = src.encode('utf-8')
-      cx.opts.memory[ptr+i : ptr+len(encoded)] = encoded[i : ]
+      cx.opts.memory[0][ptr+i : ptr+len(encoded)] = encoded[i : ]
       if worst_case_size > len(encoded):
         ptr = cx.opts.realloc(ptr, worst_case_size, 1, len(encoded))
-        trap_if(ptr + len(encoded) > len(cx.opts.memory))
+        trap_if(ptr + len(encoded) > len(cx.opts.memory[0]))
       return (ptr, len(encoded))
   return (ptr, src_code_units)
 ```
@@ -2543,13 +2529,13 @@ def store_utf8_to_utf16(cx, src, src_code_units):
   trap_if(worst_case_size > max_string_byte_length(cx.opts))
   ptr = cx.opts.realloc(0, 0, 2, worst_case_size)
   trap_if(ptr != align_to(ptr, 2))
-  trap_if(ptr + worst_case_size > len(cx.opts.memory))
+  trap_if(ptr + worst_case_size > len(cx.opts.memory[0]))
   encoded = src.encode('utf-16-le')
-  cx.opts.memory[ptr : ptr+len(encoded)] = encoded
+  cx.opts.memory[0][ptr : ptr+len(encoded)] = encoded
   if len(encoded) < worst_case_size:
     ptr = cx.opts.realloc(ptr, worst_case_size, 2, len(encoded))
     trap_if(ptr != align_to(ptr, 2))
-    trap_if(ptr + len(encoded) > len(cx.opts.memory))
+    trap_if(ptr + len(encoded) > len(cx.opts.memory[0]))
   code_units = int(len(encoded) / 2)
   return (ptr, code_units)
 ```
@@ -2567,33 +2553,33 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
   assert(src_code_units <= max_string_byte_length(cx.opts))
   ptr = cx.opts.realloc(0, 0, 2, src_code_units)
   trap_if(ptr != align_to(ptr, 2))
-  trap_if(ptr + src_code_units > len(cx.opts.memory))
+  trap_if(ptr + src_code_units > len(cx.opts.memory[0]))
   dst_byte_length = 0
   for usv in src:
     if ord(usv) < (1 << 8):
-      cx.opts.memory[ptr + dst_byte_length] = ord(usv)
+      cx.opts.memory[0][ptr + dst_byte_length] = ord(usv)
       dst_byte_length += 1
     else:
       worst_case_size = 2 * src_code_units
       trap_if(worst_case_size > max_string_byte_length(cx.opts))
       ptr = cx.opts.realloc(ptr, src_code_units, 2, worst_case_size)
       trap_if(ptr != align_to(ptr, 2))
-      trap_if(ptr + worst_case_size > len(cx.opts.memory))
+      trap_if(ptr + worst_case_size > len(cx.opts.memory[0]))
       for j in range(dst_byte_length-1, -1, -1):
-        cx.opts.memory[ptr + 2*j] = cx.opts.memory[ptr + j]
-        cx.opts.memory[ptr + 2*j + 1] = 0
+        cx.opts.memory[0][ptr + 2*j] = cx.opts.memory[0][ptr + j]
+        cx.opts.memory[0][ptr + 2*j + 1] = 0
       encoded = src.encode('utf-16-le')
-      cx.opts.memory[ptr+2*dst_byte_length : ptr+len(encoded)] = encoded[2*dst_byte_length : ]
+      cx.opts.memory[0][ptr+2*dst_byte_length : ptr+len(encoded)] = encoded[2*dst_byte_length : ]
       if worst_case_size > len(encoded):
         ptr = cx.opts.realloc(ptr, worst_case_size, 2, len(encoded))
         trap_if(ptr != align_to(ptr, 2))
-        trap_if(ptr + len(encoded) > len(cx.opts.memory))
+        trap_if(ptr + len(encoded) > len(cx.opts.memory[0]))
       tagged_code_units = int(len(encoded) / 2) | utf16_tag(cx.opts)
       return (ptr, tagged_code_units)
   if dst_byte_length < src_code_units:
     ptr = cx.opts.realloc(ptr, src_code_units, 2, dst_byte_length)
     trap_if(ptr != align_to(ptr, 2))
-    trap_if(ptr + dst_byte_length > len(cx.opts.memory))
+    trap_if(ptr + dst_byte_length > len(cx.opts.memory[0]))
   return (ptr, dst_byte_length)
 ```
 
@@ -2613,17 +2599,17 @@ def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   trap_if(src_byte_length > max_string_byte_length(cx.opts))
   ptr = cx.opts.realloc(0, 0, 2, src_byte_length)
   trap_if(ptr != align_to(ptr, 2))
-  trap_if(ptr + src_byte_length > len(cx.opts.memory))
+  trap_if(ptr + src_byte_length > len(cx.opts.memory[0]))
   encoded = src.encode('utf-16-le')
-  cx.opts.memory[ptr : ptr+len(encoded)] = encoded
+  cx.opts.memory[0][ptr : ptr+len(encoded)] = encoded
   if any(ord(c) >= (1 << 8) for c in src):
     tagged_code_units = int(len(encoded) / 2) | utf16_tag(cx.opts)
     return (ptr, tagged_code_units)
   latin1_size = int(len(encoded) / 2)
   for i in range(latin1_size):
-    cx.opts.memory[ptr + i] = cx.opts.memory[ptr + 2*i]
+    cx.opts.memory[0][ptr + i] = cx.opts.memory[0][ptr + 2*i]
   ptr = cx.opts.realloc(ptr, src_byte_length, 1, latin1_size)
-  trap_if(ptr + latin1_size > len(cx.opts.memory))
+  trap_if(ptr + latin1_size > len(cx.opts.memory[0]))
   return (ptr, latin1_size)
 ```
 
@@ -2653,7 +2639,7 @@ def store_list_into_range(cx, v, elem_type):
   trap_if(byte_length >= (1 << (ptr_size(cx.opts) * 8)))
   ptr = cx.opts.realloc(0, 0, alignment(elem_type, cx.opts), byte_length)
   trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts)))
-  trap_if(ptr + byte_length > len(cx.opts.memory))
+  trap_if(ptr + byte_length > len(cx.opts.memory[0]))
   store_list_into_valid_range(cx, v, ptr, elem_type)
   return (ptr, len(v))
 
@@ -3164,7 +3150,7 @@ def lift_flat_values(cx, max_flat, vi, ts):
     ptr = vi.next(ptr_type(cx.opts))
     tuple_type = TupleType(ts)
     trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts)))
-    trap_if(ptr + elem_size(tuple_type, cx.opts) > len(cx.opts.memory))
+    trap_if(ptr + elem_size(tuple_type, cx.opts) > len(cx.opts.memory[0]))
     return list(load(cx, ptr, tuple_type).values())
   else:
     return [ lift_flat(cx, vi, t) for t in ts ]
@@ -3190,7 +3176,7 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
       ptr = out_param.next(ptr_type(cx.opts))
       flat_vals = []
     trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts)))
-    trap_if(ptr + elem_size(tuple_type, cx.opts) > len(cx.opts.memory))
+    trap_if(ptr + elem_size(tuple_type, cx.opts) > len(cx.opts.memory[0]))
     store(cx, tuple_value, tuple_type, ptr)
   else:
     flat_vals = []
@@ -3220,17 +3206,19 @@ specifying `string-encoding=utf8` twice is an error. Each individual option, if
 present, is validated as such:
 
 * `string-encoding=N` - can be passed at most once, regardless of `N`.
-* `memory` - this is a subtype of `(memory 1)`
-* `realloc` - the function has type `(func (param T T i32 T) (result T))`
-  where `T` is `i32` or `i64` determined by `memory` as described [above](#canonopt)
+* `memory` - this is a subtype of `(memory 1)`. In the rest of the explainer,
+  `PTR` will refer to either `i32` or `i64` core Wasm types as determined by the
+  type of this `memory`.
+* `realloc` - the function has type `(func (param PTR PTR PTR PTR) (result PTR))`
+  where `PTR` is `i32` or `i64` as described above.
 * if `realloc` is present, then `memory` must be present
 * `post-return` - only allowed on [`canon lift`](#canon-lift), which has rules
   for validation
 * 🔀 `async` - cannot be present with `post-return`
 * 🔀,not(🚟) `async` - `callback` must also be present. Note that with the 🚟
   feature (the "stackful" ABI), this restriction is lifted.
-* 🔀 `callback` - the function has type `(func (param i32 i32 T) (result i32))`
-  where the `T` parameter is the payload address and cannot be present
+* 🔀 `callback` - the function has type `(func (param i32 i32 PTR) (result i32))`
+  where the `PTR` parameter is the payload address and cannot be present
   without `async` and is only allowed with
   [`canon lift`](#canon-lift)
 
@@ -3647,7 +3635,7 @@ For a canonical definition:
 validation specifies:
 * `$rt` must refer to locally-defined (not imported) resource type
 * `$f` is given type `(func (param $rt.rep) (result i32))`, where `$rt.rep` is
-  currently fixed to be `i32`.
+  `i32` or `i64`.
 
 Calling `$f` invokes the following function, which adds an owning handle
 containing the given resource representation to the current component
@@ -3726,7 +3714,7 @@ For a canonical definition:
 validation specifies:
 * `$rt` must refer to a locally-defined (not imported) resource type
 * `$f` is given type `(func (param i32) (result $rt.rep))`, where `$rt.rep` is
-  currently fixed to be `i32`.
+  `i32` or `i64`.
 
 Calling `$f` invokes the following function, which extracts the resource
 representation from the handle in the current component instance's `handles`
@@ -3749,7 +3737,7 @@ For a canonical definition:
 (canon context.get $t $i (core func $f))
 ```
 validation specifies:
-* `$t` must be `i32` or `i64` (see [here][thread-local storage])
+* `$t` must be `i32` or `i64` (see [here][thread-local storage]).
 * `$i` must be less than `Thread.CONTEXT_LENGTH` (`2`)
 * `$f` is given type `(func (result $t))`
 
@@ -3942,24 +3930,24 @@ For a canonical definition:
 (canon waitable-set.wait $cancellable? (memory $mem) (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param $si i32) (param $ptr T) (result i32))` where
-  `T` is the address type of `$mem`.
+* `$f` is given type `(func (param $si i32) (param $ptr) (result i32))` where
+  `$ptr` is the address type of `$mem`.
 
 Calling `$f` invokes the following function which waits for progress to be made
 on a `Waitable` in the given waitable set (indicated by index `$si`) and then
 returning its `EventCode` and writing the payload values into linear memory:
 ```python
-def canon_waitable_set_wait(cancellable, mem, opts, thread, si, ptr):
+def canon_waitable_set_wait(cancellable, mem, thread, si, ptr):
   trap_if(not thread.task.inst.may_leave)
   trap_if(not thread.task.may_block())
   wset = thread.task.inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
   event = thread.task.wait_until(lambda: True, thread, wset, cancellable)
-  return unpack_event(mem, opts, thread, ptr, event)
+  return unpack_event(mem, thread, ptr, event)
 
-def unpack_event(mem, opts, thread, ptr, e: EventTuple):
+def unpack_event(mem, thread, ptr, e: EventTuple):
   event, p1, p2 = e
-  cx = LiftLowerContext(LiftLowerOptions(memory = mem, addr_type = opts.addr_type, tbl_idx_type = opts.tbl_idx_type), thread.task.inst)
+  cx = LiftLowerContext(LiftLowerOptions(memory = mem), thread.task.inst)
   store(cx, p1, U32Type(), ptr)
   store(cx, p2, U32Type(), ptr + 4)
   return [event]
@@ -3986,14 +3974,14 @@ For a canonical definition:
 (canon waitable-set.poll $cancellable? (memory $mem) (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param $si i32) (param $ptr T) (result i32))` where
-  `T` is the address type of `$mem`.
+* `$f` is given type `(func (param $si i32) (param $ptr) (result i32))` where
+  `$ptr` is the address type of `$mem`.
 
 Calling `$f` invokes the following function, which either returns an event that
 was pending on one of the waitables in the given waitable set (the same way as
 `waitable-set.wait`) or, if there is none, returns `0`.
 ```python
-def canon_waitable_set_poll(cancellable, mem, opts, thread, si, ptr):
+def canon_waitable_set_poll(cancellable, mem, thread, si, ptr):
   trap_if(not thread.task.inst.may_leave)
   wset = thread.task.inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
@@ -4003,7 +3991,7 @@ def canon_waitable_set_poll(cancellable, mem, opts, thread, si, ptr):
     event = (EventCode.NONE, 0, 0)
   else:
     event = wset.get_pending_event()
-  return unpack_event(mem, opts, thread, ptr, event)
+  return unpack_event(mem, thread, ptr, event)
 ```
 If `cancellable` is set, then `waitable-set.poll` will return whether the
 supertask has already or concurrently requested cancellation.
@@ -4205,7 +4193,8 @@ For canonical definitions:
 In addition to [general validation of `$opts`](#canonopt-validation) validation
 specifies:
 * `$f` is given type `(func (param i32 T T) (result T))` where `T` is `i32` or
-  `i64` determined by the `memory` from `$opts`
+  `i64` as determined by the `memory` from `$opts` (or `i32` by default if no 
+  `memory` is present).
 * `$stream_t` must be a type of the form `(stream $t?)`
 * If `$t` is present:
   * [`lower($t)` above](#canonopt-validation) defines required options for `stream.write`
@@ -4270,7 +4259,7 @@ context switches. Next, the stream's `state` is updated based on the result
 being delivered to core wasm so that, once a stream end has been notified that
 the other end dropped, calling anything other than `stream.drop-*` traps.
 Lastly, `stream_event` packs the `CopyResult` and number of elements copied up
-until this point into a single `T`-sized payload for core wasm.
+until this point into a single `PTR`-sized payload for core wasm.
 ```python
   def stream_event(result, reclaim_buffer):
     reclaim_buffer()
@@ -4321,7 +4310,8 @@ For canonical definitions:
 In addition to [general validation of `$opts`](#canonopt-validation) validation
 specifies:
 * `$f` is given type `(func (param i32 T) (result i32))` where `T` is `i32` or
-  `i64` determined by the `memory` from `$opts`
+  `i64` as determined by the `memory` from `$opts` (or `i32` by default if no 
+  `memory` is present).
 * `$future_t` must be a type of the form `(future $t?)`
 * If `$t` is present:
   * [`lift($t)` above](#canonopt-validation) defines required options for `future.read`
@@ -4544,11 +4534,12 @@ For a canonical definition:
 (canon thread.new-indirect $ft $ftbl (core func $new_indirect))
 ```
 validation specifies
-* `$ft` must refer to the type `(func (param $c T))` where `T` is `i32` or
-  `i64` determined by the linear memory of the component instance
+* `$ft` must refer to the type `(func (param $c))` where `$c` is `i32` or
+  `i64`.
 * `$ftbl` must refer to a table whose element type matches `funcref`
-* `$new_indirect` is given type `(func (param $fi I) (param $c T) (result i32))`
-  where `I` is `i32` or `i64` determined by `$ftbl`'s table type
+* `$new_indirect` is given type `(func (param $fi) (param $c) (result i32))`
+  where `$fi` is `i32` or `i64` as determined by `$ftbl`'s table type and
+  `$c` has the same type as the parameter in `$ft`.
 
 Calling `$new_indirect` invokes the following function which reads a `funcref`
 from `$ftbl` (trapping if out-of-bounds, null or the wrong type), calls the
@@ -4743,8 +4734,9 @@ For a canonical definition:
 (canon error-context.new $opts (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param T T) (result i32))` where `T` is `i32` or
-  `i64` determined by the `memory` from `$opts`
+* `$f` is given type `(func (param $ptr) (param $units) (result i32))` 
+  where `$ptr` and `$units` are both `i32` or `i64` as determined by
+  the `memory` field in `$opts`.
 * `async` is not present
 * `memory` must be present
 
@@ -4785,8 +4777,8 @@ For a canonical definition:
 (canon error-context.debug-message $opts (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param i32 T))` where `T` is `i32` or `i64`
-  determined by the `memory` from `$opts`
+* `$f` is given type `(func (param i32) (param $ptr))` where `$ptr` is `i32` or `i64`
+  as determined by the `memory` from `$opts`
 * `async` is not present
 * `memory` must be present
 * `realloc` must be present
@@ -4837,11 +4829,10 @@ For a canonical definition:
 (canon thread.spawn-ref shared? $ft (core func $spawn_ref))
 ```
 validation specifies:
-* `$ft` must refer to the type `(shared? (func (param $c T)))` where `T` is
-  `i32` or `i64` determined by the linear memory of the component instance
-  (see explanation below)
+* `$ft` must refer to the type `(shared? (func (param $c)))` where `$c` has
+  type `i32` or `i64`.
 * `$spawn_ref` is given type
-  `(shared? (func (param $f (ref null $ft)) (param $c T) (result $e i32)))`
+  `(shared? (func (param $f (ref null $ft)) (param $c) (result $e i32)))`
 
 When the `shared` immediate is not present, the spawned thread is
 *cooperative*, only switching at specific program points. When the `shared`
@@ -4850,7 +4841,7 @@ parallel with all other threads.
 
 > Note: ideally, a thread could be spawned with [arbitrary thread parameters].
 > Currently, that would require additional work in the toolchain to support so,
-> for simplicity, the current proposal simply fixes a single `T` parameter
+> for simplicity, the current proposal simply fixes a single `i32` or `i64` parameter
 > type. However, `thread.spawn-ref` could be extended to allow arbitrary thread
 > parameters in the future, once it's concretely beneficial to the toolchain.
 > The inclusion of `$ft` ensures backwards compatibility for when arbitrary
@@ -4880,13 +4871,12 @@ For a canonical definition:
 (canon thread.spawn-indirect shared? $ft $tbl (core func $spawn_indirect))
 ```
 validation specifies:
-* `$ft` must refer to the type `(shared? (func (param $c T)))` is allowed
-  where `T` is `i32` or `i64` determined by the linear memory of the component
-  instance (see explanation in `thread.spawn-ref` above)
+* `$ft` must refer to the type `(shared? (func (param $c)))` 
+  where `$c` is either `i32` or `i64`.
 * `$tbl` must refer to a shared table whose element type matches
   `(ref null (shared? func))`
 * `$spawn_indirect` is given type
-  `(shared? (func (param $i I) (param $c T) (result $e i32)))` where `I` is
+  `(shared? (func (param $i) (param $c) (result $e i32)))` where `$i` is
   `i32` or `i64` determined by `$tbl`'s table type
 
 When the `shared` immediate is not present, the spawned thread is
