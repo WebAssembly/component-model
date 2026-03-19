@@ -233,6 +233,7 @@ class LiftLowerContext:
 @dataclass
 class LiftOptions:
   string_encoding: str = 'utf8'
+  # A tuple consisting of the memory contents and the pointer type ('i32' or 'i64')
   memory: Optional[tuple[bytearray, str]] = None
 
   def equal(lhs, rhs):

@@ -232,7 +232,7 @@ unique ownership of the *readable end* of the future or stream. To get a
 end pair (via the [`{stream,future}.new`] built-ins) and then pass the readable
 end elsewhere (e.g., in the above WIT, as a parameter to an imported
 `pipe.write` or as a result of an exported `transform`). Given the readable or
-writable end of a future or stream (represented as an index into the
+writable end of a future or stream (represented as an `i32` index into the
 component instance's handle table), Core WebAssembly can then call a
 [`{stream,future}.{read,write}`] built-in to synchronously or asynchronously
 copy into or out of a caller-provided buffer of Core WebAssembly linear (or,
@@ -369,7 +369,7 @@ creating and running threads.
 New threads are created with the [`thread.new-indirect`] built-in. As mentioned
 [above](#threads-and-tasks), a spawned thread inherits the task of the spawning
 thread which is why threads and tasks are N:1. `thread.new-indirect` adds a new
-thread to the component instance's threads table and returns the index of
+thread to the component instance's threads table and returns the `i32` index of
 this table entry to the Core WebAssembly caller. Like [`pthread_create`],
 `thread.new-indirect` takes a Core WebAssembly function (via index into a
 `funcref` table) and a "closure" parameter to pass to the function when called
@@ -943,8 +943,8 @@ Other example asynchronous lowered signatures:
 async func(s1: stream<future<string>>, s2: list<stream<string>>) -> result<stream<string>, stream<error>>
 ```
 In *both* the sync and async ABIs, a `future` or `stream` in the WIT-level type
-translates to a single `i32` index into the current component instance's handle
-table. For example, for the WIT function type:
+translates to a single `i32` in the ABI.  This `i32` is an index into the
+current component instance's handle table. For example, for the WIT function type:
 ```wit
 async func(f: future<string>) -> future<u32>
 ```
@@ -957,10 +957,10 @@ and the asynchronous ABI has the signature:
 (func (param $f i32) (param $out-ptr i32) (result i32))
 ```
 where `$f` is the index of a future (not a pointer to one) while while
-`$out-ptr` is a pointer to a linear memory location that will receive a handle
+`$out-ptr` is a pointer to a linear memory location that will receive an `i32` 
 index.
 
-For the runtime semantics of this handle index, see `lift_stream`,
+For the runtime semantics of this `i32` index, see `lift_stream`,
 `lift_future`, `lower_stream` and `lower_future` in the [Canonical ABI
 Explainer]. For a complete description of how async imports work, see
 [`canon_lower`] in the Canonical ABI Explainer.
@@ -1030,19 +1030,18 @@ The `(result i32)` lets the core function return what it wants the runtime to do
 * If the low 4 bits are `1`, the callee wants to yield, allowing other code
   to run, but resuming thereafter without waiting on anything else.
 * If the low 4 bits are `2`, the callee wants to wait for an event to occur in
-  the waitable set whose index is stored in the remaining high bits.
+  the waitable set whose index is stored in the high 28 bits.
 
 When an async stackless function is exported, a companion "callback" function
 must also be exported with signature:
 ```wat
-(func (param i32 i32 $addr) (result i32))
+(func (param i32 i32 i32) (result i32))
 ```
-where `$addr` is `i32` or `i64` depending on the `memory` canonopt.
 
 The `(result i32)` has the same interpretation as the stackless export function
 and the runtime will repeatedly call the callback until a value of `0` is
-returned. The first two `i32` parameters describe what happened that caused the
-callback to be called again and the `$addr` parameter is the payload address.
+returned. The `i32` parameters describe what happened that caused the
+callback to be called again.
 
 For a complete description of how async exports work, see [`canon_lift`] in the
 Canonical ABI Explainer.
