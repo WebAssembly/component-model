@@ -1,4 +1,4 @@
- After the Boilerplate section, this file is ordered to line up with the code
+# After the Boilerplate section, this file is ordered to line up with the code
 # blocks in ../CanonicalABI.md (split by # comment lines). If you update this
 # file, don't forget to update ../CanonicalABI.md.
 
