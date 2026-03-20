@@ -1827,7 +1827,7 @@ their respective expansions.
 ### Type Predicates
 
 The `contains_borrow` and `contains_async_value` predicates return whether the
-given type contains a `borrow` or `future/`stream`, respectively.
+given type contains a `borrow` or `future`/`stream`, respectively.
 ```python
 def contains_borrow(t):
   return contains(t, lambda u: isinstance(u, BorrowType))
