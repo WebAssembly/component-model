@@ -151,7 +151,7 @@ use cases mentioned in the [goals](#goals).
 
 Until the Core WebAssembly [shared-everything-threads] proposal allows Core
 WebAssembly function types to be annotated with `shared`, `thread.new-indirect`
-can only call non-`shared` functions (via `i32` `(table funcref)` index, just
+can only call non-`shared` functions (via `(table funcref)` index, just
 like `call_indirect`) and thus currently all threads must execute
 [cooperatively] in a sequentially-interleaved fashion, switching between
 threads only at explicit program points just like (and implementable via) a
@@ -371,7 +371,7 @@ New threads are created with the [`thread.new-indirect`] built-in. As mentioned
 thread which is why threads and tasks are N:1. `thread.new-indirect` adds a new
 thread to the component instance's threads table and returns the `i32` index of
 this table entry to the Core WebAssembly caller. Like [`pthread_create`],
-`thread.new-indirect` takes a Core WebAssembly function (via `i32` index into a
+`thread.new-indirect` takes a Core WebAssembly function (via index into a
 `funcref` table) and a "closure" parameter to pass to the function when called
 on the new thread. However, unlike `pthread_create`, the new thread is
 initially in a "suspended" state and must be explicitly "resumed" using one of
@@ -413,10 +413,10 @@ Each thread contains a distinct mutable **thread-local storage** array. The
 current thread's thread-local storage can be read and written from core wasm
 code by calling the [`context.get`] and [`context.set`] built-ins.
 
-The thread-local storage array's length is currently fixed to contain exactly
-2 `i32`s with the goal of allowing this array to be stored inline in whatever
-existing runtime data structure is already efficiently reachable from ambient
-compiled wasm code. Because module instantiation is declarative in the
+The thread-local storage array's length is currently fixed to contain exactly 2
+`i32`s or `i64`s with the goal of allowing this array to be stored inline in
+whatever existing runtime data structure is already efficiently reachable from
+ambient compiled wasm code. Because module instantiation is declarative in the
 Component Model, the imported `context.{get,set}` built-ins can be inlined by
 the core wasm compiler as-if they were instructions, allowing the generated
 machine code to be a single load or store. This makes thread-local storage a
@@ -436,11 +436,9 @@ stackless async ABI is used, returning the "exit" code to the event loop. This
 non-reuse of thread-local storage between distinct export calls avoids what
 would otherwise be a likely source of TLS-related memory leaks.
 
-When [memory64] is integrated into the Component Model's Canonical ABI,
-`context.{get,set}` will be backwards-compatibly relaxed to allow `i64`
-pointers (overlaying the `i32` values like hardware 32/64-bit registers). When
-[wasm-gc] is integrated, these integral context values can serve as indices
-into guest-managed tables of typed GC references.
+When [wasm-gc] is integrated into the Canonical ABI, `context.{get,set}` will be
+relaxed so that these integral context values can serve as indices into
+guest-managed tables of typed GC references.
 
 Since the same mutable thread-local storage cells are shared by all core wasm
 running under the same thread in the same component, the cells' contents must
@@ -886,7 +884,7 @@ world w {
   import quux: async func(t: list<u32; 17>) -> string;
 }
 ```
-the default/synchronous lowered import function signatures are:
+the default/synchronous lowered import function signatures (assuming 32-bit memories) are:
 ```wat
 ;; sync
 (func $foo (param $s-ptr i32) (param $s-len i32) (result i32))
@@ -959,7 +957,7 @@ and the asynchronous ABI has the signature:
 (func (param $f i32) (param $out-ptr i32) (result i32))
 ```
 where `$f` is the index of a future (not a pointer to one) while while
-`$out-ptr` is a pointer to a linear memory location that will receive an `i32`
+`$out-ptr` is a pointer to a linear memory location that will receive an `i32` 
 index.
 
 For the runtime semantics of this `i32` index, see `lift_stream`,
@@ -1042,8 +1040,8 @@ must also be exported with signature:
 
 The `(result i32)` has the same interpretation as the stackless export function
 and the runtime will repeatedly call the callback until a value of `0` is
-returned. The `i32` parameters describe what happened that caused the callback
-to be called again.
+returned. The `i32` parameters describe what happened that caused the
+callback to be called again.
 
 For a complete description of how async exports work, see [`canon_lift`] in the
 Canonical ABI Explainer.
