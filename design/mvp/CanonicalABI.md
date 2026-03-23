@@ -245,6 +245,7 @@ when lifting individual parameters and results:
 @dataclass
 class LiftOptions:
   string_encoding: str = 'utf8'
+  # A tuple consisting of the memory contents and the pointer type ('i32' or 'i64')'
   memory: Optional[tuple[bytearray, str]] = None
 
   def equal(lhs, rhs):
@@ -260,8 +261,7 @@ The following helper functions return the byte size and core value type of
 memory pointers: 
 ```python
 def ptr_type(opts):
-  if opts.memory is None:
-    return 'i32'
+  assert(opts.memory is not None)
   return opts.memory[1]
 
 def ptr_size(opts):
@@ -3206,9 +3206,9 @@ specifying `string-encoding=utf8` twice is an error. Each individual option, if
 present, is validated as such:
 
 * `string-encoding=N` - can be passed at most once, regardless of `N`.
-* `memory` - this is a subtype of `(memory 1)`. In the rest of the explainer,
-  `PTR` will refer to either `i32` or `i64` core Wasm types as determined by the
-  type of this `memory`.
+* `memory` - this is a subtype of `(memory 1)` or `(memory i64 1)`. In the rest
+  of the explainer, `PTR` will refer to either `i32` or `i64` core Wasm types
+  as determined by the type of this `memory`.
 * `realloc` - the function has type `(func (param PTR PTR PTR PTR) (result PTR))`
   where `PTR` is `i32` or `i64` as described above.
 * if `realloc` is present, then `memory` must be present
@@ -3217,9 +3217,8 @@ present, is validated as such:
 * 🔀 `async` - cannot be present with `post-return`
 * 🔀,not(🚟) `async` - `callback` must also be present. Note that with the 🚟
   feature (the "stackful" ABI), this restriction is lifted.
-* 🔀 `callback` - the function has type `(func (param i32 i32 PTR) (result i32))`
-  where the `PTR` parameter is the payload address and cannot be present
-  without `async` and is only allowed with
+* 🔀 `callback` - the function has type `(func (param i32 i32 i32) (result i32))`
+  and cannot be present without `async` and is only allowed with
   [`canon lift`](#canon-lift)
 
 Additionally some options are required depending on lift/lower operations

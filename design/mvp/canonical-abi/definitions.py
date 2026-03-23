@@ -241,8 +241,7 @@ class LiftOptions:
            lhs.memory is rhs.memory
 
 def ptr_type(opts):
-  if opts.memory is None:
-    return 'i32'
+  assert(opts.memory is not None)
   return opts.memory[1]
 
 def ptr_size(opts):
