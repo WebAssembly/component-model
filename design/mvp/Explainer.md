@@ -2061,8 +2061,8 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 
 | Synopsis                   |                                                               |
 | -------------------------- | ------------------------------------------------------------- |
-| Approximate WIT signature  | `func<FuncT,tableidx>(fi: uIDX, c: FuncT.params[0]) -> thread` |
-| Canonical ABI signature    | `[fi:iIDX c: FuncT.params[0]] -> [i32]`                                  |
+| Approximate WIT signature  | `func<FuncT,table>(fi: table.addrtype, c: FuncT.params[0]) -> thread` |
+| Canonical ABI signature    | `[fi:table.addrtype c: FuncT.params[0]] -> [i32]`                                  |
 
 The `thread.new-indirect` built-in adds a new thread to the current component
 instance's table, returning the index of the new thread. The function table
