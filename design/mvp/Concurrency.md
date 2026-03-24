@@ -957,7 +957,7 @@ and the asynchronous ABI has the signature:
 (func (param $f i32) (param $out-ptr i32) (result i32))
 ```
 where `$f` is the index of a future (not a pointer to one) while while
-`$out-ptr` is a pointer to a linear memory location that will receive an `i32` 
+`$out-ptr` is a pointer to a linear memory location that will receive an `i32`
 index.
 
 For the runtime semantics of this `i32` index, see `lift_stream`,
@@ -1040,8 +1040,8 @@ must also be exported with signature:
 
 The `(result i32)` has the same interpretation as the stackless export function
 and the runtime will repeatedly call the callback until a value of `0` is
-returned. The `i32` parameters describe what happened that caused the
-callback to be called again.
+returned. The `i32` parameters describe what happened that caused the callback
+to be called again.
 
 For a complete description of how async exports work, see [`canon_lift`] in the
 Canonical ABI Explainer.

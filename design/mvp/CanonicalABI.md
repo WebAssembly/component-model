@@ -3217,12 +3217,11 @@ specifying `string-encoding=utf8` twice is an error. Each individual option, if
 present, is validated as such:
 
 * `string-encoding=N` - can be passed at most once, regardless of `N`.
-* `memory` - this is a subtype of `(memory 1)` or `(memory i64 1)`. In the rest
-  of the explainer, `PTR` will refer to either `i32` or `i64` core Wasm types
-  as determined by the type of this `memory`.
-* `realloc` - the function has type `(func (param PTR PTR PTR PTR) (result PTR))`
-  where `PTR` is `i32` or `i64` as described above.
-* if `realloc` is present, then `memory` must be present
+* `memory` - this is a subtype of `(memory 1)` or `(memory i64 1)`.
+* `realloc` - the function has type `(func (param addr addr addr addr) (result addr))`
+  where `addr` is the address type (`i32` or `i64`) coming from the [`memory type`]
+  of the `memory` canonopt.
+* If `realloc` is present then `memory` must be present.
 * `post-return` - only allowed on [`canon lift`](#canon-lift), which has rules
   for validation
 * 🔀 `async` - cannot be present with `post-return`
@@ -4269,7 +4268,9 @@ context switches. Next, the stream's `state` is updated based on the result
 being delivered to core wasm so that, once a stream end has been notified that
 the other end dropped, calling anything other than `stream.drop-*` traps.
 Lastly, `stream_event` packs the `CopyResult` and number of elements copied up
-until this point into a single `PTR`-sized payload for core wasm.
+until this point into a single `i32` or `i64`-sized payload for core wasm. The
+size is determined by the `addrtype` coming from the [`memory type`] of the
+`memory` immediate.
 ```python
   def stream_event(result, reclaim_buffer):
     reclaim_buffer()

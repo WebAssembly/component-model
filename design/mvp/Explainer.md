@@ -1300,19 +1300,18 @@ default is `utf8`. It is a validation error to include more than one
 The `(memory ...)` option specifies the memory that the Canonical ABI will
 use to load and store values. If the Canonical ABI needs to load or store,
 validation requires this option to be present (there is no default). The types
-of lowered functions may also depend on whether this memory is a 32-bit or
-64-bit memory if pointers are transitively contained in parameters or results.
-In what follows the notation `PTR` will refer to the core Wasm type `i32` or
-`i64` corresponding to the type of the `(memory ...)` option.
+of lowered functions may also depend on the [`core:memory-type`] of this memory,
+specifically it's [`core:address-type`] (indicated by `memory.addrtype`), if pointers
+are transitively contained in parameters or results.
 
 The `(realloc ...)` option specifies a core function that is validated to
 have the following core function type:
 ```wat
-(func (param $originalPtr PTR)
-      (param $originalSize PTR)
-      (param $alignment PTR)
-      (param $newSize PTR)
-      (result PTR))
+(func (param $originalPtr memory.addrtype)
+      (param $originalSize memory.addrtype)
+      (param $alignment memory.addrtype)
+      (param $newSize memory.addrtype)
+      (result memory.addrtype))
 ```
 The Canonical ABI will use `realloc` both to allocate (passing `0` for the first
 two parameters) and reallocate. If the Canonical ABI needs `realloc`, validation
@@ -1339,10 +1338,9 @@ validated to have the following core function type:
 ```wat
 (func (param $ctx i32)
       (param $event i32)
-      (param $payload PTR)
+      (param $payload i32)
       (result $done i32))
 ```
-where `PTR` is determined by the `memory` canonopt as described above.
 Again, see the [concurrency explainer] for more details.
 
 Based on this description of the AST, the [Canonical ABI explainer] gives a
@@ -1675,10 +1673,10 @@ For details, see [Waitables and Waitable Sets] in the concurrency explainer and
 
 ###### 🔀 `waitable-set.wait`
 
-| Synopsis                   |                                                |
-| -------------------------- | ---------------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>(s: waitable-set) -> event` |
-| Canonical ABI signature    | `[s:i32 payload-addr:PTR] -> [event-code:i32]` |
+| Synopsis                   |                                                            |
+| -------------------------- | ---------------------------------------------------------- |
+| Approximate WIT signature  | `func<cancellable?,memory>(s: waitable-set) -> event`      |
+| Canonical ABI signature    | `[s:i32 payload-addr:memory.addrtype] -> [event-code:i32]` |
 
 where `event` is defined in WIT as:
 ```wit
@@ -1740,10 +1738,10 @@ For details, see [Waitables and Waitable Sets] in the concurrency explainer and
 
 ###### 🔀 `waitable-set.poll`
 
-| Synopsis                   |                                                |
-| -------------------------- | ---------------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>(s: waitable-set) -> event` |
-| Canonical ABI signature    | `[s:i32 payload-addr:PTR] -> [event-code:i32]` |
+| Synopsis                   |                                                            |
+| -------------------------- | ---------------------------------------------------------- |
+| Approximate WIT signature  | `func<cancellable?,memory>(s: waitable-set) -> event`      |
+| Canonical ABI signature    | `[s:i32 payload-addr:memory.addrtype] -> [event-code:i32]` |
 
 where `event` is defined as in [`waitable-set.wait`](#-waitable-setwait).
 
@@ -1857,11 +1855,11 @@ For details, see [Streams and Futures] in the concurrency explainer and
 
 ###### 🔀 `stream.read` and `stream.write`
 
-| Synopsis                                     |                                                                                                 |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Approximate WIT signature for `stream.read`  | `func<stream<T?>>(e: readable-stream-end<T?>, b: writable-buffer<T>?) -> option<stream-result>` |
-| Approximate WIT signature for `stream.write` | `func<stream<T?>>(e: writable-stream-end<T?>, b: readable-buffer<T>?) -> option<stream-result>` |
-| Canonical ABI signature                      | `[stream-end:i32 ptr:PTR num:PTR] -> [PTR]`                                               |
+| Synopsis                                     |                                                                                                             |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Approximate WIT signature for `stream.read`  | `func<stream<T?>,memory>(e: readable-stream-end<T?>, b: writable-buffer<T>?) -> option<stream-result>` |
+| Approximate WIT signature for `stream.write` | `func<stream<T?>,memory>(e: writable-stream-end<T?>, b: readable-buffer<T>?) -> option<stream-result>` |
+| Canonical ABI signature                      | `[stream-end:i32 ptr:memory.addrtype num:memory.addrtype] -> [memory.addrtype]`                        |
 
 where `stream-result` is defined in WIT as:
 ```wit
@@ -1917,10 +1915,10 @@ any subsequent operation on the stream other than `stream.drop-{readable,writabl
 traps.
 
 In the Canonical ABI, the `{readable,writable}-stream-end` is passed as an
-`i32` index into the component instance's table followed by a pair of `PTR`s
+`i32` index into the component instance's table followed by a pair of `memory.addrtype`s
 describing the linear memory offset and size-in-elements of the
 `{readable,writable}-buffer<T>`. The `option<stream-result>` return value is
-bit-packed into a single `PTR` where:
+bit-packed into a single `memory.addrtype` where:
 * all-ones represents `none`.
 * Otherwise, the `result` is in the low 4 bits and the `progress` is in the
   remaining high bits.
@@ -1930,11 +1928,11 @@ For details, see [Streams and Futures] in the concurrency explainer and
 
 ###### 🔀 `future.read` and `future.write`
 
-| Synopsis                                     |                                                                                                          |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Approximate WIT signature for `future.read`  | `func<future<T?>>(e: readable-future-end<T?>, b: writable-buffer<T; 1>?) -> option<future-read-result>`  |
-| Approximate WIT signature for `future.write` | `func<future<T?>>(e: writable-future-end<T?>, v: readable-buffer<T; 1>?) -> option<future-write-result>` |
-| Canonical ABI signature                      | `[readable-future-end:i32 ptr:PTR] -> [i32]`                                                           |
+| Synopsis                                     |                                                                                                                 |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Approximate WIT signature for `future.read`  | `func<future<T?>,memory>(e: readable-future-end<T?>, b: writable-buffer<T; 1>?) -> option<future-read-result>`  |
+| Approximate WIT signature for `future.write` | `func<future<T?>,memory>(e: writable-future-end<T?>, v: readable-buffer<T; 1>?) -> option<future-write-result>` |
+| Canonical ABI signature                      | `[readable-future-end:i32 ptr:memory.addrtype] -> [i32]`                                                        |
 
 where `future-{read,write}-result` are defined in WIT as:
 ```wit
@@ -1985,7 +1983,7 @@ called before successfully writing a value.
 
 In the Canonical ABI, the `{readable,writable}-future-end` is passed as an
 `i32` index into the component instance's table followed by a single
-`PTR` describing the linear memory offset of the
+`memory.addrtype` describing the linear memory offset of the
 `{readable,writable}-buffer<T; 1>`. The `option<future-{read,write}-result>`
 return value is bit-packed into the single `i32` return value where all-ones
 represents `none`. And, `future-read-result.cancelled` is encoded
@@ -2254,10 +2252,10 @@ explainer.
 
 ###### 📝 `error-context.new`
 
-| Synopsis                         |                                          |
-| -------------------------------- | ---------------------------------------- |
-| Approximate WIT signature        | `func(message: string) -> error-context` |
-| Canonical ABI signature          | `[ptr:PTR len:PTR] -> [i32]`         |
+| Synopsis                         |                                                      |
+| -------------------------------- | ---------------------------------------------------- |
+| Approximate WIT signature        | `func<memory>(message: string) -> error-context`     |
+| Canonical ABI signature          | `[ptr:memory.addrtype len:memory.addrtype] -> [i32]` |
 
 The `error-context.new` built-in returns a new `error-context` value. The given
 string is non-deterministically transformed to produce the `error-context`'s
@@ -2270,10 +2268,10 @@ For details, see [`canon_error_context_new`] in the Canonical ABI explainer.
 
 ###### 📝 `error-context.debug-message`
 
-| Synopsis                         |                                         |
-| -------------------------------- | --------------------------------------- |
-| Approximate WIT signature        | `func(errctx: error-context) -> string` |
-| Canonical ABI signature          | `[errctxi:i32 ptr:PTR] -> []`         |
+| Synopsis                         |                                                 |
+| -------------------------------- | ----------------------------------------------- |
+| Approximate WIT signature        | `func<memory>(errctx: error-context) -> string` |
+| Canonical ABI signature          | `[errctxi:i32 ptr:memory.addrtype] -> []`       |
 
 The `error-context.debug-message` built-in returns the
 [debug message](#error-context-type) of the given `error-context`.
@@ -3176,6 +3174,8 @@ For some use-case-focused, worked examples, see:
 [func-import-abbrev]: https://webassembly.github.io/spec/core/text/modules.html#text-func-abbrev
 [`core:version`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-version
 [`core:tableidx`]: https://webassembly.github.io/spec/core/syntax/modules.html#syntax-tableidx
+[`core:address-type`]: https://webassembly.github.io/spec/core/syntax/types.html#address-types
+[`core:memory-type`]: https://webassembly.github.io/spec/core/syntax/types.html#memory-types
 [`core:table-type`]: https://webassembly.github.io/spec/core/syntax/types.html#table-types
 
 [Embedder]: https://webassembly.github.io/spec/core/appendix/embedding.html
