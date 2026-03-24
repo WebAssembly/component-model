@@ -35,20 +35,9 @@ class Heap:
     self.memory[ret : ret + original_size] = self.memory[original_ptr : original_ptr + original_size]
     return ret
 
-_DEFAULT_MEMORY = MemInst(bytearray(), 'i32')
-_DEFAULT_MEMORY_64 = MemInst(bytearray(), 'i64')
-
-def mk_opts(memory = None, encoding = 'utf8', realloc = None, post_return = None, sync_task_return = False, async_ = False, addr_type = 'i32'):
+def mk_opts(memory = MemInst(bytearray(), 'i32'), encoding = 'utf8', realloc = None, post_return = None, sync_task_return = False, async_ = False):
   opts = CanonicalOptions()
-  if memory is None:
-    if addr_type == 'i32':
-      opts.memory = _DEFAULT_MEMORY
-    elif addr_type == 'i64':
-      opts.memory = _DEFAULT_MEMORY_64
-    else:
-      assert False, "Invalid address type: {}".format(addr_type)
-  else:
-    opts.memory = MemInst(memory, addr_type)
+  opts.memory = memory
   opts.string_encoding = encoding
   opts.realloc = realloc
   opts.post_return = post_return
@@ -57,8 +46,8 @@ def mk_opts(memory = None, encoding = 'utf8', realloc = None, post_return = None
   opts.callback = None
   return opts
 
-def mk_cx(memory = bytearray(), encoding = 'utf8', realloc = None, post_return = None, addr_type = 'i32'):
-  opts = mk_opts(memory, encoding, realloc, post_return, addr_type=addr_type)
+def mk_cx(memory = MemInst(bytearray(), 'i32'), encoding = 'utf8', realloc = None, post_return = None):
+  opts = mk_opts(memory, encoding, realloc, post_return)
   inst = ComponentInstance(Store())
   return LiftLowerContext(opts, inst)
 
@@ -143,7 +132,7 @@ def test(t, vals_to_lift, v,
   heap = Heap(5*len(cx.opts.memory.bytes))
   if dst_encoding is None:
     dst_encoding = cx.opts.string_encoding
-  cx = mk_cx(heap.memory, dst_encoding, heap.realloc, addr_type=cx.opts.memory.ptr_type())
+  cx = mk_cx(MemInst(heap.memory, cx.opts.memory.ptr_type()), dst_encoding, heap.realloc)
   lowered_vals = lower_flat(cx, v, lower_t)
 
   vi = CoreValueIter(lowered_vals)
@@ -218,7 +207,7 @@ def test_nan32(inbits, outbits):
     assert(encode_float_as_i32(f) == outbits)
   else:
     assert(not math.isnan(origf) or math.isnan(f))
-  cx = mk_cx(int.to_bytes(inbits, 4, 'little'))
+  cx = mk_cx(MemInst(int.to_bytes(inbits, 4, 'little'), 'i32'))
   f = load(cx, 0, F32Type())
   if definitions.DETERMINISTIC_PROFILE:
     assert(encode_float_as_i32(f) == outbits)
@@ -232,7 +221,7 @@ def test_nan64(inbits, outbits):
     assert(encode_float_as_i64(f) == outbits)
   else:
     assert(not math.isnan(origf) or math.isnan(f))
-  cx = mk_cx(int.to_bytes(inbits, 8, 'little'))
+  cx = mk_cx(MemInst(int.to_bytes(inbits, 8, 'little'), 'i32'))
   f = load(cx, 0, F64Type())
   if definitions.DETERMINISTIC_PROFILE:
     assert(encode_float_as_i64(f) == outbits)
@@ -257,7 +246,7 @@ test_nan64(0x3ff0000000000000, 0x3ff0000000000000)
 def test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, addr_type='i32'):
   heap = Heap(len(encoded))
   heap.memory[:] = encoded[:]
-  cx = mk_cx(heap.memory, src_encoding, addr_type=addr_type)
+  cx = mk_cx(MemInst(heap.memory, addr_type), src_encoding)
   v = (s, src_encoding, tagged_code_units)
   test(StringType(), [0, tagged_code_units], v, cx, dst_encoding)
 
@@ -295,7 +284,7 @@ for addr_type in ['i32', 'i64']:
 
 def test_heap(t, expect, args, byte_array, addr_type='i32'):
   heap = Heap(byte_array)
-  cx = mk_cx(heap.memory, addr_type=addr_type)
+  cx = mk_cx(MemInst(heap.memory, addr_type))
   test(t, args, expect, cx)
 
 # Empty record types are not permitted yet.
@@ -401,7 +390,7 @@ test_heap(t, v, [0,2],
           [0xff,0xff,0xff,0xff, 0,0,0,0])
 
 def test_flatten(t, params, results, addr_type='i32'):
-  opts = mk_opts(addr_type=addr_type)
+  opts = mk_opts(MemInst(bytearray(), addr_type))
   expect = CoreFuncType(params, results)
 
   if len(params) > definitions.MAX_FLAT_PARAMS:
@@ -442,7 +431,7 @@ def test_roundtrips():
       return x
 
     callee_heap = Heap(1000)
-    callee_opts = mk_opts(callee_heap.memory, 'utf8', callee_heap.realloc, addr_type=addr_type)
+    callee_opts = mk_opts(MemInst(callee_heap.memory, addr_type), 'utf8', callee_heap.realloc)
     callee_inst = ComponentInstance(store)
 
     got = None
@@ -589,7 +578,7 @@ def test_handles():
 
 def test_async_to_async():
   producer_heap = Heap(10)
-  producer_opts = mk_opts(producer_heap.memory)
+  producer_opts = mk_opts(MemInst(producer_heap.memory, 'i32'))
   producer_opts.async_ = True
 
   store = Store()
@@ -628,7 +617,7 @@ def test_async_to_async():
   blocking_callee = partial(canon_lift, producer_opts, producer_inst, blocking_ft, core_blocking_producer)
 
   consumer_heap = Heap(20)
-  consumer_opts = mk_opts(consumer_heap.memory)
+  consumer_opts = mk_opts(MemInst(consumer_heap.memory, 'i32'))
   consumer_opts.async_ = True
 
   def consumer(thread, args):
@@ -840,7 +829,7 @@ def test_callback_interleaving():
   consumer_inst = ComponentInstance(store)
   consumer_ft = FuncType([], [], async_ = True)
   consumer_mem = bytearray(24)
-  consumer_opts = mk_opts(consumer_mem, async_ = True)
+  consumer_opts = mk_opts(MemInst(consumer_mem, 'i32'), async_ = True)
   def core_consumer(thread, args):
     assert(len(args) == 0)
 
@@ -982,7 +971,7 @@ def test_sync_ignores_backpressure():
   caller_inst = ComponentInstance(store)
   caller_ft = FuncType([], [], async_ = True)
   caller_mem = bytearray(24)
-  caller_opts = mk_opts(memory = caller_mem, async_ = True)
+  caller_opts = mk_opts(memory = MemInst(caller_mem, 'i32'), async_ = True)
   def core_caller(thread, args):
     assert(len(args) == 0)
 
@@ -1042,7 +1031,7 @@ def test_async_to_sync():
   producer2 = partial(canon_lift, producer_opts, producer_inst, producer_ft, producer2_core)
 
   consumer_heap = Heap(20)
-  consumer_opts = mk_opts(consumer_heap.memory)
+  consumer_opts = mk_opts(MemInst(consumer_heap.memory, 'i32'))
   consumer_opts.async_ = True
 
   consumer_ft = FuncType([],[U8Type()], async_ = True)
@@ -1131,7 +1120,7 @@ def test_async_backpressure():
   producer2 = partial(canon_lift, producer_opts, producer_inst, producer_ft, producer2_core)
 
   consumer_heap = Heap(20)
-  consumer_opts = mk_opts(consumer_heap.memory, async_ = True)
+  consumer_opts = mk_opts(MemInst(consumer_heap.memory, 'i32'), async_ = True)
 
   consumer_ft = FuncType([],[U8Type()], async_ = True)
   def consumer(thread, args):
@@ -1204,7 +1193,7 @@ def test_sync_using_wait():
   hostcall2 = partial(canon_lift, hostcall_opts, hostcall_inst, ft, core_hostcall2)
 
   lower_heap = Heap(20)
-  lower_opts = mk_opts(lower_heap.memory)
+  lower_opts = mk_opts(MemInst(lower_heap.memory, 'i32'))
   lower_opts.async_ = True
 
   def core_func(thread, args):
@@ -1409,8 +1398,8 @@ def test_eager_stream_completion():
   ft = FuncType([StreamType(U8Type())], [StreamType(U8Type())])
   inst = ComponentInstance(store)
   mem = bytearray(20)
-  opts = mk_opts(memory=mem, async_=True)
-  sync_opts = mk_opts(memory=mem, async_=False)
+  opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
+  sync_opts = mk_opts(memory=MemInst(mem, 'i32'), async_=False)
 
   def host_import(caller, on_start, on_resolve):
     args = on_start()
@@ -1492,8 +1481,8 @@ def test_async_stream_ops():
   ft = FuncType([StreamType(U8Type())], [StreamType(U8Type())])
   inst = ComponentInstance(store)
   mem = bytearray(24)
-  opts = mk_opts(memory=mem, async_=True)
-  sync_opts = mk_opts(memory=mem, async_=False)
+  opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
+  sync_opts = mk_opts(memory=MemInst(mem, 'i32'), async_=False)
 
   host_import_incoming = None
   host_import_outgoing = None
@@ -1642,7 +1631,7 @@ def test_receive_own_stream():
   store = Store()
   inst = ComponentInstance(store)
   mem = bytearray(20)
-  opts = mk_opts(memory=mem, async_=True)
+  opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
 
   host_ft = FuncType([StreamType(U8Type())], [StreamType(U8Type())])
   def host_import(caller, on_start, on_resolve):
@@ -1680,7 +1669,7 @@ def test_receive_own_stream():
 def test_host_partial_reads_writes():
   store = Store()
   mem = bytearray(20)
-  opts = mk_opts(memory=mem, async_=True)
+  opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
 
   src = HostSource(U8Type(), [1,2,3,4], chunk=2, destroy_if_empty = False)
   source_ft = FuncType([], [StreamType(U8Type())])
@@ -1766,7 +1755,7 @@ def test_wasm_to_wasm_stream():
 
   inst1 = ComponentInstance(store)
   mem1 = bytearray(24)
-  opts1 = mk_opts(memory=mem1, async_=True)
+  opts1 = mk_opts(memory=MemInst(mem1, 'i32'), async_=True)
   ft1 = FuncType([], [StreamType(U8Type())])
   def core_func1(thread, args):
     assert(not args)
@@ -1831,7 +1820,7 @@ def test_wasm_to_wasm_stream():
   inst2 = ComponentInstance(store)
   heap2 = Heap(24)
   mem2 = heap2.memory
-  opts2 = mk_opts(memory=heap2.memory, realloc=heap2.realloc, async_=True)
+  opts2 = mk_opts(memory=MemInst(heap2.memory, 'i32'), realloc=heap2.realloc, async_=True)
   ft2 = FuncType([], [])
   def core_func2(thread, args):
     assert(not args)
@@ -1897,7 +1886,7 @@ def test_wasm_to_wasm_stream_empty():
 
   inst1 = ComponentInstance(store)
   mem1 = bytearray(24)
-  opts1 = mk_opts(memory=mem1, async_=True)
+  opts1 = mk_opts(memory=MemInst(mem1, 'i32'), async_=True)
   ft1 = FuncType([], [StreamType(None)])
   def core_func1(thread, args):
     assert(not args)
@@ -1942,7 +1931,7 @@ def test_wasm_to_wasm_stream_empty():
   inst2 = ComponentInstance(store)
   heap2 = Heap(10)
   mem2 = heap2.memory
-  opts2 = mk_opts(memory=heap2.memory, realloc=heap2.realloc, async_=True)
+  opts2 = mk_opts(memory=MemInst(heap2.memory, 'i32'), realloc=heap2.realloc, async_=True)
   ft2 = FuncType([], [])
   def core_func2(thread, args):
     assert(not args)
@@ -1992,7 +1981,7 @@ def test_cancel_copy():
   store = Store()
   inst = ComponentInstance(store)
   mem = bytearray(24)
-  lower_opts = mk_opts(memory=mem, async_=True)
+  lower_opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
 
   host_ft1 = FuncType([StreamType(U8Type())],[])
   host_sink = None
@@ -2147,7 +2136,7 @@ def test_futures():
   store = Store()
   inst = ComponentInstance(store)
   mem = bytearray(24)
-  lower_opts = mk_opts(memory=mem, async_=True)
+  lower_opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
 
   host_ft1 = FuncType([FutureType(U8Type())],[FutureType(U8Type())])
   def host_func(caller, on_start, on_resolve):
@@ -2238,8 +2227,8 @@ def test_cancel_subtask():
   ft = FuncType([U8Type()], [U8Type()], async_ = True)
 
   callee_heap = Heap(10)
-  callee_opts = mk_opts(callee_heap.memory, async_ = True)
-  sync_callee_opts = mk_opts(callee_heap.memory, async_ = False)
+  callee_opts = mk_opts(MemInst(callee_heap.memory, 'i32'), async_ = True)
+  sync_callee_opts = mk_opts(MemInst(callee_heap.memory, 'i32'), async_ = False)
   callee_inst = ComponentInstance(store)
 
   def core_callee1(thread, args):
@@ -2374,7 +2363,7 @@ def test_cancel_subtask():
   callee6 = partial(canon_lift, callee_opts, callee_inst, ft, core_callee6)
 
   caller_heap = Heap(20)
-  caller_opts = mk_opts(caller_heap.memory, async_ = True)
+  caller_opts = mk_opts(MemInst(caller_heap.memory, 'i32'), async_ = True)
   caller_inst = ComponentInstance(store)
 
   def core_caller(thread, args):
@@ -2554,8 +2543,8 @@ def test_self_copy(elemt):
   store = Store()
   inst = ComponentInstance(store)
   mem = bytearray(40)
-  sync_opts = mk_opts(memory=mem, async_=False)
-  async_opts = mk_opts(memory=mem, async_=True)
+  sync_opts = mk_opts(memory=MemInst(mem, 'i32'), async_=False)
+  async_opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
 
   ft = FuncType([], [], async_ = True)
   def core_func(thread, args):
@@ -2609,7 +2598,7 @@ def test_self_copy(elemt):
 def test_async_flat_params():
   store = Store()
   heap = Heap(1000)
-  opts = mk_opts(heap.memory, 'utf8', heap.realloc, async_ = True)
+  opts = mk_opts(MemInst(heap.memory, 'i32'), 'utf8', heap.realloc, async_ = True)
 
   ft1 = FuncType([F32Type(), F64Type(), U32Type(), S64Type()],[])
   def f1(caller, on_start, on_resolve):
@@ -2659,7 +2648,7 @@ def test_threads():
   store = Store()
   inst = ComponentInstance(store)
   mem = bytearray(8)
-  opts = mk_opts(memory = mem)
+  opts = mk_opts(memory = MemInst(mem, 'i32'))
 
   ftbl = Table()
   ft = CoreFuncType(['i32'],[])
@@ -2762,7 +2751,7 @@ def test_thread_cancel_callback():
   consumer_inst = ComponentInstance(store)
   consumer_ft = FuncType([], [], async_ = True)
   consumer_mem = bytearray(24)
-  consumer_opts = mk_opts(consumer_mem, async_ = True)
+  consumer_opts = mk_opts(MemInst(consumer_mem, 'i32'), async_ = True)
 
   def core_consumer(thread, args):
     assert(len(args) == 0)
