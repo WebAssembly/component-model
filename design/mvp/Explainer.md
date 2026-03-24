@@ -2222,8 +2222,8 @@ For details, see [`canon_thread_spawn_ref`] in the Canonical ABI explainer.
 
 | Synopsis                   |                                                                    |
 | -------------------------- | ------------------------------------------------------------------ |
-| Approximate WIT signature  | `func<shared?,FuncT,tableidx>(i: uIDX, c: FuncT.params[0]) -> bool` |
-| Canonical ABI signature    | `shared? [i:iIDX c:FuncT.params[0]] -> [i32]`                                |
+| Approximate WIT signature  | `func<shared?,FuncT,table>(i: table.addrtype, c: FuncT.params[0]) -> bool` |
+| Canonical ABI signature    | `shared? [i:table.addrtype c:FuncT.params[0]] -> [i32]`                                |
 
 The `thread.spawn-indirect` built-in is an optimization, fusing a call to
 [`thread.new-indirect`](#-threadnew-indirect) with a call to
