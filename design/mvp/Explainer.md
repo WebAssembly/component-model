@@ -1574,7 +1574,7 @@ For details, see [Thread-Local Storage] in the concurrency explainer and
 | Synopsis                   |                   |
 | -------------------------- | ----------------- |
 | Approximate WIT signature  | `func<T,i>(v: T)` |
-| Canonical ABI signature    | `[T] -> []`         |
+| Canonical ABI signature    | `[T] -> []`       |
 
 The `context.set` built-in sets the `i`th element of the [current thread]'s
 [thread-local storage] array to the value `v`. Validation currently restricts
