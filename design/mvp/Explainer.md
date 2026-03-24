@@ -2059,19 +2059,18 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 
 ###### 🧵 `thread.new-indirect`
 
-| Synopsis                   |                                                               |
-| -------------------------- | ------------------------------------------------------------- |
+| Synopsis                   |                                                                       |
+| -------------------------- | --------------------------------------------------------------------- |
 | Approximate WIT signature  | `func<FuncT,table>(fi: table.addrtype, c: FuncT.params[0]) -> thread` |
-| Canonical ABI signature    | `[fi:table.addrtype c: FuncT.params[0]] -> [i32]`                                  |
+| Canonical ABI signature    | `[fi:table.addrtype c: FuncT.params[0]] -> [i32]`                     |
 
 The `thread.new-indirect` built-in adds a new thread to the current component
 instance's table, returning the index of the new thread. The function table
 supplied via [`core:tableidx`] is indexed by the `fi` operand and then
 dynamically checked to match the type `FuncT` (in the same manner as
-`call_indirect`). The types `uIDX` and `iIDX` of `fi` are `u32`/`i32` or
-`u64`/`i64` as determined by the table supplied by [`core:tableidx`]. Lastly,
-the indexed function is called in the new thread with `c` as its first and only
-parameter.
+`call_indirect`). Here the `table.addrtype` is either `i32` or `i64` as
+determined by the [`core:table-type`] of the table. Lastly, the indexed function
+is called in the new thread with `c` as its first and only parameter.
 
 Currently, `FuncT` must be `(func (param i32))` or `(func (param i64))` and thus
 `c` must always be an `i32` or `i64`, but this restriction can be loosened in
@@ -2220,10 +2219,10 @@ For details, see [`canon_thread_spawn_ref`] in the Canonical ABI explainer.
 
 ###### 🧵② `thread.spawn-indirect`
 
-| Synopsis                   |                                                                    |
-| -------------------------- | ------------------------------------------------------------------ |
+| Synopsis                   |                                                                            |
+| -------------------------- | -------------------------------------------------------------------------- |
 | Approximate WIT signature  | `func<shared?,FuncT,table>(i: table.addrtype, c: FuncT.params[0]) -> bool` |
-| Canonical ABI signature    | `shared? [i:table.addrtype c:FuncT.params[0]] -> [i32]`                                |
+| Canonical ABI signature    | `shared? [i:table.addrtype c:FuncT.params[0]] -> [i32]`                    |
 
 The `thread.spawn-indirect` built-in is an optimization, fusing a call to
 [`thread.new-indirect`](#-threadnew-indirect) with a call to
@@ -3177,6 +3176,7 @@ For some use-case-focused, worked examples, see:
 [func-import-abbrev]: https://webassembly.github.io/spec/core/text/modules.html#text-func-abbrev
 [`core:version`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-version
 [`core:tableidx`]: https://webassembly.github.io/spec/core/syntax/modules.html#syntax-tableidx
+[`core:table-type`]: https://webassembly.github.io/spec/core/syntax/types.html#table-types
 
 [Embedder]: https://webassembly.github.io/spec/core/appendix/embedding.html
 [`module_instantiate`]: https://webassembly.github.io/spec/core/appendix/embedding.html#mathrm-module-instantiate-xref-exec-runtime-syntax-store-mathit-store-xref-syntax-modules-syntax-module-mathit-module-xref-exec-runtime-syntax-externval-mathit-externval-ast-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-moduleinst-mathit-moduleinst-xref-appendix-embedding-embed-error-mathit-error
