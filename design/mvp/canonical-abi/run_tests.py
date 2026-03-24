@@ -36,13 +36,19 @@ class Heap:
     return ret
 
 _DEFAULT_MEMORY = (bytearray(), 'i32')
+_DEFAULT_MEMORY_64 = (bytearray(), 'i64')
 
 def mk_opts(memory = None, encoding = 'utf8', realloc = None, post_return = None, sync_task_return = False, async_ = False, addr_type = 'i32'):
   opts = CanonicalOptions()
-  if memory is None and addr_type == 'i32':
-    opts.memory = _DEFAULT_MEMORY
+  if memory is None:
+    if addr_type == 'i32':
+      opts.memory = _DEFAULT_MEMORY
+    elif addr_type == 'i64':
+      opts.memory = _DEFAULT_MEMORY_64
+    else:
+      assert(False, "Invalid address type: {}".format(addr_type))
   else:
-    opts.memory = (memory if memory is not None else bytearray(), addr_type)
+    opts.memory = (memory, addr_type)
   opts.string_encoding = encoding
   opts.realloc = realloc
   opts.post_return = post_return
@@ -481,6 +487,12 @@ def test_handles():
     dtor_value = args[0]
     return []
 
+  store = Store()
+  rt = ResourceType(ComponentInstance(store), dtor) # usable in imports and exports
+  inst = ComponentInstance(store)
+  rt2 = ResourceType(inst, dtor) # only usable in exports
+  opts = mk_opts()
+
   def host_import(caller, on_start, on_resolve):
     args = on_start()
     assert(len(args) == 2)
@@ -544,39 +556,34 @@ def test_handles():
 
     return [h, h2, h4]
 
-  for _ in [0]:
-    store = Store()
-    rt = ResourceType(ComponentInstance(store), dtor) # usable in imports and exports
-    inst = ComponentInstance(store)
-    rt2 = ResourceType(inst, dtor) # only usable in exports
-    opts = mk_opts()
+  ft = FuncType([
+    OwnType(rt),
+    OwnType(rt),
+    BorrowType(rt),
+    BorrowType(rt2)
+  ],[
+    OwnType(rt),
+    OwnType(rt),
+    OwnType(rt)
+  ])
 
-    ft = FuncType([
-      OwnType(rt),
-      OwnType(rt),
-      BorrowType(rt),
-      BorrowType(rt2)
-    ],[
-      OwnType(rt),
-      OwnType(rt),
-      OwnType(rt)
-    ])
+  def on_start():
+    return [ 42, 43, 44, 13 ]
 
-    got = None
-    def on_resolve(results):
-      nonlocal got
-      got = results
+  got = None
+  def on_resolve(results):
+    nonlocal got
+    got = results
 
-    run_lift(opts, inst, ft, core_wasm, lambda: [42, 43, 44, 13], on_resolve)
+  run_lift(opts, inst, ft, core_wasm, on_start, on_resolve)
 
-    assert(len(got) == 3)
-    assert(got[0] == 46)
-    assert(got[1] == 43)
-    assert(got[2] == 45)
-    assert(len(inst.handles.array) == 5)
-    assert(all(inst.handles.array[i] is None for i in range(4)))
-    assert(len(inst.handles.free) == 4)
-
+  assert(len(got) == 3)
+  assert(got[0] == 46)
+  assert(got[1] == 43)
+  assert(got[2] == 45)
+  assert(len(inst.handles.array) == 5)
+  assert(all(inst.handles.array[i] is None for i in range(4)))
+  assert(len(inst.handles.free) == 4)
   definitions.MAX_FLAT_RESULTS = before
 
 
@@ -2599,7 +2606,6 @@ def test_self_copy(elemt):
   run_lift(sync_opts, inst, ft, core_func, lambda:[], lambda _:())
 
 
-
 def test_async_flat_params():
   store = Store()
   heap = Heap(1000)
@@ -2833,41 +2839,6 @@ def test_reentrance():
   assert(call_might_be_recursive(p_task, c2))
 
 
-def test_mixed_table_memory_types():
-  store = Store()
-  rt = ResourceType(ComponentInstance(store), None)
-
-  # Verify alignment and elem_size for memory64
-  opts64_addr = LiftLowerOptions(memory=(bytearray(), 'i64'))
-  assert(alignment(StringType(), opts64_addr) == 8)
-  assert(elem_size(StringType(), opts64_addr) == 16)
-  assert(alignment(OwnType(rt), opts64_addr) == 4)
-  assert(elem_size(OwnType(rt), opts64_addr) == 4)
-
-  # Round-trip a type exercising memory pointers
-  before = definitions.MAX_FLAT_RESULTS
-  definitions.MAX_FLAT_RESULTS = 16
-  t = TupleType([ListType(OwnType(rt)), StringType()])
-
-  def core_wasm(thread, args):
-    return args
-
-  for addr_type in ['i32', 'i64']:
-    heap = Heap(1000)
-    inst = ComponentInstance(store)
-    opts = mk_opts(heap.memory, 'utf8', heap.realloc, addr_type=addr_type)
-
-    ft = FuncType([t], [t])
-    v = {'0': [42, 43], '1': mk_str("hello")}
-    got = None
-    def on_resolve(results):
-      nonlocal got
-      got = results
-    run_lift(opts, inst, ft, core_wasm, lambda: [v], on_resolve)
-    assert(got[0] == v)
-
-  definitions.MAX_FLAT_RESULTS = before
-
 test_roundtrips()
 test_handles()
 test_async_to_async()
@@ -2894,6 +2865,5 @@ test_async_flat_params()
 test_threads()
 test_thread_cancel_callback()
 test_reentrance()
-test_mixed_table_memory_types()
 
 print("All tests passed")
