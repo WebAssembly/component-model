@@ -239,14 +239,37 @@ that can be set on various Canonical ABI definitions. The default values of
 the Python fields are the default values when the associated `canonopt` is
 not present in the binary or text format definition.
 
+The `MemInst` class represents a core WebAssembly [`memory` instance], with
+`bytes` corresponding to the memory's bytes and `addrtype` coming from the
+[`memory type`].
+```python
+@dataclass
+class MemInst:
+  bytes: bytearray
+  addrtype: Literal['i32', 'i64']
+
+  def ptr_type(self):
+    return self.addrtype
+
+  def ptr_size(self):
+    match self.ptr_type():
+      case 'i32': return 4
+      case 'i64': return 8
+
+  def equal(lhs, rhs):
+    return lhs.bytes == rhs.bytes and \
+           lhs.addrtype == rhs.addrtype
+```
+The `ptr_type` and `ptr_size` methods return the core value type and byte
+size of memory pointers.
+
 The `LiftOptions` class contains the subset of [`canonopt`] which are needed
 when lifting individual parameters and results:
 ```python
 @dataclass
 class LiftOptions:
   string_encoding: str = 'utf8'
-  # A tuple consisting of the memory contents and the pointer type ('i32' or 'i64')'
-  memory: Optional[tuple[bytearray, str]] = None
+  memory: Optional[MemInst] = None
 
   def equal(lhs, rhs):
     return lhs.string_encoding == rhs.string_encoding and \
@@ -254,21 +277,6 @@ class LiftOptions:
 ```
 The `equal` static method is used by `task.return` below to dynamically
 compare equality of just this subset of `canonopt`.
-
-The `str` field in `memory` is `'i32'` or `'i64'` to indicate whether type of the core Wasm `memory`.
-
-The following helper functions return the byte size and core value type of
-memory pointers: 
-```python
-def ptr_type(opts):
-  assert(opts.memory is not None)
-  return opts.memory[1]
-
-def ptr_size(opts):
-  match ptr_type(opts):
-    case 'i32': return 4
-    case 'i64': return 8
-```
 
 The `LiftLowerOptions` class contains the subset of [`canonopt`] which are
 needed when lifting *or* lowering individual parameters and results:
@@ -1372,7 +1380,7 @@ class BufferGuestImpl(Buffer):
     trap_if(length > Buffer.MAX_LENGTH)
     if t and length > 0:
       trap_if(ptr != align_to(ptr, alignment(t, cx.opts)))
-      trap_if(ptr + length * elem_size(t, cx.opts) > len(cx.opts.memory[0]))
+      trap_if(ptr + length * elem_size(t, cx.opts) > len(cx.opts.memory.bytes))
     self.cx = cx
     self.t = t
     self.ptr = ptr
@@ -1886,7 +1894,7 @@ def alignment(t, opts):
     case F32Type()                   : return 4
     case F64Type()                   : return 8
     case CharType()                  : return 4
-    case StringType()                : return ptr_size(opts)
+    case StringType()                : return opts.memory.ptr_size()
     case ErrorContextType()          : return 4
     case ListType(t, l)              : return alignment_list(t, l, opts)
     case RecordType(fields)          : return alignment_record(fields, opts)
@@ -1902,7 +1910,7 @@ otherwise uses the alignment of pointers.
 def alignment_list(elem_type, maybe_length, opts):
   if maybe_length is not None:
     return alignment(elem_type, opts)
-  return ptr_size(opts)
+  return opts.memory.ptr_size()
 ```
 
 Record alignment is tuple alignment, with the definitions split for reuse below:
@@ -1972,7 +1980,7 @@ def elem_size(t, opts):
     case F32Type()                   : return 4
     case F64Type()                   : return 8
     case CharType()                  : return 4
-    case StringType()                : return 2 * ptr_size(opts)
+    case StringType()                : return 2 * opts.memory.ptr_size()
     case ErrorContextType()          : return 4
     case ListType(t, l)              : return elem_size_list(t, l, opts)
     case RecordType(fields)          : return elem_size_record(fields, opts)
@@ -1984,7 +1992,7 @@ def elem_size(t, opts):
 def elem_size_list(elem_type, maybe_length, opts):
   if maybe_length is not None:
     return maybe_length * elem_size(elem_type, opts)
-  return 2 * ptr_size(opts)
+  return 2 * opts.memory.ptr_size()
 
 def elem_size_record(fields, opts):
   s = 0
@@ -2024,7 +2032,7 @@ the top-level case analysis:
 ```python
 def load(cx, ptr, t):
   assert(ptr == align_to(ptr, alignment(t, cx.opts)))
-  assert(ptr + elem_size(t, cx.opts) <= len(cx.opts.memory[0]))
+  assert(ptr + elem_size(t, cx.opts) <= len(cx.opts.memory.bytes))
   match despecialize(t):
     case BoolType()         : return convert_int_to_bool(load_int(cx, ptr, 1))
     case U8Type()           : return load_int(cx, ptr, 1)
@@ -2054,7 +2062,7 @@ Integers are loaded directly from memory, with their high-order bit interpreted
 according to the signedness of the type.
 ```python
 def load_int(cx, ptr, nbytes, signed = False):
-  return int.from_bytes(cx.opts.memory[0][ptr : ptr+nbytes], 'little', signed = signed)
+  return int.from_bytes(cx.opts.memory.bytes[ptr : ptr+nbytes], 'little', signed = signed)
 ```
 
 Integer-to-boolean conversions treats `0` as `false` and all other bit-patterns
@@ -2128,12 +2136,12 @@ of source code units.
 String = tuple[str, str, int]
 
 def load_string(cx, ptr) -> String:
-  begin = load_int(cx, ptr, ptr_size(cx.opts))
-  tagged_code_units = load_int(cx, ptr + ptr_size(cx.opts), ptr_size(cx.opts))
+  begin = load_int(cx, ptr, cx.opts.memory.ptr_size())
+  tagged_code_units = load_int(cx, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
   return load_string_from_range(cx, begin, tagged_code_units)
 
 def utf16_tag(opts):
-  return 1 << (ptr_size(opts) * 8 - 1)
+  return 1 << (opts.memory.ptr_size() * 8 - 1)
 
 def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   match cx.opts.string_encoding:
@@ -2155,9 +2163,9 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
         encoding = 'latin-1'
 
   trap_if(ptr != align_to(ptr, alignment))
-  trap_if(ptr + byte_length > len(cx.opts.memory[0]))
+  trap_if(ptr + byte_length > len(cx.opts.memory.bytes))
   try:
-    s = cx.opts.memory[0][ptr : ptr+byte_length].decode(encoding)
+    s = cx.opts.memory.bytes[ptr : ptr+byte_length].decode(encoding)
   except UnicodeError:
     trap()
 
@@ -2178,13 +2186,13 @@ Lists and records are loaded by recursively loading their elements/fields:
 def load_list(cx, ptr, elem_type, maybe_length):
   if maybe_length is not None:
     return load_list_from_valid_range(cx, ptr, maybe_length, elem_type)
-  begin = load_int(cx, ptr, ptr_size(cx.opts))
-  length = load_int(cx, ptr + ptr_size(cx.opts), ptr_size(cx.opts))
+  begin = load_int(cx, ptr, cx.opts.memory.ptr_size())
+  length = load_int(cx, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
   return load_list_from_range(cx, begin, length, elem_type)
 
 def load_list_from_range(cx, ptr, length, elem_type):
   trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts)))
-  trap_if(ptr + length * elem_size(elem_type, cx.opts) > len(cx.opts.memory[0]))
+  trap_if(ptr + length * elem_size(elem_type, cx.opts) > len(cx.opts.memory.bytes))
   return load_list_from_valid_range(cx, ptr, length, elem_type)
 
 def load_list_from_valid_range(cx, ptr, length, elem_type):
@@ -2310,7 +2318,7 @@ The `store` function defines how to write a value `v` of a given value type
 ```python
 def store(cx, v, t, ptr):
   assert(ptr == align_to(ptr, alignment(t, cx.opts)))
-  assert(ptr + elem_size(t, cx.opts) <= len(cx.opts.memory[0]))
+  assert(ptr + elem_size(t, cx.opts) <= len(cx.opts.memory.bytes))
   match despecialize(t):
     case BoolType()         : store_int(cx, int(bool(v)), ptr, 1)
     case U8Type()           : store_int(cx, v, ptr, 1)
@@ -2342,7 +2350,7 @@ the `signed` parameter is only present to ensure that the internal range checks
 of `int.to_bytes` are satisfied.
 ```python
 def store_int(cx, v, ptr, nbytes, signed = False):
-  cx.opts.memory[0][ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed = signed)
+  cx.opts.memory.bytes[ptr : ptr+nbytes] = int.to_bytes(v, nbytes, 'little', signed = signed)
 ```
 
 Floats are stored directly into memory, with the sign and payload bits of NaN
@@ -2427,8 +2435,8 @@ combinations, subdividing the `latin1+utf16` encoding into either `latin1` or
 ```python
 def store_string(cx, v: String, ptr):
   begin, tagged_code_units = store_string_into_range(cx, v)
-  store_int(cx, begin, ptr, ptr_size(cx.opts))
-  store_int(cx, tagged_code_units, ptr + ptr_size(cx.opts), ptr_size(cx.opts))
+  store_int(cx, begin, ptr, cx.opts.memory.ptr_size())
+  store_int(cx, tagged_code_units, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
 
 def store_string_into_range(cx, v: String):
   src, src_encoding, src_tagged_code_units = v
@@ -2470,17 +2478,17 @@ with a simply loop (that possibly inflates Latin-1 to UTF-16 by injecting a 0
 byte after every Latin-1 byte).
 ```python
 def max_string_byte_length(opts):
-  return (1 << (ptr_size(opts) * 8 - 1)) - 1
+  return (1 << (opts.memory.ptr_size() * 8 - 1)) - 1
 
 def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment, dst_encoding):
   dst_byte_length = dst_code_unit_size * src_code_units
   trap_if(dst_byte_length > max_string_byte_length(cx.opts))
   ptr = cx.opts.realloc(0, 0, dst_alignment, dst_byte_length)
   trap_if(ptr != align_to(ptr, dst_alignment))
-  trap_if(ptr + dst_byte_length > len(cx.opts.memory[0]))
+  trap_if(ptr + dst_byte_length > len(cx.opts.memory.bytes))
   encoded = src.encode(dst_encoding)
   assert(dst_byte_length == len(encoded))
-  cx.opts.memory[0][ptr : ptr+len(encoded)] = encoded
+  cx.opts.memory.bytes[ptr : ptr+len(encoded)] = encoded
   return (ptr, src_code_units)
 ```
 The `max_string_byte_length` function ensures that the high bit of a
@@ -2502,19 +2510,19 @@ def store_latin1_to_utf8(cx, src, src_code_units):
 def store_string_to_utf8(cx, src, src_code_units, worst_case_size):
   assert(src_code_units <= max_string_byte_length(cx.opts))
   ptr = cx.opts.realloc(0, 0, 1, src_code_units)
-  trap_if(ptr + src_code_units > len(cx.opts.memory[0]))
+  trap_if(ptr + src_code_units > len(cx.opts.memory.bytes))
   for i,code_point in enumerate(src):
     if ord(code_point) < 2**7:
-      cx.opts.memory[0][ptr + i] = ord(code_point)
+      cx.opts.memory.bytes[ptr + i] = ord(code_point)
     else:
       trap_if(worst_case_size > max_string_byte_length(cx.opts))
       ptr = cx.opts.realloc(ptr, src_code_units, 1, worst_case_size)
-      trap_if(ptr + worst_case_size > len(cx.opts.memory[0]))
+      trap_if(ptr + worst_case_size > len(cx.opts.memory.bytes))
       encoded = src.encode('utf-8')
-      cx.opts.memory[0][ptr+i : ptr+len(encoded)] = encoded[i : ]
+      cx.opts.memory.bytes[ptr+i : ptr+len(encoded)] = encoded[i : ]
       if worst_case_size > len(encoded):
         ptr = cx.opts.realloc(ptr, worst_case_size, 1, len(encoded))
-        trap_if(ptr + len(encoded) > len(cx.opts.memory[0]))
+        trap_if(ptr + len(encoded) > len(cx.opts.memory.bytes))
       return (ptr, len(encoded))
   return (ptr, src_code_units)
 ```
@@ -2529,13 +2537,13 @@ def store_utf8_to_utf16(cx, src, src_code_units):
   trap_if(worst_case_size > max_string_byte_length(cx.opts))
   ptr = cx.opts.realloc(0, 0, 2, worst_case_size)
   trap_if(ptr != align_to(ptr, 2))
-  trap_if(ptr + worst_case_size > len(cx.opts.memory[0]))
+  trap_if(ptr + worst_case_size > len(cx.opts.memory.bytes))
   encoded = src.encode('utf-16-le')
-  cx.opts.memory[0][ptr : ptr+len(encoded)] = encoded
+  cx.opts.memory.bytes[ptr : ptr+len(encoded)] = encoded
   if len(encoded) < worst_case_size:
     ptr = cx.opts.realloc(ptr, worst_case_size, 2, len(encoded))
     trap_if(ptr != align_to(ptr, 2))
-    trap_if(ptr + len(encoded) > len(cx.opts.memory[0]))
+    trap_if(ptr + len(encoded) > len(cx.opts.memory.bytes))
   code_units = int(len(encoded) / 2)
   return (ptr, code_units)
 ```
@@ -2553,33 +2561,33 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
   assert(src_code_units <= max_string_byte_length(cx.opts))
   ptr = cx.opts.realloc(0, 0, 2, src_code_units)
   trap_if(ptr != align_to(ptr, 2))
-  trap_if(ptr + src_code_units > len(cx.opts.memory[0]))
+  trap_if(ptr + src_code_units > len(cx.opts.memory.bytes))
   dst_byte_length = 0
   for usv in src:
     if ord(usv) < (1 << 8):
-      cx.opts.memory[0][ptr + dst_byte_length] = ord(usv)
+      cx.opts.memory.bytes[ptr + dst_byte_length] = ord(usv)
       dst_byte_length += 1
     else:
       worst_case_size = 2 * src_code_units
       trap_if(worst_case_size > max_string_byte_length(cx.opts))
       ptr = cx.opts.realloc(ptr, src_code_units, 2, worst_case_size)
       trap_if(ptr != align_to(ptr, 2))
-      trap_if(ptr + worst_case_size > len(cx.opts.memory[0]))
+      trap_if(ptr + worst_case_size > len(cx.opts.memory.bytes))
       for j in range(dst_byte_length-1, -1, -1):
-        cx.opts.memory[0][ptr + 2*j] = cx.opts.memory[0][ptr + j]
-        cx.opts.memory[0][ptr + 2*j + 1] = 0
+        cx.opts.memory.bytes[ptr + 2*j] = cx.opts.memory.bytes[ptr + j]
+        cx.opts.memory.bytes[ptr + 2*j + 1] = 0
       encoded = src.encode('utf-16-le')
-      cx.opts.memory[0][ptr+2*dst_byte_length : ptr+len(encoded)] = encoded[2*dst_byte_length : ]
+      cx.opts.memory.bytes[ptr+2*dst_byte_length : ptr+len(encoded)] = encoded[2*dst_byte_length : ]
       if worst_case_size > len(encoded):
         ptr = cx.opts.realloc(ptr, worst_case_size, 2, len(encoded))
         trap_if(ptr != align_to(ptr, 2))
-        trap_if(ptr + len(encoded) > len(cx.opts.memory[0]))
+        trap_if(ptr + len(encoded) > len(cx.opts.memory.bytes))
       tagged_code_units = int(len(encoded) / 2) | utf16_tag(cx.opts)
       return (ptr, tagged_code_units)
   if dst_byte_length < src_code_units:
     ptr = cx.opts.realloc(ptr, src_code_units, 2, dst_byte_length)
     trap_if(ptr != align_to(ptr, 2))
-    trap_if(ptr + dst_byte_length > len(cx.opts.memory[0]))
+    trap_if(ptr + dst_byte_length > len(cx.opts.memory.bytes))
   return (ptr, dst_byte_length)
 ```
 
@@ -2599,17 +2607,17 @@ def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   trap_if(src_byte_length > max_string_byte_length(cx.opts))
   ptr = cx.opts.realloc(0, 0, 2, src_byte_length)
   trap_if(ptr != align_to(ptr, 2))
-  trap_if(ptr + src_byte_length > len(cx.opts.memory[0]))
+  trap_if(ptr + src_byte_length > len(cx.opts.memory.bytes))
   encoded = src.encode('utf-16-le')
-  cx.opts.memory[0][ptr : ptr+len(encoded)] = encoded
+  cx.opts.memory.bytes[ptr : ptr+len(encoded)] = encoded
   if any(ord(c) >= (1 << 8) for c in src):
     tagged_code_units = int(len(encoded) / 2) | utf16_tag(cx.opts)
     return (ptr, tagged_code_units)
   latin1_size = int(len(encoded) / 2)
   for i in range(latin1_size):
-    cx.opts.memory[0][ptr + i] = cx.opts.memory[0][ptr + 2*i]
+    cx.opts.memory.bytes[ptr + i] = cx.opts.memory.bytes[ptr + 2*i]
   ptr = cx.opts.realloc(ptr, src_byte_length, 1, latin1_size)
-  trap_if(ptr + latin1_size > len(cx.opts.memory[0]))
+  trap_if(ptr + latin1_size > len(cx.opts.memory.bytes))
   return (ptr, latin1_size)
 ```
 
@@ -2631,15 +2639,15 @@ def store_list(cx, v, ptr, elem_type, maybe_length):
     store_list_into_valid_range(cx, v, ptr, elem_type)
     return
   begin, length = store_list_into_range(cx, v, elem_type)
-  store_int(cx, begin, ptr, ptr_size(cx.opts))
-  store_int(cx, length, ptr + ptr_size(cx.opts), ptr_size(cx.opts))
+  store_int(cx, begin, ptr, cx.opts.memory.ptr_size())
+  store_int(cx, length, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
 
 def store_list_into_range(cx, v, elem_type):
   byte_length = len(v) * elem_size(elem_type, cx.opts)
-  trap_if(byte_length >= (1 << (ptr_size(cx.opts) * 8)))
+  trap_if(byte_length >= (1 << (cx.opts.memory.ptr_size() * 8)))
   ptr = cx.opts.realloc(0, 0, alignment(elem_type, cx.opts), byte_length)
   trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts)))
-  trap_if(ptr + byte_length > len(cx.opts.memory[0]))
+  trap_if(ptr + byte_length > len(cx.opts.memory.bytes))
   store_list_into_valid_range(cx, v, ptr, elem_type)
   return (ptr, len(v))
 
@@ -2775,29 +2783,29 @@ def flatten_functype(opts, ft, context):
   flat_results = flatten_types(ft.result_type(), opts)
   if not opts.async_:
     if len(flat_params) > MAX_FLAT_PARAMS:
-      flat_params = [ptr_type(opts)]
+      flat_params = [opts.memory.ptr_type()]
     if len(flat_results) > MAX_FLAT_RESULTS:
       match context:
         case 'lift':
-          flat_results = [ptr_type(opts)]
+          flat_results = [opts.memory.ptr_type()]
         case 'lower':
-          flat_params += [ptr_type(opts)]
+          flat_params += [opts.memory.ptr_type()]
           flat_results = []
     return CoreFuncType(flat_params, flat_results)
   else:
     match context:
       case 'lift':
         if len(flat_params) > MAX_FLAT_PARAMS:
-          flat_params = [ptr_type(opts)]
+          flat_params = [opts.memory.ptr_type()]
         if opts.callback:
           flat_results = ['i32']
         else:
           flat_results = []
       case 'lower':
         if len(flat_params) > MAX_FLAT_ASYNC_PARAMS:
-          flat_params = [ptr_type(opts)]
+          flat_params = [opts.memory.ptr_type()]
         if len(flat_results) > 0:
-          flat_params += [ptr_type(opts)]
+          flat_params += [opts.memory.ptr_type()]
         flat_results = ['i32']
     return CoreFuncType(flat_params, flat_results)
 
@@ -2820,7 +2828,7 @@ def flatten_type(t, opts):
     case F32Type()                        : return ['f32']
     case F64Type()                        : return ['f64']
     case CharType()                       : return ['i32']
-    case StringType()                     : return [ptr_type(opts), ptr_type(opts)]
+    case StringType()                     : return [opts.memory.ptr_type(), opts.memory.ptr_type()]
     case ErrorContextType()               : return ['i32']
     case ListType(t, l)                   : return flatten_list(t, l, opts)
     case RecordType(fields)               : return flatten_record(fields, opts)
@@ -2836,7 +2844,7 @@ List flattening of a fixed-length list uses the same flattening as a tuple
 def flatten_list(elem_type, maybe_length, opts):
   if maybe_length is not None:
     return flatten_type(elem_type, opts) * maybe_length
-  return [ptr_type(opts), ptr_type(opts)]
+  return [opts.memory.ptr_type(), opts.memory.ptr_type()]
 ```
 
 Record flattening simply flattens each field in sequence.
@@ -2962,8 +2970,8 @@ instead of from linear memory. Fixed-length lists are lifted the same way as a
 tuple (via `lift_flat_record` below).
 ```python
 def lift_flat_string(cx, vi):
-  ptr = vi.next(ptr_type(cx.opts))
-  packed_length = vi.next(ptr_type(cx.opts))
+  ptr = vi.next(cx.opts.memory.ptr_type())
+  packed_length = vi.next(cx.opts.memory.ptr_type())
   return load_string_from_range(cx, ptr, packed_length)
 
 def lift_flat_list(cx, vi, elem_type, maybe_length):
@@ -2972,8 +2980,8 @@ def lift_flat_list(cx, vi, elem_type, maybe_length):
     for i in range(maybe_length):
       a.append(lift_flat(cx, vi, elem_type))
     return a
-  ptr = vi.next(ptr_type(cx.opts))
-  length = vi.next(ptr_type(cx.opts))
+  ptr = vi.next(cx.opts.memory.ptr_type())
+  length = vi.next(cx.opts.memory.ptr_type())
   return load_list_from_range(cx, ptr, length, elem_type)
 ```
 
@@ -3147,10 +3155,10 @@ of component-level values with types `ts`.
 def lift_flat_values(cx, max_flat, vi, ts):
   flat_types = flatten_types(ts, cx.opts)
   if len(flat_types) > max_flat:
-    ptr = vi.next(ptr_type(cx.opts))
+    ptr = vi.next(cx.opts.memory.ptr_type())
     tuple_type = TupleType(ts)
     trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts)))
-    trap_if(ptr + elem_size(tuple_type, cx.opts) > len(cx.opts.memory[0]))
+    trap_if(ptr + elem_size(tuple_type, cx.opts) > len(cx.opts.memory.bytes))
     return list(load(cx, ptr, tuple_type).values())
   else:
     return [ lift_flat(cx, vi, t) for t in ts ]
@@ -3173,10 +3181,10 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
       ptr = cx.opts.realloc(0, 0, alignment(tuple_type, cx.opts), elem_size(tuple_type, cx.opts))
       flat_vals = [ptr]
     else:
-      ptr = out_param.next(ptr_type(cx.opts))
+      ptr = out_param.next(cx.opts.memory.ptr_type())
       flat_vals = []
     trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts)))
-    trap_if(ptr + elem_size(tuple_type, cx.opts) > len(cx.opts.memory[0]))
+    trap_if(ptr + elem_size(tuple_type, cx.opts) > len(cx.opts.memory.bytes))
     store(cx, tuple_value, tuple_type, ptr)
   else:
     flat_vals = []
@@ -4969,6 +4977,8 @@ def canon_thread_available_parallelism():
 [`memaddr`]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-memaddr
 [`memaddrs` table]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-moduleinst
 [`memidx`]: https://webassembly.github.io/spec/core/syntax/modules.html#syntax-memidx
+[`memory` instance]: https://webassembly.github.io/spec/core/exec/runtime.html#memory-instances
+[`memory type`]: https://webassembly.github.io/spec/core/syntax/types.html#memory-types
 
 [Alignment]: https://en.wikipedia.org/wiki/Data_structure_alignment
 [UTF-8]: https://en.wikipedia.org/wiki/UTF-8

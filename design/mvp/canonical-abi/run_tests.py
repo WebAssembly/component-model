@@ -35,8 +35,8 @@ class Heap:
     self.memory[ret : ret + original_size] = self.memory[original_ptr : original_ptr + original_size]
     return ret
 
-_DEFAULT_MEMORY = (bytearray(), 'i32')
-_DEFAULT_MEMORY_64 = (bytearray(), 'i64')
+_DEFAULT_MEMORY = MemInst(bytearray(), 'i32')
+_DEFAULT_MEMORY_64 = MemInst(bytearray(), 'i64')
 
 def mk_opts(memory = None, encoding = 'utf8', realloc = None, post_return = None, sync_task_return = False, async_ = False, addr_type = 'i32'):
   opts = CanonicalOptions()
@@ -46,9 +46,9 @@ def mk_opts(memory = None, encoding = 'utf8', realloc = None, post_return = None
     elif addr_type == 'i64':
       opts.memory = _DEFAULT_MEMORY_64
     else:
-      assert(False, "Invalid address type: {}".format(addr_type))
+      assert False, "Invalid address type: {}".format(addr_type)
   else:
-    opts.memory = (memory, addr_type)
+    opts.memory = MemInst(memory, addr_type)
   opts.string_encoding = encoding
   opts.realloc = realloc
   opts.post_return = post_return
@@ -140,10 +140,10 @@ def test(t, vals_to_lift, v,
   if lower_v is None:
     lower_v = v
 
-  heap = Heap(5*len(cx.opts.memory[0]))
+  heap = Heap(5*len(cx.opts.memory.bytes))
   if dst_encoding is None:
     dst_encoding = cx.opts.string_encoding
-  cx = mk_cx(heap.memory, dst_encoding, heap.realloc, addr_type=ptr_type(cx.opts))
+  cx = mk_cx(heap.memory, dst_encoding, heap.realloc, addr_type=cx.opts.memory.ptr_type())
   lowered_vals = lower_flat(cx, v, lower_t)
 
   vi = CoreValueIter(lowered_vals)
@@ -278,7 +278,7 @@ def test_string(src_encoding, dst_encoding, s, addr_type='i32'):
     except UnicodeEncodeError:
       pass
     encoded = s.encode('utf-16-le')
-    tagged_code_units = int(len(encoded) / 2) | utf16_tag(LiftLowerOptions(memory=(bytearray(), addr_type)))
+    tagged_code_units = int(len(encoded) / 2) | utf16_tag(LiftLowerOptions(memory=MemInst(bytearray(), addr_type)))
     test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, addr_type)
 
 encodings = ['utf8', 'utf16', 'latin1+utf16']
@@ -655,21 +655,21 @@ def test_async_to_async():
     fut1_1.set()
 
     waitretp = consumer_heap.realloc(0, 0, 8, 4)
-    [event] = canon_waitable_set_wait(True, (consumer_heap.memory, 'i32'), thread, seti, waitretp)
+    [event] = canon_waitable_set_wait(True, MemInst(consumer_heap.memory, 'i32'), thread, seti, waitretp)
     assert(event == EventCode.SUBTASK)
     assert(consumer_heap.memory[waitretp] == subi1)
     assert(consumer_heap.memory[waitretp+4] == Subtask.State.RETURNED)
     [] = canon_subtask_drop(thread, subi1)
     fut1_2.set()
 
-    [event] = canon_waitable_set_wait(True, (consumer_heap.memory, 'i32'), thread, seti, waitretp)
+    [event] = canon_waitable_set_wait(True, MemInst(consumer_heap.memory, 'i32'), thread, seti, waitretp)
     assert(event == EventCode.SUBTASK)
     assert(consumer_heap.memory[waitretp] == subi2)
     assert(consumer_heap.memory[waitretp+4] == Subtask.State.STARTED)
     assert(consumer_heap.memory[retp] == 13)
     fut2.set()
 
-    [event] = canon_waitable_set_wait(True, (consumer_heap.memory, 'i32'), thread, seti, waitretp)
+    [event] = canon_waitable_set_wait(True, MemInst(consumer_heap.memory, 'i32'), thread, seti, waitretp)
     assert(event == EventCode.SUBTASK)
     assert(consumer_heap.memory[waitretp] == subi2)
     assert(consumer_heap.memory[waitretp+4] == Subtask.State.RETURNED)
@@ -890,7 +890,7 @@ def test_callback_interleaving():
     assert(ret == CopyResult.COMPLETED)
 
     retp = 0
-    [event] = canon_waitable_set_wait(True, (consumer_mem, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(consumer_mem, 'i32'), thread, seti, retp)
     assert(event == EventCode.SUBTASK)
     assert(consumer_mem[retp+0] == subi2)
     assert(consumer_mem[retp+4] == Subtask.State.STARTED)
@@ -902,14 +902,14 @@ def test_callback_interleaving():
       [ret] = canon_thread_yield(True, thread)
       assert(ret == 0)
       retp = 0
-      [ret] = canon_waitable_set_poll(True, (consumer_mem, 'i32'), thread, seti, retp)
+      [ret] = canon_waitable_set_poll(True, MemInst(consumer_mem, 'i32'), thread, seti, retp)
       assert(ret == EventCode.NONE)
 
     [ret] = canon_future_write(FutureType(None), consumer_opts, thread, wfut21, 0xdeadbeef)
     assert(ret == CopyResult.COMPLETED)
 
     retp = 0
-    [event] = canon_waitable_set_wait(True, (consumer_mem, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(consumer_mem, 'i32'), thread, seti, retp)
     assert(event == EventCode.SUBTASK)
     assert(consumer_mem[retp+0] == subi1)
     assert(consumer_mem[retp+4] == Subtask.State.RETURNED)
@@ -923,14 +923,14 @@ def test_callback_interleaving():
       [ret] = canon_thread_yield(True, thread)
       assert(ret == 0)
       retp = 0
-      [ret] = canon_waitable_set_poll(True, (consumer_mem, 'i32'), thread, seti, retp)
+      [ret] = canon_waitable_set_poll(True, MemInst(consumer_mem, 'i32'), thread, seti, retp)
       assert(ret == EventCode.NONE)
 
     [ret] = canon_future_write(FutureType(None), consumer_opts, thread, wfut13, 0xdeadbeef)
     assert(ret == CopyResult.COMPLETED)
 
     retp = 0
-    [event] = canon_waitable_set_wait(True, (consumer_mem, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(consumer_mem, 'i32'), thread, seti, retp)
     assert(event == EventCode.SUBTASK)
     assert(consumer_mem[retp+0] == subi2)
     assert(consumer_mem[retp+4] == Subtask.State.RETURNED)
@@ -947,7 +947,7 @@ def test_callback_interleaving():
     assert(ret == CopyResult.COMPLETED)
 
     retp = 0
-    [event] = canon_waitable_set_wait(True, (consumer_mem, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(consumer_mem, 'i32'), thread, seti, retp)
     assert(event == EventCode.SUBTASK)
     assert(consumer_mem[retp+0] == subi3)
     assert(consumer_mem[retp+4] == Subtask.State.RETURNED)
@@ -1005,7 +1005,7 @@ def test_sync_ignores_backpressure():
     [seti] = canon_waitable_set_new(thread)
     [] = canon_waitable_join(thread, subi, seti)
     retp3 = 12
-    [event] = canon_waitable_set_wait(True, (caller_mem, 'i32'), thread, seti, retp3)
+    [event] = canon_waitable_set_wait(True, MemInst(caller_mem, 'i32'), thread, seti, retp3)
     assert(event == EventCode.SUBTASK)
     assert(caller_mem[retp3+0] == subi)
     assert(caller_mem[retp3+4] == Subtask.State.RETURNED)
@@ -1072,7 +1072,7 @@ def test_async_to_sync():
       [ret] = canon_thread_yield(True, thread)
       assert(ret == 0)
       retp = 8
-      [event] = canon_waitable_set_poll(True, (consumer_heap.memory, 'i32'), thread, seti, retp)
+      [event] = canon_waitable_set_poll(True, MemInst(consumer_heap.memory, 'i32'), thread, seti, retp)
       if event == EventCode.NONE:
         continue
       assert(event == EventCode.SUBTASK)
@@ -1158,7 +1158,7 @@ def test_async_backpressure():
     remain = [subi1, subi2]
     while remain:
       retp = 8
-      [event] = canon_waitable_set_wait(True, (consumer_heap.memory, 'i32'), thread, seti, retp)
+      [event] = canon_waitable_set_wait(True, MemInst(consumer_heap.memory, 'i32'), thread, seti, retp)
       assert(event == EventCode.SUBTASK)
       assert(consumer_heap.memory[retp+4] == Subtask.State.RETURNED)
       subi = consumer_heap.memory[retp]
@@ -1224,14 +1224,14 @@ def test_sync_using_wait():
     fut1.set()
 
     retp = lower_heap.realloc(0,0,8,4)
-    [event] = canon_waitable_set_wait(True, (lower_heap.memory, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(lower_heap.memory, 'i32'), thread, seti, retp)
     assert(event == EventCode.SUBTASK)
     assert(lower_heap.memory[retp] == subi1)
     assert(lower_heap.memory[retp+4] == Subtask.State.RETURNED)
 
     fut2.set()
 
-    [event] = canon_waitable_set_wait(True, (lower_heap.memory, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(lower_heap.memory, 'i32'), thread, seti, retp)
     assert(event == EventCode.SUBTASK)
     assert(lower_heap.memory[retp] == subi2)
     assert(lower_heap.memory[retp+4] == Subtask.State.RETURNED)
@@ -1548,7 +1548,7 @@ def test_async_stream_ops():
     [seti] = canon_waitable_set_new(thread)
     [] = canon_waitable_join(thread, rsi1, seti)
     definitions.throw_it = True
-    [event] = canon_waitable_set_wait(True, (mem, 'i32'), thread, seti, retp) ##
+    [event] = canon_waitable_set_wait(True, MemInst(mem, 'i32'), thread, seti, retp) ##
     assert(event == EventCode.STREAM_READ)
     assert(mem[retp+0] == rsi1)
     result,n = unpack_result(mem[retp+4])
@@ -1564,7 +1564,7 @@ def test_async_stream_ops():
     assert(ret == definitions.BLOCKED)
     host_import_incoming.set_remain(100)
     [] = canon_waitable_join(thread, wsi3, seti)
-    [event] = canon_waitable_set_wait(True, (mem, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(mem, 'i32'), thread, seti, retp)
     assert(event == EventCode.STREAM_WRITE)
     assert(mem[retp+0] == wsi3)
     result,n = unpack_result(mem[retp+4])
@@ -1576,7 +1576,7 @@ def test_async_stream_ops():
     assert(ret == definitions.BLOCKED)
     dst_stream.set_remain(100)
     [] = canon_waitable_join(thread, wsi2, seti)
-    [event] = canon_waitable_set_wait(True, (mem, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(mem, 'i32'), thread, seti, retp)
     assert(event == EventCode.STREAM_WRITE)
     assert(mem[retp+0] == wsi2)
     result,n = unpack_result(mem[retp+4])
@@ -1595,7 +1595,7 @@ def test_async_stream_ops():
     [ret] = canon_stream_read(StreamType(U8Type()), opts, thread, rsi4, 0, 4)
     assert(ret == definitions.BLOCKED)
     [] = canon_waitable_join(thread, rsi4, seti)
-    [event] = canon_waitable_set_wait(True, (mem, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(mem, 'i32'), thread, seti, retp)
     assert(event == EventCode.STREAM_READ)
     assert(mem[retp+0] == rsi4)
     result,n = unpack_result(mem[retp+4])
@@ -1719,7 +1719,7 @@ def test_host_partial_reads_writes():
 
     [seti] = canon_waitable_set_new(thread)
     [] = canon_waitable_join(thread, rsi, seti)
-    [event] = canon_waitable_set_wait(True, (mem, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(mem, 'i32'), thread, seti, retp)
     assert(event == EventCode.STREAM_READ)
     assert(mem[retp+0] == rsi)
     result,n = unpack_result(mem[retp+4])
@@ -1740,7 +1740,7 @@ def test_host_partial_reads_writes():
     assert(ret == definitions.BLOCKED)
     dst.set_remain(4)
     [] = canon_waitable_join(thread, wsi, seti)
-    [event] = canon_waitable_set_wait(True, (mem, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(mem, 'i32'), thread, seti, retp)
     assert(event == EventCode.STREAM_WRITE)
     assert(mem[retp+0] == wsi)
     result,n = unpack_result(mem[retp+4])
@@ -1801,7 +1801,7 @@ def test_wasm_to_wasm_stream():
     retp = 16
     [seti] = canon_waitable_set_new(thread)
     [] = canon_waitable_join(thread, wsi, seti)
-    [event] = canon_waitable_set_wait(True, (mem1, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(mem1, 'i32'), thread, seti, retp)
     assert(event == EventCode.STREAM_WRITE)
     assert(mem1[retp+0] == wsi)
     result,n = unpack_result(mem1[retp+4])
@@ -1812,7 +1812,7 @@ def test_wasm_to_wasm_stream():
 
     fut4.set()
 
-    [event] = canon_waitable_set_wait(True, (mem1, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(mem1, 'i32'), thread, seti, retp)
     assert(event == EventCode.STREAM_WRITE)
     assert(mem1[retp+0] == wsi)
     assert(mem1[retp+4] == 0)
@@ -1850,7 +1850,7 @@ def test_wasm_to_wasm_stream():
 
     [seti] = canon_waitable_set_new(thread)
     [] = canon_waitable_join(thread, rsi, seti)
-    [event] = canon_waitable_set_wait(True, (mem2, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(mem2, 'i32'), thread, seti, retp)
     assert(event == EventCode.STREAM_READ)
     assert(mem2[retp+0] == rsi)
     result,n = unpack_result(mem2[retp+4])
@@ -1878,7 +1878,7 @@ def test_wasm_to_wasm_stream():
     [ret] = canon_stream_read(StreamType(U8Type()), opts2, thread, rsi, 12345, 0)
     assert(ret == definitions.BLOCKED)
 
-    [event] = canon_waitable_set_wait(True, (mem2, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(mem2, 'i32'), thread, seti, retp)
     assert(event == EventCode.STREAM_READ)
     assert(mem2[retp+0] == rsi)
     p2 = int.from_bytes(mem2[retp+4 : retp+8], 'little', signed=False)
@@ -1924,7 +1924,7 @@ def test_wasm_to_wasm_stream_empty():
     retp = 16
     [seti] = canon_waitable_set_new(thread)
     [] = canon_waitable_join(thread, wsi, seti)
-    [event] = canon_waitable_set_wait(True, (mem1, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(mem1, 'i32'), thread, seti, retp)
     assert(event == EventCode.STREAM_WRITE)
     assert(mem1[retp+0] == wsi)
     result,n = unpack_result(mem1[retp+4])
@@ -1961,7 +1961,7 @@ def test_wasm_to_wasm_stream_empty():
 
     [seti] = canon_waitable_set_new(thread)
     [] = canon_waitable_join(thread, rsi, seti)
-    [event] = canon_waitable_set_wait(True, (mem2, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(mem2, 'i32'), thread, seti, retp)
     assert(event == EventCode.STREAM_READ)
     assert(mem2[retp+0] == rsi)
     result,n = unpack_result(mem2[retp+4])
@@ -2078,7 +2078,7 @@ def test_cancel_copy():
     host_source.unblock_cancel()
     [seti] = canon_waitable_set_new(thread)
     [] = canon_waitable_join(thread, rsi, seti)
-    [event] = canon_waitable_set_wait(True, (mem, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(mem, 'i32'), thread, seti, retp)
     assert(event == EventCode.STREAM_READ)
     assert(mem[retp+0] == rsi)
     result,n = unpack_result(mem[retp+4])
@@ -2183,7 +2183,7 @@ def test_futures():
 
     [seti] = canon_waitable_set_new(thread)
     [] = canon_waitable_join(thread, rfi, seti)
-    [event] = canon_waitable_set_wait(True, (mem, 'i32'), thread, seti, retp)
+    [event] = canon_waitable_set_wait(True, MemInst(mem, 'i32'), thread, seti, retp)
     assert(event == EventCode.FUTURE_READ)
     assert(mem[retp+0] == rfi)
     assert(mem[retp+4] == CopyResult.COMPLETED)
@@ -2249,7 +2249,7 @@ def test_cancel_subtask():
   def core_callee2(thread, args):
     [x] = args
     [si] = canon_waitable_set_new(thread)
-    [ret] = canon_waitable_set_wait(True, (callee_heap.memory, 'i32'), thread, si, 0)
+    [ret] = canon_waitable_set_wait(True, MemInst(callee_heap.memory, 'i32'), thread, si, 0)
     assert(ret == EventCode.TASK_CANCELLED)
     match x:
       case 1:
@@ -2296,9 +2296,9 @@ def test_cancel_subtask():
     except Trap:
       pass
     [seti] = canon_waitable_set_new(thread)
-    [result] = canon_waitable_set_wait(True, (callee_heap.memory, 'i32'), thread, seti, 0)
+    [result] = canon_waitable_set_wait(True, MemInst(callee_heap.memory, 'i32'), thread, seti, 0)
     assert(result == EventCode.TASK_CANCELLED)
-    [result] = canon_waitable_set_poll(True, (callee_heap.memory, 'i32'), thread, seti, 0)
+    [result] = canon_waitable_set_poll(True, MemInst(callee_heap.memory, 'i32'), thread, seti, 0)
     assert(result == EventCode.NONE)
     [] = canon_task_cancel(thread)
     return []
@@ -2433,7 +2433,7 @@ def test_cancel_subtask():
     assert(caller_heap.memory[0] == 13)
     [] = canon_waitable_join(thread, subi3, seti)
     retp = 8
-    [ret] = canon_waitable_set_wait(True, (caller_heap.memory, 'i32'), thread, seti, retp)
+    [ret] = canon_waitable_set_wait(True, MemInst(caller_heap.memory, 'i32'), thread, seti, retp)
     assert(ret == EventCode.SUBTASK)
     assert(caller_heap.memory[retp+0] == subi3)
     assert(caller_heap.memory[retp+4] == Subtask.State.RETURNED)
@@ -2452,7 +2452,7 @@ def test_cancel_subtask():
     assert(caller_heap.memory[0] == 13)
     [] = canon_waitable_join(thread, subi4, seti)
     retp = 8
-    [ret] = canon_waitable_set_wait(True, (caller_heap.memory, 'i32'), thread, seti, retp)
+    [ret] = canon_waitable_set_wait(True, MemInst(caller_heap.memory, 'i32'), thread, seti, retp)
     assert(ret == EventCode.SUBTASK)
     assert(caller_heap.memory[retp+0] == subi4)
     assert(caller_heap.memory[retp+4] == Subtask.State.CANCELLED_BEFORE_RETURNED)
@@ -2494,7 +2494,7 @@ def test_cancel_subtask():
     host_fut4.set()
     [] = canon_waitable_join(thread, subi, seti)
     waitretp = 4
-    [event] = canon_waitable_set_wait(True, (caller_heap.memory, 'i32'), thread, seti, waitretp)
+    [event] = canon_waitable_set_wait(True, MemInst(caller_heap.memory, 'i32'), thread, seti, waitretp)
     assert(event == EventCode.SUBTASK)
     assert(caller_heap.memory[waitretp] == subi)
     assert(caller_heap.memory[waitretp+4] == Subtask.State.CANCELLED_BEFORE_RETURNED)
@@ -2510,7 +2510,7 @@ def test_cancel_subtask():
     host_fut5.set()
     [] = canon_waitable_join(thread, subi, seti)
     waitretp = 4
-    [event] = canon_waitable_set_wait(True, (caller_heap.memory, 'i32'), thread, seti, waitretp)
+    [event] = canon_waitable_set_wait(True, MemInst(caller_heap.memory, 'i32'), thread, seti, waitretp)
     assert(event == EventCode.SUBTASK)
     assert(caller_heap.memory[waitretp] == subi)
     assert(caller_heap.memory[waitretp+4] == Subtask.State.RETURNED)
@@ -2525,7 +2525,7 @@ def test_cancel_subtask():
     assert(ret == definitions.BLOCKED)
 
     [] = canon_waitable_join(thread, subi, seti)
-    [event] = canon_waitable_set_wait(True, (caller_heap.memory, 'i32'), thread, seti, 4)
+    [event] = canon_waitable_set_wait(True, MemInst(caller_heap.memory, 'i32'), thread, seti, 4)
     assert(event == EventCode.SUBTASK)
     assert(caller_heap.memory[0] == 45)
     assert(caller_heap.memory[4] == subi)
@@ -2572,7 +2572,7 @@ def test_self_copy(elemt):
     [] = canon_future_drop_readable(FutureType(elemt), thread, rfi)
 
     [] = canon_waitable_join(thread, wfi, seti)
-    [event] = canon_waitable_set_wait(True, (mem, 'i32'), thread, seti, 0)
+    [event] = canon_waitable_set_wait(True, MemInst(mem, 'i32'), thread, seti, 0)
     assert(event == EventCode.FUTURE_WRITE)
     assert(mem[0] == wfi)
     assert(mem[4] == CopyResult.COMPLETED)
@@ -2592,7 +2592,7 @@ def test_self_copy(elemt):
     [] = canon_stream_drop_readable(StreamType(elemt), thread, rsi)
 
     [] = canon_waitable_join(thread, wsi, seti)
-    [event] = canon_waitable_set_wait(True, (mem, 'i32'), thread, seti, 0)
+    [event] = canon_waitable_set_wait(True, MemInst(mem, 'i32'), thread, seti, 0)
     assert(event == EventCode.STREAM_WRITE)
     assert(mem[0] == wsi)
     result,n = unpack_result(mem[4])
@@ -2783,14 +2783,14 @@ def test_thread_cancel_callback():
     retp3 = 16
     [seti] = canon_waitable_set_new(thread)
     [] = canon_waitable_join(thread, subi1, seti)
-    [event] = canon_waitable_set_wait(True, (consumer_mem, 'i32'), thread, seti, retp3)
+    [event] = canon_waitable_set_wait(True, MemInst(consumer_mem, 'i32'), thread, seti, retp3)
     assert(event == EventCode.SUBTASK)
     assert(consumer_mem[retp3] == subi1)
     assert(consumer_mem[retp3+4] == Subtask.State.RETURNED)
     assert(consumer_mem[retp1] == 42)
 
     [] = canon_waitable_join(thread, subi2, seti)
-    [event] = canon_waitable_set_wait(True, (consumer_mem, 'i32'), thread, seti, retp3)
+    [event] = canon_waitable_set_wait(True, MemInst(consumer_mem, 'i32'), thread, seti, retp3)
     assert(event == EventCode.SUBTASK)
     assert(consumer_mem[retp3] == subi2)
     assert(consumer_mem[retp3+4] == Subtask.State.RETURNED)
