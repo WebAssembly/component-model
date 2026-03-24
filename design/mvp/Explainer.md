@@ -1475,7 +1475,7 @@ canon ::= ...
 | Synopsis                   |                            |
 | -------------------------- | -------------------------- |
 | Approximate WIT signature  | `func<T>(rep: T.rep) -> T` |
-| Canonical ABI signature    | `[rep: T.rep] -> [i32]`     |
+| Canonical ABI signature    | `[rep: T.rep] -> [i32]`    |
 
 The `resource.new` built-in creates a new resource (of resource type `T`) with
 `rep` as its representation, and returns a new handle pointing to the new
