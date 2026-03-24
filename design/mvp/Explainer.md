@@ -1559,7 +1559,7 @@ See the [concurrency explainer] for background.
 | Synopsis                   |                    |
 | -------------------------- | ------------------ |
 | Approximate WIT signature  | `func<T,i>() -> T` |
-| Canonical ABI signature    | `[] -> [T]`          |
+| Canonical ABI signature    | `[] -> [T]`        |
 
 The `context.get` built-in returns the `i`th element of the [current thread]'s
 [thread-local storage] array. Validation currently restricts `i` to be less
