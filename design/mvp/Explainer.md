@@ -1313,9 +1313,9 @@ have the following core function type:
       (param $newSize memory.addrtype)
       (result memory.addrtype))
 ```
-The Canonical ABI will use `realloc` both to allocate (passing `0` for the first
-two parameters) and reallocate. If the Canonical ABI needs `realloc`, validation
-requires this option to be present (there is no default).
+The Canonical ABI will use `realloc` both to allocate (passing `0` for the
+first two parameters) and reallocate. If the Canonical ABI needs `realloc`,
+validation requires this option to be present (there is no default).
 
 The `(post-return ...)` option may only be present in `canon lift` when
 `async` is not present and specifies a core function to be called with the
@@ -1480,10 +1480,10 @@ The `resource.new` built-in creates a new resource (of resource type `T`) with
 resource. Validation only allows `resource.rep T` to be used within the
 component that defined `T`.
 
-In the Canonical ABI, `T.rep` is defined to be the `$rep` in the `(type $T
-(resource (rep $rep) ...))` type definition that defined `T`. While it's
-designed to allow different types in the future, it is currently fixed to be
-`i32` or `i64`.
+In the Canonical ABI, `T.rep` is defined to be the `$rep` in the
+`(type $T (resource (rep $rep) ...))` type definition that defined `T`. While
+it's designed to allow different types in the future, it is currently
+limited to `i32` or `i64`.
 
 For details, see [`canon_resource_new`] in the Canonical ABI explainer.
 
@@ -1515,7 +1515,7 @@ resource type `T`) pointed to by the handle `t`. Validation only allows
 In the Canonical ABI, `T.rep` is defined to be the `$rep` in the
 `(type $T (resource (rep $rep) ...))` type definition that defined `T`. While
 it's designed to allow different types in the future, it is currently
-fixed to be `i32` or `i64`.
+limited to `i32` or `i64`.
 
 As an example, the following component imports the `resource.new` built-in,
 allowing it to create and return new resources to its client:
@@ -1869,7 +1869,7 @@ For details, see [Streams and Futures] in the concurrency explainer and
 
 ###### 🔀 `stream.read` and `stream.write`
 
-| Synopsis                                     |                                                                                                             |
+| Synopsis                                     |                                                                                                        |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | Approximate WIT signature for `stream.read`  | `func<stream<T?>,memory>(e: readable-stream-end<T?>, b: writable-buffer<T>?) -> option<stream-result>` |
 | Approximate WIT signature for `stream.write` | `func<stream<T?>,memory>(e: writable-stream-end<T?>, b: readable-buffer<T>?) -> option<stream-result>` |
@@ -2216,9 +2216,9 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 
 ###### 🧵② `thread.spawn-ref`
 
-| Synopsis                   |                                                                    |
-| -------------------------- | ------------------------------------------------------------------ |
-| Approximate WIT signature  | `func<shared?,FuncT>(f: FuncT, c: FuncT.params[0]) -> bool`        |
+| Synopsis                   |                                                                                            |
+| -------------------------- | ------------------------------------------------------------------------------------------ |
+| Approximate WIT signature  | `func<shared?,FuncT>(f: FuncT, c: FuncT.params[0]) -> bool`                                |
 | Canonical ABI signature    | `shared? [f:(ref null (shared (func (param FuncT.params[0]))) c:FuncT.params[0]] -> [i32]` |
 
 The `thread.spawn-ref` built-in is an optimization, fusing a call to
