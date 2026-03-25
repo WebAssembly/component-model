@@ -1319,7 +1319,7 @@ been allowed to resolve and explicitly relinquish any borrowed handles.
 
 A "buffer" is an abstract region of memory that can either be read-from or
 written-to. This region of memory can either be owned by the host or by wasm.
-Currently wasm memory is always 32-bit linear memory, but soon 64-bit and GC
+Currently wasm memory is always 32-bit or 64-bit linear memory, but soon GC
 memory will be added. Thus, buffers provide an abstraction over at least 4
 different "kinds" of memory.
 
@@ -4203,8 +4203,8 @@ For canonical definitions:
 In addition to [general validation of `$opts`](#canonopt-validation) validation
 specifies:
 * `$f` is given type `(func (param i32 T T) (result T))` where `T` is `i32` or
-  `i64` as determined by the `memory` from `$opts` (or `i32` by default if no 
-  `memory` is present).
+  `i64` as determined by the address type of `memory` from `$opts` (or `i32` by
+  default if no `memory` is present).
 * `$stream_t` must be a type of the form `(stream $t?)`
 * If `$t` is present:
   * [`lower($t)` above](#canonopt-validation) defines required options for `stream.write`
@@ -4324,8 +4324,8 @@ For canonical definitions:
 In addition to [general validation of `$opts`](#canonopt-validation) validation
 specifies:
 * `$f` is given type `(func (param i32 T) (result i32))` where `T` is `i32` or
-  `i64` as determined by the `memory` from `$opts` (or `i32` by default if no 
-  `memory` is present).
+  `i64` as determined by the address type of `memory` from `$opts` (or `i32`
+  by default if no `memory` is present).
 * `$future_t` must be a type of the form `(future $t?)`
 * If `$t` is present:
   * [`lift($t)` above](#canonopt-validation) defines required options for `future.read`
@@ -4750,7 +4750,7 @@ For a canonical definition:
 validation specifies:
 * `$f` is given type `(func (param $ptr) (param $units) (result i32))` 
   where `$ptr` and `$units` are both `i32` or `i64` as determined by
-  the `memory` field in `$opts`.
+  the address type of the `memory` field in `$opts`.
 * `async` is not present
 * `memory` must be present
 
@@ -4792,7 +4792,7 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func (param i32) (param $ptr))` where `$ptr` is `i32` or `i64`
-  as determined by the `memory` from `$opts`
+  as determined by the address type of `memory` from `$opts`
 * `async` is not present
 * `memory` must be present
 * `realloc` must be present
