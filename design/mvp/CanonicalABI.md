@@ -4386,7 +4386,7 @@ state (in which the only valid operation is to call `future.drop-*`) on
 read/written at most once and futures are only passed to other components in a
 state where they are ready to be read/written. Another important difference is
 that, since the buffer length is always implied by the `CopyResult`, the number
-of elements copied is not packed in the high bits; they're always zero.
+of elements copied is not packed in the high 28 bits; they're always zero.
 ```python
   def future_event(result):
     assert((buffer.remain() == 0) == (result == CopyResult.COMPLETED))
