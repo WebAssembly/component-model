@@ -1336,8 +1336,9 @@ that returns how many `t` values may still be read or written. Buffers mostly
 hide their original/complete size. However, zero-length buffers need to be
 treated specially (particularly when a zero-length read rendezvous with a
 zero-length write), so there is a special query for detecting whether a buffer
-is zero-length. Based on this, buffers are represented by the following 3
-abstract Python classes:
+is zero-length. Internally, buffers do have a maximum length of `2^28 - 1` which
+is independent of the type of memory backing the buffer. Based on this, buffers
+are represented by the following 3 abstract Python classes:
 ```python
 class Buffer:
   MAX_LENGTH = 2**28 - 1
@@ -4270,7 +4271,9 @@ the other end dropped, calling anything other than `stream.drop-*` traps.
 Lastly, `stream_event` packs the `CopyResult` and number of elements copied up
 until this point into a single `i32` or `i64`-sized payload for core wasm. The
 size is determined by the `addrtype` coming from the [`memory type`] of the
-`memory` immediate.
+`memory` immediate. Note that even though the number of elements copied is
+packed into an `addrtype`, the maximum length of the buffer is fixed at `2^28 - 1`
+independently of the `addrtype`.
 ```python
   def stream_event(result, reclaim_buffer):
     reclaim_buffer()

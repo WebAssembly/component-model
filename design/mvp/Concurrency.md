@@ -436,10 +436,6 @@ stackless async ABI is used, returning the "exit" code to the event loop. This
 non-reuse of thread-local storage between distinct export calls avoids what
 would otherwise be a likely source of TLS-related memory leaks.
 
-When [wasm-gc] is integrated into the Canonical ABI, `context.{get,set}` will be
-relaxed so that these integral context values can serve as indices into
-guest-managed tables of typed GC references.
-
 Since the same mutable thread-local storage cells are shared by all core wasm
 running under the same thread in the same component, the cells' contents must
 be carefully coordinated in the same way as native code has to carefully
