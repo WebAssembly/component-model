@@ -129,7 +129,7 @@ def test(t, vals_to_lift, v,
   if lower_v is None:
     lower_v = v
 
-  heap = Heap(5*len(cx.opts.memory.bytes))
+  heap = Heap(5*len(cx.opts.memory))
   if dst_encoding is None:
     dst_encoding = cx.opts.string_encoding
   cx = mk_cx(MemInst(heap.memory, cx.opts.memory.ptr_type()), dst_encoding, heap.realloc)
