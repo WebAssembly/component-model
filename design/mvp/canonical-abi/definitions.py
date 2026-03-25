@@ -2195,9 +2195,14 @@ def canon_resource_rep(rt, thread, i):
 ### 🔀 `canon context.get`
 
 def canon_context_get(t, i, thread):
+  MASK_32BIT = 1 << 32 - 1
+
   assert(t == 'i32' or t == 'i64')
   assert(i < Thread.CONTEXT_LENGTH)
-  return [thread.context[i]]
+  result = thread.context[i]
+  if t == 'i32':
+    result &= MASK_32BIT
+  return [result]
 
 ### 🔀 `canon context.set`
 

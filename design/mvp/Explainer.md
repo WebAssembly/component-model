@@ -1564,6 +1564,13 @@ The `context.get` built-in returns the `i`th element of the [current thread]'s
 than 2 and `T` to be `i32` or `i64`, but these restrictions may be relaxed in
 the future.
 
+Mixing `i32` and `i64` results in truncating or unsigned extending the
+stored values:
+* If `context.get i32 i` is called after `context.set i64 i v`,
+  only the low 32-bits are read (returning `i32.wrap_i64 v`).
+* If `context.get i64 i` is called after `context.set i32 i v`,
+  only the upper 32-bits will be zeroed (returning `i64.extend_i32_u v`).
+
 For details, see [Thread-Local Storage] in the concurrency explainer and
 [`canon_context_get`] in the Canonical ABI explainer.
 
@@ -1578,6 +1585,13 @@ The `context.set` built-in sets the `i`th element of the [current thread]'s
 [thread-local storage] array to the value `v`. Validation currently restricts
 `i` to be less than 2 and `T` to be `i32` or `i64`, but these restrictions may
 be relaxed in the future.
+
+Mixing `i32` and `i64` results in truncating or unsigned extending the
+stored values:
+* If `context.get i32 i` is called after `context.set i64 i v`,
+  only the low 32-bits are read (returning `i32.wrap_i64 v`).
+* If `context.get i64 i` is called after `context.set i32 i v`,
+  only the upper 32-bits will be zeroed (returning `i64.extend_i32_u v`).
 
 For details, see [Thread-Local Storage] in the concurrency explainer and
 [`canon_context_set`] in the Canonical ABI explainer.
