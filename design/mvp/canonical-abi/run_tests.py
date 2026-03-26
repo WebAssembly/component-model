@@ -389,6 +389,7 @@ v = [{ str(i):b for i in range(32) } for b in [True,False]]
 test_heap(t, v, [0,2],
           [0xff,0xff,0xff,0xff, 0,0,0,0])
 
+
 def test_flatten(t, params, results, addr_type='i32'):
   opts = mk_opts(MemInst(bytearray(), addr_type))
   expect = CoreFuncType(params, results)
@@ -463,6 +464,107 @@ def test_roundtrips():
   for addr_type in ['i32', 'i64']:
     for t, v in cases:
       test_roundtrip(t, v, addr_type=addr_type)
+
+
+def assert_trap_on_load_string(src_encoding, s, tagged_code_units, encoded):
+  ptr_offset = 8
+  memory = bytearray(ptr_offset + len(encoded))
+  memory[0:4] = int.to_bytes(ptr_offset, 4, 'little')
+  memory[4:8] = int.to_bytes(tagged_code_units, 4, 'little')
+  memory[ptr_offset:] = encoded
+  cx = mk_cx(MemInst(memory, 'i32'), src_encoding)
+  try:
+    load(cx, 0, StringType())
+    fail("expected trap loading {!r} as {}".format(s, src_encoding))
+  except Trap:
+    pass
+
+def test_string_byte_length_limit():
+  saved = definitions.MAX_STRING_BYTE_LENGTH
+  try:
+    definitions.MAX_STRING_BYTE_LENGTH = 20
+
+    # Loading from UTF-8: 10 bytes will succeed, 11 bytes will trap on load
+    for dst in encodings:
+      test_string('utf8', dst, 'helloworld')
+    assert_trap_on_load_string('utf8', 'hello world', 11, b'hello world')
+
+    # Loading from UTF-16 all ASCII: 10 code units will succeed, 11 will trap on
+    # load
+    for dst in encodings:
+      test_string('utf16', dst, 'abcdefghij')
+    assert_trap_on_load_string('utf16', 'abcdefghijk', 11,
+                        'abcdefghijk'.encode('utf-16-le'))
+
+    # UTF-16 non-ASCII: 6 code units will succeed, 7 will trap on load
+    for dst in encodings:
+      test_string('utf16', dst, 'ab\u0100def')
+    assert_trap_on_load_string('utf16', '\u0100abcdef', 7,
+                        '\u0100abcdef'.encode('utf-16-le'))
+
+    # Latin1+utf16 (latin1): 10 bytes will succeed, 11 will trap on load
+    for dst in encodings:
+      test_string('latin1+utf16', dst, 'helloworld')
+    assert_trap_on_load_string('latin1+utf16', 'hello world', 11,
+                        b'hello world')
+
+    # Latin1+utf16 (utf16 variant, non-ASCII): 6 code units will succeed, 7
+    # will trap on load
+    for dst in encodings:
+      test_string('latin1+utf16', dst, '\u0100abcde')
+    assert_trap_on_load_string('latin1+utf16', '\u0100abcdef', 7 | UTF16_TAG,
+                        '\u0100abcdef'.encode('utf-16-le'))
+
+  finally:
+    definitions.MAX_STRING_BYTE_LENGTH = saved
+
+def test_list_byte_length_limit():
+  saved = definitions.MAX_LIST_BYTE_LENGTH
+  try:
+    definitions.MAX_LIST_BYTE_LENGTH = 20
+
+    # This list has the same size under all pointer types
+    for addr_type in ['i32', 'i64']:
+      # five U32's fit in 20 bytes
+      test_heap(ListType(U32Type()), [1,2,3,4,5], [0, 5],
+                [1,0,0,0, 2,0,0,0, 3,0,0,0, 4,0,0,0, 5,0,0,0], addr_type)
+      # six U32's exceed the limit
+      test_heap(ListType(U32Type()), None, [0, 6],
+                [1,0,0,0, 2,0,0,0, 3,0,0,0, 4,0,0,0, 5,0,0,0, 6,0,0,0], addr_type)
+
+    # A list of strings has 8 bytes per entry in i32 and 16 bytes per entry in
+    # i64 So a list of length 1 can be loaded, but a list of length 2 hits the
+    # limit.
+    test_heap(ListType(StringType()), [mk_str("hi")], [0, 1],
+              [8,0,0,0, 2,0,0,0, ord('h'), ord('i')], 'i32')
+    test_heap(ListType(StringType()), [mk_str("hi")], [0, 1],
+              [16,0,0,0,0,0,0,0, 2,0,0,0,0,0,0,0, ord('h'), ord('i')], 'i64')
+
+    test_heap(ListType(StringType()), None, [0, 2],
+              [16,0,0,0, 2,0,0,0, 18,0,0,0, 2,0,0,0,
+                ord('h'),ord('i'),ord('a'),ord('b')], 'i32')
+    test_heap(ListType(StringType()), None, [0, 2],
+              [32,0,0,0,0,0,0,0, 2,0,0,0,0,0,0,0,
+                34,0,0,0,0,0,0,0, 2,0,0,0,0,0,0,0,
+                ord('h'),ord('i'),ord('a'),ord('b')], 'i64')
+
+	  # Similarly a list of lists of U8's has 8 bytes per entry in i32 and 16
+	  # bytes per entry in i64 So a list of length 1 can be loaded, but a list
+	  # of length 2 hits the limit.
+    test_heap(ListType(ListType(U8Type())), [[3,4,5]], [0, 1],
+              [8,0,0,0, 3,0,0,0, 3, 4, 5], 'i32')
+    test_heap(ListType(ListType(U8Type())), [[3,4,5]], [0, 1],
+              [16,0,0,0,0,0,0,0, 3,0,0,0,0,0,0,0, 3, 4, 5], 'i64')
+    test_heap(ListType(ListType(U8Type())), None, [0, 2],
+              [16,0,0,0, 2,0,0,0, 18,0,0,0, 3,0,0,0,
+               1,2,3,4,5], 'i32')
+    test_heap(ListType(ListType(U8Type())), None, [0, 2],
+              [32,0,0,0,0,0,0,0, 2,0,0,0,0,0,0,0,
+                34,0,0,0,0,0,0,0, 3,0,0,0,0,0,0,0,
+                1,2,3,4,5], 'i64')
+
+  finally:
+    definitions.MAX_LIST_BYTE_LENGTH = saved
 
 
 def test_handles():
@@ -2829,6 +2931,8 @@ def test_reentrance():
 
 
 test_roundtrips()
+test_string_byte_length_limit()
+test_list_byte_length_limit()
 test_handles()
 test_async_to_async()
 test_async_callback()
