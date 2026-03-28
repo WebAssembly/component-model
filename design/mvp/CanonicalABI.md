@@ -627,7 +627,9 @@ A `Thread` can be in one of the following 3 states:
   component instance
 
 The `waiting` state has additional `ready` and non-`ready` sub-states such that
-a `waiting` thread may only be resumed once it's `ready`.
+a `waiting` thread may only be resumed once it's `ready`. Because all threads
+are contained by a single component instance, each component instance has an
+associated (potentially-empty) list of threads that are `ready` to be resumed.
 ```python
   def running(self):
     return self.parent_lock is not None
@@ -640,6 +642,9 @@ a `waiting` thread may only be resumed once it's `ready`.
 
   def ready(self):
     return self.waiting() and self.ready_func()
+
+  def ready_list(inst: ComponentInstance) -> list[Thread]:
+    return [t for t in inst.threads.array if t and t.ready()]
 ```
 
 When a `Thread` is created, an internal `threading.Thread` is started and
@@ -664,31 +669,75 @@ Thus, threads start blocked and have to be explicitly unblocked by wasm code.
       self.fiber_lock.acquire()
       assert(self.running() and not cancelled(self.resume_arg))
       self.resume_arg = None
-      thread_func(self)
-      assert(self.running())
-      self.task.thread_stop(self)
-      if self.index is not None:
-        self.task.inst.threads.remove(self.index)
-      self.parent_lock.release()
+      try:
+        thread_func(self)
+        self.exit()
+      except ThreadExit:
+        return
+      assert(False)
     self.fiber = threading.Thread(target = fiber_func)
     self.fiber.start()
     assert(self.suspended())
 ```
 `Thread`s register themselves with their containing `Task` via
-`Task.thread_start` and unregister themselves via `Task.thread_stop` when they
-exit. This registration is used for delivering cancellation requests sent to the
-`Task` by the caller (via `Task.request_cancellation`) as well as enforcing
-Canonical ABI rules when the last `Thread` in a `Task` exits.
+`Task.thread_start` and unregister themselves via `Task.thread_stop` in
+`Thread.exit` (defined next).
 
-If a `Thread` was not cancelled while waiting for backpressure, it will be
-allocated an `index` in its containing component instance's `threads` table and,
-when the `Thread`'s root function returns, this `index` is deallocated by the
-code above.
+A thread always exits by throwing a `ThreadExit` exception that is thrown by
+`Thread.exit`. The call to `exit()` can either happen implicitly, when the core
+wasm thread function returns, or explicitly, if core wasm calls the
+`thread.exit` built-in (defined below in `canon_thread_exit`). In either case,
+the following things happen on the thread before it is released:
+```python
+  def exit(self):
+    assert(self.running() and self.task.may_block())
+    if self.index is not None:
+      self.task.inst.threads.remove(self.index)
+    self.task.thread_stop(self)
+    if self.task.is_sync_and_not_returned():
+      self.release_some_ready_sibling()
+    else:
+      self.parent_lock.release()
+    raise ThreadExit()
+```
+First, if a `Thread` was not cancelled while waiting for backpressure, it will
+have been allocated an `index` in its containing component instance's `threads`
+table which is then deallocated and recycled when the thread exits.
 
+Next, `Task.thread_stop` is called to pair with the `Task.thread_start` call in
+thread initialization above which, among other things, will trap if this was the
+last thread in a task that has not yet returned its value.
+
+Lastly, before throwing the `ThreadExit` exception that actually exits the
+Python thread, control flow is transferred to some other thread by releasing its
+lock. *Which* thread depends on the state of the `Task` that this thread is
+executing on behalf of:
+* If the current task was spawned for a non-`async`-typed export and the task
+  has not yet returned a value, then, by the calling contract, it must not
+  block. So instead, control flow is transferred to some other thread *in the
+  same component instance*
+
+TODO: what if that other thread blocks... need to adjust `may_block`
+
+...
 While in the `running` state, threads have a `parent_lock` which points to a
 locked mutex that some parent thread is currently waiting to `acquire()`. When a
 thread exits, it transfers control flow to this parent thread by `release()`ing
 the `parent_lock` as its final action.
+
+
+```python
+  def release_some_ready_sibling(self):
+    other = random.choice(Thread.ready_list(self.task.inst))
+    assert(self is not other)
+    other.stop_waiting()
+    self.release_sibling(other)
+
+  def stop_waiting(self):
+    assert(self.waiting())
+    self.ready_func = None
+    self.task.inst.store.waiting.remove(self)
+```
 
 While in the `waiting` state, threads have an associated `ready_func` callback
 which is continuously polled by `Store.tick` (semantically, an optimized

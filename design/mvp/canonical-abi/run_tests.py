@@ -2294,13 +2294,13 @@ def test_cancel_subtask():
   def thread_func(cancellable, thread, args):
     [mainthreadi] = args
     if cancellable:
-      [ret] = canon_thread_switch_to(True, thread, mainthreadi)
+      [ret] = canon_thread_suspend_to_suspended(True, thread, mainthreadi)
       assert(ret == ResumeArg.CANCELLED)
-      [ret] = canon_thread_switch_to(True, thread, mainthreadi)
+      [ret] = canon_thread_suspend_to_suspended(True, thread, mainthreadi)
       assert(ret == ResumeArg.NOT_CANCELLED)
       [] = canon_task_return(thread, [U8Type()], callee_opts, [45])
     else:
-      [ret] = canon_thread_switch_to(False, thread, mainthreadi)
+      [ret] = canon_thread_suspend_to_suspended(False, thread, mainthreadi)
       assert(ret == ResumeArg.NOT_CANCELLED)
     return []
   cthread_func = partial(thread_func, True)
@@ -2315,23 +2315,23 @@ def test_cancel_subtask():
     [mainthreadi] = canon_thread_index(thread)
 
     [threadi1] = canon_thread_new_indirect(core_ft, core_ftbl, thread, ncfi, mainthreadi)
-    [ret] = canon_thread_switch_to(True, thread, threadi1)
+    [ret] = canon_thread_suspend_to_suspended(True, thread, threadi1)
     assert(ret == ResumeArg.NOT_CANCELLED)
 
     [threadi2] = canon_thread_new_indirect(core_ft, core_ftbl, thread, cfi, mainthreadi)
-    [ret] = canon_thread_switch_to(True, thread, threadi2)
+    [ret] = canon_thread_suspend_to_suspended(True, thread, threadi2)
     assert(ret == ResumeArg.NOT_CANCELLED)
 
     [threadi3] = canon_thread_new_indirect(core_ft, core_ftbl, thread, ncfi, mainthreadi)
-    [ret] = canon_thread_switch_to(True, thread, threadi3)
+    [ret] = canon_thread_suspend_to_suspended(True, thread, threadi3)
     assert(ret == ResumeArg.NOT_CANCELLED)
 
     [ret] = canon_thread_suspend(False, thread)
     assert(ret == ResumeArg.NOT_CANCELLED)
 
-    [] = canon_thread_resume_later(thread, threadi1)
-    [] = canon_thread_resume_later(thread, threadi2)
-    [] = canon_thread_resume_later(thread, threadi3)
+    [] = canon_thread_unsuspend(thread, threadi1)
+    [] = canon_thread_unsuspend(thread, threadi2)
+    [] = canon_thread_unsuspend(thread, threadi3)
     return []
   callee6 = partial(canon_lift, callee_opts, callee_inst, ft, core_callee6)
 
@@ -2633,14 +2633,14 @@ def test_threads():
 
   def thread_func2(thread, args):
     [mainthreadi] = args
-    [ret] = canon_thread_yield_to(True, thread, mainthreadi)
+    [ret] = canon_thread_yield_to_suspended(True, thread, mainthreadi)
     assert(ret == ResumeArg.NOT_CANCELLED)
     return []
   fi2 = ftbl.add(CoreFuncRef(ft, thread_func2))
 
   def thread_func3(thread, args):
     [mainthreadi] = args
-    [] = canon_thread_resume_later(thread, mainthreadi)
+    [] = canon_thread_unsuspend(thread, mainthreadi)
     return []
   fi3 = ftbl.add(CoreFuncRef(ft, thread_func3))
 
@@ -2661,15 +2661,15 @@ def test_threads():
     [mainthreadi] = canon_thread_index(thread)
 
     [threadi] = canon_thread_new_indirect(ft, ftbl, thread, fi1, 13)
-    [ret] = canon_thread_yield_to(True, thread, threadi)
+    [ret] = canon_thread_yield_to_suspended(True, thread, threadi)
     assert(ret == ResumeArg.NOT_CANCELLED)
 
     [threadi] = canon_thread_new_indirect(ft, ftbl, thread, fi2, mainthreadi)
-    [ret] = canon_thread_switch_to(True, thread, threadi)
+    [ret] = canon_thread_suspend_to_suspended(True, thread, threadi)
     assert(ret == ResumeArg.NOT_CANCELLED)
 
     [threadi] = canon_thread_new_indirect(ft, ftbl, thread, fi3, mainthreadi)
-    [] = canon_thread_resume_later(thread, threadi)
+    [] = canon_thread_unsuspend(thread, threadi)
     [ret] = canon_thread_suspend(True, thread)
     assert(ret == ResumeArg.NOT_CANCELLED)
 
@@ -2677,7 +2677,7 @@ def test_threads():
     mem[ptr] = 0
     for i in range(5):
       [threadi] = canon_thread_new_indirect(ft, ftbl, thread, fi4, ptr)
-      [] = canon_thread_resume_later(thread, threadi)
+      [] = canon_thread_unsuspend(thread, threadi)
     while mem[ptr] != 10:
       canon_thread_yield(False, thread)
 
@@ -2689,6 +2689,135 @@ def test_threads():
     [result] = v
 
   caller_ft = FuncType([], [U8Type()], async_ = True)
+  run_lift(opts, inst, caller_ft, core_func, lambda:[], on_resolve)
+  assert(result == 42)
+
+def test_sync_threads():
+  store = Store()
+  inst = ComponentInstance(store)
+  mem = bytearray(8)
+  opts = mk_opts(memory = mem, async_ = True)
+
+  ftbl = Table()
+  ft = CoreFuncType(['i32'],[])
+
+  ping_count1 = 0
+  pong_count1 = 0
+  threadi2 = None
+  threadi3 = None
+  threadi4_1 = None
+  threadi4_2 = None
+  ping_count5 = 0
+  pong_count5 = 0
+  threadi5_1 = None
+  threadi5_2 = None
+
+  def thread_func1_1(thread, args):
+    assert(args == [131])
+    nonlocal ping_count1
+    while ping_count1 < 3 or pong_count1 < 3:
+      ping_count1 += 1
+      [_] = canon_thread_yield(False, thread)
+    [] = canon_thread_unsuspend(thread, threadi2)
+    return []
+  fi1_1 = ftbl.add(CoreFuncRef(ft, thread_func1_1))
+
+  def thread_func1_2(thread, args):
+    assert(args == [132])
+    nonlocal pong_count1
+    while ping_count1 < 3 or pong_count1 < 3:
+      pong_count1 += 1
+      [_] = canon_thread_yield(False, thread)
+    return []
+  fi1_2 = ftbl.add(CoreFuncRef(ft, thread_func1_2))
+
+  def thread_func2(thread, args):
+    assert(args == [14])
+    [] = canon_thread_unsuspend(thread, threadi3)
+    [] = canon_thread_exit(thread)
+    return []
+  fi2 = ftbl.add(CoreFuncRef(ft, thread_func2))
+
+  def thread_func3(thread, args):
+    assert(args == [15])
+    [] = canon_thread_unsuspend(thread, threadi4_1)
+    [_] = canon_thread_suspend(False, thread)
+    return []
+  fi3 = ftbl.add(CoreFuncRef(ft, thread_func3))
+
+  wsi = None
+  def thread_func4_1(thread, args):
+    assert(args == [161])
+    [] = canon_thread_unsuspend(thread, threadi3)
+    [] = canon_thread_unsuspend(thread, threadi4_2)
+    nonlocal wsi
+    [wsi] = canon_waitable_set_new(thread)
+    [event] = canon_waitable_set_wait(True, mem, thread, wsi, 0)
+    assert(event == EventCode.FUTURE_READ)
+    [] = canon_thread_unsuspend(thread, threadi5_1)
+    return []
+  fi4_1 = ftbl.add(CoreFuncRef(ft, thread_func4_1))
+
+  def thread_func4_2(thread, args):
+    assert(args == [162])
+    [packed] = canon_future_new(FutureType(None), thread)
+    futr,futw = unpack_new_ends(packed)
+    [ret] = canon_future_read(FutureType(None), opts, thread, futr, 0xdeadbeef)
+    assert(ret == definitions.BLOCKED)
+    [] = canon_waitable_join(thread, futr, wsi)
+    [ret] = canon_future_write(FutureType(None), opts, thread, futw, 0xdeadbeef)
+    assert(ret == CopyResult.COMPLETED)
+    return []
+  fi4_2 = ftbl.add(CoreFuncRef(ft, thread_func4_2))
+
+  def thread_func5_1(thread, args):
+    assert(args == [171])
+    nonlocal ping_count5
+    while ping_count5 < 3:
+      assert(ping_count5 == pong_count5)
+      [_] = canon_thread_yield_then_promote(False, thread, threadi5_2)
+      assert(ping_count5 == pong_count5)
+      [] = canon_thread_unsuspend(thread, threadi5_2)
+      [_] = canon_thread_yield_then_promote(False, thread, threadi5_2)
+      assert(ping_count5 == pong_count5 - 1)
+      ping_count5 += 1
+    [] = canon_task_return(thread, [U8Type()], opts, [42])
+    [] = canon_thread_unsuspend(thread, threadi5_2)
+    return []
+  fi5_1 = ftbl.add(CoreFuncRef(ft, thread_func5_1))
+
+  def thread_func5_2(thread, args):
+    assert(args == [172])
+    nonlocal pong_count5
+    while pong_count5 < 3:
+      pong_count5 += 1
+      [_] = canon_thread_suspend_then_promote(False, thread, threadi5_1)
+    return []
+  fi5_2 = ftbl.add(CoreFuncRef(ft, thread_func5_2))
+
+  def core_func(thread, args):
+    assert(not args)
+    nonlocal threadi2, threadi3, threadi4_1, threadi4_2, threadi5_1, threadi5_2
+
+    [threadi1_1] = canon_thread_new_indirect(ft, ftbl, thread, fi1_1, 131)
+    [threadi1_2] = canon_thread_new_indirect(ft, ftbl, thread, fi1_2, 132)
+    [threadi2] = canon_thread_new_indirect(ft, ftbl, thread, fi2, 14)
+    [threadi3] = canon_thread_new_indirect(ft, ftbl, thread, fi3, 15)
+    [threadi4_1] = canon_thread_new_indirect(ft, ftbl, thread, fi4_1, 161)
+    [threadi4_2] = canon_thread_new_indirect(ft, ftbl, thread, fi4_2, 162)
+    [threadi5_1] = canon_thread_new_indirect(ft, ftbl, thread, fi5_1, 171)
+    [threadi5_2] = canon_thread_new_indirect(ft, ftbl, thread, fi5_2, 172)
+    [] = canon_thread_unsuspend(thread, threadi1_1)
+    [] = canon_thread_unsuspend(thread, threadi1_2)
+    [] = canon_thread_exit(thread)
+    assert(False)
+
+  result = None
+  def on_resolve(v):
+    nonlocal result
+    [result] = v
+
+  caller_ft = FuncType([], [U8Type()])
   run_lift(opts, inst, caller_ft, core_func, lambda:[], on_resolve)
   assert(result == 42)
 
@@ -2825,6 +2954,7 @@ test_self_copy(U8Type())
 test_self_copy(F64Type())
 test_async_flat_params()
 test_threads()
+test_sync_threads()
 test_thread_cancel_callback()
 test_reentrance()
 
