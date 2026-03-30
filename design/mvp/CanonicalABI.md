@@ -2158,13 +2158,13 @@ of source code units.
 The `MAX_STRING_BYTE_LENGTH` constant ensures that the high bit of a
 string's number of code units is never set, keeping it clear for `UTF16_TAG`.
 
-Since this byte length of a string depends on the encoding, we estimate the
-worst case length across all encodings when loading the string and trap if the
-maximum length might be exceeded. Generally the worst case length comes from
-encoding in UTF-16 where byte length could be twice the number of code units.
-But if the original encoding was UTF-16 the byte length may be up to 3 times the
-number of code units when encoding in UTF-8 if there are code points at 2^7 or
-higher.
+Since this byte length of a string depends on the encoding, we additionally
+restrict the total code units to `MAX_STRING_CODE_UNITS = (1 << 28) - 1` when
+loading a string to ensure that it won't exceed the maximum byte length when
+converted to a different encoding. The worst case inflation for string length
+comes in `store_utf16_to_utf8` which may result in 3 bytes per code unit in the
+original encoding, so this limit is low enough to keep strings within the
+maximum length.
 ```python
 String = tuple[str, str, int]
 
@@ -2175,15 +2175,11 @@ def load_string(cx, ptr) -> String:
 
 UTF16_TAG = 1 << 31
 
-def worst_case_string_byte_length(string : String):
-  (s, encoding, tagged_code_units) = string
-  if encoding == 'utf16' or (encoding == 'latin1+utf16' and (tagged_code_units & UTF16_TAG)):
-    for code_point in s:
-      if ord(code_point) >= 2 ** 7:
-        return 3 * (tagged_code_units & ~UTF16_TAG)
-  return 2 * (tagged_code_units & ~UTF16_TAG)
-
 MAX_STRING_BYTE_LENGTH = (1 << 31) - 1
+MAX_STRING_CODE_UNITS = (1 << 28) - 1
+# The worst case for string byte length comes in store_utf16_to_utf8 where
+# we may end up with 3 bytes for each original code unit.
+assert(MAX_STRING_CODE_UNITS * 3 <= MAX_STRING_BYTE_LENGTH)
 
 def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   match cx.opts.string_encoding:
@@ -2211,10 +2207,9 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   except UnicodeError:
     trap()
 
-  string = (s, cx.opts.string_encoding, tagged_code_units)
-  trap_if(worst_case_string_byte_length(string) > MAX_STRING_BYTE_LENGTH)
+  trap_if((tagged_code_units & ~UTF16_TAG) > MAX_STRING_CODE_UNITS)
 
-  return string
+  return (s, cx.opts.string_encoding, tagged_code_units)
 ```
 
 Error context values are lifted directly from the current component instance's

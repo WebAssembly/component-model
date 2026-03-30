@@ -1286,15 +1286,11 @@ def load_string(cx, ptr) -> String:
 
 UTF16_TAG = 1 << 31
 
-def worst_case_string_byte_length(string : String):
-  (s, encoding, tagged_code_units) = string
-  if encoding == 'utf16' or (encoding == 'latin1+utf16' and (tagged_code_units & UTF16_TAG)):
-    for code_point in s:
-      if ord(code_point) >= 2 ** 7:
-        return 3 * (tagged_code_units & ~UTF16_TAG)
-  return 2 * (tagged_code_units & ~UTF16_TAG)
-
 MAX_STRING_BYTE_LENGTH = (1 << 31) - 1
+MAX_STRING_CODE_UNITS = (1 << 28) - 1
+# The worst case for string byte length comes in store_utf16_to_utf8 where
+# we may end up with 3 bytes for each original code unit.
+assert(MAX_STRING_CODE_UNITS * 3 <= MAX_STRING_BYTE_LENGTH)
 
 def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   match cx.opts.string_encoding:
@@ -1322,10 +1318,9 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   except UnicodeError:
     trap()
 
-  string = (s, cx.opts.string_encoding, tagged_code_units)
-  trap_if(worst_case_string_byte_length(string) > MAX_STRING_BYTE_LENGTH)
+  trap_if((tagged_code_units & ~UTF16_TAG) > MAX_STRING_CODE_UNITS)
 
-  return string
+  return (s, cx.opts.string_encoding, tagged_code_units)
 
 def lift_error_context(cx, i):
   errctx = cx.inst.handles.get(i)

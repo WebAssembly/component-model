@@ -466,58 +466,6 @@ def test_roundtrips():
       test_roundtrip(t, v, addr_type=addr_type)
 
 
-def assert_trap_on_load_string(src_encoding, s, tagged_code_units, encoded):
-  ptr_offset = 8
-  memory = bytearray(ptr_offset + len(encoded))
-  memory[0:4] = int.to_bytes(ptr_offset, 4, 'little')
-  memory[4:8] = int.to_bytes(tagged_code_units, 4, 'little')
-  memory[ptr_offset:] = encoded
-  cx = mk_cx(MemInst(memory, 'i32'), src_encoding)
-  try:
-    load(cx, 0, StringType())
-    fail("expected trap loading {!r} as {}".format(s, src_encoding))
-  except Trap:
-    pass
-
-def test_string_byte_length_limit():
-  saved = definitions.MAX_STRING_BYTE_LENGTH
-  try:
-    definitions.MAX_STRING_BYTE_LENGTH = 20
-
-    # Loading from UTF-8: 10 bytes will succeed, 11 bytes will trap on load
-    for dst in encodings:
-      test_string('utf8', dst, 'helloworld')
-    assert_trap_on_load_string('utf8', 'hello world', 11, b'hello world')
-
-    # Loading from UTF-16 all ASCII: 10 code units will succeed, 11 will trap on
-    # load
-    for dst in encodings:
-      test_string('utf16', dst, 'abcdefghij')
-    assert_trap_on_load_string('utf16', 'abcdefghijk', 11,
-                        'abcdefghijk'.encode('utf-16-le'))
-
-    # UTF-16 non-ASCII: 6 code units will succeed, 7 will trap on load
-    for dst in encodings:
-      test_string('utf16', dst, 'ab\u0100def')
-    assert_trap_on_load_string('utf16', '\u0100abcdef', 7,
-                        '\u0100abcdef'.encode('utf-16-le'))
-
-    # Latin1+utf16 (latin1): 10 bytes will succeed, 11 will trap on load
-    for dst in encodings:
-      test_string('latin1+utf16', dst, 'helloworld')
-    assert_trap_on_load_string('latin1+utf16', 'hello world', 11,
-                        b'hello world')
-
-    # Latin1+utf16 (utf16 variant, non-ASCII): 6 code units will succeed, 7
-    # will trap on load
-    for dst in encodings:
-      test_string('latin1+utf16', dst, '\u0100abcde')
-    assert_trap_on_load_string('latin1+utf16', '\u0100abcdef', 7 | UTF16_TAG,
-                        '\u0100abcdef'.encode('utf-16-le'))
-
-  finally:
-    definitions.MAX_STRING_BYTE_LENGTH = saved
-
 def test_list_byte_length_limit():
   saved = definitions.MAX_LIST_BYTE_LENGTH
   try:
@@ -2931,7 +2879,6 @@ def test_reentrance():
 
 
 test_roundtrips()
-test_string_byte_length_limit()
 test_list_byte_length_limit()
 test_handles()
 test_async_to_async()
