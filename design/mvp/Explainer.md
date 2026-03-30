@@ -1591,7 +1591,7 @@ stored values:
 * If `context.get i32 i` is called after `context.set i64 i v`,
   only the low 32-bits are read (returning `i32.wrap_i64 v`).
 * If `context.get i64 i` is called after `context.set i32 i v`,
-  only the upper 32-bits will be zeroed (returning `i64.extend_i32_u v`).
+  the upper 32-bits will be zero (returning `i64.extend_i32_u v`).
 
 For details, see [Thread-Local Storage] in the concurrency explainer and
 [`canon_context_set`] in the Canonical ABI explainer.
