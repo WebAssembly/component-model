@@ -54,7 +54,7 @@ def mk_cx(memory = MemInst(bytearray(), 'i32'), encoding = 'utf8', realloc = Non
 def run_lift(opts, inst, ft, callee, on_start, on_resolve):
   lifted_func = partial(canon_lift, opts, inst, ft, callee)
   task = inst.store.invoke(lifted_func, None, on_start, on_resolve)
-  while inst.store.pending:
+  while inst.store.waiting:
     inst.store.tick()
 
 def mk_task(caller, on_resolve, thread_func):
@@ -599,9 +599,9 @@ def test_async_to_async():
   def core_toggle(thread, args):
     assert(len(args) == 0)
     [] = canon_backpressure_inc(thread)
-    thread.suspend_until(fut1_1.is_set)
+    thread.wait_until(fut1_1.is_set)
     [] = canon_task_return(thread, [], producer_opts, [])
-    thread.suspend_until(fut1_2.is_set)
+    thread.wait_until(fut1_2.is_set)
     [] = canon_backpressure_dec(thread)
     return []
   toggle_callee = partial(canon_lift, producer_opts, producer_inst, toggle_ft, core_toggle)
@@ -611,9 +611,9 @@ def test_async_to_async():
   def core_blocking_producer(thread, args):
     [x] = args
     assert(x == 83)
-    thread.suspend_until(fut2.is_set)
+    thread.wait_until(fut2.is_set)
     [] = canon_task_return(thread, [U8Type()], producer_opts, [44])
-    thread.suspend_until(fut3.is_set)
+    thread.wait_until(fut3.is_set)
     fut4.set()
     return []
   blocking_callee = partial(canon_lift, producer_opts, producer_inst, blocking_ft, core_blocking_producer)
@@ -667,7 +667,7 @@ def test_async_to_async():
     assert(consumer_heap.memory[retp] == 44)
     [] = canon_subtask_drop(thread, subi2)
     fut3.set()
-    thread.suspend_until(fut4.is_set)
+    thread.wait_until(fut4.is_set)
 
     [] = canon_task_return(thread, [U8Type()], consumer_opts, [42])
     return []
@@ -697,7 +697,7 @@ def test_async_callback():
 
   def core_producer_pre(fut, thread, args):
     assert(len(args) == 0)
-    thread.suspend_until(fut.is_set)
+    thread.wait_until(fut.is_set)
     canon_task_return(thread, [], producer_opts, [])
     return []
   fut1 = RacyBool(False)
@@ -1017,7 +1017,7 @@ def test_async_to_sync():
   def producer1_core(thread, args):
     nonlocal producer1_done
     assert(len(args) == 0)
-    thread.suspend_until(fut.is_set)
+    thread.wait_until(fut.is_set)
     producer1_done = True
     return []
 
@@ -1104,7 +1104,7 @@ def test_async_backpressure():
   def producer1_core(thread, args):
     nonlocal producer1_done
     canon_backpressure_inc(thread)
-    thread.suspend_until(fut.is_set)
+    thread.wait_until(fut.is_set)
     canon_backpressure_dec(thread)
     canon_task_return(thread, [], producer_opts, [])
     producer1_done = True
@@ -1184,7 +1184,7 @@ def test_sync_using_wait():
   ft = FuncType([], [], async_ = True)
 
   def core_hostcall_pre(fut, thread, args):
-    thread.suspend_until(fut.is_set)
+    thread.wait_until(fut.is_set)
     [] = canon_task_return(thread, [], hostcall_opts, [])
     return []
   fut1 = RacyBool(False)
@@ -1505,7 +1505,7 @@ def test_async_stream_ops():
           vs = host_import_incoming.consume(4)
           results_ready.set()
         threading.Thread(target = consume_results).start()
-        thread.suspend_until(results_ready.is_set)
+        thread.wait_until(results_ready.is_set)
         if vs:
           for i in range(len(vs)):
             vs[i] += 10
@@ -1765,7 +1765,7 @@ def test_wasm_to_wasm_stream():
     rsi,wsi = unpack_new_ends(packed)
     [] = canon_task_return(thread, [StreamType(U8Type())], opts1, [rsi])
 
-    thread.suspend_until(fut1.is_set)
+    thread.wait_until(fut1.is_set)
 
     mem1[0:4] = b'\x01\x02\x03\x04'
     [ret] = canon_stream_write(StreamType(U8Type()), opts1, thread, wsi, 0, 4)
@@ -1781,7 +1781,7 @@ def test_wasm_to_wasm_stream():
     result,n = unpack_result(ret)
     assert(n == 0 and result == CopyResult.CANCELLED)
 
-    thread.suspend_until(fut2.is_set)
+    thread.wait_until(fut2.is_set)
 
     mem1[0:8] = b'\x05\x06\x07\x08\x09\x0a\x0b\x0c'
     [ret] = canon_stream_write(StreamType(U8Type()), opts1, thread, wsi, 0, 8)
@@ -1849,7 +1849,7 @@ def test_wasm_to_wasm_stream():
     assert(mem2[0:8] == b'\x01\x02\x03\x04\x01\x02\x03\x04')
 
     fut2.set()
-    thread.suspend_until(fut3.is_set)
+    thread.wait_until(fut3.is_set)
 
     [ret] = canon_stream_read(StreamType(U8Type()), opts2, thread, rsi, 12345, 0)
     assert(ret == 0)
@@ -1864,7 +1864,7 @@ def test_wasm_to_wasm_stream():
     assert(n == 2 and result == CopyResult.COMPLETED)
     assert(mem2[0:6] == b'\x05\x06\x07\x08\x00\x00')
 
-    thread.suspend_until(fut4.is_set)
+    thread.wait_until(fut4.is_set)
 
     [ret] = canon_stream_read(StreamType(U8Type()), opts2, thread, rsi, 12345, 0)
     assert(ret == definitions.BLOCKED)
@@ -1896,7 +1896,7 @@ def test_wasm_to_wasm_stream_empty():
     rsi,wsi = unpack_new_ends(packed)
     [] = canon_task_return(thread, [StreamType(None)], opts1, [rsi])
 
-    thread.suspend_until(fut1.is_set)
+    thread.wait_until(fut1.is_set)
 
     [ret] = canon_stream_write(StreamType(None), opts1, thread, wsi, 10000, 2)
     result,n = unpack_result(ret)
@@ -1905,7 +1905,7 @@ def test_wasm_to_wasm_stream_empty():
     result,n = unpack_result(ret)
     assert(n == 2 and result == CopyResult.COMPLETED)
 
-    thread.suspend_until(fut2.is_set)
+    thread.wait_until(fut2.is_set)
 
     [ret] = canon_stream_write(StreamType(None), opts1, thread, wsi, 0, 8)
     assert(ret == definitions.BLOCKED)
@@ -1959,7 +1959,7 @@ def test_wasm_to_wasm_stream_empty():
     assert(n == 4 and result == CopyResult.COMPLETED)
 
     fut2.set()
-    thread.suspend_until(fut3.is_set)
+    thread.wait_until(fut3.is_set)
 
     [ret] = canon_stream_read(StreamType(None), opts2, thread, rsi, 1000000, 2)
     result,n = unpack_result(ret)
@@ -1968,7 +1968,7 @@ def test_wasm_to_wasm_stream_empty():
     result,n = unpack_result(ret)
     assert(n == 2 and result == CopyResult.COMPLETED)
 
-    thread.suspend_until(fut4.is_set)
+    thread.wait_until(fut4.is_set)
 
     [ret] = canon_stream_read(StreamType(None), opts2, thread, rsi, 1000000, 2)
     result,n = unpack_result(ret)
@@ -2148,7 +2148,7 @@ def test_futures():
       thread.task.return_([outgoing])
       incoming = HostFutureSink(U8Type())
       future.read(None, incoming, lambda why:())
-      thread.suspend_until(incoming.has_v.is_set)
+      thread.wait_until(incoming.has_v.is_set)
       assert(incoming.v == 42)
       outgoing.set_result(43)
     return mk_task(caller, on_resolve, thread_func)
@@ -2274,7 +2274,7 @@ def test_cancel_subtask():
       args = on_start()
       assert(len(args) == 1)
       assert(args[0] == 42)
-      thread.suspend_until(host_fut4.is_set)
+      thread.wait_until(host_fut4.is_set)
       thread.task.return_([43])
     return mk_task(caller, on_resolve, thread_func)
   def core_callee4(thread, args):
@@ -2301,9 +2301,9 @@ def test_cancel_subtask():
       args = on_start()
       assert(len(args) == 1)
       assert(args[0] == 42)
-      thread.suspend_until(host_fut5.is_set)
+      thread.wait_until(host_fut5.is_set)
       assert(thread.task.state == Task.State.PENDING_CANCEL)
-      thread.suspend_until(host_fut5.is_set)
+      thread.wait_until(host_fut5.is_set)
       thread.task.return_([43])
     return mk_task(caller, on_resolve, thread_func)
   def core_callee5(thread, args):
