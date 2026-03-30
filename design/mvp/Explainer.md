@@ -1301,7 +1301,7 @@ The `(memory ...)` option specifies the memory that the Canonical ABI will
 use to load and store values. If the Canonical ABI needs to load or store,
 validation requires this option to be present (there is no default). The types
 of lowered functions may also depend on the [`core:memory-type`] of this memory,
-specifically it's [`core:address-type`] (indicated by `memory.addrtype`), if pointers
+specifically its [`core:address-type`] (indicated by `memory.addrtype`), if pointers
 are transitively contained in parameters or results.
 
 The `(realloc ...)` option specifies a core function that is validated to
