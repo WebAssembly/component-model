@@ -269,10 +269,6 @@ class MemInst:
 
   def ptr_size(self):
     return ptr_size(self.ptr_type())
-
-  def equal(lhs, rhs):
-    return lhs.bytes == rhs.bytes and \
-           lhs.addrtype == rhs.addrtype
 ```
 The `ptr_type` and `ptr_size` methods return the core value type and byte
 size of memory pointers.

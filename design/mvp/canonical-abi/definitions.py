@@ -257,10 +257,6 @@ class MemInst:
   def ptr_size(self):
     return ptr_size(self.ptr_type())
 
-  def equal(lhs, rhs):
-    return lhs.bytes == rhs.bytes and \
-           lhs.addrtype == rhs.addrtype
-
 @dataclass
 class LiftOptions:
   string_encoding: str = 'utf8'
