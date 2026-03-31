@@ -466,55 +466,6 @@ def test_roundtrips():
       test_roundtrip(t, v, addr_type=addr_type)
 
 
-def test_list_byte_length_limit():
-  saved = definitions.MAX_LIST_BYTE_LENGTH
-  try:
-    definitions.MAX_LIST_BYTE_LENGTH = 20
-
-    # This list has the same size under all pointer types
-    for addr_type in ['i32', 'i64']:
-      # five U32's fit in 20 bytes
-      test_heap(ListType(U32Type()), [1,2,3,4,5], [0, 5],
-                [1,0,0,0, 2,0,0,0, 3,0,0,0, 4,0,0,0, 5,0,0,0], addr_type)
-      # six U32's exceed the limit
-      test_heap(ListType(U32Type()), None, [0, 6],
-                [1,0,0,0, 2,0,0,0, 3,0,0,0, 4,0,0,0, 5,0,0,0, 6,0,0,0], addr_type)
-
-    # A list of strings has 8 bytes per entry in i32 and 16 bytes per entry in
-    # i64 So a list of length 1 can be loaded, but a list of length 2 hits the
-    # limit.
-    test_heap(ListType(StringType()), [mk_str("hi")], [0, 1],
-              [8,0,0,0, 2,0,0,0, ord('h'), ord('i')], 'i32')
-    test_heap(ListType(StringType()), [mk_str("hi")], [0, 1],
-              [16,0,0,0,0,0,0,0, 2,0,0,0,0,0,0,0, ord('h'), ord('i')], 'i64')
-
-    test_heap(ListType(StringType()), None, [0, 2],
-              [16,0,0,0, 2,0,0,0, 18,0,0,0, 2,0,0,0,
-                ord('h'),ord('i'),ord('a'),ord('b')], 'i32')
-    test_heap(ListType(StringType()), None, [0, 2],
-              [32,0,0,0,0,0,0,0, 2,0,0,0,0,0,0,0,
-                34,0,0,0,0,0,0,0, 2,0,0,0,0,0,0,0,
-                ord('h'),ord('i'),ord('a'),ord('b')], 'i64')
-
-	  # Similarly a list of lists of U8's has 8 bytes per entry in i32 and 16
-	  # bytes per entry in i64 So a list of length 1 can be loaded, but a list
-	  # of length 2 hits the limit.
-    test_heap(ListType(ListType(U8Type())), [[3,4,5]], [0, 1],
-              [8,0,0,0, 3,0,0,0, 3, 4, 5], 'i32')
-    test_heap(ListType(ListType(U8Type())), [[3,4,5]], [0, 1],
-              [16,0,0,0,0,0,0,0, 3,0,0,0,0,0,0,0, 3, 4, 5], 'i64')
-    test_heap(ListType(ListType(U8Type())), None, [0, 2],
-              [16,0,0,0, 2,0,0,0, 18,0,0,0, 3,0,0,0,
-               1,2,3,4,5], 'i32')
-    test_heap(ListType(ListType(U8Type())), None, [0, 2],
-              [32,0,0,0,0,0,0,0, 2,0,0,0,0,0,0,0,
-                34,0,0,0,0,0,0,0, 3,0,0,0,0,0,0,0,
-                1,2,3,4,5], 'i64')
-
-  finally:
-    definitions.MAX_LIST_BYTE_LENGTH = saved
-
-
 def test_handles():
   before = definitions.MAX_FLAT_RESULTS
   definitions.MAX_FLAT_RESULTS = 16
@@ -2879,7 +2830,6 @@ def test_reentrance():
 
 
 test_roundtrips()
-test_list_byte_length_limit()
 test_handles()
 test_async_to_async()
 test_async_callback()

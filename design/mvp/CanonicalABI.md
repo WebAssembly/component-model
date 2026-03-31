@@ -2000,14 +2000,6 @@ def elem_size(t, ptr_type):
     case OwnType() | BorrowType()    : return 4
     case StreamType() | FutureType() : return 4
 
-def worst_case_elem_size(t, ptr_type):
-  if ptr_type is None:
-    return elem_size(t, ptr_type)
-  result = elem_size(t, ptr_type)
-  other_ptr_type = 'i32' if ptr_type == 'i64' else 'i64'
-  result = max(result, elem_size(t, other_ptr_type))
-  return result
-
 def elem_size_list(elem_type, maybe_length, ptr_type):
   if maybe_length is not None:
     return maybe_length * elem_size(elem_type, ptr_type)
@@ -2222,12 +2214,13 @@ def lift_error_context(cx, i):
 ```
 
 Lists and records are loaded by recursively loading their elements/fields. The
-byte length of a list is limited to fit in a 32-bit memory. When loading a list,
-we check the what it's worst case byte length doesn't exceed that limit under
-any pointer type and trap if the length could exceed the maximum limit. This
-ensures that interfaces can be used by both 32-bit and 64-bit components.
+byte length of a list is limited to `MAX_LIST_BYTE_LENGTH` which, similar to
+`MAX_STRING_CODE_UNITS`, keeps list lengths well below the 32-bit address space
+limit.
 ```python
-MAX_LIST_BYTE_LENGTH = (1 << 32) - 1
+MAX_LIST_BYTE_LENGTH = (1 << 28) - 1
+MAX_LIST_STORE_BYTE_LENGTH = (1 << 32) - 1
+assert(MAX_LIST_STORE_BYTE_LENGTH > 2 * MAX_LIST_BYTE_LENGTH)
 
 def load_list(cx, ptr, elem_type, maybe_length):
   if maybe_length is not None:
@@ -2237,12 +2230,12 @@ def load_list(cx, ptr, elem_type, maybe_length):
   return load_list_from_range(cx, begin, length, elem_type)
 
 def load_list_from_range(cx, ptr, length, elem_type):
+  trap_if(length * elem_size(elem_type, cx.opts.memory.ptr_type()) > MAX_LIST_BYTE_LENGTH)
   trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type())))
   trap_if(ptr + length * elem_size(elem_type, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
   return load_list_from_valid_range(cx, ptr, length, elem_type)
 
 def load_list_from_valid_range(cx, ptr, length, elem_type):
-  trap_if(length * worst_case_elem_size(elem_type, cx.opts.memory.ptr_type()) > MAX_LIST_BYTE_LENGTH)
   a = []
   for i in range(length):
     a.append(load(cx, ptr + i * elem_size(elem_type, cx.opts.memory.ptr_type()), elem_type))
@@ -2687,7 +2680,7 @@ def store_list(cx, v, ptr, elem_type, maybe_length):
 
 def store_list_into_range(cx, v, elem_type):
   byte_length = len(v) * elem_size(elem_type, cx.opts.memory.ptr_type())
-  assert(byte_length <= MAX_LIST_BYTE_LENGTH)
+  assert(byte_length <= MAX_LIST_STORE_BYTE_LENGTH)
   ptr = cx.opts.realloc(0, 0, alignment(elem_type, cx.opts.memory.ptr_type()), byte_length)
   trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type())))
   trap_if(ptr + byte_length > len(cx.opts.memory))
