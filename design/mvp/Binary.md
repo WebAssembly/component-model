@@ -386,8 +386,8 @@ flags are set.
 (See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
 in the explainer.)
 ```ebnf
-import         ::= in:<importname> ed:<externdesc>                      => (import in ed)
-export         ::= en:<exportname> si:<sortidx> ed?:<externdesc>?       => (export en si ed?)
+import         ::= in:<importname'> ed:<externdesc>                     => (import in ed)
+export         ::= en:<exportname'> si:<sortidx> ed?:<externdesc>?      => (export en si ed?)
 importname'    ::= 0x00 len:<u32> in:<importname>                       => in     (if len = |in|)
                  | 0x01 len:<u32> in:<importname>                       => in     (if len = |in|)
                  | 0x02 len:<u32> in:<importname> vs:<versionsuffix>    => in vs  (if len = |in|) 🔗
