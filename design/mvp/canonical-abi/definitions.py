@@ -1276,7 +1276,8 @@ def load_string(cx, ptr) -> String:
   tagged_code_units = load_int(cx, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
   return load_string_from_range(cx, begin, tagged_code_units)
 
-UTF16_TAG = 1 << 31
+def utf16_tag(ptr_type):
+  return 1 << (ptr_size(ptr_type) * 8 - 1)
 
 MAX_STRING_BYTE_LENGTH = (1 << 31) - 1
 MAX_STRING_CODE_UNITS = (1 << 28) - 1
@@ -1285,6 +1286,7 @@ MAX_STRING_CODE_UNITS = (1 << 28) - 1
 assert(MAX_STRING_CODE_UNITS * 3 <= MAX_STRING_BYTE_LENGTH)
 
 def load_string_from_range(cx, ptr, tagged_code_units) -> String:
+  tag = utf16_tag(cx.opts.memory.ptr_type())
   match cx.opts.string_encoding:
     case 'utf8':
       alignment = 1
@@ -1296,8 +1298,8 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
       encoding = 'utf-16-le'
     case 'latin1+utf16':
       alignment = 2
-      if bool(tagged_code_units & UTF16_TAG):
-        byte_length = 2 * (tagged_code_units ^ UTF16_TAG)
+      if bool(tagged_code_units & tag):
+        byte_length = 2 * (tagged_code_units ^ tag)
         encoding = 'utf-16-le'
       else:
         byte_length = tagged_code_units
@@ -1310,7 +1312,7 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   except UnicodeError:
     trap()
 
-  trap_if((tagged_code_units & ~UTF16_TAG) > MAX_STRING_CODE_UNITS)
+  trap_if((tagged_code_units & ~tag) > MAX_STRING_CODE_UNITS)
 
   return (s, cx.opts.string_encoding, tagged_code_units)
 
@@ -1483,11 +1485,12 @@ def store_string(cx, v: String, ptr):
 
 def store_string_into_range(cx, v: String):
   src, src_encoding, src_tagged_code_units = v
+  tag = utf16_tag(cx.opts.memory.ptr_type())
 
   if src_encoding == 'latin1+utf16':
-    if bool(src_tagged_code_units & UTF16_TAG):
+    if bool(src_tagged_code_units & tag):
       src_simple_encoding = 'utf16'
-      src_code_units = src_tagged_code_units ^ UTF16_TAG
+      src_code_units = src_tagged_code_units ^ tag
     else:
       src_simple_encoding = 'latin1'
       src_code_units = src_tagged_code_units
@@ -1593,7 +1596,7 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
         ptr = cx.opts.realloc(ptr, worst_case_size, 2, len(encoded))
         trap_if(ptr != align_to(ptr, 2))
         trap_if(ptr + len(encoded) > len(cx.opts.memory))
-      tagged_code_units = int(len(encoded) / 2) | UTF16_TAG
+      tagged_code_units = int(len(encoded) / 2) | utf16_tag(cx.opts.memory.ptr_type())
       return (ptr, tagged_code_units)
   if dst_byte_length < src_code_units:
     ptr = cx.opts.realloc(ptr, src_code_units, 2, dst_byte_length)
@@ -1610,7 +1613,7 @@ def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   encoded = src.encode('utf-16-le')
   cx.opts.memory[ptr : ptr+len(encoded)] = encoded
   if any(ord(c) >= (1 << 8) for c in src):
-    tagged_code_units = int(len(encoded) / 2) | UTF16_TAG
+    tagged_code_units = int(len(encoded) / 2) | utf16_tag(cx.opts.memory.ptr_type())
     return (ptr, tagged_code_units)
   latin1_size = int(len(encoded) / 2)
   for i in range(latin1_size):

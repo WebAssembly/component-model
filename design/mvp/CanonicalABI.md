@@ -2136,19 +2136,17 @@ def convert_i32_to_char(cx, i):
 Strings are loaded from two pointer-sized values: a pointer (offset in linear
 memory) and a number of [code units]. There are three supported string encodings
 in [`canonopt`]: [UTF-8], [UTF-16] and `latin1+utf16`. This last option allows a
-*dynamic* choice between [Latin-1] and UTF-16, indicated by the 32nd bit of the
-second pointer-sized value. The length of a string is limited so that the number
-of code units fits in 31 bits (leaving the 32nd bit free as the flag). This
-maximum length is enforced even on 64-bit memories to ensure they don't define
-interfaces which 32-bit components couldn't handle.  String values include their
-original encoding and length in tagged code units as a "hint" that enables
-`store_string` (defined below) to make better up-front allocation size choices
-in many cases. Thus, the value produced by `load_string` isn't simply a Python
-`str`, but a *tuple* containing a `str`, the original encoding and the number
-of source code units.
+*dynamic* choice between [Latin-1] and UTF-16, indicated by the high bit of the
+second pointer-sized value (32nd bit on 32-bit memories, 64th bit on 64-bit
+memories). String values include their original encoding and length in tagged
+code units as a "hint" that enables `store_string` (defined below) to make
+better up-front allocation size choices in many cases. Thus, the value produced
+by `load_string` isn't simply a Python `str`, but a *tuple* containing a `str`,
+the original encoding and the number of source code units.
 
-The `MAX_STRING_BYTE_LENGTH` constant ensures that the high bit of a
-string's number of code units is never set, keeping it clear for `UTF16_TAG`.
+The `MAX_STRING_BYTE_LENGTH` constant ensures that the high bit of a string's
+number of code units is never set, keeping it clear for `utf16_tag`. Note that
+this limit is the same across 32-bit and 64-bit components.
 
 Since this byte length of a string depends on the encoding, we additionally
 restrict the total code units to `MAX_STRING_CODE_UNITS = (1 << 28) - 1` when
@@ -2165,7 +2163,8 @@ def load_string(cx, ptr) -> String:
   tagged_code_units = load_int(cx, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
   return load_string_from_range(cx, begin, tagged_code_units)
 
-UTF16_TAG = 1 << 31
+def utf16_tag(ptr_type):
+  return 1 << (ptr_size(ptr_type) * 8 - 1)
 
 MAX_STRING_BYTE_LENGTH = (1 << 31) - 1
 MAX_STRING_CODE_UNITS = (1 << 28) - 1
@@ -2174,6 +2173,7 @@ MAX_STRING_CODE_UNITS = (1 << 28) - 1
 assert(MAX_STRING_CODE_UNITS * 3 <= MAX_STRING_BYTE_LENGTH)
 
 def load_string_from_range(cx, ptr, tagged_code_units) -> String:
+  tag = utf16_tag(cx.opts.memory.ptr_type())
   match cx.opts.string_encoding:
     case 'utf8':
       alignment = 1
@@ -2185,8 +2185,8 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
       encoding = 'utf-16-le'
     case 'latin1+utf16':
       alignment = 2
-      if bool(tagged_code_units & UTF16_TAG):
-        byte_length = 2 * (tagged_code_units ^ UTF16_TAG)
+      if bool(tagged_code_units & tag):
+        byte_length = 2 * (tagged_code_units ^ tag)
         encoding = 'utf-16-le'
       else:
         byte_length = tagged_code_units
@@ -2199,7 +2199,7 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   except UnicodeError:
     trap()
 
-  trap_if((tagged_code_units & ~UTF16_TAG) > MAX_STRING_CODE_UNITS)
+  trap_if((tagged_code_units & ~tag) > MAX_STRING_CODE_UNITS)
 
   return (s, cx.opts.string_encoding, tagged_code_units)
 ```
@@ -2471,7 +2471,7 @@ original encoding and number of source [code units]. From this hint data,
 
 We start with a case analysis to enumerate all the meaningful encoding
 combinations, subdividing the `latin1+utf16` encoding into either `latin1` or
-`utf16` based on the `UTF16_TAG` flag set by `load_string`:
+`utf16` based on the `utf16_tag` flag set by `load_string`:
 ```python
 def store_string(cx, v: String, ptr):
   begin, tagged_code_units = store_string_into_range(cx, v)
@@ -2480,11 +2480,12 @@ def store_string(cx, v: String, ptr):
 
 def store_string_into_range(cx, v: String):
   src, src_encoding, src_tagged_code_units = v
+  tag = utf16_tag(cx.opts.memory.ptr_type())
 
   if src_encoding == 'latin1+utf16':
-    if bool(src_tagged_code_units & UTF16_TAG):
+    if bool(src_tagged_code_units & tag):
       src_simple_encoding = 'utf16'
-      src_code_units = src_tagged_code_units ^ UTF16_TAG
+      src_code_units = src_tagged_code_units ^ tag
     else:
       src_simple_encoding = 'latin1'
       src_code_units = src_tagged_code_units
@@ -2616,7 +2617,7 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
         ptr = cx.opts.realloc(ptr, worst_case_size, 2, len(encoded))
         trap_if(ptr != align_to(ptr, 2))
         trap_if(ptr + len(encoded) > len(cx.opts.memory))
-      tagged_code_units = int(len(encoded) / 2) | UTF16_TAG
+      tagged_code_units = int(len(encoded) / 2) | utf16_tag(cx.opts.memory.ptr_type())
       return (ptr, tagged_code_units)
   if dst_byte_length < src_code_units:
     ptr = cx.opts.realloc(ptr, src_code_units, 2, dst_byte_length)
@@ -2645,7 +2646,7 @@ def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   encoded = src.encode('utf-16-le')
   cx.opts.memory[ptr : ptr+len(encoded)] = encoded
   if any(ord(c) >= (1 << 8) for c in src):
-    tagged_code_units = int(len(encoded) / 2) | UTF16_TAG
+    tagged_code_units = int(len(encoded) / 2) | utf16_tag(cx.opts.memory.ptr_type())
     return (ptr, tagged_code_units)
   latin1_size = int(len(encoded) / 2)
   for i in range(latin1_size):

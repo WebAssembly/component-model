@@ -267,7 +267,7 @@ def test_string(src_encoding, dst_encoding, s, addr_type='i32'):
     except UnicodeEncodeError:
       pass
     encoded = s.encode('utf-16-le')
-    tagged_code_units = int(len(encoded) / 2) | UTF16_TAG
+    tagged_code_units = int(len(encoded) / 2) | utf16_tag(addr_type)
     test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, addr_type)
 
 encodings = ['utf8', 'utf16', 'latin1+utf16']
