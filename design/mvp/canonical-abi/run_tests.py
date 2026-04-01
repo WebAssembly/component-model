@@ -311,8 +311,8 @@ test_heap(ListType(StringType()), [mk_str("hi"),mk_str("wat")], [0,2],
           [16,0,0,0, 2,0,0,0, 21,0,0,0, 3,0,0,0,
            ord('h'), ord('i'),   0xf,0xf,0xf,   ord('w'), ord('a'), ord('t')])
 test_heap(ListType(StringType()), [mk_str("hi"),mk_str("wat")], [0,2],
-          [32,0,0,0,0,0,0,0, 2,0,0,0,0xf,0xf,0xf,0xf,
-           37,0,0,0,0,0,0,0, 3,0,0,0,0xf,0xf,0xf,0xf,
+          [32,0,0,0,0,0,0,0, 2,0,0,0,0,0,0,0,
+           37,0,0,0,0,0,0,0, 3,0,0,0,0,0,0,0,
            ord('h'), ord('i'),   0xf,0xf,0xf,   ord('w'), ord('a'), ord('t')],
           addr_type='i64')
 test_heap(ListType(ListType(U8Type())), [[3,4,5],[],[6,7]], [0,3],

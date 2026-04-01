@@ -1273,7 +1273,7 @@ String = tuple[str, str, int]
 
 def load_string(cx, ptr) -> String:
   begin = load_int(cx, ptr, cx.opts.memory.ptr_size())
-  tagged_code_units = load_int(cx, ptr + cx.opts.memory.ptr_size(), 4)
+  tagged_code_units = load_int(cx, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
   return load_string_from_range(cx, begin, tagged_code_units)
 
 UTF16_TAG = 1 << 31
@@ -1479,7 +1479,7 @@ def char_to_i32(c):
 def store_string(cx, v: String, ptr):
   begin, tagged_code_units = store_string_into_range(cx, v)
   store_int(cx, begin, ptr, cx.opts.memory.ptr_size())
-  store_int(cx, tagged_code_units, ptr + cx.opts.memory.ptr_size(), 4)
+  store_int(cx, tagged_code_units, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
 
 def store_string_into_range(cx, v: String):
   src, src_encoding, src_tagged_code_units = v
@@ -1749,7 +1749,7 @@ def flatten_type(t, opts):
     case F32Type()                        : return ['f32']
     case F64Type()                        : return ['f64']
     case CharType()                       : return ['i32']
-    case StringType()                     : return [opts.memory.ptr_type(), 'i32']
+    case StringType()                     : return [opts.memory.ptr_type(), opts.memory.ptr_type()]
     case ErrorContextType()               : return ['i32']
     case ListType(t, l)                   : return flatten_list(t, l, opts)
     case RecordType(fields)               : return flatten_record(fields, opts)
@@ -1849,7 +1849,7 @@ def lift_flat_signed(vi, core_width, t_width):
 
 def lift_flat_string(cx, vi):
   ptr = vi.next(cx.opts.memory.ptr_type())
-  packed_length = vi.next('i32')
+  packed_length = vi.next(cx.opts.memory.ptr_type())
   return load_string_from_range(cx, ptr, packed_length)
 
 def lift_flat_list(cx, vi, elem_type, maybe_length):

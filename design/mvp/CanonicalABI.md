@@ -2133,17 +2133,19 @@ def convert_i32_to_char(cx, i):
   return chr(i)
 ```
 
-Strings are loaded from a pointer-sized value (offset in linear memory) and a
-32-bit number of [code units]. There are three supported string encodings in
-[`canonopt`]: [UTF-8], [UTF-16] and `latin1+utf16`. This last option allows a
+Strings are loaded from two pointer-sized values: a pointer (offset in linear
+memory) and a number of [code units]. There are three supported string encodings
+in [`canonopt`]: [UTF-8], [UTF-16] and `latin1+utf16`. This last option allows a
 *dynamic* choice between [Latin-1] and UTF-16, indicated by the 32nd bit of the
-code unit count. The length of a string is limited so that the number of code
-units fits in 31 bits (leaving the 32nd bit free as the flag). String values
-include their original encoding and length in tagged code units as a "hint" that
-enables `store_string` (defined below) to make better up-front allocation size
-choices in many cases. Thus, the value produced by `load_string` isn't simply a
-Python `str`, but a *tuple* containing a `str`, the original encoding and the
-number of source code units.
+second pointer-sized value. The length of a string is limited so that the number
+of code units fits in 31 bits (leaving the 32nd bit free as the flag). This
+maximum length is enforced even on 64-bit memories to ensure they don't define
+interfaces which 32-bit components couldn't handle.  String values include their
+original encoding and length in tagged code units as a "hint" that enables
+`store_string` (defined below) to make better up-front allocation size choices
+in many cases. Thus, the value produced by `load_string` isn't simply a Python
+`str`, but a *tuple* containing a `str`, the original encoding and the number
+of source code units.
 
 The `MAX_STRING_BYTE_LENGTH` constant ensures that the high bit of a
 string's number of code units is never set, keeping it clear for `UTF16_TAG`.
@@ -2160,7 +2162,7 @@ String = tuple[str, str, int]
 
 def load_string(cx, ptr) -> String:
   begin = load_int(cx, ptr, cx.opts.memory.ptr_size())
-  tagged_code_units = load_int(cx, ptr + cx.opts.memory.ptr_size(), 4)
+  tagged_code_units = load_int(cx, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
   return load_string_from_range(cx, begin, tagged_code_units)
 
 UTF16_TAG = 1 << 31
@@ -2474,7 +2476,7 @@ combinations, subdividing the `latin1+utf16` encoding into either `latin1` or
 def store_string(cx, v: String, ptr):
   begin, tagged_code_units = store_string_into_range(cx, v)
   store_int(cx, begin, ptr, cx.opts.memory.ptr_size())
-  store_int(cx, tagged_code_units, ptr + cx.opts.memory.ptr_size(), 4)
+  store_int(cx, tagged_code_units, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
 
 def store_string_into_range(cx, v: String):
   src, src_encoding, src_tagged_code_units = v
@@ -2862,7 +2864,7 @@ def flatten_type(t, opts):
     case F32Type()                        : return ['f32']
     case F64Type()                        : return ['f64']
     case CharType()                       : return ['i32']
-    case StringType()                     : return [opts.memory.ptr_type(), 'i32']
+    case StringType()                     : return [opts.memory.ptr_type(), opts.memory.ptr_type()]
     case ErrorContextType()               : return ['i32']
     case ListType(t, l)                   : return flatten_list(t, l, opts)
     case RecordType(fields)               : return flatten_record(fields, opts)
@@ -2999,13 +3001,13 @@ def lift_flat_signed(vi, core_width, t_width):
 
 The contents of strings and variable-length lists are stored in memory so
 lifting these types is essentially the same as loading them from memory; the
-only difference is that the pointer and length come from wasm values instead of
-from linear memory. Fixed-length lists are lifted the same way as a tuple (via
-`lift_flat_record` below).
+only difference is that the pointer and length come from ptr-sized values
+instead of from linear memory. Fixed-length lists are lifted the same way as a
+tuple (via `lift_flat_record` below).
 ```python
 def lift_flat_string(cx, vi):
   ptr = vi.next(cx.opts.memory.ptr_type())
-  packed_length = vi.next('i32')
+  packed_length = vi.next(cx.opts.memory.ptr_type())
   return load_string_from_range(cx, ptr, packed_length)
 
 def lift_flat_list(cx, vi, elem_type, maybe_length):
