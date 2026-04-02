@@ -2556,7 +2556,8 @@ interfaceversion  ::= '@' <valid semver>
                     | '@' <canonversion> 🔗
 canonversion      ::= [1-9] [0-9]* 🔗
                     | '0.' [1-9] [0-9]* 🔗
-                    | '0.0.' [0-9]+ 🔗
+                    | '0.0.' [1-9] [0-9]* 🔗
+                    | '0.0.0' 🔗
 semversuffix      ::= [0-9A-Za-z.+-]* 🔗
 depname           ::= 'unlocked-dep=<' <pkgnamequery> '>'
                     | 'locked-dep=<' <pkgname> '>' ( ',' <hashname> )?
