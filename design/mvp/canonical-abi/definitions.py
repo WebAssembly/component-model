@@ -1281,8 +1281,6 @@ def utf16_tag(ptr_type):
 
 MAX_STRING_BYTE_LENGTH = (1 << 31) - 1
 MAX_STRING_CODE_UNITS = (1 << 28) - 1
-# The worst case for string byte length comes in store_utf16_to_utf8 where
-# we may end up with 3 bytes for each original code unit.
 assert(MAX_STRING_CODE_UNITS * 3 <= MAX_STRING_BYTE_LENGTH)
 
 def load_string_from_range(cx, ptr, tagged_code_units) -> String:
