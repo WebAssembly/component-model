@@ -42,13 +42,14 @@
   (core instance (instantiate $B (with "" (instance (export "" (table $m))))))
 )
 
-(assert_invalid
-  (component
-    (import "x" (func $x (param "x" string)))
-    (core module $A
-      (memory (export "m") i64 1))
-    (core instance $A (instantiate $A))
-    (alias core export $A "m" (core memory $m))
-    (core func (canon lower (func $x) (memory $m)))
+(component
+  (import "x" (func $x (param "x" string)))
+  (core module $A
+    (memory (export "m") i64 1)
+    (func (export "realloc") (param i64 i64 i64 i64) (result i64) unreachable)
   )
-  "canonical ABI memory is not a 32-bit linear memory")
+  (core instance $A (instantiate $A))
+  (alias core export $A "m" (core memory $m))
+  (core func $realloc (alias core export $A "realloc"))
+  (core func (canon lower (func $x) (memory $m) (realloc (func $realloc))))
+)

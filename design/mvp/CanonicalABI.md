@@ -239,13 +239,47 @@ that can be set on various Canonical ABI definitions. The default values of
 the Python fields are the default values when the associated `canonopt` is
 not present in the binary or text format definition.
 
+The `MemInst` class represents a core WebAssembly [`memory` instance], with
+`bytes` corresponding to the memory's bytes and `addrtype` coming from the
+[`memory type`].
+```python
+def ptr_size(ptr_type):
+  match ptr_type:
+    case 'i32':
+      return 4
+    case 'i64':
+      return 8
+
+@dataclass
+class MemInst:
+  bytes: bytearray
+  addrtype: Literal['i32', 'i64']
+
+  def __getitem__(self, i):
+    return self.bytes[i]
+
+  def __setitem__(self, i, v):
+    self.bytes[i] = v
+
+  def __len__(self):
+    return len(self.bytes)
+
+  def ptr_type(self):
+    return self.addrtype
+
+  def ptr_size(self):
+    return ptr_size(self.ptr_type())
+```
+The `ptr_type` and `ptr_size` methods return the core value type and byte
+size of memory pointers.
+
 The `LiftOptions` class contains the subset of [`canonopt`] which are needed
 when lifting individual parameters and results:
 ```python
 @dataclass
 class LiftOptions:
   string_encoding: str = 'utf8'
-  memory: Optional[bytearray] = None
+  memory: Optional[MemInst] = None
 
   def equal(lhs, rhs):
     return lhs.string_encoding == rhs.string_encoding and \
@@ -1295,7 +1329,7 @@ been allowed to resolve and explicitly relinquish any borrowed handles.
 
 A "buffer" is an abstract region of memory that can either be read-from or
 written-to. This region of memory can either be owned by the host or by wasm.
-Currently wasm memory is always 32-bit linear memory, but soon 64-bit and GC
+Currently wasm memory is always 32-bit or 64-bit linear memory, but soon GC
 memory will be added. Thus, buffers provide an abstraction over at least 4
 different "kinds" of memory.
 
@@ -1312,8 +1346,9 @@ that returns how many `t` values may still be read or written. Buffers mostly
 hide their original/complete size. However, zero-length buffers need to be
 treated specially (particularly when a zero-length read rendezvous with a
 zero-length write), so there is a special query for detecting whether a buffer
-is zero-length. Based on this, buffers are represented by the following 3
-abstract Python classes:
+is zero-length. Internally, buffers do have a maximum length of `2^28 - 1` which
+is independent of the type of memory backing the buffer. Based on this, buffers
+are represented by the following 3 abstract Python classes:
 ```python
 class Buffer:
   MAX_LENGTH = 2**28 - 1
@@ -1355,8 +1390,8 @@ class BufferGuestImpl(Buffer):
   def __init__(self, t, cx, ptr, length):
     trap_if(length > Buffer.MAX_LENGTH)
     if t and length > 0:
-      trap_if(ptr != align_to(ptr, alignment(t)))
-      trap_if(ptr + length * elem_size(t) > len(cx.opts.memory))
+      trap_if(ptr != align_to(ptr, alignment(t, cx.opts.memory.ptr_type())))
+      trap_if(ptr + length * elem_size(t, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
     self.cx = cx
     self.t = t
     self.ptr = ptr
@@ -1374,7 +1409,7 @@ class ReadableBufferGuestImpl(BufferGuestImpl):
     assert(n <= self.remain())
     if self.t:
       vs = load_list_from_valid_range(self.cx, self.ptr, n, self.t)
-      self.ptr += n * elem_size(self.t)
+      self.ptr += n * elem_size(self.t, self.cx.opts.memory.ptr_type())
     else:
       vs = n * [()]
     self.progress += n
@@ -1385,7 +1420,7 @@ class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
     assert(len(vs) <= self.remain())
     if self.t:
       store_list_into_valid_range(self.cx, vs, self.ptr, self.t)
-      self.ptr += len(vs) * elem_size(self.t)
+      self.ptr += len(vs) * elem_size(self.t, self.cx.opts.memory.ptr_type())
     else:
       assert(all(v == () for v in vs))
     self.progress += len(vs)
@@ -1860,7 +1895,7 @@ Each value type is assigned an [alignment] which is used by subsequent
 Canonical ABI definitions. Presenting the definition of `alignment` piecewise,
 we start with the top-level case analysis:
 ```python
-def alignment(t):
+def alignment(t, ptr_type):
   match despecialize(t):
     case BoolType()                  : return 1
     case S8Type() | U8Type()         : return 1
@@ -1870,11 +1905,11 @@ def alignment(t):
     case F32Type()                   : return 4
     case F64Type()                   : return 8
     case CharType()                  : return 4
-    case StringType()                : return 4
+    case StringType()                : return ptr_size(ptr_type)
     case ErrorContextType()          : return 4
-    case ListType(t, l)              : return alignment_list(t, l)
-    case RecordType(fields)          : return alignment_record(fields)
-    case VariantType(cases)          : return alignment_variant(cases)
+    case ListType(t, l)              : return alignment_list(t, l, ptr_type)
+    case RecordType(fields)          : return alignment_record(fields, ptr_type)
+    case VariantType(cases)          : return alignment_variant(cases, ptr_type)
     case FlagsType(labels)           : return alignment_flags(labels)
     case OwnType() | BorrowType()    : return 4
     case StreamType() | FutureType() : return 4
@@ -1883,18 +1918,18 @@ def alignment(t):
 List alignment is the same as tuple alignment when the length is fixed and
 otherwise uses the alignment of pointers.
 ```python
-def alignment_list(elem_type, maybe_length):
+def alignment_list(elem_type, maybe_length, ptr_type):
   if maybe_length is not None:
-    return alignment(elem_type)
-  return 4
+    return alignment(elem_type, ptr_type)
+  return ptr_size(ptr_type)
 ```
 
 Record alignment is tuple alignment, with the definitions split for reuse below:
 ```python
-def alignment_record(fields):
+def alignment_record(fields, ptr_type):
   a = 1
   for f in fields:
-    a = max(a, alignment(f.t))
+    a = max(a, alignment(f.t, ptr_type))
   return a
 ```
 
@@ -1904,8 +1939,8 @@ covering the number of cases in the variant (with cases numbered in order from
 compact representations of variants in memory. This smallest integer type is
 selected by the following function, used above and below:
 ```python
-def alignment_variant(cases):
-  return max(alignment(discriminant_type(cases)), max_case_alignment(cases))
+def alignment_variant(cases, ptr_type):
+  return max(alignment(discriminant_type(cases), ptr_type), max_case_alignment(cases, ptr_type))
 
 def discriminant_type(cases):
   n = len(cases)
@@ -1916,11 +1951,11 @@ def discriminant_type(cases):
     case 2: return U16Type()
     case 3: return U32Type()
 
-def max_case_alignment(cases):
+def max_case_alignment(cases, ptr_type):
   a = 1
   for c in cases:
     if c.t is not None:
-      a = max(a, alignment(c.t))
+      a = max(a, alignment(c.t, ptr_type))
   return a
 ```
 
@@ -1946,7 +1981,7 @@ maps well to languages which represent `list`s as random-access arrays. Empty
 types, such as records with no fields, are not permitted, to avoid
 complications in source languages.
 ```python
-def elem_size(t):
+def elem_size(t, ptr_type):
   match despecialize(t):
     case BoolType()                  : return 1
     case S8Type() | U8Type()         : return 1
@@ -1956,40 +1991,40 @@ def elem_size(t):
     case F32Type()                   : return 4
     case F64Type()                   : return 8
     case CharType()                  : return 4
-    case StringType()                : return 8
+    case StringType()                : return 2 * ptr_size(ptr_type)
     case ErrorContextType()          : return 4
-    case ListType(t, l)              : return elem_size_list(t, l)
-    case RecordType(fields)          : return elem_size_record(fields)
-    case VariantType(cases)          : return elem_size_variant(cases)
+    case ListType(t, l)              : return elem_size_list(t, l, ptr_type)
+    case RecordType(fields)          : return elem_size_record(fields, ptr_type)
+    case VariantType(cases)          : return elem_size_variant(cases, ptr_type)
     case FlagsType(labels)           : return elem_size_flags(labels)
     case OwnType() | BorrowType()    : return 4
     case StreamType() | FutureType() : return 4
 
-def elem_size_list(elem_type, maybe_length):
+def elem_size_list(elem_type, maybe_length, ptr_type):
   if maybe_length is not None:
-    return maybe_length * elem_size(elem_type)
-  return 8
+    return maybe_length * elem_size(elem_type, ptr_type)
+  return 2 * ptr_size(ptr_type)
 
-def elem_size_record(fields):
+def elem_size_record(fields, ptr_type):
   s = 0
   for f in fields:
-    s = align_to(s, alignment(f.t))
-    s += elem_size(f.t)
+    s = align_to(s, alignment(f.t, ptr_type))
+    s += elem_size(f.t, ptr_type)
   assert(s > 0)
-  return align_to(s, alignment_record(fields))
+  return align_to(s, alignment_record(fields, ptr_type))
 
 def align_to(ptr, alignment):
   return math.ceil(ptr / alignment) * alignment
 
-def elem_size_variant(cases):
-  s = elem_size(discriminant_type(cases))
-  s = align_to(s, max_case_alignment(cases))
+def elem_size_variant(cases, ptr_type):
+  s = elem_size(discriminant_type(cases), ptr_type)
+  s = align_to(s, max_case_alignment(cases, ptr_type))
   cs = 0
   for c in cases:
     if c.t is not None:
-      cs = max(cs, elem_size(c.t))
+      cs = max(cs, elem_size(c.t, ptr_type))
   s += cs
-  return align_to(s, alignment_variant(cases))
+  return align_to(s, alignment_variant(cases, ptr_type))
 
 def elem_size_flags(labels):
   n = len(labels)
@@ -2007,8 +2042,8 @@ as a Python value. Presenting the definition of `load` piecewise, we start with
 the top-level case analysis:
 ```python
 def load(cx, ptr, t):
-  assert(ptr == align_to(ptr, alignment(t)))
-  assert(ptr + elem_size(t) <= len(cx.opts.memory))
+  assert(ptr == align_to(ptr, alignment(t, cx.opts.memory.ptr_type())))
+  assert(ptr + elem_size(t, cx.opts.memory.ptr_type()) <= len(cx.opts.memory))
   match despecialize(t):
     case BoolType()         : return convert_int_to_bool(load_int(cx, ptr, 1))
     case U8Type()           : return load_int(cx, ptr, 1)
@@ -2098,26 +2133,47 @@ def convert_i32_to_char(cx, i):
   return chr(i)
 ```
 
-Strings are loaded from two `i32` values: a pointer (offset in linear memory)
-and a number of [code units]. There are three supported string encodings in
-[`canonopt`]: [UTF-8], [UTF-16] and `latin1+utf16`. This last options allows a
+Strings are loaded from two pointer-sized values: a pointer (offset in linear
+memory) and a number of [code units]. There are three supported string encodings
+in [`canonopt`]: [UTF-8], [UTF-16] and `latin1+utf16`. This last option allows a
 *dynamic* choice between [Latin-1] and UTF-16, indicated by the high bit of the
-second `i32`. String values include their original encoding and length in
-tagged code units as a "hint" that enables `store_string` (defined below) to
-make better up-front allocation size choices in many cases. Thus, the value
-produced by `load_string` isn't simply a Python `str`, but a *tuple* containing
-a `str`, the original encoding and the number of source code units.
+second pointer-sized value (32nd bit on 32-bit memories, 64th bit on 64-bit
+memories). String values include their original encoding and length in tagged
+code units as a "hint" that enables `store_string` (defined below) to make
+better up-front allocation size choices in many cases. Thus, the value produced
+by `load_string` isn't simply a Python `str`, but a *tuple* containing a `str`,
+the original encoding and the number of source code units.
+
+The `MAX_STRING_BYTE_LENGTH` constant ensures that the high bit of a string's
+number of code units is never set, keeping it clear for `utf16_tag`. Note that
+this limit is the same across 32-bit and 64-bit components.
+
+Since this byte length of a string depends on the encoding, we additionally
+restrict the total code units to `MAX_STRING_CODE_UNITS = (1 << 28) - 1` when
+loading a string to ensure that it won't exceed the maximum byte length when
+converted to a different encoding. The worst case inflation for string length
+comes in `store_utf16_to_utf8` which may result in 3 bytes per code unit in the
+original encoding, so this limit is low enough to keep strings within the
+maximum length.
 ```python
 String = tuple[str, str, int]
 
 def load_string(cx, ptr) -> String:
-  begin = load_int(cx, ptr, 4)
-  tagged_code_units = load_int(cx, ptr + 4, 4)
+  begin = load_int(cx, ptr, cx.opts.memory.ptr_size())
+  tagged_code_units = load_int(cx, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
   return load_string_from_range(cx, begin, tagged_code_units)
 
-UTF16_TAG = 1 << 31
+def utf16_tag(ptr_type):
+  return 1 << (ptr_size(ptr_type) * 8 - 1)
+
+MAX_STRING_BYTE_LENGTH = (1 << 31) - 1
+MAX_STRING_CODE_UNITS = (1 << 28) - 1
+# The worst case for string byte length comes in store_utf16_to_utf8 where
+# we may end up with 3 bytes for each original code unit.
+assert(MAX_STRING_CODE_UNITS * 3 <= MAX_STRING_BYTE_LENGTH)
 
 def load_string_from_range(cx, ptr, tagged_code_units) -> String:
+  tag = utf16_tag(cx.opts.memory.ptr_type())
   match cx.opts.string_encoding:
     case 'utf8':
       alignment = 1
@@ -2129,8 +2185,8 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
       encoding = 'utf-16-le'
     case 'latin1+utf16':
       alignment = 2
-      if bool(tagged_code_units & UTF16_TAG):
-        byte_length = 2 * (tagged_code_units ^ UTF16_TAG)
+      if bool(tagged_code_units & tag):
+        byte_length = 2 * (tagged_code_units ^ tag)
         encoding = 'utf-16-le'
       else:
         byte_length = tagged_code_units
@@ -2142,6 +2198,8 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
     s = cx.opts.memory[ptr : ptr+byte_length].decode(encoding)
   except UnicodeError:
     trap()
+
+  trap_if((tagged_code_units & ~tag) > MAX_STRING_CODE_UNITS)
 
   return (s, cx.opts.string_encoding, tagged_code_units)
 ```
@@ -2155,32 +2213,40 @@ def lift_error_context(cx, i):
   return errctx
 ```
 
-Lists and records are loaded by recursively loading their elements/fields:
+Lists and records are loaded by recursively loading their elements/fields. The
+byte length of a list is limited to `MAX_LIST_BYTE_LENGTH` which, similar to
+`MAX_STRING_CODE_UNITS`, keeps list lengths well below the 32-bit address space
+limit.
 ```python
+MAX_LIST_BYTE_LENGTH = (1 << 28) - 1
+MAX_LIST_STORE_BYTE_LENGTH = (1 << 32) - 1
+assert(MAX_LIST_STORE_BYTE_LENGTH > 2 * MAX_LIST_BYTE_LENGTH)
+
 def load_list(cx, ptr, elem_type, maybe_length):
   if maybe_length is not None:
     return load_list_from_valid_range(cx, ptr, maybe_length, elem_type)
-  begin = load_int(cx, ptr, 4)
-  length = load_int(cx, ptr + 4, 4)
+  begin = load_int(cx, ptr, cx.opts.memory.ptr_size())
+  length = load_int(cx, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
   return load_list_from_range(cx, begin, length, elem_type)
 
 def load_list_from_range(cx, ptr, length, elem_type):
-  trap_if(ptr != align_to(ptr, alignment(elem_type)))
-  trap_if(ptr + length * elem_size(elem_type) > len(cx.opts.memory))
+  trap_if(length * elem_size(elem_type, cx.opts.memory.ptr_type()) > MAX_LIST_BYTE_LENGTH)
+  trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type())))
+  trap_if(ptr + length * elem_size(elem_type, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
   return load_list_from_valid_range(cx, ptr, length, elem_type)
 
 def load_list_from_valid_range(cx, ptr, length, elem_type):
   a = []
   for i in range(length):
-    a.append(load(cx, ptr + i * elem_size(elem_type), elem_type))
+    a.append(load(cx, ptr + i * elem_size(elem_type, cx.opts.memory.ptr_type()), elem_type))
   return a
 
 def load_record(cx, ptr, fields):
   record = {}
   for field in fields:
-    ptr = align_to(ptr, alignment(field.t))
+    ptr = align_to(ptr, alignment(field.t, cx.opts.memory.ptr_type()))
     record[field.label] = load(cx, ptr, field.t)
-    ptr += elem_size(field.t)
+    ptr += elem_size(field.t, cx.opts.memory.ptr_type())
   return record
 ```
 As a technical detail: the `align_to` in the loop in `load_record` is
@@ -2194,12 +2260,12 @@ implementation can build the appropriate index tables at compile-time so that
 variant-passing is always O(1) and not involving string operations.
 ```python
 def load_variant(cx, ptr, cases):
-  disc_size = elem_size(discriminant_type(cases))
+  disc_size = elem_size(discriminant_type(cases), cx.opts.memory.ptr_type())
   case_index = load_int(cx, ptr, disc_size)
   ptr += disc_size
   trap_if(case_index >= len(cases))
   c = cases[case_index]
-  ptr = align_to(ptr, max_case_alignment(cases))
+  ptr = align_to(ptr, max_case_alignment(cases, cx.opts.memory.ptr_type()))
   if c.t is None:
     return { c.label: None }
   return { c.label: load(cx, ptr, c.t) }
@@ -2291,8 +2357,8 @@ The `store` function defines how to write a value `v` of a given value type
 `store` piecewise, we start with the top-level case analysis:
 ```python
 def store(cx, v, t, ptr):
-  assert(ptr == align_to(ptr, alignment(t)))
-  assert(ptr + elem_size(t) <= len(cx.opts.memory))
+  assert(ptr == align_to(ptr, alignment(t, cx.opts.memory.ptr_type())))
+  assert(ptr + elem_size(t, cx.opts.memory.ptr_type()) <= len(cx.opts.memory))
   match despecialize(t):
     case BoolType()         : store_int(cx, int(bool(v)), ptr, 1)
     case U8Type()           : store_int(cx, v, ptr, 1)
@@ -2405,20 +2471,21 @@ original encoding and number of source [code units]. From this hint data,
 
 We start with a case analysis to enumerate all the meaningful encoding
 combinations, subdividing the `latin1+utf16` encoding into either `latin1` or
-`utf16` based on the `UTF16_TAG` flag set by `load_string`:
+`utf16` based on the `utf16_tag` flag set by `load_string`:
 ```python
 def store_string(cx, v: String, ptr):
   begin, tagged_code_units = store_string_into_range(cx, v)
-  store_int(cx, begin, ptr, 4)
-  store_int(cx, tagged_code_units, ptr + 4, 4)
+  store_int(cx, begin, ptr, cx.opts.memory.ptr_size())
+  store_int(cx, tagged_code_units, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
 
 def store_string_into_range(cx, v: String):
   src, src_encoding, src_tagged_code_units = v
+  tag = utf16_tag(cx.opts.memory.ptr_type())
 
   if src_encoding == 'latin1+utf16':
-    if bool(src_tagged_code_units & UTF16_TAG):
+    if bool(src_tagged_code_units & tag):
       src_simple_encoding = 'utf16'
-      src_code_units = src_tagged_code_units ^ UTF16_TAG
+      src_code_units = src_tagged_code_units ^ tag
     else:
       src_simple_encoding = 'latin1'
       src_code_units = src_tagged_code_units
@@ -2451,11 +2518,9 @@ The simplest 4 cases above can compute the exact destination size and then copy
 with a simply loop (that possibly inflates Latin-1 to UTF-16 by injecting a 0
 byte after every Latin-1 byte).
 ```python
-MAX_STRING_BYTE_LENGTH = (1 << 31) - 1
-
 def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment, dst_encoding):
   dst_byte_length = dst_code_unit_size * src_code_units
-  trap_if(dst_byte_length > MAX_STRING_BYTE_LENGTH)
+  assert(dst_byte_length <= MAX_STRING_BYTE_LENGTH)
   ptr = cx.opts.realloc(0, 0, dst_alignment, dst_byte_length)
   trap_if(ptr != align_to(ptr, dst_alignment))
   trap_if(ptr + dst_byte_length > len(cx.opts.memory))
@@ -2464,9 +2529,6 @@ def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment
   cx.opts.memory[ptr : ptr+len(encoded)] = encoded
   return (ptr, src_code_units)
 ```
-The choice of `MAX_STRING_BYTE_LENGTH` constant ensures that the high bit of a
-string's number of code units is never set, keeping it clear for `UTF16_TAG`.
-
 The 2 cases of transcoding into UTF-8 share an algorithm that starts by
 optimistically assuming that each code unit of the source string fits in a
 single UTF-8 byte and then, failing that, reallocates to a worst-case size,
@@ -2488,7 +2550,7 @@ def store_string_to_utf8(cx, src, src_code_units, worst_case_size):
     if ord(code_point) < 2**7:
       cx.opts.memory[ptr + i] = ord(code_point)
     else:
-      trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
+      assert(worst_case_size <= MAX_STRING_BYTE_LENGTH)
       ptr = cx.opts.realloc(ptr, src_code_units, 1, worst_case_size)
       trap_if(ptr + worst_case_size > len(cx.opts.memory))
       encoded = src.encode('utf-8')
@@ -2507,7 +2569,7 @@ if multiple UTF-8 bytes were collapsed into a single 2-byte UTF-16 code unit:
 ```python
 def store_utf8_to_utf16(cx, src, src_code_units):
   worst_case_size = 2 * src_code_units
-  trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
+  assert(worst_case_size <= MAX_STRING_BYTE_LENGTH)
   ptr = cx.opts.realloc(0, 0, 2, worst_case_size)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + worst_case_size > len(cx.opts.memory))
@@ -2542,7 +2604,7 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
       dst_byte_length += 1
     else:
       worst_case_size = 2 * src_code_units
-      trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
+      assert(worst_case_size <= MAX_STRING_BYTE_LENGTH)
       ptr = cx.opts.realloc(ptr, src_code_units, 2, worst_case_size)
       trap_if(ptr != align_to(ptr, 2))
       trap_if(ptr + worst_case_size > len(cx.opts.memory))
@@ -2555,7 +2617,7 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
         ptr = cx.opts.realloc(ptr, worst_case_size, 2, len(encoded))
         trap_if(ptr != align_to(ptr, 2))
         trap_if(ptr + len(encoded) > len(cx.opts.memory))
-      tagged_code_units = int(len(encoded) / 2) | UTF16_TAG
+      tagged_code_units = int(len(encoded) / 2) | utf16_tag(cx.opts.memory.ptr_type())
       return (ptr, tagged_code_units)
   if dst_byte_length < src_code_units:
     ptr = cx.opts.realloc(ptr, src_code_units, 2, dst_byte_length)
@@ -2577,14 +2639,14 @@ inexpensively fused with the UTF-16 validate+copy loop.)
 ```python
 def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   src_byte_length = 2 * src_code_units
-  trap_if(src_byte_length > MAX_STRING_BYTE_LENGTH)
+  assert(src_byte_length <= MAX_STRING_BYTE_LENGTH)
   ptr = cx.opts.realloc(0, 0, 2, src_byte_length)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + src_byte_length > len(cx.opts.memory))
   encoded = src.encode('utf-16-le')
   cx.opts.memory[ptr : ptr+len(encoded)] = encoded
   if any(ord(c) >= (1 << 8) for c in src):
-    tagged_code_units = int(len(encoded) / 2) | UTF16_TAG
+    tagged_code_units = int(len(encoded) / 2) | utf16_tag(cx.opts.memory.ptr_type())
     return (ptr, tagged_code_units)
   latin1_size = int(len(encoded) / 2)
   for i in range(latin1_size):
@@ -2604,7 +2666,9 @@ def lower_error_context(cx, v):
 Lists and records are stored by recursively storing their elements and
 are symmetric to the loading functions. Unlike strings, lists can
 simply allocate based on the up-front knowledge of length and static
-element size.
+element size. Storing a list that exceeds the size of a 32-bit memory traps even
+when storing on 64-bit platform to avoid having interfaces that 32-bit
+components can't use.
 ```python
 def store_list(cx, v, ptr, elem_type, maybe_length):
   if maybe_length is not None:
@@ -2612,27 +2676,27 @@ def store_list(cx, v, ptr, elem_type, maybe_length):
     store_list_into_valid_range(cx, v, ptr, elem_type)
     return
   begin, length = store_list_into_range(cx, v, elem_type)
-  store_int(cx, begin, ptr, 4)
-  store_int(cx, length, ptr + 4, 4)
+  store_int(cx, begin, ptr, cx.opts.memory.ptr_size())
+  store_int(cx, length, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
 
 def store_list_into_range(cx, v, elem_type):
-  byte_length = len(v) * elem_size(elem_type)
-  trap_if(byte_length >= (1 << 32))
-  ptr = cx.opts.realloc(0, 0, alignment(elem_type), byte_length)
-  trap_if(ptr != align_to(ptr, alignment(elem_type)))
+  byte_length = len(v) * elem_size(elem_type, cx.opts.memory.ptr_type())
+  assert(byte_length <= MAX_LIST_STORE_BYTE_LENGTH)
+  ptr = cx.opts.realloc(0, 0, alignment(elem_type, cx.opts.memory.ptr_type()), byte_length)
+  trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type())))
   trap_if(ptr + byte_length > len(cx.opts.memory))
   store_list_into_valid_range(cx, v, ptr, elem_type)
   return (ptr, len(v))
 
 def store_list_into_valid_range(cx, v, ptr, elem_type):
   for i,e in enumerate(v):
-    store(cx, e, elem_type, ptr + i * elem_size(elem_type))
+    store(cx, e, elem_type, ptr + i * elem_size(elem_type, cx.opts.memory.ptr_type()))
 
 def store_record(cx, v, ptr, fields):
   for f in fields:
-    ptr = align_to(ptr, alignment(f.t))
+    ptr = align_to(ptr, alignment(f.t, cx.opts.memory.ptr_type()))
     store(cx, v[f.label], f.t, ptr)
-    ptr += elem_size(f.t)
+    ptr += elem_size(f.t, cx.opts.memory.ptr_type())
 ```
 
 Variant values are represented as Python dictionaries containing exactly one
@@ -2645,10 +2709,10 @@ indices.
 ```python
 def store_variant(cx, v, ptr, cases):
   case_index, case_value = match_case(v, cases)
-  disc_size = elem_size(discriminant_type(cases))
+  disc_size = elem_size(discriminant_type(cases), cx.opts.memory.ptr_type())
   store_int(cx, case_index, ptr, disc_size)
   ptr += disc_size
-  ptr = align_to(ptr, max_case_alignment(cases))
+  ptr = align_to(ptr, max_case_alignment(cases, cx.opts.memory.ptr_type()))
   c = cases[case_index]
   if c.t is not None:
     store(cx, case_value, c.t, ptr)
@@ -2752,38 +2816,38 @@ MAX_FLAT_ASYNC_PARAMS = 4
 MAX_FLAT_RESULTS = 1
 
 def flatten_functype(opts, ft, context):
-  flat_params = flatten_types(ft.param_types())
-  flat_results = flatten_types(ft.result_type())
+  flat_params = flatten_types(ft.param_types(), opts)
+  flat_results = flatten_types(ft.result_type(), opts)
   if not opts.async_:
     if len(flat_params) > MAX_FLAT_PARAMS:
-      flat_params = ['i32']
+      flat_params = [opts.memory.ptr_type()]
     if len(flat_results) > MAX_FLAT_RESULTS:
       match context:
         case 'lift':
-          flat_results = ['i32']
+          flat_results = [opts.memory.ptr_type()]
         case 'lower':
-          flat_params += ['i32']
+          flat_params += [opts.memory.ptr_type()]
           flat_results = []
     return CoreFuncType(flat_params, flat_results)
   else:
     match context:
       case 'lift':
         if len(flat_params) > MAX_FLAT_PARAMS:
-          flat_params = ['i32']
+          flat_params = [opts.memory.ptr_type()]
         if opts.callback:
           flat_results = ['i32']
         else:
           flat_results = []
       case 'lower':
         if len(flat_params) > MAX_FLAT_ASYNC_PARAMS:
-          flat_params = ['i32']
+          flat_params = [opts.memory.ptr_type()]
         if len(flat_results) > 0:
-          flat_params += ['i32']
+          flat_params += [opts.memory.ptr_type()]
         flat_results = ['i32']
     return CoreFuncType(flat_params, flat_results)
 
-def flatten_types(ts):
-  return [ft for t in ts for ft in flatten_type(t)]
+def flatten_types(ts, opts):
+  return [ft for t in ts for ft in flatten_type(t, opts)]
 ```
 As shown here, the core signatures `async` functions use a lower limit on the
 maximum number of parameters (1) and results (0) passed as scalars before
@@ -2792,7 +2856,7 @@ falling back to passing through memory.
 Presenting the definition of `flatten_type` piecewise, we start with the
 top-level case analysis:
 ```python
-def flatten_type(t):
+def flatten_type(t, opts):
   match despecialize(t):
     case BoolType()                       : return ['i32']
     case U8Type() | U16Type() | U32Type() : return ['i32']
@@ -2801,11 +2865,11 @@ def flatten_type(t):
     case F32Type()                        : return ['f32']
     case F64Type()                        : return ['f64']
     case CharType()                       : return ['i32']
-    case StringType()                     : return ['i32', 'i32']
+    case StringType()                     : return [opts.memory.ptr_type(), opts.memory.ptr_type()]
     case ErrorContextType()               : return ['i32']
-    case ListType(t, l)                   : return flatten_list(t, l)
-    case RecordType(fields)               : return flatten_record(fields)
-    case VariantType(cases)               : return flatten_variant(cases)
+    case ListType(t, l)                   : return flatten_list(t, l, opts)
+    case RecordType(fields)               : return flatten_record(fields, opts)
+    case VariantType(cases)               : return flatten_variant(cases, opts)
     case FlagsType(labels)                : return ['i32']
     case OwnType() | BorrowType()         : return ['i32']
     case StreamType() | FutureType()      : return ['i32']
@@ -2814,18 +2878,18 @@ def flatten_type(t):
 List flattening of a fixed-length list uses the same flattening as a tuple
 (via `flatten_record` below).
 ```python
-def flatten_list(elem_type, maybe_length):
+def flatten_list(elem_type, maybe_length, opts):
   if maybe_length is not None:
-    return flatten_type(elem_type) * maybe_length
-  return ['i32', 'i32']
+    return flatten_type(elem_type, opts) * maybe_length
+  return [opts.memory.ptr_type(), opts.memory.ptr_type()]
 ```
 
 Record flattening simply flattens each field in sequence.
 ```python
-def flatten_record(fields):
+def flatten_record(fields, opts):
   flat = []
   for f in fields:
-    flat += flatten_type(f.t)
+    flat += flatten_type(f.t, opts)
   return flat
 ```
 
@@ -2838,16 +2902,16 @@ case, all flattened variants are passed with the same static set of core types,
 which may involve, e.g., reinterpreting an `f32` as an `i32` or zero-extending
 an `i32` into an `i64`.
 ```python
-def flatten_variant(cases):
+def flatten_variant(cases, opts):
   flat = []
   for c in cases:
     if c.t is not None:
-      for i,ft in enumerate(flatten_type(c.t)):
+      for i,ft in enumerate(flatten_type(c.t, opts)):
         if i < len(flat):
           flat[i] = join(flat[i], ft)
         else:
           flat.append(ft)
-  return flatten_type(discriminant_type(cases)) + flat
+  return flatten_type(discriminant_type(cases), opts) + flat
 
 def join(a, b):
   if a == b: return a
@@ -2938,13 +3002,13 @@ def lift_flat_signed(vi, core_width, t_width):
 
 The contents of strings and variable-length lists are stored in memory so
 lifting these types is essentially the same as loading them from memory; the
-only difference is that the pointer and length come from `i32` values instead
-of from linear memory. Fixed-length lists are lifted the same way as a
+only difference is that the pointer and length come from ptr-sized values
+instead of from linear memory. Fixed-length lists are lifted the same way as a
 tuple (via `lift_flat_record` below).
 ```python
 def lift_flat_string(cx, vi):
-  ptr = vi.next('i32')
-  packed_length = vi.next('i32')
+  ptr = vi.next(cx.opts.memory.ptr_type())
+  packed_length = vi.next(cx.opts.memory.ptr_type())
   return load_string_from_range(cx, ptr, packed_length)
 
 def lift_flat_list(cx, vi, elem_type, maybe_length):
@@ -2953,8 +3017,8 @@ def lift_flat_list(cx, vi, elem_type, maybe_length):
     for i in range(maybe_length):
       a.append(lift_flat(cx, vi, elem_type))
     return a
-  ptr = vi.next('i32')
-  length = vi.next('i32')
+  ptr = vi.next(cx.opts.memory.ptr_type())
+  length = vi.next(cx.opts.memory.ptr_type())
   return load_list_from_range(cx, ptr, length, elem_type)
 ```
 
@@ -2975,7 +3039,7 @@ reinterprets between the different types appropriately and also traps if the
 high bits of an `i64` are set for a 32-bit type:
 ```python
 def lift_flat_variant(cx, vi, cases):
-  flat_types = flatten_variant(cases)
+  flat_types = flatten_variant(cases, cx.opts)
   assert(flat_types.pop(0) == 'i32')
   case_index = vi.next('i32')
   trap_if(case_index >= len(cases))
@@ -3092,14 +3156,14 @@ manually coercing the otherwise-incompatible type pairings allowed by `join`:
 ```python
 def lower_flat_variant(cx, v, cases):
   case_index, case_value = match_case(v, cases)
-  flat_types = flatten_variant(cases)
+  flat_types = flatten_variant(cases, cx.opts)
   assert(flat_types.pop(0) == 'i32')
   c = cases[case_index]
   if c.t is None:
     payload = []
   else:
     payload = lower_flat(cx, case_value, c.t)
-    for i,(fv,have) in enumerate(zip(payload, flatten_type(c.t))):
+    for i,(fv,have) in enumerate(zip(payload, flatten_type(c.t, cx.opts))):
       want = flat_types.pop(0)
       match (have, want):
         case ('f32', 'i32') : payload[i] = encode_float_as_i32(fv)
@@ -3126,12 +3190,12 @@ parameters or results (given by the `CoreValueIter` `vi`) into a tuple
 of component-level values with types `ts`.
 ```python
 def lift_flat_values(cx, max_flat, vi, ts):
-  flat_types = flatten_types(ts)
+  flat_types = flatten_types(ts, cx.opts)
   if len(flat_types) > max_flat:
-    ptr = vi.next('i32')
+    ptr = vi.next(cx.opts.memory.ptr_type())
     tuple_type = TupleType(ts)
-    trap_if(ptr != align_to(ptr, alignment(tuple_type)))
-    trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
+    trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts.memory.ptr_type())))
+    trap_if(ptr + elem_size(tuple_type, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
     return list(load(cx, ptr, tuple_type).values())
   else:
     return [ lift_flat(cx, vi, t) for t in ts ]
@@ -3146,18 +3210,18 @@ out-param:
 ```python
 def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
   cx.inst.may_leave = False
-  flat_types = flatten_types(ts)
+  flat_types = flatten_types(ts, cx.opts)
   if len(flat_types) > max_flat:
     tuple_type = TupleType(ts)
     tuple_value = {str(i): v for i,v in enumerate(vs)}
     if out_param is None:
-      ptr = cx.opts.realloc(0, 0, alignment(tuple_type), elem_size(tuple_type))
+      ptr = cx.opts.realloc(0, 0, alignment(tuple_type, cx.opts.memory.ptr_type()), elem_size(tuple_type, cx.opts.memory.ptr_type()))
       flat_vals = [ptr]
     else:
-      ptr = out_param.next('i32')
+      ptr = out_param.next(cx.opts.memory.ptr_type())
       flat_vals = []
-    trap_if(ptr != align_to(ptr, alignment(tuple_type)))
-    trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
+    trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts.memory.ptr_type())))
+    trap_if(ptr + elem_size(tuple_type, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
     store(cx, tuple_value, tuple_type, ptr)
   else:
     flat_vals = []
@@ -3187,9 +3251,11 @@ specifying `string-encoding=utf8` twice is an error. Each individual option, if
 present, is validated as such:
 
 * `string-encoding=N` - can be passed at most once, regardless of `N`.
-* `memory` - this is a subtype of `(memory 1)`
-* `realloc` - the function has type `(func (param i32 i32 i32 i32) (result i32))`
-* if `realloc` is present, then `memory` must be present
+* `memory` - this is a subtype of `(memory 1)` or `(memory i64 1)`.
+* `realloc` - the function has type `(func (param addr addr addr addr) (result addr))`
+  where `addr` is the address type (`i32` or `i64`) coming from the [`memory type`]
+  of the `memory` canonopt.
+* If `realloc` is present then `memory` must be present.
 * `post-return` - only allowed on [`canon lift`](#canon-lift), which has rules
   for validation
 * 🔀 `async` - cannot be present with `post-return`
@@ -3612,7 +3678,7 @@ For a canonical definition:
 validation specifies:
 * `$rt` must refer to locally-defined (not imported) resource type
 * `$f` is given type `(func (param $rt.rep) (result i32))`, where `$rt.rep` is
-  currently fixed to be `i32`.
+  `i32` or `i64`.
 
 Calling `$f` invokes the following function, which adds an owning handle
 containing the given resource representation to the current component
@@ -3691,7 +3757,7 @@ For a canonical definition:
 validation specifies:
 * `$rt` must refer to a locally-defined (not imported) resource type
 * `$f` is given type `(func (param i32) (result $rt.rep))`, where `$rt.rep` is
-  currently fixed to be `i32`.
+  `i32` or `i64`.
 
 Calling `$f` invokes the following function, which extracts the resource
 representation from the handle in the current component instance's `handles`
@@ -3714,17 +3780,22 @@ For a canonical definition:
 (canon context.get $t $i (core func $f))
 ```
 validation specifies:
-* `$t` must be `i32` (for now; see [here][thread-local storage])
+* `$t` must be `i32` or `i64` (see [here][thread-local storage]).
 * `$i` must be less than `Thread.CONTEXT_LENGTH` (`2`)
-* `$f` is given type `(func (result i32))`
+* `$f` is given type `(func (result $t))`
 
 Calling `$f` invokes the following function, which reads the [thread-local
-storage] of the [current thread]:
+storage] of the [current thread] (taking only the low 32-bits if `$t` is `i32`):
 ```python
 def canon_context_get(t, i, thread):
-  assert(t == 'i32')
+  MASK_32BIT = (1 << 32) - 1
+
+  assert(t == 'i32' or t == 'i64')
   assert(i < Thread.CONTEXT_LENGTH)
-  return [thread.context[i]]
+  result = thread.context[i]
+  if t == 'i32':
+    result &= MASK_32BIT
+  return [result]
 ```
 
 
@@ -3735,15 +3806,15 @@ For a canonical definition:
 (canon context.set $t $i (core func $f))
 ```
 validation specifies:
-* `$t` must be `i32` (for now; see [here][thread-local storage])
+* `$t` must be `i32` or `i64` (see [here][thread-local storage])
 * `$i` must be less than `Thread.CONTEXT_LENGTH` (`2`)
-* `$f` is given type `(func (param $v i32))`
+* `$f` is given type `(func (param $v $t))`
 
 Calling `$f` invokes the following function, which writes to the [thread-local
 storage] of the [current thread]:
 ```python
 def canon_context_set(t, i, thread, v):
-  assert(t == 'i32')
+  assert(t == 'i32' or t == 'i64')
   assert(i < Thread.CONTEXT_LENGTH)
   thread.context[i] = v
   return []
@@ -3907,7 +3978,8 @@ For a canonical definition:
 (canon waitable-set.wait $cancellable? (memory $mem) (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param $si) (param $ptr i32) (result i32))`
+* `$f` is given type `(func (param $si i32) (param $ptr) (result i32))` where
+  `$ptr` is the address type of `$mem`.
 
 Calling `$f` invokes the following function which waits for progress to be made
 on a `Waitable` in the given waitable set (indicated by index `$si`) and then
@@ -3950,7 +4022,8 @@ For a canonical definition:
 (canon waitable-set.poll $cancellable? (memory $mem) (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param $si i32) (param $ptr i32) (result i32))`
+* `$f` is given type `(func (param $si i32) (param $ptr) (result i32))` where
+  `$ptr` is the address type of `$mem`.
 
 Calling `$f` invokes the following function, which either returns an event that
 was pending on one of the waitables in the given waitable set (the same way as
@@ -4167,7 +4240,9 @@ For canonical definitions:
 ```
 In addition to [general validation of `$opts`](#canonopt-validation) validation
 specifies:
-* `$f` is given type `(func (param i32 i32 i32) (result i32))`
+* `$f` is given type `(func (param i32 T T) (result T))` where `T` is `i32` or
+  `i64` as determined by the address type of `memory` from `$opts` (or `i32` by
+  default if no `memory` is present).
 * `$stream_t` must be a type of the form `(stream $t?)`
 * If `$t` is present:
   * [`lower($t)` above](#canonopt-validation) defines required options for `stream.write`
@@ -4232,7 +4307,11 @@ context switches. Next, the stream's `state` is updated based on the result
 being delivered to core wasm so that, once a stream end has been notified that
 the other end dropped, calling anything other than `stream.drop-*` traps.
 Lastly, `stream_event` packs the `CopyResult` and number of elements copied up
-until this point into a single `i32` payload for core wasm.
+until this point into a single `i32` or `i64`-sized payload for core wasm. The
+size is determined by the `addrtype` coming from the [`memory type`] of the
+`memory` immediate. Note that even though the number of elements copied is
+packed into an `addrtype`, the maximum length of the buffer is fixed at `2^28 - 1`
+independently of the `addrtype`.
 ```python
   def stream_event(result, reclaim_buffer):
     reclaim_buffer()
@@ -4282,7 +4361,9 @@ For canonical definitions:
 ```
 In addition to [general validation of `$opts`](#canonopt-validation) validation
 specifies:
-* `$f` is given type `(func (param i32 i32) (result i32))`
+* `$f` is given type `(func (param i32 T) (result i32))` where `T` is `i32` or
+  `i64` as determined by the address type of `memory` from `$opts` (or `i32`
+  by default if no `memory` is present).
 * `$future_t` must be a type of the form `(future $t?)`
 * If `$t` is present:
   * [`lift($t)` above](#canonopt-validation) defines required options for `future.read`
@@ -4505,9 +4586,12 @@ For a canonical definition:
 (canon thread.new-indirect $ft $ftbl (core func $new_indirect))
 ```
 validation specifies
-* `$ft` must refer to the type `(func (param $c i32))`
+* `$ft` must refer to the type `(func (param $c))` where `$c` is `i32` or
+  `i64`.
 * `$ftbl` must refer to a table whose element type matches `funcref`
-* `$new_indirect` is given type `(func (param $fi i32) (param $c i32) (result i32))`
+* `$new_indirect` is given type `(func (param $fi) (param $c) (result i32))`
+  where `$fi` is `i32` or `i64` as determined by `$ftbl`'s table type and
+  `$c` has the same type as the parameter in `$ft`.
 
 Calling `$new_indirect` invokes the following function which reads a `funcref`
 from `$ftbl` (trapping if out-of-bounds, null or the wrong type), calls the
@@ -4522,7 +4606,7 @@ class CoreFuncRef:
 def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], thread, fi, c):
   trap_if(not thread.task.inst.may_leave)
   f = ftbl.get(fi)
-  assert(ft == CoreFuncType(['i32'], []))
+  assert(ft == CoreFuncType(['i32'], []) or ft == CoreFuncType(['i64'], []))
   trap_if(f.t != ft)
   def thread_func(thread):
     [] = call_and_trap_on_throw(f.callee, thread, [c])
@@ -4702,7 +4786,9 @@ For a canonical definition:
 (canon error-context.new $opts (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param i32 i32) (result i32))`
+* `$f` is given type `(func (param $ptr) (param $units) (result i32))` 
+  where `$ptr` and `$units` are both `i32` or `i64` as determined by
+  the address type of the `memory` field in `$opts`.
 * `async` is not present
 * `memory` must be present
 
@@ -4743,7 +4829,8 @@ For a canonical definition:
 (canon error-context.debug-message $opts (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param i32 i32))`
+* `$f` is given type `(func (param i32) (param $ptr))` where `$ptr` is `i32` or `i64`
+  as determined by the address type of `memory` from `$opts`
 * `async` is not present
 * `memory` must be present
 * `realloc` must be present
@@ -4762,8 +4849,9 @@ def canon_error_context_debug_message(opts, thread, i, ptr):
   store_string(cx, errctx.debug_message, ptr)
   return []
 ```
-Note that `ptr` points to an 8-byte region of memory into which will be stored
-the pointer and length of the debug string (allocated via `opts.realloc`).
+Note that `ptr` points to a region of memory (8 bytes for memory32, 16 bytes
+for memory64) into which will be stored the pointer and length of the debug
+string (allocated via `opts.realloc`).
 
 
 ### 📝 `canon error-context.drop`
@@ -4793,9 +4881,10 @@ For a canonical definition:
 (canon thread.spawn-ref shared? $ft (core func $spawn_ref))
 ```
 validation specifies:
-* `$ft` must refer to the type `(shared? (func (param $c i32)))` (see explanation below)
+* `$ft` must refer to the type `(shared? (func (param $c)))` where `$c` has
+  type `i32` or `i64`.
 * `$spawn_ref` is given type
-  `(shared? (func (param $f (ref null $ft)) (param $c i32) (result $e i32)))`
+  `(shared? (func (param $f (ref null $ft)) (param $c) (result $e i32)))`
 
 When the `shared` immediate is not present, the spawned thread is
 *cooperative*, only switching at specific program points. When the `shared`
@@ -4804,7 +4893,7 @@ parallel with all other threads.
 
 > Note: ideally, a thread could be spawned with [arbitrary thread parameters].
 > Currently, that would require additional work in the toolchain to support so,
-> for simplicity, the current proposal simply fixes a single `i32` parameter
+> for simplicity, the current proposal simply fixes a single `i32` or `i64` parameter
 > type. However, `thread.spawn-ref` could be extended to allow arbitrary thread
 > parameters in the future, once it's concretely beneficial to the toolchain.
 > The inclusion of `$ft` ensures backwards compatibility for when arbitrary
@@ -4834,12 +4923,13 @@ For a canonical definition:
 (canon thread.spawn-indirect shared? $ft $tbl (core func $spawn_indirect))
 ```
 validation specifies:
-* `$ft` must refer to the type `(shared? (func (param $c i32)))` is allowed
-  (see explanation in `thread.spawn-ref` above)
+* `$ft` must refer to the type `(shared? (func (param $c)))` 
+  where `$c` is either `i32` or `i64`.
 * `$tbl` must refer to a shared table whose element type matches
   `(ref null (shared? func))`
 * `$spawn_indirect` is given type
-  `(shared? (func (param $i i32) (param $c i32) (result $e i32)))`
+  `(shared? (func (param $i) (param $c) (result $e i32)))` where `$i` is
+  `i32` or `i64` determined by `$tbl`'s table type
 
 When the `shared` immediate is not present, the spawned thread is
 *cooperative*, only switching at specific program points. When the `shared`
@@ -4932,6 +5022,8 @@ def canon_thread_available_parallelism():
 [`memaddr`]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-memaddr
 [`memaddrs` table]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-moduleinst
 [`memidx`]: https://webassembly.github.io/spec/core/syntax/modules.html#syntax-memidx
+[`memory` instance]: https://webassembly.github.io/spec/core/exec/runtime.html#memory-instances
+[`memory type`]: https://webassembly.github.io/spec/core/syntax/types.html#memory-types
 
 [Alignment]: https://en.wikipedia.org/wiki/Data_structure_alignment
 [UTF-8]: https://en.wikipedia.org/wiki/UTF-8
