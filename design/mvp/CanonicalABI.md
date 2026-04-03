@@ -3187,7 +3187,7 @@ specifying `string-encoding=utf8` twice is an error. Each individual option, if
 present, is validated as such:
 
 * `string-encoding=N` - can be passed at most once, regardless of `N`.
-* `memory` - this is a subtype of `(memory 1)`
+* `memory` - this is a subtype of `(memory 0)`
 * `realloc` - the function has type `(func (param i32 i32 i32 i32) (result i32))`
 * if `realloc` is present, then `memory` must be present
 * `post-return` - only allowed on [`canon lift`](#canon-lift), which has rules
