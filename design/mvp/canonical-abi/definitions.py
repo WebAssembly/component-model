@@ -185,22 +185,30 @@ class FutureType(ValType):
 
 class Store:
   waiting: list[Thread]
+  nesting_depth: int
 
   def __init__(self):
     self.waiting = []
+    self.nesting_depth = 0
 
   def invoke(self, f: FuncInst, caller: Optional[Supertask], on_start, on_resolve) -> Call:
     host_caller = Supertask()
     host_caller.inst = None
     host_caller.supertask = caller
-    return f(host_caller, on_start, on_resolve)
+    self.nesting_depth += 1
+    call = f(host_caller, on_start, on_resolve)
+    self.nesting_depth -= 1
+    return call
 
   def tick(self):
+    assert(self.nesting_depth == 0)
+    self.nesting_depth = 1
     random.shuffle(self.waiting)
     for thread in self.waiting:
       if thread.ready():
         thread.resume(Cancelled.FALSE)
-        return
+        break
+    self.nesting_depth = 0
 
 FuncInst: Callable[[Optional[Supertask], OnStart, OnResolve], Call]
 
@@ -286,6 +294,7 @@ class ComponentInstance:
   handles: Table[ResourceHandle | Waitable | WaitableSet | ErrorContext]
   threads: Table[Thread]
   may_leave: bool
+  may_block: bool
   backpressure: int
   exclusive: Optional[Task]
   num_waiting_to_enter: int
@@ -297,6 +306,7 @@ class ComponentInstance:
     self.handles = Table()
     self.threads = Table()
     self.may_leave = True
+    self.may_block = True
     self.backpressure = 0
     self.exclusive = None
     self.num_waiting_to_enter = 0
@@ -508,7 +518,7 @@ class Thread:
       cancelled = Cancelled.FALSE
 
   def suspend(self, cancellable) -> Cancelled:
-    assert(self.running() and self.task.may_block())
+    assert(self.running() and self.task.inst.may_block)
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
     self.cancellable = cancellable
@@ -517,7 +527,7 @@ class Thread:
     return cancelled
 
   def wait_until(self, ready_func, cancellable = False) -> Cancelled:
-    assert(self.running() and self.task.may_block())
+    assert(self.running() and self.task.inst.may_block)
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
     if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):
@@ -528,7 +538,7 @@ class Thread:
 
   def yield_until(self, ready_func, cancellable) -> Cancelled:
     assert(self.running())
-    if self.task.may_block():
+    if self.task.inst.may_block:
       return self.wait_until(ready_func, cancellable)
     else:
       assert(ready_func())
@@ -673,9 +683,6 @@ class Task(Call, Supertask):
   def needs_exclusive(self):
     return not self.opts.async_ or self.opts.callback
 
-  def may_block(self):
-    return self.ft.async_ or self.state == Task.State.RESOLVED
-
   def enter(self):
     thread = current_thread()
     if self.ft.async_:
@@ -693,6 +700,9 @@ class Task(Call, Supertask):
       if self.needs_exclusive():
         assert(self.inst.exclusive is None)
         self.inst.exclusive = self
+    else:
+      assert(self.inst.may_block)
+      self.inst.may_block = False
     self.register_thread(thread)
     return True
 
@@ -742,6 +752,9 @@ class Task(Call, Supertask):
   def return_(self, result):
     trap_if(self.state == Task.State.RESOLVED)
     trap_if(self.num_borrows > 0)
+    if not self.ft.async_:
+      assert(not self.inst.may_block)
+      self.inst.may_block = True
     assert(result is not None)
     self.on_resolve(result)
     self.state = Task.State.RESOLVED
@@ -749,6 +762,7 @@ class Task(Call, Supertask):
   def cancel(self):
     trap_if(self.state != Task.State.CANCEL_DELIVERED)
     trap_if(self.num_borrows > 0)
+    assert(self.ft.async_)
     self.on_resolve(None)
     self.state = Task.State.RESOLVED
 
@@ -2082,7 +2096,7 @@ def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
           else:
             event = (EventCode.NONE, 0, 0)
         case CallbackCode.WAIT:
-          trap_if(not task.may_block())
+          trap_if(not inst.may_block)
           wset = inst.handles.get(si)
           trap_if(not isinstance(wset, WaitableSet))
           event = wset.wait_until(lambda: not inst.exclusive, cancellable = True)
@@ -2098,6 +2112,7 @@ def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
 
   thread = Thread(task, thread_func)
   thread.resume(Cancelled.FALSE)
+  assert(ft.async_ or task.state == Task.State.RESOLVED)
   return task
 
 class CallbackCode(IntEnum):
@@ -2125,7 +2140,7 @@ def call_and_trap_on_throw(callee, args):
 def canon_lower(opts, ft, callee: FuncInst, flat_args):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block() and ft.async_ and not opts.async_)
+  trap_if(not thread.task.inst.may_block and ft.async_ and not opts.async_)
 
   subtask = Subtask()
   cx = LiftLowerContext(opts, thread.task.inst, subtask)
@@ -2311,13 +2326,13 @@ def canon_waitable_set_new():
 ### 🔀 `canon waitable-set.wait`
 
 def canon_waitable_set_wait(cancellable, mem, si, ptr):
-  task = current_thread().task
-  trap_if(not task.inst.may_leave)
-  trap_if(not task.may_block())
-  wset = task.inst.handles.get(si)
+  inst = current_thread().task.inst
+  trap_if(not inst.may_leave)
+  trap_if(not inst.may_block)
+  wset = inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
   event = wset.wait(cancellable)
-  return unpack_event(mem, task.inst, ptr, event)
+  return unpack_event(mem, inst, ptr, event)
 
 def unpack_event(mem, inst, ptr, e: EventTuple):
   event, p1, p2 = e
@@ -2368,7 +2383,7 @@ BLOCKED = 0xffff_ffff
 def canon_subtask_cancel(async_, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block() and not async_)
+  trap_if(not thread.task.inst.may_block and not async_)
   subtask = thread.task.inst.handles.get(i)
   trap_if(not isinstance(subtask, Subtask))
   trap_if(subtask.resolve_delivered())
@@ -2429,7 +2444,7 @@ def canon_stream_write(stream_t, opts, i, ptr, n):
 def stream_copy(EndT, BufferT, event_code, stream_t, opts, i, ptr, n):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block() and not opts.async_)
+  trap_if(not thread.task.inst.may_block and not opts.async_)
 
   e = thread.task.inst.handles.get(i)
   trap_if(not isinstance(e, EndT))
@@ -2484,7 +2499,7 @@ def canon_future_write(future_t, opts, i, ptr):
 def future_copy(EndT, BufferT, event_code, future_t, opts, i, ptr):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block() and not opts.async_)
+  trap_if(not thread.task.inst.may_block and not opts.async_)
 
   e = thread.task.inst.handles.get(i)
   trap_if(not isinstance(e, EndT))
@@ -2537,7 +2552,7 @@ def canon_future_cancel_write(future_t, async_, i):
 def cancel_copy(EndT, event_code, stream_or_future_t, async_, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block() and not async_)
+  trap_if(not thread.task.inst.may_block and not async_)
   e = thread.task.inst.handles.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_or_future_t.t)
@@ -2620,7 +2635,7 @@ def canon_thread_switch_to(cancellable, i):
 def canon_thread_suspend(cancellable):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block())
+  trap_if(not thread.task.inst.may_block)
   cancelled = thread.suspend(cancellable)
   return [cancelled]
 

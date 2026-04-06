@@ -119,41 +119,71 @@ runtime behavior of the Canonical ABI, the Embedding interface here just
 includes functions for the embedder to:
 1. construct a Component Model `Store`, analogous to [`store_init`]ing a Core
    WebAssembly [`store`];
-2. `invoke` a Component Model `FuncInst`, analogous to [`func_invoke`]ing a
-   Core WebAssembly [`funcinst`]; and
-3. allow a cooperative thread (created during a previous call to to `invoke`)
-   to execute until blocking or exiting.
+2. `Store.invoke` a Component Model `FuncInst`, analogous to [`func_invoke`]ing
+   a Core WebAssembly [`funcinst`]; and
+3. allow an existing thread to execute, via `Store.tick`, until [blocking] or
+   exiting.
 
+`Store.tick` does not have an analogue in Core WebAssembly and is necessary to
+provide native [concurrency] support in the Component Model. The expectation is
+that the host will interleave calls to `invoke` with calls to `tick`, repeatedly
+calling `tick` until there is no more work to do or the store is destroyed.
+`tick` never blocks: if execution *would* block, the thread is suspended and
+execution returns to the host from `tick` (which can then call `invoke` or
+`tick` again, etc). Although the host would use more sophisticated data
+structures for performance, the definition of `tick` below simply tracks all the
+threads that are `waiting` to run once some `ready` condition is met in one big
+list and then nondeterministically picks one. The `Thread.ready` and
+`Thread.resume` methods along with how the `Store.waiting` list is populated are
+all defined below as part of the `Thread` class.
+
+Hosts are allowed to call `Store.invoke` recursively, i.e., if a component is
+instantiated with host functions, the host is allowed to recursively call
+`Store.invoke` again, producing a synchronous callstack:
+```
+[host] --invoke--> [component] --call-import--> [host] --invoke--> [component]
+```
+Hosts are *not* allowed to call `Store.tick` recursively; it can only be called
+from the base of the call stack. However, once component code is running from
+a `Store.tick`, the host can recursively call `Store.invoke` as above:
+```
+[host] --tick--> [component] --call-import--> [host] --invoke--> [component]
+```
+Furthermore, hosts are required to link the two `[component]` calls in the above
+call stacks together, by passing the `Supertask` of the older `[component]` call
+to the inner `Store.invoke`.
+
+The above host requirements are `assert()`ed by the `nesting_depth` accounting
+below which, depending on the embedding scenario, may or may not need to be
+enforced at runtime by the engine.
 ```python
 class Store:
   waiting: list[Thread]
+  nesting_depth: int
 
   def __init__(self):
     self.waiting = []
+    self.nesting_depth = 0
 
   def invoke(self, f: FuncInst, caller: Optional[Supertask], on_start, on_resolve) -> Call:
     host_caller = Supertask()
     host_caller.inst = None
     host_caller.supertask = caller
-    return f(host_caller, on_start, on_resolve)
+    self.nesting_depth += 1
+    call = f(host_caller, on_start, on_resolve)
+    self.nesting_depth -= 1
+    return call
 
   def tick(self):
+    assert(self.nesting_depth == 0)
+    self.nesting_depth = 1
     random.shuffle(self.waiting)
     for thread in self.waiting:
       if thread.ready():
         thread.resume(Cancelled.FALSE)
-        return
+        break
+    self.nesting_depth = 0
 ```
-The `Store.tick` method does not have an analogue in Core WebAssembly and
-enables [native concurrency support](Concurrency.md) in the Component Model. The
-expectation is that the host will interleave calls to `invoke` with calls to
-`tick`, repeatedly calling `tick` until there is no more work to do or the
-store is destroyed. The nondeterministic `random.shuffle` indicates that the
-embedder is allowed to use any algorithm (involving priorities, fairness, etc)
-to choose which thread to schedule next (and hopefully an algorithm more
-efficient than the simple polling loop written above). The `Thread.ready` and
-`Thread.resume` methods along with how the `waiting` list is populated are all
-defined [below](#thread-state) as part of the `Thread` class.
 
 The `FuncInst` passed to `Store.invoke` is defined to take 3 parameters:
 * an optional `caller` `Supertask` which is used to maintain the
@@ -332,6 +362,7 @@ class ComponentInstance:
   handles: Table[ResourceHandle | Waitable | WaitableSet | ErrorContext]
   threads: Table[Thread]
   may_leave: bool
+  may_block: bool
   backpressure: int
   exclusive: Optional[Task]
   num_waiting_to_enter: int
@@ -343,6 +374,7 @@ class ComponentInstance:
     self.handles = Table()
     self.threads = Table()
     self.may_leave = True
+    self.may_block = True
     self.backpressure = 0
     self.exclusive = None
     self.num_waiting_to_enter = 0
@@ -883,7 +915,7 @@ here which transfers control flow back to `Thread.resume()` via `block()`. The
 `switch_to` argument `None` tells `Thread.resume()` to return immediately.
 ```python
   def suspend(self, cancellable) -> Cancelled:
-    assert(self.running() and self.task.may_block())
+    assert(self.running() and self.task.inst.may_block)
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
     self.cancellable = cancellable
@@ -905,7 +937,7 @@ until a particular condition is met, as specified by the boolean-valued
 `ready_func` parameter:
 ```python
   def wait_until(self, ready_func, cancellable = False) -> Cancelled:
-    assert(self.running() and self.task.may_block())
+    assert(self.running() and self.task.inst.may_block)
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
     if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):
@@ -932,7 +964,7 @@ emulating preemptive multi-threading.
 ```python
   def yield_until(self, ready_func, cancellable) -> Cancelled:
     assert(self.running())
-    if self.task.may_block():
+    if self.task.inst.may_block:
       return self.wait_until(ready_func, cancellable)
     else:
       assert(ready_func())
@@ -1177,14 +1209,6 @@ synchronously or with `async callback`. This predicate is used by the other
     return not self.opts.async_ or self.opts.callback
 ```
 
-The `Task.may_block` predicate returns whether the [current task]'s function's
-type is allowed to [block]. Specifically, functions that do not declare the
-`async` effect that have not yet returned a value may not block.
-```python
-  def may_block(self):
-    return self.ft.async_ or self.state == Task.State.RESOLVED
-```
-
 The `Task.enter` method implements [backpressure] between when the caller of an
 `async`-typed function initiates the call and when the callee's core wasm entry
 point is executed. This interstitial placement allows a component instance that
@@ -1206,7 +1230,14 @@ they may reenter core wasm when an `async`-typed function would have been
 blocked by implicit backpressure. Thus, export bindings generators must be
 careful to handle this possibility (e.g., while maintaining the linear-memory
 shadow stack pointer) for components with mixed `async`- and non-`async`- typed
-exports.
+exports. However, non-`async`-typed functions *must* return a value before
+blocking, and thus the `may_block` flag (which is dynamically checked before
+all Canonical ABI built-ins which might block) is cleared when entering a
+non-`async`-typed function, to be cleared in `Task.return_`. Because recursive
+calls to `Store.tick` and to the same component instance are disallowed (see
+`Store` and `call_might_be_recursive`, resp.) and because reentrance is only
+otherwise possible when blocked, `may_block` must always already be true when
+`Task.enter` is called.
 ```python
   def enter(self):
     thread = current_thread()
@@ -1225,6 +1256,9 @@ exports.
       if self.needs_exclusive():
         assert(self.inst.exclusive is None)
         self.inst.exclusive = self
+    else:
+      assert(self.inst.may_block)
+      self.inst.may_block = False
     self.register_thread(thread)
     return True
 
@@ -1323,15 +1357,19 @@ by `Task.deliver_pending_cancel`, which is checked at all cancellation points:
 
 The `Task.return_` method is called by `canon_task_return` and `canon_lift` to
 return a list of lifted values to the task's caller via the `OnResolve`
-callback. There is a dynamic error if the callee has not dropped all borrowed
-handles by the time `task.return` is called which means that the caller can
-assume that all its lent handles have been returned to it when it receives the
-`SUBTASK` `RETURNED` event. Note that the initial `trap_if` allows a task to
+callback. After returning a value, a synchronous (non-`async`-typed) function
+is allowed to block. There is a dynamic error if the callee has not dropped all
+borrowed handles by the time `task.return` is called which means that the caller
+can assume that all its lent handles have been returned to it when it receives
+the `SUBTASK` `RETURNED` event. Note that the initial `trap_if` allows a task to
 return a value even after cancellation has been requested.
 ```python
   def return_(self, result):
     trap_if(self.state == Task.State.RESOLVED)
     trap_if(self.num_borrows > 0)
+    if not self.ft.async_:
+      assert(not self.inst.may_block)
+      self.inst.may_block = True
     assert(result is not None)
     self.on_resolve(result)
     self.state = Task.State.RESOLVED
@@ -1349,6 +1387,7 @@ call `task.cancel`.
   def cancel(self):
     trap_if(self.state != Task.State.CANCEL_DELIVERED)
     trap_if(self.num_borrows > 0)
+    assert(self.ft.async_)
     self.on_resolve(None)
     self.state = Task.State.RESOLVED
 ```
@@ -3517,7 +3556,7 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
           else:
             event = (EventCode.NONE, 0, 0)
         case CallbackCode.WAIT:
-          trap_if(not task.may_block())
+          trap_if(not inst.may_block)
           wset = inst.handles.get(si)
           trap_if(not isinstance(wset, WaitableSet))
           event = wset.wait_until(lambda: not inst.exclusive, cancellable = True)
@@ -3555,16 +3594,19 @@ tasks, which entirely ignore `ComponentInstance.exclusive`.
 The end of `canon_lift` immediately runs the `thread_func` function (which
 contains all the steps above) in a new `Thread`, allowing `thread_func` to make
 as much progress as it can before blocking (which transitively calls
-`Thread.suspend`, deterministically returning control flow here and then to the
+`block`, deterministically returning control flow here and then to the
 caller. If `thread_func` and the core wasm `callee` return a value (by calling
 the `OnResolve` callback) before blocking, the call will complete synchronously
-even for `async` callers. Note that if an `async` callee calls `OnResolve` and
-*then* blocks, the caller will see the call complete synchronously even though
-the callee is still running concurrently in the `Thread` created here (see
-the [concurrency explainer] for more on this).
+from the perspective of the caller (even if the callee then blocks *after*
+returning a value, taking advantage of the fact that the callee is running on
+its own `Thread`). By ABI contract, a callee can only block before returning
+its value if it declares the `async` effect on the component function type. If a
+callee is non-`async`-typed and *tries* to block, the callee will trap on the
+`ComponentInstance.may_block` guards that dominate all calls to `block`.
 ```python
   thread = Thread(task, thread_func)
   thread.resume(Cancelled.FALSE)
+  assert(ft.async_ or task.state == Task.State.RESOLVED)
   return task
 ```
 
@@ -3631,7 +3673,7 @@ this, `canon_lower` is defined in chunks as follows:
 def canon_lower(opts, ft, callee: FuncInst, flat_args):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block() and ft.async_ and not opts.async_)
+  trap_if(not thread.task.inst.may_block and ft.async_ and not opts.async_)
 ```
 A non-`async`-typed function export that has not yet returned a value
 unconditionally traps if it transitively attempts to make a synchronous call to
@@ -4095,13 +4137,13 @@ on a `Waitable` in the given waitable set (indicated by index `$si`) and then
 returning its `EventCode` and writing the payload values into linear memory:
 ```python
 def canon_waitable_set_wait(cancellable, mem, si, ptr):
-  task = current_thread().task
-  trap_if(not task.inst.may_leave)
-  trap_if(not task.may_block())
-  wset = task.inst.handles.get(si)
+  inst = current_thread().task.inst
+  trap_if(not inst.may_leave)
+  trap_if(not inst.may_block)
+  wset = inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
   event = wset.wait(cancellable)
-  return unpack_event(mem, task.inst, ptr, event)
+  return unpack_event(mem, inst, ptr, event)
 
 def unpack_event(mem, inst, ptr, e: EventTuple):
   event, p1, p2 = e
@@ -4245,7 +4287,7 @@ BLOCKED = 0xffff_ffff
 def canon_subtask_cancel(async_, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block() and not async_)
+  trap_if(not thread.task.inst.may_block and not async_)
   subtask = thread.task.inst.handles.get(i)
   trap_if(not isinstance(subtask, Subtask))
   trap_if(subtask.resolve_delivered())
@@ -4379,7 +4421,7 @@ whether the operation would have succeeded eagerly without blocking).
 def stream_copy(EndT, BufferT, event_code, stream_t, opts, i, ptr, n):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block() and not opts.async_)
+  trap_if(not thread.task.inst.may_block and not opts.async_)
 ```
 
 Next, `stream_copy` checks that the element at index `i` is of the right type
@@ -4501,7 +4543,7 @@ parameters `i` and `ptr`. The only difference is that, with futures, the
 def future_copy(EndT, BufferT, event_code, future_t, opts, i, ptr):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block() and not opts.async_)
+  trap_if(not thread.task.inst.may_block and not opts.async_)
 
   e = thread.task.inst.handles.get(i)
   trap_if(not isinstance(e, EndT))
@@ -4587,7 +4629,7 @@ def canon_future_cancel_write(future_t, async_, i):
 def cancel_copy(EndT, event_code, stream_or_future_t, async_, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block() and not async_)
+  trap_if(not thread.task.inst.may_block and not async_)
   e = thread.task.inst.handles.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_or_future_t.t)
@@ -4783,7 +4825,7 @@ calling component.
 def canon_thread_suspend(cancellable):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block())
+  trap_if(not thread.task.inst.may_block)
   cancelled = thread.suspend(cancellable)
   return [cancelled]
 ```
@@ -5102,6 +5144,7 @@ def canon_thread_available_parallelism():
 [JavaScript Embedding]: Explainer.md#JavaScript-embedding
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Shared-Everything Dynamic Linking]: examples/SharedEverythingDynamicLinking.md
+[Concurrency]: Concurrency.md
 [Concurrency Explainer]: Concurrency.md
 [Suspended]: Concurrency.md#thread-built-ins
 [Thread Index]: Concurrency.md#thread-built-ins
@@ -5113,7 +5156,7 @@ def canon_thread_available_parallelism():
 [Current Thread]: Concurrency.md#current-thread-and-task
 [Current Task]: Concurrency.md#current-thread-and-task
 [Blocks]: Concurrency.md#blocking
-[Block]: Concurrency.md#blocking
+[Blocking]: Concurrency.md#blocking
 [Waiting On External I/O And Yielding]: Concurrency.md#blocking
 [Subtasks]: Concurrency.md#subtasks-and-supertasks
 [Readable and Writable Ends]: Concurrency.md#streams-and-futures
