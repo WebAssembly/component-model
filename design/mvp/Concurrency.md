@@ -388,32 +388,44 @@ learn its own index by calling the [`thread.index`] built-in.
 
 A suspended thread (identified by thread-table index) can be resumed at some
 nondeterministic point in future via the [`thread.resume-later`] built-in. In
-contrast, the [`thread.yield-to`] built-in switches execution to the given
-thread immediately, leaving the *calling* thread to be resumed at some
-nondeterministic point in the future. Lastly, the [`thread.switch-to`]
-built-in switches execution to the given thread immediately, like `yield-to`,
-but leaves the calling thread in the "suspended" state. These three functions
-can be used to resume both newly-created threads as well as threads that
-executed and then suspended.
+contrast, the [`thread.yield-then-resume`] built-in switches execution to the
+given thread immediately, leaving the *calling* thread to be resumed at some
+nondeterministic point in the future. Lastly, the [`thread.suspend-then-resume`]
+built-in switches execution to the given thread immediately, like
+`thread.yield-then-resume`, but leaves the calling thread in the "suspended"
+state. These three functions can be used to resume both newly-created threads as
+well as threads that executed and then suspended.
 
-In addition to threads entering the suspended state via `thread.new-indirect`
-and `thread.switch-to`, threads can also explicitly suspend themselves via the
-[`thread.suspend`] built-in. Thus, there are three ways a thread *enters* the
-suspended state and three ways a thread *exits* the suspended state (with
-`thread.switch-to` serving in both categories). Together, these 5 thread
-built-ins support both the "green thread" [use cases](#goals) where Core
-WebAssembly code running inside the component wants to fully control thread
-scheduling (via `thread.switch-to` and `thread.suspend`) as well as the "host
-thread" use cases where the Core WebAssembly code wants to let the containing
-runtime nondeterministically schedule threads (via `thread.resume-later` or
-`thread.yield-to`).
+Threads can also explicitly put themselves in the "suspended" state without
+specifying the other thread to run by calling the [`thread.suspend`] built-in.
+This is useful if a thread needs to wait on some condition that will be met by
+some unknown thread in the future (which will resume the suspended thread).
+Similarly, threads can explicitly put themselves in the "ready to run" state
+without specifying the other thread to run by calling [`thread.yield`]. This is
+useful if a thread has a long-running computation without I/O but still needs to
+allow other cooperative threads to make progress concurrently.
 
-Lastly, since threads are cooperative, there is a [`thread.yield`] built-in
-that can be called in the middle of long-running computations to allow the
-runtime to nondeterministically switch execution to another thread.
-`thread.yield` is equivalent to (but obviously more efficient than) creating a
-new thread with a no-op function (via `thread.new-indirect`) and then yielding
-to it (via `thread.yield-to`).
+Lastly, in addition to being able to switch to "suspended" threads, threads can
+also switch to threads that are in a "ready to run" state by calling the
+[`thread.suspend-then-promote`] and [`thread.yield-then-promote`] built-ins
+which, like the `thread.{suspend,yield}-then-resume` built-ins, leave the
+calling thread in a "suspended" or "ready to run" state, resp. The calling
+thread *may* know that the target thread is ready to run (e.g., because the
+target thread is known to have yielded or to be waiting on a future/stream
+operation that the calling thread just completed). However, in general,
+readiness may depend on nondeterministic external I/O and the calling thread may
+just want to yield its timeslice to the target thread *if* it's ready as a
+scheduling optimization. Thus, if the target thread is *not* "ready to run",
+these built-ins are defined to gracefully fall back to the behavior of the
+`thread.{suspend,yield}` built-ins.
+
+Together, these thread built-ins support both the "green thread" [use
+cases](#goals), where Core WebAssembly code running inside the component wants
+to fully control thread scheduling (via suspending and resuming built-ins),
+and the "host thread" use cases, where the Core WebAssembly code wants to let
+the containing runtime nondeterministically schedule threads (via yielding
+built-ins) with hints (via the promoting built-ins) — or a mixture of both.
+
 
 ### Thread-Local Storage
 
@@ -467,47 +479,70 @@ For more information, see [`context.get`] in the AST explainer.
 ### Blocking
 
 When a thread calls an import using the async ABI, the Component Model
-guarantees that if the callee **blocks**, control flow is immediately returned
-back to the caller. When the callee is implemented by the *host*, what counts as
-"blocking" is up to the host; e.g., the host can arbitrarily determine whether
-file I/O "blocks" or not depending on whether the host is implemented using
-traditional synchronous OS syscalls or an asynchronous `io_uring`. However,
-when the callee is implemented by another component, the Component Model
-defines exactly what counts as "blocking".
+guarantees that if the callee [task](#threads-and-tasks) **blocks**, control
+flow is immediately returned back to the caller's thread. When the callee is
+implemented by the *host*, what counts as "blocking" is up to the host; e.g.,
+the host can arbitrarily determine whether file I/O "blocks" or not depending on
+whether the host is implemented using traditional synchronous OS syscalls or an
+asynchronous `io_uring`. However, when the callee is implemented by another
+component, the Component Model defines what counts as "blocking".
 
-At a high level, there are six ways for a call to a component export to block,
-all of which are described above or below in more detail:
-* calling an `async`-typed function import using the sync ABI
+There are several ways for a task to potentially "block":
+* synchronously calling an `async` function that transitively blocks
+  or hits [backpressure](#backpressure)
 * suspending the current thread via the
-  [`thread.suspend`](#thread-built-ins) built-in
+  [`thread.suspend{,-then-promote}`](#thread-built-ins) built-ins
 * cooperatively yielding (e.g., during a long-running computation) via the
-  [`thread.yield`](#thread-built-ins) built-in
+  [`thread.yield{,-then-promote}`](#thread-built-ins) built-ins or, when
+  using the stackless `callback` ABI, returning with the `YIELD` code
 * waiting for one of a set of concurrent operations to complete via the
-  [`waitable-set.wait`](#waitables-and-waitable-sets) built-in
-* waiting for a stream or future operation to complete via the
+  [`waitable-set.wait`](#waitables-and-waitable-sets) built-in or, when
+  using the stackless `callback` ABI, returning with the `WAIT` code
+* synchronously waiting for a stream or future operation to complete via the
   [`{stream,future}.{,cancel-}{read,write}`](#streams-and-futures) built-ins
-* waiting for a subtask to cooperatively cancel itself via the
+* synchronously waiting for a subtask to cooperatively cancel itself via the
   [`subtask.cancel`](#cancellation) built-in
 
-At each of these points, the [current thread](#current-thread-and-task) will be
-suspended. Execution transfers to a caller's thread if there is one, or
-otherwise back to the runtime, which may invoke new component exports or
-nondeterministically resume a cooperative thread that is ready to run. Thus,
-each of these represents **cooperative yield points**.
+Since Component Model concurrency is [specified in terms of] the Core WebAssembly
+[stack-switching] proposal, each of the above represents a point where the
+[current thread](#current-thread-and-task) may suspend with the `$block` effect.
+Each of these points also serves as a **cooperative yield point** where
+[Component Invariant] #2 allows reentrance. However, just because the current
+thread *suspends* doesn't mean that the *task* has officially "blocked": what
+happens next depends on the state of the task and the declared function type:
 
-Additionally, each of these potentially-blocking operations will trap if the
-[current task's function type](#current-thread-and-task) does not declare the
-`async` effect, since only `async`-typed functions are allowed to block. As an
-exception, to allow it to be called arbitrarily from anywhere, `thread.yield`
-does not trap but instead behaves as a no-op if the current task's function
-type does not contain `async`.
+If the task has already [returned](#returning) a value to the caller, then
+control flow returns to the caller and, from the caller's perspective, the call
+returns normally without blocking. The callee's threads can continue executing,
+but what happens with these threads no longer matters to the caller.
 
-"Blocking" is [specified in terms of] stack-switching, with a `block` effect
-that suspends the current thread to produce a continuation that can be resumed
-once the reason for blocking is addressed.
+If instead the task has *not* yet returned a value and the callee's function
+type declares the `async` effect, control flow returns directly to the
+caller. If the caller used the *async* ABI, then control flow returns to Core
+WebAssembly, indicating that the call "blocked" by returning the non-zero index
+of a new [subtask](#subtasks-and-supertasks). If the caller used the *sync* ABI,
+then the caller immediately suspends with the `$block` effect and this process
+repeats recursively up the stack.
 
-The [Canonical ABI explainer] defines the above behavior more precisely; search
-for `may_block` to see all the relevant points.
+Lastly, if the task has not yet returned a value and the callee's function type
+does *not* declare the `async` effect, then the task is not allowed to "block"
+and will trap if it ends up blocking. However, just because the *current thread*
+has suspended doesn't mean that the overall *task* is blocked: if there are any
+other threads in the callee's component instance that are in the ["ready to
+run"](#thread-built-ins) state, progressing them may unblock returning a value
+(e.g., by releasing a lock or computing a dependency) and so the Component Model
+repeatedly resumes threads that are ready to run until either the task returns a
+value or there are no more eligible ready threads (and the call traps).
+See the end of [`canon_lift`] in the Canonical ABI Explainer for more details.
+
+These rules achieve expressive parity with what would otherwise be possible
+using a CPS transform like [Asyncify] to implement a synchronous function. For
+example, they allow synchronous functions to be implemented by pthreads that
+switch and make progress at cooperative yield points. And if there is only a
+single pthread, since `thread.yield` always leaves the calling thread in a
+"ready to run" state, `thread.yield` effectively becomes a no-op (until a value
+is returned).
+
 
 ### Waitables and Waitable Sets
 
@@ -713,9 +748,7 @@ the readable end passed for `in`) and `stream.write`s (of the writable end it
 `stream.new`ed) before exiting the task.
 
 Once `task.return` is called, the task is in the "returned" state. Calling
-`task.return` when not in the "started" state traps. Once in a "returned" state,
-non-`async` functions may block using cooperative threads that were created
-before the synchronous task's implicit thread returned.
+`task.return` when not in the "started" state traps.
 
 ### Borrows
 
@@ -1538,13 +1571,15 @@ comes after:
 [`waitable-set.wait`]: Explainer.md#-waitable-setwait
 [`waitable-set.poll`]: Explainer.md#-waitable-setpoll
 [`waitable.join`]: Explainer.md#-waitablejoin
-[`thread.new-indirect`]: Explainer.md#-threadnew-indirect
 [`thread.index`]: Explainer.md#-threadindex
-[`thread.suspend`]: Explainer.md#-threadsuspend
-[`thread.switch-to`]: Explainer.md#-threadswitch-to
+[`thread.new-indirect`]: Explainer.md#-threadnew-indirect
 [`thread.resume-later`]: Explainer.md#-threadresume-later
-[`thread.yield-to`]: Explainer.md#-threadyield-to
+[`thread.suspend`]: Explainer.md#-threadsuspend
 [`thread.yield`]: Explainer.md#-threadyield
+[`thread.suspend-then-resume`]: Explainer.md#-threadsuspend-then-resume
+[`thread.yield-then-resume`]: Explainer.md#-threadyield-then-resume
+[`thread.suspend-then-promote`]: Explainer.md#-threadsuspend-then-promote
+[`thread.yield-then-promote`]: Explainer.md#-threadyield-then-promote
 [`{stream,future}.new`]: Explainer.md#-streamnew-and-futurenew
 [`{stream,future}.{read,write}`]: Explainer.md#-streamread-and-streamwrite
 [`stream.cancel-write`]: Explainer.md#-streamcancel-read-streamcancel-write-futurecancel-read-and-futurecancel-write
