@@ -99,7 +99,7 @@
   (core instance $m (instantiate $M))
   (func (export "f") (result string) (canon lift (core func $m "f") (memory $m "mem")))
 )
-(assert_trap (invoke "f") "invalid utf-8")
+(assert_trap (invoke "f") "incomplete utf-8 byte sequence")
 
 ;; string at end of memory page boundary
 (component
