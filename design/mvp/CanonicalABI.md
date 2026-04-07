@@ -3676,8 +3676,9 @@ For a canonical definition:
 ```
 validation specifies:
 * `$rt` must refer to locally-defined (not imported) resource type
-* `$f` is given type `(func (param $rt.rep) (result i32))`, where `$rt.rep` is
-  `i32` or `i64`.
+* `$f` is given type `(func (param $rt.rep ) (result i32))`, where `$rt.rep` is
+  fixed to be `i32`
+  * 🐘 - `$rt.rep` may be `i32` or `i64`
 
 Calling `$f` invokes the following function, which adds an owning handle
 containing the given resource representation to the current component
@@ -3756,7 +3757,8 @@ For a canonical definition:
 validation specifies:
 * `$rt` must refer to a locally-defined (not imported) resource type
 * `$f` is given type `(func (param i32) (result $rt.rep))`, where `$rt.rep` is
-  `i32` or `i64`.
+  fixed to be `i32`
+  * 🐘 - `$rt.rep` may be `i32` or `i64`
 
 Calling `$f` invokes the following function, which extracts the resource
 representation from the handle in the current component instance's `handles`
