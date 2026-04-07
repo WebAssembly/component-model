@@ -2144,17 +2144,15 @@ better up-front allocation size choices in many cases. Thus, the value produced
 by `load_string` isn't simply a Python `str`, but a *tuple* containing a `str`,
 the original encoding and the number of source code units.
 
-The `MAX_STRING_BYTE_LENGTH` constant ensures that the high bit of a string's
-number of code units is never set, keeping it clear for `utf16_tag`. Note that
-this limit is the same across 32-bit and 64-bit components.
+The `MAX_STRING_STORE_BYTE_LENGTH` constant ensures that the high bit of a
+string's number of code units is never set, keeping it clear for `utf16_tag`.
+Note that this limit is the same across 32-bit and 64-bit components.
 
-Since this byte length of a string depends on the encoding, we additionally
-restrict the total code units to `MAX_STRING_CODE_UNITS = (1 << 28) - 1` when
-loading a string to ensure that it won't exceed the maximum byte length when
-converted to a different encoding. The worst case inflation for string length
-comes in `store_utf16_to_utf8` which may result in 3 bytes per code unit in the
-original encoding, so this limit is low enough to keep strings within the
-maximum length.
+The `MAX_STRING_BYTE_LENGTH` constant limits the byte length of a string when
+loading. It ensures that the length of the string remains under
+`MAX_STRING_STORE_BYTE_LENGTH` even when converting to other encodings. The
+worst case inflation in string byte length is by a factor of 2 (e.g. this could
+occur when converting from [UTF-8] to [UTF-16]).
 ```python
 String = tuple[str, str, int]
 
@@ -2166,11 +2164,9 @@ def load_string(cx, ptr) -> String:
 def utf16_tag(ptr_type):
   return 1 << (ptr_size(ptr_type) * 8 - 1)
 
-MAX_STRING_BYTE_LENGTH = (1 << 31) - 1
-MAX_STRING_CODE_UNITS = (1 << 28) - 1
-# The worst case for string byte length comes in store_utf16_to_utf8 where
-# we may end up with 3 bytes for each original code unit.
-assert(MAX_STRING_CODE_UNITS * 3 <= MAX_STRING_BYTE_LENGTH)
+MAX_STRING_BYTE_LENGTH = (1 << 28) - 1
+MAX_STRING_STORE_BYTE_LENGTH = (1 << 31) - 1
+assert(MAX_STRING_STORE_BYTE_LENGTH > 2 * MAX_STRING_BYTE_LENGTH)
 
 def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   tag = utf16_tag(cx.opts.memory.ptr_type())
@@ -2192,14 +2188,13 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
         byte_length = tagged_code_units
         encoding = 'latin-1'
 
+  trap_if(byte_length > MAX_STRING_BYTE_LENGTH)
   trap_if(ptr != align_to(ptr, alignment))
   trap_if(ptr + byte_length > len(cx.opts.memory))
   try:
     s = cx.opts.memory[ptr : ptr+byte_length].decode(encoding)
   except UnicodeError:
     trap()
-
-  trap_if((tagged_code_units & ~tag) > MAX_STRING_CODE_UNITS)
 
   return (s, cx.opts.string_encoding, tagged_code_units)
 ```
@@ -2215,8 +2210,11 @@ def lift_error_context(cx, i):
 
 Lists and records are loaded by recursively loading their elements/fields. The
 byte length of a list is limited to `MAX_LIST_BYTE_LENGTH` which, similar to
-`MAX_STRING_CODE_UNITS`, keeps list lengths well below the 32-bit address space
-limit.
+`MAX_STRING_BYTE_LENGTH`, keeps list lengths well below the 32-bit address space
+limit. The worst case inflation of a list length in bytes is by a factor of 2
+(which could occure when pointer sizes increase from 4 to 8 bytes) so
+`MAX_LIST_BYTE_LENGTH` is small enough that the list length will fit in
+`MAX_LIST_STORE_BYTE_LENGTH` even when doubled in length.
 ```python
 MAX_LIST_BYTE_LENGTH = (1 << 28) - 1
 MAX_LIST_STORE_BYTE_LENGTH = (1 << 32) - 1
@@ -2520,7 +2518,7 @@ byte after every Latin-1 byte).
 ```python
 def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment, dst_encoding):
   dst_byte_length = dst_code_unit_size * src_code_units
-  assert(dst_byte_length <= MAX_STRING_BYTE_LENGTH)
+  assert(dst_byte_length <= MAX_STRING_STORE_BYTE_LENGTH)
   ptr = cx.opts.realloc(0, 0, dst_alignment, dst_byte_length)
   trap_if(ptr != align_to(ptr, dst_alignment))
   trap_if(ptr + dst_byte_length > len(cx.opts.memory))
@@ -2543,14 +2541,14 @@ def store_latin1_to_utf8(cx, src, src_code_units):
   return store_string_to_utf8(cx, src, src_code_units, worst_case_size)
 
 def store_string_to_utf8(cx, src, src_code_units, worst_case_size):
-  assert(src_code_units <= MAX_STRING_BYTE_LENGTH)
+  assert(src_code_units <= MAX_STRING_STORE_BYTE_LENGTH)
   ptr = cx.opts.realloc(0, 0, 1, src_code_units)
   trap_if(ptr + src_code_units > len(cx.opts.memory))
   for i,code_point in enumerate(src):
     if ord(code_point) < 2**7:
       cx.opts.memory[ptr + i] = ord(code_point)
     else:
-      assert(worst_case_size <= MAX_STRING_BYTE_LENGTH)
+      assert(worst_case_size <= MAX_STRING_STORE_BYTE_LENGTH)
       ptr = cx.opts.realloc(ptr, src_code_units, 1, worst_case_size)
       trap_if(ptr + worst_case_size > len(cx.opts.memory))
       encoded = src.encode('utf-8')
@@ -2569,7 +2567,7 @@ if multiple UTF-8 bytes were collapsed into a single 2-byte UTF-16 code unit:
 ```python
 def store_utf8_to_utf16(cx, src, src_code_units):
   worst_case_size = 2 * src_code_units
-  assert(worst_case_size <= MAX_STRING_BYTE_LENGTH)
+  assert(worst_case_size <= MAX_STRING_STORE_BYTE_LENGTH)
   ptr = cx.opts.realloc(0, 0, 2, worst_case_size)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + worst_case_size > len(cx.opts.memory))
@@ -2604,7 +2602,7 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
       dst_byte_length += 1
     else:
       worst_case_size = 2 * src_code_units
-      assert(worst_case_size <= MAX_STRING_BYTE_LENGTH)
+      assert(worst_case_size <= MAX_STRING_STORE_BYTE_LENGTH)
       ptr = cx.opts.realloc(ptr, src_code_units, 2, worst_case_size)
       trap_if(ptr != align_to(ptr, 2))
       trap_if(ptr + worst_case_size > len(cx.opts.memory))
@@ -2639,7 +2637,7 @@ inexpensively fused with the UTF-16 validate+copy loop.)
 ```python
 def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   src_byte_length = 2 * src_code_units
-  assert(src_byte_length <= MAX_STRING_BYTE_LENGTH)
+  assert(src_byte_length <= MAX_STRING_STORE_BYTE_LENGTH)
   ptr = cx.opts.realloc(0, 0, 2, src_byte_length)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + src_byte_length > len(cx.opts.memory))

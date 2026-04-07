@@ -1279,9 +1279,9 @@ def load_string(cx, ptr) -> String:
 def utf16_tag(ptr_type):
   return 1 << (ptr_size(ptr_type) * 8 - 1)
 
-MAX_STRING_BYTE_LENGTH = (1 << 31) - 1
-MAX_STRING_CODE_UNITS = (1 << 28) - 1
-assert(MAX_STRING_CODE_UNITS * 3 <= MAX_STRING_BYTE_LENGTH)
+MAX_STRING_BYTE_LENGTH = (1 << 28) - 1
+MAX_STRING_STORE_BYTE_LENGTH = (1 << 31) - 1
+assert(MAX_STRING_STORE_BYTE_LENGTH > 2 * MAX_STRING_BYTE_LENGTH)
 
 def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   tag = utf16_tag(cx.opts.memory.ptr_type())
@@ -1303,14 +1303,13 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
         byte_length = tagged_code_units
         encoding = 'latin-1'
 
+  trap_if(byte_length > MAX_STRING_BYTE_LENGTH)
   trap_if(ptr != align_to(ptr, alignment))
   trap_if(ptr + byte_length > len(cx.opts.memory))
   try:
     s = cx.opts.memory[ptr : ptr+byte_length].decode(encoding)
   except UnicodeError:
     trap()
-
-  trap_if((tagged_code_units & ~tag) > MAX_STRING_CODE_UNITS)
 
   return (s, cx.opts.string_encoding, tagged_code_units)
 
@@ -1518,7 +1517,7 @@ def store_string_into_range(cx, v: String):
 
 def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment, dst_encoding):
   dst_byte_length = dst_code_unit_size * src_code_units
-  assert(dst_byte_length <= MAX_STRING_BYTE_LENGTH)
+  assert(dst_byte_length <= MAX_STRING_STORE_BYTE_LENGTH)
   ptr = cx.opts.realloc(0, 0, dst_alignment, dst_byte_length)
   trap_if(ptr != align_to(ptr, dst_alignment))
   trap_if(ptr + dst_byte_length > len(cx.opts.memory))
@@ -1536,14 +1535,14 @@ def store_latin1_to_utf8(cx, src, src_code_units):
   return store_string_to_utf8(cx, src, src_code_units, worst_case_size)
 
 def store_string_to_utf8(cx, src, src_code_units, worst_case_size):
-  assert(src_code_units <= MAX_STRING_BYTE_LENGTH)
+  assert(src_code_units <= MAX_STRING_STORE_BYTE_LENGTH)
   ptr = cx.opts.realloc(0, 0, 1, src_code_units)
   trap_if(ptr + src_code_units > len(cx.opts.memory))
   for i,code_point in enumerate(src):
     if ord(code_point) < 2**7:
       cx.opts.memory[ptr + i] = ord(code_point)
     else:
-      assert(worst_case_size <= MAX_STRING_BYTE_LENGTH)
+      assert(worst_case_size <= MAX_STRING_STORE_BYTE_LENGTH)
       ptr = cx.opts.realloc(ptr, src_code_units, 1, worst_case_size)
       trap_if(ptr + worst_case_size > len(cx.opts.memory))
       encoded = src.encode('utf-8')
@@ -1556,7 +1555,7 @@ def store_string_to_utf8(cx, src, src_code_units, worst_case_size):
 
 def store_utf8_to_utf16(cx, src, src_code_units):
   worst_case_size = 2 * src_code_units
-  assert(worst_case_size <= MAX_STRING_BYTE_LENGTH)
+  assert(worst_case_size <= MAX_STRING_STORE_BYTE_LENGTH)
   ptr = cx.opts.realloc(0, 0, 2, worst_case_size)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + worst_case_size > len(cx.opts.memory))
@@ -1581,7 +1580,7 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
       dst_byte_length += 1
     else:
       worst_case_size = 2 * src_code_units
-      assert(worst_case_size <= MAX_STRING_BYTE_LENGTH)
+      assert(worst_case_size <= MAX_STRING_STORE_BYTE_LENGTH)
       ptr = cx.opts.realloc(ptr, src_code_units, 2, worst_case_size)
       trap_if(ptr != align_to(ptr, 2))
       trap_if(ptr + worst_case_size > len(cx.opts.memory))
@@ -1604,7 +1603,7 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
 
 def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   src_byte_length = 2 * src_code_units
-  assert(src_byte_length <= MAX_STRING_BYTE_LENGTH)
+  assert(src_byte_length <= MAX_STRING_STORE_BYTE_LENGTH)
   ptr = cx.opts.realloc(0, 0, 2, src_byte_length)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + src_byte_length > len(cx.opts.memory))
