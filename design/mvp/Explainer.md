@@ -1300,8 +1300,8 @@ default is `utf8`. It is a validation error to include more than one
 The `(memory ...)` option specifies the memory that the Canonical ABI will
 use to load and store values. If the Canonical ABI needs to load or store,
 validation requires this option to be present (there is no default). The types
-of lowered functions may also depend on the [`core:memory-type`] of this memory,
-specifically its [`core:address-type`] (indicated by `memory.addrtype`), if pointers
+of lowered functions may also depend on the [`core:memtype`] of this memory,
+specifically its [`core:addrtype`] (indicated by `memory.addrtype`), if pointers
 are transitively contained in parameters or results.
 
 The `(realloc ...)` option specifies a core function that is validated to
@@ -2081,7 +2081,7 @@ instance's table, returning the index of the new thread. The function table
 supplied via [`core:tableidx`] is indexed by the `fi` operand and then
 dynamically checked to match the type `FuncT` (in the same manner as
 `call_indirect`). Here the `table.addrtype` is either `i32` or `i64` as
-determined by the [`core:table-type`] of the table. Lastly, the indexed function
+determined by the [`core:tabletype`] of the table. Lastly, the indexed function
 is called in the new thread with `c` as its first and only parameter.
 
 Currently, `FuncT` must be `(func (param i32))` or `(func (param i64))` and thus
@@ -3188,9 +3188,9 @@ For some use-case-focused, worked examples, see:
 [func-import-abbrev]: https://webassembly.github.io/spec/core/text/modules.html#text-func-abbrev
 [`core:version`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-version
 [`core:tableidx`]: https://webassembly.github.io/spec/core/syntax/modules.html#syntax-tableidx
-[`core:address-type`]: https://webassembly.github.io/spec/core/syntax/types.html#address-types
-[`core:memory-type`]: https://webassembly.github.io/spec/core/syntax/types.html#memory-types
-[`core:table-type`]: https://webassembly.github.io/spec/core/syntax/types.html#table-types
+[`core:addrtype`]: https://webassembly.github.io/spec/core/syntax/types.html#address-types
+[`core:memtype`]: https://webassembly.github.io/spec/core/syntax/types.html#memory-types
+[`core:tabletype`]: https://webassembly.github.io/spec/core/syntax/types.html#table-types
 
 [Embedder]: https://webassembly.github.io/spec/core/appendix/embedding.html
 [`module_instantiate`]: https://webassembly.github.io/spec/core/appendix/embedding.html#mathrm-module-instantiate-xref-exec-runtime-syntax-store-mathit-store-xref-syntax-modules-syntax-module-mathit-module-xref-exec-runtime-syntax-externval-mathit-externval-ast-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-moduleinst-mathit-moduleinst-xref-appendix-embedding-embed-error-mathit-error

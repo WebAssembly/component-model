@@ -241,7 +241,7 @@ not present in the binary or text format definition.
 
 The `MemInst` class represents a core WebAssembly [`memory` instance], with
 `bytes` corresponding to the memory's bytes and `addrtype` coming from the
-[`memory type`].
+[`memtype`].
 ```python
 def ptr_size(ptr_type):
   match ptr_type:
@@ -3253,7 +3253,7 @@ present, is validated as such:
 * `string-encoding=N` - can be passed at most once, regardless of `N`.
 * `memory` - this is a subtype of `(memory 1)` or `(memory i64 1)`.
 * `realloc` - the function has type `(func (param addr addr addr addr) (result addr))`
-  where `addr` is the address type (`i32` or `i64`) coming from the [`memory type`]
+  where `addr` is the address type (`i32` or `i64`) coming from the [`memtype`]
   of the `memory` canonopt.
 * If `realloc` is present then `memory` must be present.
 * `post-return` - only allowed on [`canon lift`](#canon-lift), which has rules
@@ -3787,9 +3787,9 @@ validation specifies:
 Calling `$f` invokes the following function, which reads the [thread-local
 storage] of the [current thread] (taking only the low 32-bits if `$t` is `i32`):
 ```python
-def canon_context_get(t, i, thread):
-  MASK_32BIT = (1 << 32) - 1
+MASK_32BIT = (1 << 32) - 1
 
+def canon_context_get(t, i, thread):
   assert(t == 'i32' or t == 'i64')
   assert(i < Thread.CONTEXT_LENGTH)
   result = thread.context[i]
@@ -3815,6 +3815,7 @@ storage] of the [current thread]:
 ```python
 def canon_context_set(t, i, thread, v):
   assert(t == 'i32' or t == 'i64')
+  assert(v <= MASK_32BIT or t == 'i64')
   assert(i < Thread.CONTEXT_LENGTH)
   thread.context[i] = v
   return []
@@ -4308,7 +4309,7 @@ being delivered to core wasm so that, once a stream end has been notified that
 the other end dropped, calling anything other than `stream.drop-*` traps.
 Lastly, `stream_event` packs the `CopyResult` and number of elements copied up
 until this point into a single `i32` or `i64`-sized payload for core wasm. The
-size is determined by the `addrtype` coming from the [`memory type`] of the
+size is determined by the `addrtype` coming from the [`memtype`] of the
 `memory` immediate. Note that even though the number of elements copied is
 packed into an `addrtype`, the maximum length of the buffer is fixed at `2^28 - 1`
 independently of the `addrtype`.
@@ -5023,7 +5024,7 @@ def canon_thread_available_parallelism():
 [`memaddrs` table]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-moduleinst
 [`memidx`]: https://webassembly.github.io/spec/core/syntax/modules.html#syntax-memidx
 [`memory` instance]: https://webassembly.github.io/spec/core/exec/runtime.html#memory-instances
-[`memory type`]: https://webassembly.github.io/spec/core/syntax/types.html#memory-types
+[`memtype`]: https://webassembly.github.io/spec/core/syntax/types.html#memory-types
 
 [Alignment]: https://en.wikipedia.org/wiki/Data_structure_alignment
 [UTF-8]: https://en.wikipedia.org/wiki/UTF-8
