@@ -3249,11 +3249,12 @@ specifying `string-encoding=utf8` twice is an error. Each individual option, if
 present, is validated as such:
 
 * `string-encoding=N` - can be passed at most once, regardless of `N`.
-* `memory` - this is a subtype of `(memory 1)` or `(memory i64 1)`.
+* `memory` - this is a subtype of `(memory 1)`
+  * 🐘 `memory` may also be a subtype of `(memory i64 1)`
 * `realloc` - the function has type `(func (param addr addr addr addr) (result addr))`
-  where `addr` is the address type (`i32` or `i64`) coming from the [`memtype`]
-  of the `memory` canonopt.
-* If `realloc` is present then `memory` must be present.
+  where `addr` is the address type coming from the [`memtype`] of the `memory`
+  canonopt (restricted to `i32`, but with 🐘 may also be `i64`).
+* if `realloc` is present then `memory` must be present
 * `post-return` - only allowed on [`canon lift`](#canon-lift), which has rules
   for validation
 * 🔀 `async` - cannot be present with `post-return`
@@ -3778,7 +3779,8 @@ For a canonical definition:
 (canon context.get $t $i (core func $f))
 ```
 validation specifies:
-* `$t` must be `i32` or `i64` (see [here][thread-local storage]).
+* `$t` must be `i32` (see [here][thread-local storage]).
+  * 🐘 - `$t` may also be `i64`
 * `$i` must be less than `Thread.CONTEXT_LENGTH` (`2`)
 * `$f` is given type `(func (result $t))`
 
@@ -3804,7 +3806,9 @@ For a canonical definition:
 (canon context.set $t $i (core func $f))
 ```
 validation specifies:
-* `$t` must be `i32` or `i64` (see [here][thread-local storage])
+* `$t` must be `i32` (see [here][thread-local storage])
+  * 🐘 - `$t` may also be `i64`
+* `$i` must be less than `Thread.CONTEXT_LENGTH` (`2`)
 * `$i` must be less than `Thread.CONTEXT_LENGTH` (`2`)
 * `$f` is given type `(func (param $v $t))`
 
@@ -3977,8 +3981,8 @@ For a canonical definition:
 (canon waitable-set.wait $cancellable? (memory $mem) (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param $si i32) (param $ptr) (result i32))` where
-  `$ptr` is the address type of `$mem`.
+* `$f` is given type `(func (param $si i32) (param $ptr i32) (result i32))`
+  * 🐘 - `$ptr` has type `i32` or `i64` to match the address type of `$mem`
 
 Calling `$f` invokes the following function which waits for progress to be made
 on a `Waitable` in the given waitable set (indicated by index `$si`) and then
@@ -4021,8 +4025,8 @@ For a canonical definition:
 (canon waitable-set.poll $cancellable? (memory $mem) (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param $si i32) (param $ptr) (result i32))` where
-  `$ptr` is the address type of `$mem`.
+* `$f` is given type `(func (param $si i32) (param $ptr i32) (result i32))`
+  * 🐘 - `$ptr` has type `i32` or `i64` to match the address type of `$mem`
 
 Calling `$f` invokes the following function, which either returns an event that
 was pending on one of the waitables in the given waitable set (the same way as
@@ -4239,9 +4243,9 @@ For canonical definitions:
 ```
 In addition to [general validation of `$opts`](#canonopt-validation) validation
 specifies:
-* `$f` is given type `(func (param i32 T T) (result T))` where `T` is `i32` or
-  `i64` as determined by the address type of `memory` from `$opts` (or `i32` by
-  default if no `memory` is present).
+* `$f` is given type `(func (param i32 T T) (result T))` where `T` is `i32`
+  * 🐘 - `T` is `i32` or `i64` as determined by the address type of `memory` from
+    `$opts` (or `i32` by default if no `memory` is present)
 * `$stream_t` must be a type of the form `(stream $t?)`
 * If `$t` is present:
   * [`lower($t)` above](#canonopt-validation) defines required options for `stream.write`
@@ -4360,9 +4364,9 @@ For canonical definitions:
 ```
 In addition to [general validation of `$opts`](#canonopt-validation) validation
 specifies:
-* `$f` is given type `(func (param i32 T) (result i32))` where `T` is `i32` or
-  `i64` as determined by the address type of `memory` from `$opts` (or `i32`
-  by default if no `memory` is present).
+* `$f` is given type `(func (param i32 T) (result i32))` where `T` is `i32`
+  * 🐘 - `T` is `i32` or `i64` as determined by the address type of `memory` from
+    `$opts` (or `i32` by default if no `memory` is present)
 * `$future_t` must be a type of the form `(future $t?)`
 * If `$t` is present:
   * [`lift($t)` above](#canonopt-validation) defines required options for `future.read`
@@ -4585,12 +4589,12 @@ For a canonical definition:
 (canon thread.new-indirect $ft $ftbl (core func $new_indirect))
 ```
 validation specifies
-* `$ft` must refer to the type `(func (param $c))` where `$c` is `i32` or
-  `i64`.
+* `$ft` must refer to the type `(func (param $c i32))`
+  * 🐘 - `$c` may also have type `i64`
 * `$ftbl` must refer to a table whose element type matches `funcref`
-* `$new_indirect` is given type `(func (param $fi) (param $c) (result i32))`
-  where `$fi` is `i32` or `i64` as determined by `$ftbl`'s table type and
-  `$c` has the same type as the parameter in `$ft`.
+* `$new_indirect` is given type `(func (param $fi i32) (param $c i32) (result i32))`
+  * 🐘 - `$fi` has type`i32` or `i64` as determined by `$ftbl`'s table type and
+    `$c` has the same type as the parameter in `$ft`
 
 Calling `$new_indirect` invokes the following function which reads a `funcref`
 from `$ftbl` (trapping if out-of-bounds, null or the wrong type), calls the
@@ -4785,9 +4789,9 @@ For a canonical definition:
 (canon error-context.new $opts (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param $ptr) (param $units) (result i32))` 
-  where `$ptr` and `$units` are both `i32` or `i64` as determined by
-  the address type of the `memory` field in `$opts`.
+* `$f` is given type `(func (param $ptr i32) (param $units i32) (result i32))`
+  * 🐘 - `$ptr` and `$units` are both type `i32` or `i64` as determined by
+    the address type of the `memory` field in `$opts`
 * `async` is not present
 * `memory` must be present
 
@@ -4828,8 +4832,9 @@ For a canonical definition:
 (canon error-context.debug-message $opts (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param i32) (param $ptr))` where `$ptr` is `i32` or `i64`
-  as determined by the address type of `memory` from `$opts`
+* `$f` is given type `(func (param i32) (param $ptr i32))`
+  * 🐘 - `$ptr` is type `i32` or `i64` as determined by the address type of
+    `memory` from `$opts`
 * `async` is not present
 * `memory` must be present
 * `realloc` must be present
@@ -4880,10 +4885,12 @@ For a canonical definition:
 (canon thread.spawn-ref shared? $ft (core func $spawn_ref))
 ```
 validation specifies:
-* `$ft` must refer to the type `(shared? (func (param $c)))` where `$c` has
-  type `i32` or `i64`.
+* `$ft` must refer to the type `(shared? (func (param $c i32)))`
+  * 🐘 - `$c` has type `i32` or `i64`.
 * `$spawn_ref` is given type
-  `(shared? (func (param $f (ref null $ft)) (param $c) (result $e i32)))`
+  `(shared? (func (param $f (ref null $ft)) (param $c i32) (result $e i32)))`
+  * 🐘 - the param `$c` in the type of `$spawn_ref` has type `i32` or `i64` to
+    match `$c` in `$ft`
 
 When the `shared` immediate is not present, the spawned thread is
 *cooperative*, only switching at specific program points. When the `shared`
@@ -4922,13 +4929,15 @@ For a canonical definition:
 (canon thread.spawn-indirect shared? $ft $tbl (core func $spawn_indirect))
 ```
 validation specifies:
-* `$ft` must refer to the type `(shared? (func (param $c)))` 
-  where `$c` is either `i32` or `i64`.
+* `$ft` must refer to the type `(shared? (func (param $c i32)))`
+  * 🐘 - `$c` has type `i32` or `i64`
 * `$tbl` must refer to a shared table whose element type matches
   `(ref null (shared? func))`
 * `$spawn_indirect` is given type
-  `(shared? (func (param $i) (param $c) (result $e i32)))` where `$i` is
-  `i32` or `i64` determined by `$tbl`'s table type
+  `(shared? (func (param $i i32) (param $c i32) (result $e i32)))`
+  * 🐘 - `$i` has type `i32` or `i64` as determined by `$tbl`'s table type
+  * 🐘 - the param `$c` in the type of `$spawn_indirect` has type `i32` or `i64` to
+    match `$c` in `$ft`
 
 When the `shared` immediate is not present, the spawned thread is
 *cooperative*, only switching at specific program points. When the `shared`

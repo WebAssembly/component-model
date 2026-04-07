@@ -57,6 +57,7 @@ implemented, considered stable and included in a future milestone:
 * 🔧: fixed-length lists
 * 📝: the `error-context` type
 * 🔗: canonical interface names
+* 🐘: [memory64]
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
 this repo merges and supersedes the [module-linking] and [interface-types]
@@ -568,6 +569,8 @@ valtype       ::= <typeidx>
                 | <defvaltype>
 resourcetype  ::= (resource (rep i32) (dtor <funcidx>)?)
                 | (resource (rep i32) (dtor async <funcidx> (callback <funcidx>)?)?) 🚝
+                | (resource (rep i64) (dtor <funcidx>)?) 🐘
+                | (resource (rep i64) (dtor async <funcidx> (callback <funcidx>)?)?) 🚝🐘
 functype      ::= (func async? (param "<label>" <valtype>)* (result <valtype>)?)
 componenttype ::= (component <componentdecl>*)
 instancetype  ::= (instance <instancedecl>*)
@@ -806,13 +809,13 @@ type-checking described in more detail [below](#type-checking)). Resource types
 can be referred to by handle types (such as `own` and `borrow`) as well as the
 canonical built-ins described [below](#canonical-built-ins). The `rep`
 immediate of a `resource` type specifies its *core representation type*, which
-is currently fixed to `i32`, but will be relaxed in the future (to at least
-include `i64`, but also potentially other types). When the last handle to a
-resource is dropped, the resource's destructor function specified by the `dtor`
-immediate will be called (if present), allowing the implementing component to
-perform clean-up like freeing linear memory allocations. Destructors can be
-declared `async`, with the same meaning for the `async` and `callback`
-immediates as described below for `canon lift`.
+is currently fixed to `i32` or `i64`, but will potentially be relaxed to include
+other types. When the last handle to a resource is dropped, the resource's
+destructor function specified by the `dtor` immediate will be called (if
+present), allowing the implementing component to perform clean-up like freeing
+linear memory allocations. Destructors can be declared `async`, with the same
+meaning for the `async` and `callback` immediates as described below for `canon
+lift`.
 
 The `instance` type constructor describes a list of named, typed definitions
 that can be imported or exported by a component. Informally, instance types
