@@ -199,7 +199,7 @@ class Store:
     random.shuffle(self.pending)
     for thread in self.pending:
       if thread.ready():
-        thread.resume()
+        thread.resume(Cancelled.FALSE)
         return
 
 FuncInst: Callable[[Optional[Supertask], OnStart, OnResolve], Call]
@@ -389,27 +389,74 @@ class ResourceType(Type):
     self.dtor_async = dtor_async
     self.dtor_callback = dtor_callback
 
+#### Stack Switching Support
+
+class Continuation:
+  lock: threading.Lock
+  handler: Handler
+  cancelled: Cancelled
+
+class Handler:
+  tls = threading.local()
+  lock: threading.Lock
+  cont: Optional[Continuation]
+  switch_to: Optional[Thread]
+
+def cont_new(f: Callable[[Cancelled], Optional[Thread]]) -> Continuation:
+  cont = Continuation()
+  cont.lock = threading.Lock()
+  cont.lock.acquire()
+  def wrapper():
+    cont.lock.acquire()
+    Handler.tls.value = cont.handler
+    switch_to = f(cont.cancelled)
+    handler = Handler.tls.value
+    handler.cont = None
+    handler.switch_to = switch_to
+    handler.lock.release()
+  threading.Thread(target = wrapper).start()
+  return cont
+
+def resume(cont: Continuation, cancelled: Cancelled) -> tuple[Optional[Continuation], Optional[Thread]]:
+  handler = Handler()
+  handler.lock = threading.Lock()
+  handler.lock.acquire()
+  cont.handler = handler
+  cont.cancelled = cancelled
+  cont.lock.release()
+  handler.lock.acquire()
+  return (handler.cont, handler.switch_to)
+
+def suspend(switch_to: Optional[Thread]) -> Cancelled:
+  cont = Continuation()
+  cont.lock = threading.Lock()
+  cont.lock.acquire()
+  handler = Handler.tls.value
+  handler.cont = cont
+  handler.switch_to = switch_to
+  handler.lock.release()
+  cont.lock.acquire()
+  Handler.tls.value = cont.handler
+  return cont.cancelled
+
 #### Thread State
 
-class SuspendResult(IntEnum):
-  NOT_CANCELLED = 0
-  CANCELLED = 1
+class Cancelled(IntEnum):
+  FALSE = 0
+  TRUE = 1
 
 class Thread:
-  task: Task
-  fiber: threading.Thread
-  fiber_lock: threading.Lock
-  parent_lock: Optional[threading.Lock]
+  cont: Optional[Continuation]
   ready_func: Optional[Callable[[], bool]]
-  cancellable: bool
-  suspend_result: Optional[SuspendResult]
+  task: Task
   index: Optional[int]
   context: list[int]
+  cancellable: bool
 
   CONTEXT_LENGTH = 2
 
   def running(self):
-    return self.parent_lock is not None
+    return self.cont is None
 
   def suspended(self):
     return not self.running() and self.ready_func is None
@@ -422,94 +469,63 @@ class Thread:
     return self.ready_func()
 
   def __init__(self, task, thread_func):
-    self.task = task
-    self.fiber_lock = threading.Lock()
-    self.fiber_lock.acquire()
-    self.parent_lock = None
-    self.ready_func = None
-    self.cancellable = False
-    self.suspend_result = None
-    self.index = None
-    self.context = [0] * Thread.CONTEXT_LENGTH
-    def fiber_func():
-      self.fiber_lock.acquire()
-      assert(self.running() and self.suspend_result == SuspendResult.NOT_CANCELLED)
-      self.suspend_result = None
+    def wrapper(cancelled):
+      assert(self.running() and not cancelled)
       thread_func(self)
-      assert(self.running())
       self.task.thread_stop(self)
       if self.index is not None:
         self.task.inst.threads.remove(self.index)
-      self.parent_lock.release()
-    self.fiber = threading.Thread(target = fiber_func)
-    self.fiber.start()
-    self.task.thread_start(self)
+    self.cont = cont_new(wrapper)
+    self.ready_func = None
+    self.task = task
+    self.index = None
+    self.context = [0] * Thread.CONTEXT_LENGTH
+    self.cancellable = False
     assert(self.suspended())
+    self.task.thread_start(self)
 
-  def resume(self, suspend_result = SuspendResult.NOT_CANCELLED):
-    assert(not self.running() and self.suspend_result is None)
+  def resume(self, cancelled):
+    assert(not self.running() and (self.cancellable or not cancelled))
     if self.ready_func:
-      assert(suspend_result == SuspendResult.CANCELLED or self.ready_func())
+      assert(cancelled or self.ready_func())
       self.ready_func = None
       self.task.inst.store.pending.remove(self)
-    assert(self.cancellable or suspend_result == SuspendResult.NOT_CANCELLED)
-    self.suspend_result = suspend_result
-    self.parent_lock = threading.Lock()
-    self.parent_lock.acquire()
-    self.fiber_lock.release()
-    self.parent_lock.acquire()
-    self.parent_lock = None
-    assert(not self.running())
+    thread = self
+    while thread is not None:
+      cont = thread.cont
+      thread.cont = None
+      thread.cont, thread = resume(cont, cancelled)
+      cancelled = Cancelled.FALSE
 
-  def suspend(self, cancellable) -> SuspendResult:
-    assert(self.task.may_block())
-    assert(self.running() and not self.cancellable and self.suspend_result is None)
+  def suspend(self, cancellable) -> Cancelled:
+    assert(self.running() and self.task.may_block())
     self.cancellable = cancellable
-    self.parent_lock.release()
-    self.fiber_lock.acquire()
-    assert(self.running())
-    self.cancellable = False
-    suspend_result = self.suspend_result
-    self.suspend_result = None
-    assert(suspend_result is not None)
-    assert(cancellable or suspend_result == SuspendResult.NOT_CANCELLED)
-    return suspend_result
+    cancelled = suspend(None)
+    assert(self.running() and (cancellable or not cancelled))
+    return cancelled
 
   def resume_later(self):
     assert(self.suspended())
     self.ready_func = lambda: True
     self.task.inst.store.pending.append(self)
 
-  def suspend_until(self, ready_func, cancellable = False) -> SuspendResult:
-    assert(self.task.may_block())
-    assert(self.running())
+  def suspend_until(self, ready_func, cancellable = False) -> Cancelled:
+    assert(self.running() and self.task.may_block())
     if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):
-      return SuspendResult.NOT_CANCELLED
+      return Cancelled.FALSE
     self.ready_func = ready_func
     self.task.inst.store.pending.append(self)
     return self.suspend(cancellable)
 
-  def switch_to(self, cancellable, other: Thread) -> SuspendResult:
-    assert(self.running() and not self.cancellable and self.suspend_result is None)
-    assert(other.suspended() and other.suspend_result is None)
-    self.cancellable = cancellable
-    other.suspend_result = SuspendResult.NOT_CANCELLED
-    assert(self.parent_lock and not other.parent_lock)
-    other.parent_lock = self.parent_lock
-    self.parent_lock = None
-    assert(not self.running() and other.running())
-    other.fiber_lock.release()
-    self.fiber_lock.acquire()
+  def switch_to(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running())
-    self.cancellable = False
-    suspend_result = self.suspend_result
-    self.suspend_result = None
-    assert(suspend_result is not None)
-    assert(cancellable or suspend_result == SuspendResult.NOT_CANCELLED)
-    return suspend_result
+    self.cancellable = cancellable
+    cancelled = suspend(other)
+    assert(self.running() and (cancellable or not cancelled))
+    return cancelled
 
-  def yield_to(self, cancellable, other: Thread) -> SuspendResult:
-    assert(not self.ready_func)
+  def yield_to(self, cancellable, other: Thread) -> Cancelled:
+    assert(self.running())
     self.ready_func = lambda: True
     self.task.inst.store.pending.append(self)
     return self.switch_to(cancellable, other)
@@ -637,7 +653,7 @@ class Task(Call, Supertask):
       self.inst.num_waiting_to_enter += 1
       result = thread.suspend_until(lambda: not has_backpressure(), cancellable = True)
       self.inst.num_waiting_to_enter -= 1
-      if result == SuspendResult.CANCELLED:
+      if result == Cancelled.TRUE:
         self.cancel()
         return False
       self.state = Task.State.UNRESOLVED
@@ -658,7 +674,7 @@ class Task(Call, Supertask):
     if self.state == Task.State.BACKPRESSURE:
       assert(len(self.threads) == 1)
       self.state = Task.State.CANCEL_DELIVERED
-      self.threads[0].resume(SuspendResult.CANCELLED)
+      self.threads[0].resume(Cancelled.TRUE)
       return
     assert(self.state == Task.State.UNRESOLVED)
     if not self.needs_exclusive() or not self.inst.exclusive or self.inst.exclusive is self:
@@ -666,7 +682,7 @@ class Task(Call, Supertask):
       for thread in self.threads:
         if thread.cancellable:
           self.state = Task.State.CANCEL_DELIVERED
-          thread.resume(SuspendResult.CANCELLED)
+          thread.resume(Cancelled.TRUE)
           return
     self.state = Task.State.PENDING_CANCEL
 
@@ -676,28 +692,28 @@ class Task(Call, Supertask):
       return True
     return False
 
-  def suspend(self, thread, cancellable) -> SuspendResult:
+  def suspend(self, thread, cancellable) -> Cancelled:
     assert(thread in self.threads and thread.task is self)
     if self.deliver_pending_cancel(cancellable):
-      return SuspendResult.CANCELLED
+      return Cancelled.TRUE
     return thread.suspend(cancellable)
 
-  def suspend_until(self, ready_func, thread, cancellable) -> SuspendResult:
+  def suspend_until(self, ready_func, thread, cancellable) -> Cancelled:
     assert(thread in self.threads and thread.task is self)
     if self.deliver_pending_cancel(cancellable):
-      return SuspendResult.CANCELLED
+      return Cancelled.TRUE
     return thread.suspend_until(ready_func, cancellable)
 
-  def switch_to(self, thread, cancellable, other_thread) -> SuspendResult:
+  def switch_to(self, thread, cancellable, other_thread) -> Cancelled:
     assert(thread in self.threads and thread.task is self)
     if self.deliver_pending_cancel(cancellable):
-      return SuspendResult.CANCELLED
+      return Cancelled.TRUE
     return thread.switch_to(cancellable, other_thread)
 
-  def yield_to(self, thread, cancellable, other_thread) -> SuspendResult:
+  def yield_to(self, thread, cancellable, other_thread) -> Cancelled:
     assert(thread in self.threads and thread.task is self)
     if self.deliver_pending_cancel(cancellable):
-      return SuspendResult.CANCELLED
+      return Cancelled.TRUE
     return thread.yield_to(cancellable, other_thread)
 
   def wait_until(self, ready_func, thread, wset, cancellable) -> EventTuple:
@@ -706,9 +722,9 @@ class Task(Call, Supertask):
     def ready_and_has_event():
       return ready_func() and wset.has_pending_event()
     match self.suspend_until(ready_and_has_event, thread, cancellable):
-      case SuspendResult.CANCELLED:
+      case Cancelled.TRUE:
         event = (EventCode.TASK_CANCELLED, 0, 0)
-      case SuspendResult.NOT_CANCELLED:
+      case Cancelled.FALSE:
         event = wset.get_pending_event()
     wset.num_waiting -= 1
     return event
@@ -716,9 +732,9 @@ class Task(Call, Supertask):
   def yield_until(self, ready_func, thread, cancellable) -> EventTuple:
     assert(thread in self.threads and thread.task is self)
     match self.suspend_until(ready_func, thread, cancellable):
-      case SuspendResult.CANCELLED:
+      case Cancelled.TRUE:
         return (EventCode.TASK_CANCELLED, 0, 0)
-      case SuspendResult.NOT_CANCELLED:
+      case Cancelled.FALSE:
         return (EventCode.NONE, 0, 0)
 
   def return_(self, result):
@@ -2082,7 +2098,7 @@ def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
     return
 
   thread = Thread(task, thread_func)
-  thread.resume()
+  thread.resume(Cancelled.FALSE)
   return task
 
 class CallbackCode(IntEnum):
@@ -2578,16 +2594,16 @@ def canon_thread_switch_to(cancellable, thread, i):
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
-  suspend_result = thread.task.switch_to(thread, cancellable, other_thread)
-  return [suspend_result]
+  cancelled = thread.task.switch_to(thread, cancellable, other_thread)
+  return [cancelled]
 
 ### 🧵 `canon thread.suspend`
 
 def canon_thread_suspend(cancellable, thread):
   trap_if(not thread.task.inst.may_leave)
   trap_if(not thread.task.may_block())
-  suspend_result = thread.task.suspend(thread, cancellable)
-  return [suspend_result]
+  cancelled = thread.task.suspend(thread, cancellable)
+  return [cancelled]
 
 ### 🧵 `canon thread.resume-later`
 
@@ -2604,21 +2620,21 @@ def canon_thread_yield_to(cancellable, thread, i):
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
-  suspend_result = thread.task.yield_to(thread, cancellable, other_thread)
-  return [suspend_result]
+  cancelled = thread.task.yield_to(thread, cancellable, other_thread)
+  return [cancelled]
 
 ### 🧵 `canon thread.yield`
 
 def canon_thread_yield(cancellable, thread):
   trap_if(not thread.task.inst.may_leave)
   if not thread.task.may_block():
-    return [SuspendResult.NOT_CANCELLED]
+    return [Cancelled.FALSE]
   event_code,_,_ = thread.task.yield_until(lambda: True, thread, cancellable)
   match event_code:
     case EventCode.NONE:
-      return [SuspendResult.NOT_CANCELLED]
+      return [Cancelled.FALSE]
     case EventCode.TASK_CANCELLED:
-      return [SuspendResult.CANCELLED]
+      return [Cancelled.TRUE]
 
 ### 📝 `canon error-context.new`
 
