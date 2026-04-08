@@ -260,7 +260,7 @@ class ComponentInstance:
   threads: Table[Thread]
   may_leave: bool
   backpressure: int
-  exclusive: bool
+  exclusive: Optional[Task]
   num_waiting_to_enter: int
 
   def __init__(self, store, parent = None):
@@ -271,7 +271,7 @@ class ComponentInstance:
     self.threads = Table()
     self.may_leave = True
     self.backpressure = 0
-    self.exclusive = False
+    self.exclusive = None
     self.num_waiting_to_enter = 0
 
   def reflexive_ancestors(self) -> set[ComponentInstance]:
@@ -376,7 +376,6 @@ class Thread:
   ready_func: Optional[Callable[[], bool]]
   cancellable: bool
   suspend_result: Optional[SuspendResult]
-  in_event_loop: bool
   index: Optional[int]
   context: list[int]
 
@@ -403,7 +402,6 @@ class Thread:
     self.ready_func = None
     self.cancellable = False
     self.suspend_result = None
-    self.in_event_loop = False
     self.index = None
     self.context = [0] * Thread.CONTEXT_LENGTH
     def fiber_func():
@@ -559,10 +557,11 @@ class WaitableSet:
 
 class Task(Call, Supertask):
   class State(Enum):
-    INITIAL = 1
-    PENDING_CANCEL = 2
-    CANCEL_DELIVERED = 3
-    RESOLVED = 4
+    UNRESOLVED = 1
+    BACKPRESSURE = 2
+    PENDING_CANCEL = 3
+    CANCEL_DELIVERED = 4
+    RESOLVED = 5
 
   state: State
   opts: CanonicalOptions
@@ -574,7 +573,7 @@ class Task(Call, Supertask):
   threads: list[Thread]
 
   def __init__(self, opts, inst, ft, supertask, on_resolve):
-    self.state = Task.State.INITIAL
+    self.state = Task.State.UNRESOLVED
     self.opts = opts
     self.inst = inst
     self.ft = ft
@@ -605,17 +604,19 @@ class Task(Call, Supertask):
     if not self.ft.async_:
       return True
     def has_backpressure():
-      return self.inst.backpressure > 0 or (self.needs_exclusive() and self.inst.exclusive)
+      return self.inst.backpressure > 0 or (self.needs_exclusive() and bool(self.inst.exclusive))
     if has_backpressure() or self.inst.num_waiting_to_enter > 0:
+      self.state = Task.State.BACKPRESSURE
       self.inst.num_waiting_to_enter += 1
       result = thread.suspend_until(lambda: not has_backpressure(), cancellable = True)
       self.inst.num_waiting_to_enter -= 1
       if result == SuspendResult.CANCELLED:
         self.cancel()
         return False
+      self.state = Task.State.UNRESOLVED
     if self.needs_exclusive():
-      assert(not self.inst.exclusive)
-      self.inst.exclusive = True
+      assert(self.inst.exclusive is None)
+      self.inst.exclusive = self
     return True
 
   def exit(self):
@@ -623,17 +624,23 @@ class Task(Call, Supertask):
     if not self.ft.async_:
       return
     if self.needs_exclusive():
-      assert(self.inst.exclusive)
-      self.inst.exclusive = False
+      assert(self.inst.exclusive is self)
+      self.inst.exclusive = None
 
   def request_cancellation(self):
-    assert(self.state == Task.State.INITIAL)
-    random.shuffle(self.threads)
-    for thread in self.threads:
-      if thread.cancellable and not (thread.in_event_loop and self.inst.exclusive):
-        self.state = Task.State.CANCEL_DELIVERED
-        thread.resume(SuspendResult.CANCELLED)
-        return
+    if self.state == Task.State.BACKPRESSURE:
+      assert(len(self.threads) == 1)
+      self.state = Task.State.CANCEL_DELIVERED
+      self.threads[0].resume(SuspendResult.CANCELLED)
+      return
+    assert(self.state == Task.State.UNRESOLVED)
+    if not self.needs_exclusive() or not self.inst.exclusive or self.inst.exclusive is self:
+      random.shuffle(self.threads)
+      for thread in self.threads:
+        if thread.cancellable:
+          self.state = Task.State.CANCEL_DELIVERED
+          thread.resume(SuspendResult.CANCELLED)
+          return
     self.state = Task.State.PENDING_CANCEL
 
   def deliver_pending_cancel(self, cancellable) -> bool:
@@ -2014,8 +2021,8 @@ def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
     [packed] = call_and_trap_on_throw(callee, thread, flat_args)
     code,si = unpack_callback_result(packed)
     while code != CallbackCode.EXIT:
-      thread.in_event_loop = True
-      inst.exclusive = False
+      assert(inst.exclusive is task)
+      inst.exclusive = None
       match code:
         case CallbackCode.YIELD:
           if task.may_block():
@@ -2029,8 +2036,8 @@ def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
           event = task.wait_until(lambda: not inst.exclusive, thread, wset, cancellable = True)
         case _:
           trap()
-      thread.in_event_loop = False
-      inst.exclusive = True
+      assert(inst.exclusive is None)
+      inst.exclusive = task
       event_code, p1, p2 = event
       [packed] = call_and_trap_on_throw(opts.callback, thread, [event_code, p1, p2])
       code,si = unpack_callback_result(packed)
