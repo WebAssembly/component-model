@@ -2154,14 +2154,12 @@ def canon_resource_drop(rt, thread, i):
       if rt.dtor:
         rt.dtor(h.rep)
     else:
-      if rt.dtor:
-        caller_opts = CanonicalOptions(async_ = False)
-        callee_opts = CanonicalOptions(async_ = rt.dtor_async, callback = rt.dtor_callback)
-        ft = FuncType([U32Type()],[], async_ = False)
-        callee = partial(canon_lift, callee_opts, rt.impl, ft, rt.dtor)
-        [] = canon_lower(caller_opts, ft, callee, thread, [h.rep])
-      else:
-        trap_if(call_might_be_recursive(thread.task, rt.impl))
+      caller_opts = CanonicalOptions(async_ = False)
+      callee_opts = CanonicalOptions(async_ = rt.dtor_async, callback = rt.dtor_callback)
+      ft = FuncType([U32Type()],[], async_ = False)
+      dtor = rt.dtor or (lambda thread, rep: [])
+      callee = partial(canon_lift, callee_opts, rt.impl, ft, dtor)
+      [] = canon_lower(caller_opts, ft, callee, thread, [h.rep])
   else:
     h.borrow_scope.num_borrows -= 1
   return []

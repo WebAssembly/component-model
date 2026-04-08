@@ -371,9 +371,8 @@ cases are prevented via trap for several reasons:
   to link recursive calls and this requires opting in via some
   [TBD](Concurrency.md#TODO) function effect type or canonical ABI option.
 
-The `call_might_be_recursive` predicate is used by `canon_lift` and
-`canon_resource_drop` (defined below) to conservatively detect recursive
-reentrance and subsequently trap.
+The `call_might_be_recursive` predicate is used by `canon_lift` below to
+conservatively detect recursive reentrance and subsequently trap.
 ```python
 def call_might_be_recursive(caller: Supertask, callee_inst: ComponentInstance):
   if caller.inst is None:
@@ -3653,14 +3652,12 @@ def canon_resource_drop(rt, thread, i):
       if rt.dtor:
         rt.dtor(h.rep)
     else:
-      if rt.dtor:
-        caller_opts = CanonicalOptions(async_ = False)
-        callee_opts = CanonicalOptions(async_ = rt.dtor_async, callback = rt.dtor_callback)
-        ft = FuncType([U32Type()],[], async_ = False)
-        callee = partial(canon_lift, callee_opts, rt.impl, ft, rt.dtor)
-        [] = canon_lower(caller_opts, ft, callee, thread, [h.rep])
-      else:
-        trap_if(call_might_be_recursive(thread.task, rt.impl))
+      caller_opts = CanonicalOptions(async_ = False)
+      callee_opts = CanonicalOptions(async_ = rt.dtor_async, callback = rt.dtor_callback)
+      ft = FuncType([U32Type()],[], async_ = False)
+      dtor = rt.dtor or (lambda thread, rep: [])
+      callee = partial(canon_lift, callee_opts, rt.impl, ft, dtor)
+      [] = canon_lower(caller_opts, ft, callee, thread, [h.rep])
   else:
     h.borrow_scope.num_borrows -= 1
   return []
