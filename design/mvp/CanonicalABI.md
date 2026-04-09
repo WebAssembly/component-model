@@ -4790,9 +4790,8 @@ For a canonical definition:
 (canon error-context.new $opts (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param $ptr i32) (param $units i32) (result i32))`
-  * 🐘 - `$ptr` and `$units` are both type `i32` or `i64` as determined by
-    the address type of the `memory` field in `$opts`
+* `$f` is given type `(func (param $ptr T) (param $units T) (result i32))` where `T` is `i32`
+  * 🐘 - `T` is `i32` or `i64` as determined by the `memory` field of `$opts`
 * `async` is not present
 * `memory` must be present
 
