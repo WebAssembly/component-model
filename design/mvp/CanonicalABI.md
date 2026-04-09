@@ -3676,7 +3676,7 @@ For a canonical definition:
 ```
 validation specifies:
 * `$rt` must refer to locally-defined (not imported) resource type
-* `$f` is given type `(func (param $rt.rep ) (result i32))`, where `$rt.rep` is
+* `$f` is given type `(func (param $rt.rep) (result i32))`, where `$rt.rep` is
   fixed to be `i32`
   * 🐘 - `$rt.rep` may be `i32` or `i64`
 
