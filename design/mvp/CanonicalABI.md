@@ -4931,8 +4931,8 @@ For a canonical definition:
 (canon thread.spawn-indirect shared? $ft $tbl (core func $spawn_indirect))
 ```
 validation specifies:
-* `$ft` must refer to the type `(shared? (func (param $c i32)))`
-  * 🐘 - `$c` has type `i32` or `i64`
+* `$ft` must refer to the type `(shared? (func (param $c T)))` where `T` is `i32`
+  * 🐘 - `T` may be `i32` or `i64`
 * `$tbl` must refer to a shared table whose element type matches
   `(ref null (shared? func))`
 * `$spawn_indirect` is given type `(shared? (func (param $i U) (param $c T) (result $e i32)))`
