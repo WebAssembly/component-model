@@ -3983,8 +3983,8 @@ For a canonical definition:
 (canon waitable-set.wait $cancellable? (memory $mem) (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param $si i32) (param $ptr i32) (result i32))`
-  * 🐘 - `$ptr` has type `i32` or `i64` to match the address type of `$mem`
+* `$f` is given type `(func (param $si i32) (param $ptr T) (result i32))` where `T` is `i32`
+  * 🐘 - `T` is `i32` or `i64` as determined by the address type of `$mem`
 
 Calling `$f` invokes the following function which waits for progress to be made
 on a `Waitable` in the given waitable set (indicated by index `$si`) and then
