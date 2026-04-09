@@ -4887,8 +4887,8 @@ For a canonical definition:
 (canon thread.spawn-ref shared? $ft (core func $spawn_ref))
 ```
 validation specifies:
-* `$ft` must refer to the type `(shared? (func (param $c i32)))`
-  * 🐘 - `$c` has type `i32` or `i64`.
+* `$ft` must refer to the type `(shared? (func (param $c T)))` where `T` is `i32`
+  * 🐘 - `T` may be `i32` or `i64`.
 * `$spawn_ref` is given type
   `(shared? (func (param $f (ref null $ft)) (param $c T) (result $e i32)))` where `T` comes from `$ft` as defined above
 
