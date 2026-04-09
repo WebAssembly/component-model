@@ -2594,7 +2594,7 @@ after every Latin-1 byte (iterating in reverse to avoid clobbering later
 bytes):
 ```python
 def store_string_to_latin1_or_utf16(cx, src, src_code_units):
-  assert(src_code_units <= MAX_STRING_BYTE_LENGTH)
+  assert(src_code_units <= REALLOC_I32_MAX)
   ptr = cx.opts.realloc(0, 0, 2, src_code_units)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + src_code_units > len(cx.opts.memory))
@@ -3982,7 +3982,8 @@ For a canonical definition:
 (canon waitable-set.wait $cancellable? (memory $mem) (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param $si i32) (param $ptr T) (result i32))` where `T` is `i32`
+* `$f` is given type `(func (param $si i32) (param $ptr T) (result i32))` where
+  `T` is `i32`
   * 🐘 - `T` is `i32` or `i64` as determined by the address type of `$mem`
 
 Calling `$f` invokes the following function which waits for progress to be made
@@ -4026,7 +4027,8 @@ For a canonical definition:
 (canon waitable-set.poll $cancellable? (memory $mem) (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param $si i32) (param $ptr T) (result i32))` where `T` is `i32`
+* `$f` is given type `(func (param $si i32) (param $ptr T) (result i32))` where
+  `T` is `i32`
   * 🐘 - `T` is `i32` or `i64` as determined by the address type of `$mem`
 
 Calling `$f` invokes the following function, which either returns an event that
@@ -4593,7 +4595,8 @@ validation specifies
 * `$ft` must refer to the type `(func (param $c T))` where `T` is `i32`
   * 🐘 - `T` may be `i32` or `i64`
 * `$ftbl` must refer to a table whose element type matches `funcref`
-* `$new_indirect` is given type `(func (param $fi U) (param $c T) (result i32))` where `T` comes from `$ft`, as described above, and `U` is `i32`
+* `$new_indirect` is given type `(func (param $fi U) (param $c T) (result i32))`
+  where `T` comes from `$ft`, as described above, and `U` is `i32`
   * 🐘 - `U` is `i32` or `i64` as determined by `$ftbl`'s address type
 
 Calling `$new_indirect` invokes the following function which reads a `funcref`
@@ -4789,7 +4792,8 @@ For a canonical definition:
 (canon error-context.new $opts (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param $ptr T) (param $units T) (result i32))` where `T` is `i32`
+* `$f` is given type `(func (param $ptr T) (param $units T) (result i32))` where
+  `T` is `i32`
   * 🐘 - `T` is `i32` or `i64` as determined by the `memory` field of `$opts`
 * `async` is not present
 * `memory` must be present
@@ -4887,7 +4891,8 @@ validation specifies:
 * `$ft` must refer to the type `(shared? (func (param $c T)))` where `T` is `i32`
   * 🐘 - `T` may be `i32` or `i64`.
 * `$spawn_ref` is given type
-  `(shared? (func (param $f (ref null $ft)) (param $c T) (result $e i32)))` where `T` comes from `$ft` as defined above
+  `(shared? (func (param $f (ref null $ft)) (param $c T) (result $e i32)))`
+  where `T` comes from `$ft` as defined above
 
 When the `shared` immediate is not present, the spawned thread is
 *cooperative*, only switching at specific program points. When the `shared`

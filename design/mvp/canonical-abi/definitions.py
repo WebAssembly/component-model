@@ -1575,7 +1575,7 @@ def store_utf8_to_utf16(cx, src, src_code_units):
   return (ptr, code_units)
 
 def store_string_to_latin1_or_utf16(cx, src, src_code_units):
-  assert(src_code_units <= MAX_STRING_BYTE_LENGTH)
+  assert(src_code_units <= REALLOC_I32_MAX)
   ptr = cx.opts.realloc(0, 0, 2, src_code_units)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + src_code_units > len(cx.opts.memory))
