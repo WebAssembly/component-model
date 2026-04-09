@@ -330,7 +330,7 @@ class ComponentInstance:
   threads: Table[Thread]
   may_leave: bool
   backpressure: int
-  exclusive: bool
+  exclusive: Optional[Task]
   num_waiting_to_enter: int
 
   def __init__(self, store, parent = None):
@@ -341,7 +341,7 @@ class ComponentInstance:
     self.threads = Table()
     self.may_leave = True
     self.backpressure = 0
-    self.exclusive = False
+    self.exclusive = None
     self.num_waiting_to_enter = 0
 ```
 Components are always instantiated in the context of a `Store` which is saved
@@ -405,9 +405,8 @@ cases are prevented via trap for several reasons:
   to link recursive calls and this requires opting in via some
   [TBD](Concurrency.md#TODO) function effect type or canonical ABI option.
 
-The `call_might_be_recursive` predicate is used by `canon_lift` and
-`canon_resource_drop` (defined below) to conservatively detect recursive
-reentrance and subsequently trap.
+The `call_might_be_recursive` predicate is used by `canon_lift` below to
+conservatively detect recursive reentrance and subsequently trap.
 ```python
 def call_might_be_recursive(caller: Supertask, callee_inst: ComponentInstance):
   if caller.inst is None:
@@ -644,7 +643,6 @@ class Thread:
   ready_func: Optional[Callable[[], bool]]
   cancellable: bool
   suspend_result: Optional[SuspendResult]
-  in_event_loop: bool
   index: Optional[int]
   context: list[int]
 
@@ -663,13 +661,11 @@ class Thread:
     assert(self.pending())
     return self.ready_func()
 ```
-The `in_event_loop` field is used by `Task.request_cancellation` to prevent
-unexpected reentrance of `callback` functions. The `index` field stores the
-index of the thread in its containing component instance's `threads` table and
-is initialized only once a thread is allowed to start executing (after the
-backpressure gate). The `context` field holds the [thread-local storage]
-accessed by the `context.{get,set}` built-ins. All the other fields are used
-directly by `Thread` methods as shown next.
+The `index` field stores the index of the thread in its containing component
+instance's `threads` table and is initialized only once a thread is allowed to
+start executing (after the backpressure gate). The `context` field holds the
+[thread-local storage] accessed by the `context.{get,set}` built-ins. All the
+other fields are used directly by `Thread` methods as shown next.
 
 When a `Thread` is created, an internal `threading.Thread` is started and
 immediately blocked `acquire()`ing `fiber_lock` (which will be `release()`ed by
@@ -683,7 +679,6 @@ immediately blocked `acquire()`ing `fiber_lock` (which will be `release()`ed by
     self.ready_func = None
     self.cancellable = False
     self.suspend_result = None
-    self.in_event_loop = False
     self.index = None
     self.context = [0] * Thread.CONTEXT_LENGTH
     def fiber_func():
@@ -978,10 +973,11 @@ for calls to exports.
 ```python
 class Task(Call, Supertask):
   class State(Enum):
-    INITIAL = 1
-    PENDING_CANCEL = 2
-    CANCEL_DELIVERED = 3
-    RESOLVED = 4
+    UNRESOLVED = 1
+    BACKPRESSURE = 2
+    PENDING_CANCEL = 3
+    CANCEL_DELIVERED = 4
+    RESOLVED = 5
 
   state: State
   opts: CanonicalOptions
@@ -993,7 +989,7 @@ class Task(Call, Supertask):
   threads: list[Thread]
 
   def __init__(self, opts, inst, ft, supertask, on_resolve):
-    self.state = Task.State.INITIAL
+    self.state = Task.State.UNRESOLVED
     self.opts = opts
     self.inst = inst
     self.ft = ft
@@ -1069,17 +1065,19 @@ exports.
     if not self.ft.async_:
       return True
     def has_backpressure():
-      return self.inst.backpressure > 0 or (self.needs_exclusive() and self.inst.exclusive)
+      return self.inst.backpressure > 0 or (self.needs_exclusive() and bool(self.inst.exclusive))
     if has_backpressure() or self.inst.num_waiting_to_enter > 0:
+      self.state = Task.State.BACKPRESSURE
       self.inst.num_waiting_to_enter += 1
       result = thread.suspend_until(lambda: not has_backpressure(), cancellable = True)
       self.inst.num_waiting_to_enter -= 1
       if result == SuspendResult.CANCELLED:
         self.cancel()
         return False
+      self.state = Task.State.UNRESOLVED
     if self.needs_exclusive():
-      assert(not self.inst.exclusive)
-      self.inst.exclusive = True
+      assert(self.inst.exclusive is None)
+      self.inst.exclusive = self
     return True
 ```
 Since the order in which suspended threads are resumed is nondeterministic (see
@@ -1103,47 +1101,55 @@ returns to clear the `exclusive` flag set by `Task.enter`, allowing other
     if not self.ft.async_:
       return
     if self.needs_exclusive():
-      assert(self.inst.exclusive)
-      self.inst.exclusive = False
+      assert(self.inst.exclusive is self)
+      self.inst.exclusive = None
 ```
 
 The `Task.request_cancellation` method is called by the host or wasm caller
 (via the `Call` interface of `Task`) to signal that they don't need the return
 value and that the caller should hurry up and call the `OnResolve` callback. If
-*any* of a cancelled `Task`'s `Thread`s are expecting cancellation (e.g., when
+a task is waiting to start in `Task.enter` due to backpressure, then it is
+immediately cancelled without running any guest code. Otherwise, if *any* of a
+cancelled `Task`'s `Thread`s are expecting cancellation (e.g., when
 an `async callback` export returns to the event loop or when a `waitable-set.*`
 or `thread.*` built-in is called with `cancellable` set), `request_cancellation`
 immediately resumes that thread (picking one nondeterministically if there are
 multiple), giving the thread the chance to handle cancellation promptly
 (allowing `subtask.cancel` to complete eagerly without returning `BLOCKED`).
-Otherwise, the cancellation request is remembered in the `Task`'s `state` so
-that it can be delivered in the future by `Task.deliver_pending_cancel`.
 ```python
   def request_cancellation(self):
-    assert(self.state == Task.State.INITIAL)
-    random.shuffle(self.threads)
-    for thread in self.threads:
-      if thread.cancellable and not (thread.in_event_loop and self.inst.exclusive):
-        self.state = Task.State.CANCEL_DELIVERED
-        thread.resume(SuspendResult.CANCELLED)
-        return
+    if self.state == Task.State.BACKPRESSURE:
+      assert(len(self.threads) == 1)
+      self.state = Task.State.CANCEL_DELIVERED
+      self.threads[0].resume(SuspendResult.CANCELLED)
+      return
+    assert(self.state == Task.State.UNRESOLVED)
+    if not self.needs_exclusive() or not self.inst.exclusive or self.inst.exclusive is self:
+      random.shuffle(self.threads)
+      for thread in self.threads:
+        if thread.cancellable:
+          self.state = Task.State.CANCEL_DELIVERED
+          thread.resume(SuspendResult.CANCELLED)
+          return
     self.state = Task.State.PENDING_CANCEL
+```
+As handled above, cancellation must avoid running two `needs_exclusive` tasks at
+the same time in the corner case where the first task starts and blocks and then
+the other task is cancelled. However, a single `needs_exclusive` task that
+starts and blocks calling a built-in with `cancellable` set *can* be immediately
+resumed. Thus, the `exclusive` lock tracks *which* task is exclusively running
+to distinguish these cases.
 
+If cancellation cannot be immediately delivered by `Task.request_cancellation`,
+the request is remembered in `Task.state` and delivered at the next opportunity
+by `Task.deliver_pending_cancel`, which is checked at all cancellation points:
+```python
   def deliver_pending_cancel(self, cancellable) -> bool:
     if cancellable and self.state == Task.State.PENDING_CANCEL:
       self.state = Task.State.CANCEL_DELIVERED
       return True
     return False
 ```
-`in_event_loop` is set by the `async callback` event loop (in `canon_lift`,
-defined below) every time the event loop suspends the thread and is used here
-to detect the corner case where one `async callback` task returns to its event
-loop, then a second `async callback` task starts running and suspends *without*
-returning to its event loop, and then the caller cancels the first task. In
-this case, the first task's `Thread` is `cancellable` (it returned to its event
-loop, which sets `cancellable`) but it cannot be resumed until the second task
-returns to its event loop (since `async callback` wasm code is non-reentrant
-and `needs_exclusive`).
 
 The following `Task` methods wrap corresponding `Thread` methods after first
 delivering any pending cancellations set by `Task.request_cancellation`:
@@ -1862,7 +1868,7 @@ their respective expansions.
 ### Type Predicates
 
 The `contains_borrow` and `contains_async_value` predicates return whether the
-given type contains a `borrow` or `future/`stream`, respectively.
+given type contains a `borrow` or `future`/`stream`, respectively.
 ```python
 def contains_borrow(t):
   return contains(t, lambda u: isinstance(u, BorrowType))
@@ -3246,8 +3252,8 @@ specifying `string-encoding=utf8` twice is an error. Each individual option, if
 present, is validated as such:
 
 * `string-encoding=N` - can be passed at most once, regardless of `N`.
-* `memory` - this is a subtype of `(memory 1)`
-  * 🐘 `memory` may also be a subtype of `(memory i64 1)`
+* `memory` - this is a subtype of `(memory 0)`
+  * 🐘 `memory` may also be a subtype of `(memory i64 0)`
 * `realloc` - the function has type `(func (param addr addr addr addr) (result addr))`
   where `addr` is the address type coming from the [`memtype`] of the `memory`
   canonopt (restricted to `i32`, but with 🐘 may also be `i64`).
@@ -3404,8 +3410,8 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
     [packed] = call_and_trap_on_throw(callee, thread, flat_args)
     code,si = unpack_callback_result(packed)
     while code != CallbackCode.EXIT:
-      thread.in_event_loop = True
-      inst.exclusive = False
+      assert(inst.exclusive is task)
+      inst.exclusive = None
       match code:
         case CallbackCode.YIELD:
           if task.may_block():
@@ -3419,8 +3425,8 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
           event = task.wait_until(lambda: not inst.exclusive, thread, wset, cancellable = True)
         case _:
           trap()
-      thread.in_event_loop = False
-      inst.exclusive = True
+      assert(inst.exclusive is None)
+      inst.exclusive = task
       event_code, p1, p2 = event
       [packed] = call_and_trap_on_throw(opts.callback, thread, [event_code, p1, p2])
       code,si = unpack_callback_result(packed)
@@ -3446,9 +3452,7 @@ execute in the interim. However, other synchronous and `async callback` tasks
 *cannot* execute while running core wasm called from the event loop as this
 could break the non-reentrancy assumptions of the core wasm code. Thus,
 `async callback` tasks allow less concurrency than non-`callback` `async`
-tasks, which entirely ignore `ComponentInstance.exclusive`. The `in_event_loop`
-flag is set while suspended to prevent `Task.request_cancellation` from
-reentering during a core wasm call.
+tasks, which entirely ignore `ComponentInstance.exclusive`.
 
 The end of `canon_lift` immediately runs the `thread_func` function (which
 contains all the steps above) in a new `Thread`, allowing `thread_func` to make
@@ -3716,14 +3720,12 @@ def canon_resource_drop(rt, thread, i):
       if rt.dtor:
         rt.dtor(h.rep)
     else:
-      if rt.dtor:
-        caller_opts = CanonicalOptions(async_ = False)
-        callee_opts = CanonicalOptions(async_ = rt.dtor_async, callback = rt.dtor_callback)
-        ft = FuncType([U32Type()],[], async_ = False)
-        callee = partial(canon_lift, callee_opts, rt.impl, ft, rt.dtor)
-        [] = canon_lower(caller_opts, ft, callee, thread, [h.rep])
-      else:
-        trap_if(call_might_be_recursive(thread.task, rt.impl))
+      caller_opts = CanonicalOptions(async_ = False)
+      callee_opts = CanonicalOptions(async_ = rt.dtor_async, callback = rt.dtor_callback)
+      ft = FuncType([U32Type()],[], async_ = False)
+      dtor = rt.dtor or (lambda thread, rep: [])
+      callee = partial(canon_lift, callee_opts, rt.impl, ft, dtor)
+      [] = canon_lower(caller_opts, ft, callee, thread, [h.rep])
   else:
     h.borrow_scope.num_borrows -= 1
   return []

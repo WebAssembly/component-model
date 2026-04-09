@@ -2568,8 +2568,8 @@ fragment          ::= <word>
                     | <acronym>
 word              ::= [0-9a-z]+
 acronym           ::= [0-9A-Z]+
-interfacename     ::= <namespace> <label> <projection> <interfaceversion>?
-                    | <namespace>+ <label> <projection>+ <interfaceversion>? 🪺
+interfacename     ::= <namespace> <words> <projection> <interfaceversion>?
+                    | <namespace>+ <words> <projection>+ <interfaceversion>? 🪺
 namespace         ::= <words> ':'
 words             ::= <first-word> ( '-' <word> )*
 projection        ::= '/' <label>
@@ -2578,6 +2578,7 @@ interfaceversion  ::= '@' <valid semver>
 canonversion      ::= [1-9] [0-9]* 🔗
                     | '0.' [1-9] [0-9]* 🔗
                     | '0.0.' [1-9] [0-9]* 🔗
+                    | '0.0.0' 🔗
 semversuffix      ::= [0-9A-Za-z.+-]* 🔗
 depname           ::= 'unlocked-dep=<' <pkgnamequery> '>'
                     | 'locked-dep=<' <pkgname> '>' ( ',' <hashname> )?

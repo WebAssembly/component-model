@@ -59,7 +59,8 @@ def run_lift(opts, inst, ft, callee, on_start, on_resolve):
 
 def mk_task(caller, on_resolve, thread_func):
   inst = ComponentInstance(caller.inst.store)
-  task = Task(None, inst, FuncType([],[],async_=True), caller, on_resolve)
+  opts = mk_opts(async_ = True)
+  task = Task(opts, inst, FuncType([],[],async_=True), caller, on_resolve)
   thread = Thread(task, thread_func)
   thread.resume()
   return task
