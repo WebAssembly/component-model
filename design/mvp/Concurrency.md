@@ -151,7 +151,7 @@ use cases mentioned in the [goals](#goals).
 
 Until the Core WebAssembly [shared-everything-threads] proposal allows Core
 WebAssembly function types to be annotated with `shared`, `thread.new-indirect`
-can only call non-`shared` functions (via `i32` `(table funcref)` index, just
+can only call non-`shared` functions (via `(table funcref)` index, just
 like `call_indirect`) and thus currently all threads must execute
 [cooperatively] in a sequentially-interleaved fashion, switching between
 threads only at explicit program points just like (and implementable via) a
@@ -371,7 +371,7 @@ New threads are created with the [`thread.new-indirect`] built-in. As mentioned
 thread which is why threads and tasks are N:1. `thread.new-indirect` adds a new
 thread to the component instance's threads table and returns the `i32` index of
 this table entry to the Core WebAssembly caller. Like [`pthread_create`],
-`thread.new-indirect` takes a Core WebAssembly function (via `i32` index into a
+`thread.new-indirect` takes a Core WebAssembly function (via index into a
 `funcref` table) and a "closure" parameter to pass to the function when called
 on the new thread. However, unlike `pthread_create`, the new thread is
 initially in a "suspended" state and must be explicitly "resumed" using one of
@@ -414,7 +414,7 @@ current thread's thread-local storage can be read and written from core wasm
 code by calling the [`context.get`] and [`context.set`] built-ins.
 
 The thread-local storage array's length is currently fixed to contain exactly
-2 `i32`s with the goal of allowing this array to be stored inline in whatever
+2 `i64`s with the goal of allowing this array to be stored inline in whatever
 existing runtime data structure is already efficiently reachable from ambient
 compiled wasm code. Because module instantiation is declarative in the
 Component Model, the imported `context.{get,set}` built-ins can be inlined by
@@ -424,6 +424,13 @@ natural place to store:
 1. a pointer to the linear-memory "shadow stack" pointer
 2. a pointer to a struct used by the runtime to implement the language's
    thread-local features
+
+Both of `context.{get,set}` take an immediate argument of `i32` or `i64` to
+indicate the return or argument type. `context.set i32` will zero the high
+bits of the stored value and `context.get i32` will only read the low bits of
+the stored value.  Generally it is expected that 32-bit components always use
+the `i32` immediate and 64-bit components always use the `i64` immediate, but
+mixing these calls is still valid.
 
 When threads are created explicitly by `thread.new-indirect`, the lifetime of
 the thread-local storage array ends when the function passed to
@@ -435,12 +442,6 @@ implicit thread exits by returning from the exported function or, if the
 stackless async ABI is used, returning the "exit" code to the event loop. This
 non-reuse of thread-local storage between distinct export calls avoids what
 would otherwise be a likely source of TLS-related memory leaks.
-
-When [memory64] is integrated into the Component Model's Canonical ABI,
-`context.{get,set}` will be backwards-compatibly relaxed to allow `i64`
-pointers (overlaying the `i32` values like hardware 32/64-bit registers). When
-[wasm-gc] is integrated, these integral context values can serve as indices
-into guest-managed tables of typed GC references.
 
 Since the same mutable thread-local storage cells are shared by all core wasm
 running under the same thread in the same component, the cells' contents must
@@ -886,7 +887,7 @@ world w {
   import quux: async func(t: list<u32; 17>) -> string;
 }
 ```
-the default/synchronous lowered import function signatures are:
+the default/synchronous lowered import function signatures (assuming 32-bit memories) are:
 ```wat
 ;; sync
 (func $foo (param $s-ptr i32) (param $s-len i32) (result i32))
