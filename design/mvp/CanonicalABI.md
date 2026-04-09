@@ -4595,8 +4595,7 @@ validation specifies
   * 🐘 - `$c` may also have type `i64`
 * `$ftbl` must refer to a table whose element type matches `funcref`
 * `$new_indirect` is given type `(func (param $fi i32) (param $c i32) (result i32))`
-  * 🐘 - `$fi` has type`i32` or `i64` as determined by `$ftbl`'s table type and
-    `$c` has the same type as the parameter in `$ft`
+  * 🐘 - `U` is `i32` or `i64` as determined by `$ftbl`'s address type
 
 Calling `$new_indirect` invokes the following function which reads a `funcref`
 from `$ftbl` (trapping if out-of-bounds, null or the wrong type), calls the
