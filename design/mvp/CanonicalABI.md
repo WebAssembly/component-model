@@ -4935,8 +4935,8 @@ validation specifies:
   * 🐘 - `$c` has type `i32` or `i64`
 * `$tbl` must refer to a shared table whose element type matches
   `(ref null (shared? func))`
-* `$spawn_indirect` is given type
-  `(shared? (func (param $i i32) (param $c i32) (result $e i32)))`
+* `$spawn_indirect` is given type `(shared? (func (param $i U) (param $c T) (result $e i32)))`
+  where `T` comes from `$ft` as defined above and `U` is `i32`
   * 🐘 - `$i` has type `i32` or `i64` as determined by `$tbl`'s table type
   * 🐘 - the param `$c` in the type of `$spawn_indirect` has type `i32` or `i64` to
     match `$c` in `$ft`
