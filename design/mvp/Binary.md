@@ -69,6 +69,7 @@ core:sort           ::= 0x00                                               => fu
                       | 0x01                                               => table
                       | 0x02                                               => memory
                       | 0x03                                               => global
+                      | 0x04                                               => tag
                       | 0x10                                               => type
                       | 0x11                                               => module
                       | 0x12                                               => instance

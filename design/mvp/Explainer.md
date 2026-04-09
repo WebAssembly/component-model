@@ -169,21 +169,22 @@ executing a component, there are 5 component-level index spaces:
 * component instances
 * components
 
-5 core index spaces that also exist in WebAssembly 1.0:
+6 core index spaces that also exist in the Core WebAssembly specification:
 * (core) functions
 * (core) tables
 * (core) memories
 * (core) globals
+* (core) tags
 * (core) types
 
 and 2 additional core index spaces that contain core definition introduced by
-the Component Model that are not in WebAssembly 1.0 (yet: the [module-linking]
+the Component Model that are not in Core WebAssembly (yet: the [module-linking]
 proposal would add them):
 * module instances
 * modules
 
-for a total of 12 index spaces that need to be maintained by an implementation
-when, e.g., validating a component. These 12 index spaces correspond 1:1 with
+for a total of 13 index spaces that need to be maintained by an implementation
+when, e.g., validating a component. These 13 index spaces correspond 1:1 with
 the terminals of the `sort` production defined below and thus "sort" and
 "index space" can be used interchangeably.
 
@@ -236,6 +237,7 @@ core:sort           ::= func
                       | table
                       | memory
                       | global
+                      | tag
                       | type
                       | module
                       | instance
