@@ -4834,8 +4834,8 @@ For a canonical definition:
 (canon error-context.debug-message $opts (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param i32) (param $ptr i32))`
-  * 🐘 - `$ptr` is type `i32` or `i64` as determined by the address type of
+* `$f` is given type `(func (param i32) (param $ptr T))` where `T` is `i32`
+  * 🐘 - `T` is `i32` or `i64` as determined by the address type of
     `memory` from `$opts`
 * `async` is not present
 * `memory` must be present
