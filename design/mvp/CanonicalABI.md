@@ -4028,7 +4028,7 @@ For a canonical definition:
 ```
 validation specifies:
 * `$f` is given type `(func (param $si i32) (param $ptr i32) (result i32))`
-  * 🐘 - `$ptr` has type `i32` or `i64` to match the address type of `$mem`
+  * 🐘 - `T` is `i32` or `i64` as determined by the address type of `$mem`
 
 Calling `$f` invokes the following function, which either returns an event that
 was pending on one of the waitables in the given waitable set (the same way as
