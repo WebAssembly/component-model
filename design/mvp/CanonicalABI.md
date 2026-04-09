@@ -4890,7 +4890,7 @@ validation specifies:
 * `$ft` must refer to the type `(shared? (func (param $c i32)))`
   * 🐘 - `$c` has type `i32` or `i64`.
 * `$spawn_ref` is given type
-  `(shared? (func (param $f (ref null $ft)) (param $c i32) (result $e i32)))`
+  `(shared? (func (param $f (ref null $ft)) (param $c T) (result $e i32)))` where `T` comes from `$ft` as defined above
 
 When the `shared` immediate is not present, the spawned thread is
 *cooperative*, only switching at specific program points. When the `shared`
