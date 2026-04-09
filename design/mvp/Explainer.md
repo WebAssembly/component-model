@@ -1456,11 +1456,11 @@ canon ::= ...
         | (canon future.drop-writable <typeidx> (core func <id>?)) 🔀
         | (canon thread.index (core func <id>?)) 🧵
         | (canon thread.new-indirect <typeidx> <core:tableidx> (core func <id>?)) 🧵
-        | (canon thread.switch-to cancellable? (core func <id>?)) 🧵
-        | (canon thread.suspend cancellable? (core func <id>?)) 🧵
         | (canon thread.resume-later (core func <id>?)) 🧵
-        | (canon thread.yield-to cancellable? (core func <id>?)) 🧵
+        | (canon thread.suspend cancellable? (core func <id>?)) 🧵
         | (canon thread.yield cancellable? (core func <id>?)) 🧵
+        | (canon thread.switch-to cancellable? (core func <id>?)) 🧵
+        | (canon thread.yield-to cancellable? (core func <id>?)) 🧵
         | (canon error-context.new <canonopt>* (core func <id>?)) 📝
         | (canon error-context.debug-message <canonopt>* (core func <id>?)) 📝
         | (canon error-context.drop (core func <id>?)) 📝
@@ -2099,34 +2099,19 @@ eagerly or lazily by [`thread.yield-to`](#-threadyield-to) or
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_new_indirect`] in the Canonical ABI explainer.
 
-###### 🧵 `thread.switch-to`
+###### 🧵 `thread.resume-later`
 
-| Synopsis                   |                                                   |
-| -------------------------- | ------------------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>(t: thread) -> suspend-result` |
-| Canonical ABI signature    | `[t:i32] -> [i32]`                                |
+| Synopsis                   |                   |
+| -------------------------- | ----------------- |
+| Approximate WIT signature  | `func(t: thread)` |
+| Canonical ABI signature    | `[t:i32] -> []`   |
 
-where `suspend-result` is defined in WIT as:
-```wit
-enum suspend-result { completed, cancelled }
-```
-
-The `thread.switch-to` built-in suspends the [current thread] and
-immediately resumes execution of the thread `t`, trapping if `t` is not in a
-"suspended" state. When the current thread is resumed by some other thread or,
-if `cancellable` was set, [cancellation], `thread.switch-to` will return,
-indicating what happened.
-
-If `thread.switch-to` is called from a synchronous- or `async callback`-lifted
-export, no other threads that were implicitly created by a separate
-synchronous- or `async callback`-lifted export call can start or progress in
-the current component instance until `thread.switch-to` returns (thereby
-ensuring non-reentrance of the core wasm code). However, explicitly-created
-threads and threads implicitly created by non-`callback` `async`-lifted
-("stackful async") exports may start or progress at any time.
+The `thread.resume-later` built-in changes the state of thread `t` from
+"suspended" to "ready" (trapping if `t` is not in a "suspended" state) so that
+the runtime can nondeterministically resume `t` at some point in the future.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
-[`canon_thread_switch_to`] in the Canonical ABI explainer.
+[`canon_thread_resume_later`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.suspend`
 
@@ -2153,19 +2138,59 @@ threads and threads implicitly created by non-`callback` `async`-lifted
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_suspend`] in the Canonical ABI explainer.
 
-###### 🧵 `thread.resume-later`
+###### 🧵 `thread.yield`
 
-| Synopsis                   |                   |
-| -------------------------- | ----------------- |
-| Approximate WIT signature  | `func(t: thread)` |
-| Canonical ABI signature    | `[t:i32] -> []`   |
+| Synopsis                   |                                          |
+| -------------------------- | ---------------------------------------- |
+| Approximate WIT signature  | `func<cancellable?>() -> suspend-result` |
+| Canonical ABI signature    | `[] -> [i32]`                            |
 
-The `thread.resume-later` built-in changes the state of thread `t` from
-"suspended" to "ready" (trapping if `t` is not in a "suspended" state) so that
-the runtime can nondeterministically resume `t` at some point in the future.
+where `suspend-result` is defined in WIT as:
+```wit
+enum suspend-result { completed, cancelled }
+```
+
+The `thread.yield` built-in allows the runtime to potentially switch to any
+other thread in the "ready" state, enabling a long-running computation to
+cooperatively interleave execution without specifically requesting another
+thread to be resumed (as with `thread.yield-to`). When the current thread is
+resumed either due to runtime scheduling or, if `cancellable` was set,
+[cancellation], `thread.yield` will return, indicating what happened.
+
+If `thread.yield` is called from a synchronous- or `async callback`-lifted
+export, no other threads that were implicitly created by a separate
+synchronous- or `async callback`-lifted export call can start or progress in
+the current component instance until `thread.yield` returns (thereby
+ensuring non-reentrance of the core wasm code). However, explicitly-created
+threads and threads implicitly created by non-`callback` `async`-lifted
+("stackful async") exports may start or progress at any time.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
-[`canon_thread_resume_later`] in the Canonical ABI explainer.
+[`canon_thread_yield`] in the Canonical ABI explainer.
+
+###### 🧵 `thread.switch-to`
+
+| Synopsis                   |                                                   |
+| -------------------------- | ------------------------------------------------- |
+| Approximate WIT signature  | `func<cancellable?>(t: thread) -> suspend-result` |
+| Canonical ABI signature    | `[t:i32] -> [i32]`                                |
+
+The `thread.switch-to` built-in suspends the [current thread] and
+immediately resumes execution of the thread `t`, trapping if `t` is not in a
+"suspended" state. When the current thread is resumed by some other thread or,
+if `cancellable` was set, [cancellation], `thread.switch-to` will return,
+indicating what happened.
+
+If `thread.switch-to` is called from a synchronous- or `async callback`-lifted
+export, no other threads that were implicitly created by a separate
+synchronous- or `async callback`-lifted export call can start or progress in
+the current component instance until `thread.switch-to` returns (thereby
+ensuring non-reentrance of the core wasm code). However, explicitly-created
+threads and threads implicitly created by non-`callback` `async`-lifted
+("stackful async") exports may start or progress at any time.
+
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_thread_switch_to`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.yield-to`
 
@@ -2191,31 +2216,6 @@ threads and threads implicitly created by non-`callback` `async`-lifted
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield_to`] in the Canonical ABI explainer.
-
-###### 🧵 `thread.yield`
-
-| Synopsis                   |                                          |
-| -------------------------- | ---------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>() -> suspend-result` |
-| Canonical ABI signature    | `[] -> [i32]`                            |
-
-The `thread.yield` built-in allows the runtime to potentially switch to any
-other thread in the "ready" state, enabling a long-running computation to
-cooperatively interleave execution without specifically requesting another
-thread to be resumed (as with `thread.yield-to`). When the current thread is
-resumed either due to runtime scheduling or, if `cancellable` was set,
-[cancellation], `thread.yield` will return, indicating what happened.
-
-If `thread.yield` is called from a synchronous- or `async callback`-lifted
-export, no other threads that were implicitly created by a separate
-synchronous- or `async callback`-lifted export call can start or progress in
-the current component instance until `thread.yield` returns (thereby
-ensuring non-reentrance of the core wasm code). However, explicitly-created
-threads and threads implicitly created by non-`callback` `async`-lifted
-("stackful async") exports may start or progress at any time.
-
-For details, see [Thread Built-ins] in the concurrency explainer and
-[`canon_thread_yield`] in the Canonical ABI explainer.
 
 ###### 🧵② `thread.spawn-ref`
 
