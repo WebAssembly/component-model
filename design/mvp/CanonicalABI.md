@@ -4591,7 +4591,7 @@ For a canonical definition:
 (canon thread.new-indirect $ft $ftbl (core func $new_indirect))
 ```
 validation specifies
-* `$ft` must refer to the type `(func (param $c i32))`
+* `$ft` must refer to the type `(func (param $c T))` where `T` is `i32`
   * 🐘 - `T` may be `i32` or `i64`
 * `$ftbl` must refer to a table whose element type matches `funcref`
 * `$new_indirect` is given type `(func (param $fi U) (param $c T) (result i32))` where `T` comes from `$ft`, as described above, and `U` is `i32`
