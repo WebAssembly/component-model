@@ -4027,7 +4027,7 @@ For a canonical definition:
 (canon waitable-set.poll $cancellable? (memory $mem) (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param $si i32) (param $ptr i32) (result i32))`
+* `$f` is given type `(func (param $si i32) (param $ptr T) (result i32))` where `T` is `i32`
   * 🐘 - `T` is `i32` or `i64` as determined by the address type of `$mem`
 
 Calling `$f` invokes the following function, which either returns an event that
