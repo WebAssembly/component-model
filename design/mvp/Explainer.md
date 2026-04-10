@@ -786,7 +786,7 @@ this can sometimes allow values to be represented differently. For example,
 `flags` in the Canonical ABI uses a bit-vector while an equivalent record
 of boolean fields uses a sequence of boolean-valued bytes.
 
-Note that, at least initially, variants are required to have a non-empty list of
+Note that, at least initially, variants must have a non-empty list of
 cases. This could be relaxed in the future to allow an empty list of cases, with
 the empty `(variant)` effectively serving as an [empty type] and indicating
 unreachability.
@@ -2537,8 +2537,8 @@ export        ::= (export <id>? "<exportname>" <sortidx> <externdesc>?)
 versionsuffix ::= (versionsuffix "<semversuffix>") 🔗
 ```
 
-All import names are required to be [strongly-unique]. Separately, all export
-names are also required to be [strongly-unique]. The rest of the grammar for
+All import names must be [strongly-unique]. Separately, all export
+names must be [strongly-unique]. The rest of the grammar for
 imports and exports defines a structured syntax for the contents of import and
 export names. Syntactically, these names appear inside quoted string literals.
 The grammar thus restricts the contents of these string literals to provide
@@ -2712,7 +2712,7 @@ emit whatever asynchronous language construct is appropriate (such as an
 more details.
 
 The `label` production used inside `plainname` as well as the labels of
-`record` and `variant` types are required to have [kebab case]. The reason for
+`record` and `variant` types must be [kebab case]. The reason for
 this particular form of casing is to unambiguously separate words and acronyms
 (represented as all-caps words) so that source language bindings can convert a
 `label` into the idiomatic casing of that language. (Indeed, because hyphens
