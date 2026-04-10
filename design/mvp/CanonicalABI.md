@@ -106,6 +106,31 @@ nature of eliminating `realloc`, switching to [lazy lowering] would obviate
 this issue, allowing guest wasm code to handle failure by eagerly returning
 some value of the declared return type to indicate failure.
 
+### Implementation-Defined Limits
+
+Beyond the explicit `trap_if` checks in the Python code below, implementations
+may also trap during any cross-component call when
+implementation-defined resource limits have been reached. In particular:
+* An implementation may trap when the handles table has reached an
+  implementation-defined capacity that is at or below `Table.MAX_LENGTH`. This
+  allows implementations to bound the host-side memory used to track resources,
+  waitables and other table elements. This is analogous to how `memory.grow`
+  may non-deterministically return `-1` in Core WebAssembly when the
+  implementation cannot satisfy the allocation.
+* An implementation may trap when the total size of values being transferred
+  across a component boundary (via lifting or lowering) exceeds an
+  implementation-defined limit. For example, lifting a `list<u8>` of length N
+  from guest linear memory requires an intermediate allocation of at least N
+  bytes on the host, and implementations may refuse to perform such an
+  allocation when N is very large.
+
+In both cases, the resulting trap is non-deterministic: the same call with the
+same arguments may succeed at one point and trap at another depending on the
+current resource usage of the implementation. Guest code should be written
+defensively, but WASI-level interfaces are also encouraged to use `result`
+return types with explicit error cases for resource exhaustion where possible,
+enabling guests to handle limits gracefully rather than trapping.
+
 ## Embedding
 
 A WebAssembly Component Model implementation will typically be *embedded* into
@@ -525,7 +550,9 @@ free list in the free elements of `array`.
 
 The limit of `2**28` ensures that the high 2 bits of table indices are unset
 and available for other use in guest code (e.g., for tagging, packed words or
-sentinel values).
+sentinel values). As described in the [Introduction](#introduction),
+implementations may trap at a lower limit than `MAX_LENGTH` based on
+implementation-defined resource constraints.
 
 
 #### Resource State
