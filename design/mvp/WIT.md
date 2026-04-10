@@ -20,6 +20,11 @@ bytes. Types can be imported between interfaces within a package using
 unqualified names and additionally from other packages through namespace-
 and-package-qualified names.
 
+Alternatively, a WIT file can contain a single unnamed
+[`component`][components-wit] definition, which provides a lightweight way to
+define the imports and exports of a component without requiring a `package`
+declaration, namespace, package name, or world name.
+
 This document will go through the purpose of the syntactic constructs of a WIT
 document, a pseudo-formal [grammar specification][lexical-structure], and
 additionally a specification of the [package format][package-format] of a WIT
@@ -799,6 +804,78 @@ same syntax with the same restrictions as the first, but prefixed with '%':
 
 [kebab-case]: https://en.wikipedia.org/wiki/Letter_case#Kebab_case
 
+## WIT Components
+[components-wit]: #wit-components
+
+In addition to defining reusable, published packages with `package` and `world`,
+WIT supports a lightweight `component` definition for cases where you are simply
+defining the imports and exports of a single component and don't intend to
+publish the WIT as a reusable package.
+
+A `component` definition is an unnamed world: it has `import` and `export`
+statements just like a `world`, but it has no name, and a `package` declaration
+is neither required nor allowed to be present in the same file. This avoids
+forcing the author to invent a namespace, package name, and world name that
+would not appear in the compiled `.wasm` component anyway.
+
+For example, instead of writing:
+
+```wit
+package my:test;
+
+world my-component {
+    import wasi:http/outgoing-handler;
+    export frob: func(in: string) -> string;
+}
+```
+
+where the namespace `my`, the package name `test`, and the world name
+`my-component` are all arbitrary and unused in the final binary, you can write:
+
+```wit
+component {
+    import wasi:http/outgoing-handler;
+    export frob: func(in: string) -> string;
+}
+```
+
+### Rules
+
+* A WIT file must contain **either** a `package` declaration (with optional
+  `world` and `interface` definitions) **or** a single `component` definition,
+  but **not both**. This invariant is enforced by the parser.
+* A `component` definition is always unnamed. No identifier follows the
+  `component` keyword.
+* The body of a `component` is identical to the body of a `world`: it may
+  contain `import`, `export`, `use`, `include`, and type definition items.
+* Dependencies on external packages (e.g. `wasi:http/outgoing-handler`) are
+  referenced with the same fully-qualified `use-path` syntax used in worlds.
+  These dependencies must be resolved through the same mechanisms used for
+  `world` definitions (inline `package … { … }` blocks, `deps/` directory,
+  or tooling-specific configuration).
+* Because there is no package name or world name, a `component` definition does
+  not produce a named entry in a WIT package and cannot be referenced by other
+  WIT files via `include` or `use-path`.
+* Tooling that accepts a "world" input (e.g. bindings generators) should
+  automatically select the unnamed component when the WIT file contains a
+  `component` definition, without requiring the user to specify a world name.
+
+### Motivation
+
+The `component` syntax addresses two common sources of confusion for newcomers:
+
+1. **Superfluous names.** When defining a custom component that is not intended
+   for reuse, the `package` namespace, package name, and `world` name add
+   ceremony that must be explained away.
+2. **Naming.** New users often expect to see the word "component" in a file that
+   defines a component. Using `component { … }` rather than `world { … }` for
+   this use case aligns with that expectation and reduces the number of concepts
+   a tutorial must introduce up front.
+
+The `world` keyword and `package` declaration remain the right choice when
+defining reusable, published contracts between multiple hosts and components.
+`component` is intended for the single-component, non-published case.
+
 # Filesystem structure
 
 WIT supports multiple `package`s and the ability to define a single package
@@ -832,10 +909,13 @@ happening.
 wit_bindgen::generate!("./my.wit");
 ```
 
-To be a valid WIT file the file being parsed must have a leading `package ...;`
-statement meaning that it's now the "root package". Dependencies of this package
-must be specified inline with `package ... { ... }` blocks when using this
-format.
+To be a valid WIT file the file being parsed must have either a leading
+`package ...;` statement (meaning that it's now the "root package") or a single
+`component { ... }` definition (see [WIT Components][components-wit]).
+When a `package` statement is present, dependencies of this package must be
+specified inline with `package ... { ... }` blocks when using this format.
+When a `component` definition is present, dependencies on external packages
+are resolved with the same inline `package ... { ... }` blocks.
 
 Some tooling may support the ability to load multiple "roots" which means that
 the final root is used for `world` selection and the other roots are used to
@@ -883,6 +963,12 @@ wit/
 Here `types.wit`, `world.wit`, and `my-interface.wit` would all be parsed
 together as a single package.
 
+Note that `component` files and `package` files cannot be mixed within the same
+directory-based root. All `*.wit` files in a directory must be either package
+files or component files — they cannot be a mixture of both. This mutual
+exclusivity is enforced symmetrically: pushing a package file into a resolver
+that already contains a component (or vice versa) is an error.
+
 Dependencies in the directory format of the filesystem are specified in a `deps`
 folder within the root folder. Above for example dependencies would be specified
 in `wit/deps`. Dependencies are specified in a flat format where each dependency
@@ -921,14 +1007,17 @@ package which is duplicated across dependencies must have the same contents.
 
 ## Specifying a World
 
-The primary unit of bindings generation for WIT tooling is a `world` which means
-that various phases of the process must take a `world` input. For example when
-generating guest bindings within a language you'll be specifying a `world` as
-the unit of bindings generation. WIT tooling should follow these conventions for
-selecting a world:
+The primary unit of bindings generation for WIT tooling is a `world` (or
+`component`) which means that various phases of the process must take a `world`
+input. For example when generating guest bindings within a language you'll be
+specifying a `world` as the unit of bindings generation. WIT tooling should
+follow these conventions for selecting a world:
 
-* Inputs to world selection are a "root package" (what was parsed from the WIT
-  path specified) as well as an optional world string.
+* If the WIT file contains a `component` definition (see
+  [WIT Components][components-wit]), that definition is used directly as the
+  world for bindings generation. No world string is needed or accepted.
+* Otherwise, inputs to world selection are a "root package" (what was parsed
+  from the WIT path specified) as well as an optional world string.
 * If the world string is not present, then the root package must have a single
   world in it. If so that world is used for bindings generation.
 * If the world string is a WIT identifier, then it specifies the name of a world
@@ -1008,6 +1097,7 @@ keyword ::= 'as'
           | 'bool'
           | 'borrow'
           | 'char'
+          | 'component'
           | 'constructor'
           | 'enum'
           | 'export'
@@ -1064,14 +1154,28 @@ readability but this isn't required.
 Concretely, the structure of a `wit` file is:
 
 ```ebnf
-wit-file ::= (package-decl ';')? (package-items | nested-package-definition)*
+wit-file ::= package-file | component-file
+
+package-file ::= (package-decl ';')? (package-items | nested-package-definition)*
+
+component-file ::= (toplevel-use-item | nested-package-definition)* component-item
 
 nested-package-definition ::= package-decl '{' package-items* '}'
 
 package-items ::= toplevel-use-item | interface-item | world-item
 ```
 
-Essentially, these top level items are [worlds], [interfaces], [use statements][use] and other package definitions.
+A `wit-file` is **either** a package-based file (`package-file`) **or** a file
+containing a single [`component`][components-wit] definition (`component-file`).
+The two forms are mutually exclusive: a `component` keyword at the top level
+means no `package` declaration or named `world`/`interface` items may appear
+(other than inline `package … { … }` dependency blocks and top-level `use`
+statements which are allowed before the `component`).
+
+Essentially, `package-file` top level items are [worlds], [interfaces],
+[use statements][use] and other package definitions, while `component-file`
+consists of optional `use` imports and dependency blocks followed by a single
+[`component`][components-wit] definition.
 
 ### Feature Gates
 
@@ -1390,6 +1494,27 @@ The `interface` item here additionally defines the grammar for IDs used to refer
 to `interface` items.
 
 [`componenttype`]: Explainer.md#type-definitions
+
+## Item: `component`
+
+A `component` definition is an unnamed world that can appear as the sole
+top-level construct in a WIT file (see [WIT Components][components-wit]). Its
+body is identical to a `world` body.
+
+```ebnf
+component-item ::= 'component' '{' world-items* '}'
+```
+
+The `component` keyword must **not** be preceded by a `gate` or followed by an
+identifier — components are always unnamed and ungated. The `world-items`
+production is the same one used by `world-item`, so `import`, `export`, `use`,
+`include`, and type definitions are all permitted inside a `component` body.
+
+A file containing a `component-item` must not contain a `package` declaration
+(i.e. `package ...;` heading) or any `world-item` or `interface-item` at the
+top level. Inline `package ... { ... }` dependency blocks and `use` statements
+*are* permitted before the `component-item`, as reflected in the
+`component-file` grammar above.
 
 ## Item: `include`
 
