@@ -2103,21 +2103,16 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 
 ###### 🧵 `thread.switch-to`
 
-| Synopsis                   |                                                   |
-| -------------------------- | ------------------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>(t: thread) -> suspend-result` |
-| Canonical ABI signature    | `[t:i32] -> [i32]`                                |
+| Synopsis                   |                                         |
+| -------------------------- | --------------------------------------- |
+| Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
+| Canonical ABI signature    | `[t:i32] -> [i32]`                      |
 
-where `suspend-result` is defined in WIT as:
-```wit
-enum suspend-result { completed, cancelled }
-```
-
-The `thread.switch-to` built-in suspends the [current thread] and
-immediately resumes execution of the thread `t`, trapping if `t` is not in a
-"suspended" state. When the current thread is resumed by some other thread or,
-if `cancellable` was set, [cancellation], `thread.switch-to` will return,
-indicating what happened.
+The `thread.switch-to` built-in suspends the [current thread] and immediately
+resumes execution of the thread `t`, trapping if `t` is not in a "suspended"
+state. If `cancellable` is set, `thread.switch-to` returns whether the current
+task was [cancelled] by the caller; otherwise, `thread.switch-to` always returns
+`false`.
 
 If `thread.switch-to` is called from a synchronous- or `async callback`-lifted
 export, no other threads that were implicitly created by a separate
@@ -2132,17 +2127,17 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 
 ###### 🧵 `thread.suspend`
 
-| Synopsis                   |                                          |
-| -------------------------- | ---------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>() -> suspend-result` |
-| Canonical ABI signature    | `[] -> i32`                              |
+| Synopsis                   |                                |
+| -------------------------- | ------------------------------ |
+| Approximate WIT signature  | `func<cancellable?>() -> bool` |
+| Canonical ABI signature    | `[] -> [i32]`                  |
 
 The `thread.suspend` built-in suspends the [current thread] which,
 depending on the calling context, will either immediately switch control flow
 to an `async`-lowered caller or, if the current task has already suspended
-before, switch to the runtime's scheduler to find something else to do. When
-the current thread is resumed by some other thread or, if `cancellable` was
-set, [cancellation], `thread.suspend` will return, indicating what happened.
+before, switch to the runtime's scheduler to find something else to do. If
+`cancellable` is set, `thread.suspend` returns whether the current task was
+[cancelled] by the caller; otherwise, `thread.suspend` always returns `false`.
 
 If `thread.suspend` is called from a synchronous- or `async callback`-lifted
 export, no other threads that were implicitly created by a separate
@@ -2171,17 +2166,17 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 
 ###### 🧵 `thread.yield-to`
 
-| Synopsis                   |                                 |
-| -------------------------- | ------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>(t: thread)` |
-| Canonical ABI signature    | `[t:i32] -> [i32]`   |
+| Synopsis                   |                                         |
+| -------------------------- | --------------------------------------- |
+| Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
+| Canonical ABI signature    | `[t:i32] -> [i32]`                      |
 
 The `thread.yield-to` built-in immediately resumes execution of the thread `t`,
 (trapping if `t` is not in a "suspended" state) leaving the [current thread] in
 a "ready" state so that the runtime can nondeterministically resume the current
-thread at some point in the future. When the current thread is resumed either
-due to runtime scheduling or, if `cancellable` was set, [cancellation],
-`thread.yield-to` will return, indicating what happened.
+thread at some point in the future. If `cancellable` is set, `thread.yield-to`
+returns whether the current task was [cancelled] by the caller; otherwise,
+`thread.yield-to` always returns `false`.
 
 If `thread.yield-to` is called from a synchronous- or `async callback`-lifted
 export, no other threads that were implicitly created by a separate
@@ -2196,17 +2191,17 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 
 ###### 🧵 `thread.yield`
 
-| Synopsis                   |                                          |
-| -------------------------- | ---------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>() -> suspend-result` |
-| Canonical ABI signature    | `[] -> [i32]`                            |
+| Synopsis                   |                                |
+| -------------------------- | ------------------------------ |
+| Approximate WIT signature  | `func<cancellable?>() -> bool` |
+| Canonical ABI signature    | `[] -> [i32]`                  |
 
 The `thread.yield` built-in allows the runtime to potentially switch to any
 other thread in the "ready" state, enabling a long-running computation to
 cooperatively interleave execution without specifically requesting another
-thread to be resumed (as with `thread.yield-to`). When the current thread is
-resumed either due to runtime scheduling or, if `cancellable` was set,
-[cancellation], `thread.yield` will return, indicating what happened.
+thread to be resumed (as with `thread.yield-to`). If `cancellable` is set,
+`thread.yield` returns whether the current task was [cancelled] by the caller;
+otherwise, `thread.yield` always returns `false`.
 
 If `thread.yield` is called from a synchronous- or `async callback`-lifted
 export, no other threads that were implicitly created by a separate
@@ -3334,6 +3329,7 @@ For some use-case-focused, worked examples, see:
 [Returning]: Concurrency.md#returning
 [Resolved]: Concurrency.md#cancellation
 [Cancellation]: Concurrency.md#cancellation
+[Cancelled]: Concurrency.md#cancellation
 
 [Component Model Documentation]: https://component-model.bytecodealliance.org
 [`wizer`]: https://github.com/bytecodealliance/wizer
