@@ -2620,25 +2620,6 @@ def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], fi, c):
   task.register_thread(new_thread)
   return [new_thread.index]
 
-### 🧵 `canon thread.switch-to`
-
-def canon_thread_switch_to(cancellable, i):
-  thread = current_thread()
-  trap_if(not thread.task.inst.may_leave)
-  other_thread = thread.task.inst.threads.get(i)
-  trap_if(not other_thread.suspended())
-  cancelled = thread.switch_to(cancellable, other_thread)
-  return [cancelled]
-
-### 🧵 `canon thread.suspend`
-
-def canon_thread_suspend(cancellable):
-  thread = current_thread()
-  trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.inst.may_block)
-  cancelled = thread.suspend(cancellable)
-  return [cancelled]
-
 ### 🧵 `canon thread.resume-later`
 
 def canon_thread_resume_later(i):
@@ -2649,14 +2630,13 @@ def canon_thread_resume_later(i):
   other_thread.resume_later()
   return []
 
-### 🧵 `canon thread.yield-to`
+### 🧵 `canon thread.suspend`
 
-def canon_thread_yield_to(cancellable, i):
+def canon_thread_suspend(cancellable):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  other_thread = thread.task.inst.threads.get(i)
-  trap_if(not other_thread.suspended())
-  cancelled = thread.yield_to(cancellable, other_thread)
+  trap_if(not thread.task.inst.may_block)
+  cancelled = thread.suspend(cancellable)
   return [cancelled]
 
 ### 🧵 `canon thread.yield`
@@ -2665,6 +2645,26 @@ def canon_thread_yield(cancellable):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   cancelled = thread.yield_(cancellable)
+  return [cancelled]
+
+### 🧵 `canon thread.switch-to`
+
+def canon_thread_switch_to(cancellable, i):
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  other_thread = thread.task.inst.threads.get(i)
+  trap_if(not other_thread.suspended())
+  cancelled = thread.switch_to(cancellable, other_thread)
+  return [cancelled]
+
+### 🧵 `canon thread.yield-to`
+
+def canon_thread_yield_to(cancellable, i):
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  other_thread = thread.task.inst.threads.get(i)
+  trap_if(not other_thread.suspended())
+  cancelled = thread.yield_to(cancellable, other_thread)
   return [cancelled]
 
 ### 📝 `canon error-context.new`

@@ -61,11 +61,11 @@ specified here.
   * [`canon {stream,future}.drop-{readable,writable}`](#-canon-streamfuturedrop-readablewritable) 🔀
   * [`canon thread.index`](#-canon-threadindex) 🧵
   * [`canon thread.new-indirect`](#-canon-threadnew-indirect) 🧵
-  * [`canon thread.switch-to`](#-canon-threadswitch-to) 🧵
-  * [`canon thread.suspend`](#-canon-threadsuspend) 🧵
   * [`canon thread.resume-later`](#-canon-threadresume-later) 🧵
-  * [`canon thread.yield-to`](#-canon-threadyield-to) 🧵
+  * [`canon thread.suspend`](#-canon-threadsuspend) 🧵
   * [`canon thread.yield`](#-canon-threadyield) 🧵
+  * [`canon thread.switch-to`](#-canon-threadswitch-to) 🧵
+  * [`canon thread.yield-to`](#-canon-threadyield-to) 🧵
   * [`canon error-context.new`](#-canon-error-contextnew) 📝
   * [`canon error-context.debug-message`](#-canon-error-contextdebug-message) 📝
   * [`canon error-context.drop`](#-canon-error-contextdrop) 📝
@@ -4779,34 +4779,30 @@ actually start executing, Core WebAssembly code must call one of the other
 `thread.*` built-ins defined below.
 
 
-### 🧵 `canon thread.switch-to`
+### 🧵 `canon thread.resume-later`
 
 For a canonical definition:
 ```wat
-(canon thread.switch-to $cancellable? (core func $switch-to))
+(canon thread.resume-later (core func $resume-later))
 ```
 validation specifies:
-* `$switch-to` is given type `(func (param $i i32) (result i32))`
+* `$resume-later` is given type `(func (param $i i32))`
 
-Calling `$switch-to` invokes the following function which loads a thread at
+Calling `$resume-later` invokes the following function which loads a thread at
 index `$i` from the current component instance's `threads` table, traps if it's
-not [suspended], and then switches to that thread, leaving the [current thread]
-suspended.
+not [suspended], and then marks that thread as ready to run at some
+nondeterministic point in the future chosen by the embedder.
 ```python
-def canon_thread_switch_to(cancellable, i):
+def canon_thread_resume_later(i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
-  cancelled = thread.switch_to(cancellable, other_thread)
-  return [cancelled]
+  other_thread.resume_later()
+  return []
 ```
-If `cancellable` is set, then `thread.switch-to` will return a `Cancelled`
-value to indicate whether the supertask has already or concurrently requested
-cancellation. `thread.switch-to` (and other cancellable operations) will only
-indicate cancellation once and thus, if a caller is not prepared to propagate
-cancellation, they can omit `cancellable` so that cancellation is instead
-delivered at a later `cancellable` call.
+`thread.resume-later` never suspends the [current thread] and so there is no
+possibility of cancellation and thus no `cancellable` immediate.
 
 
 ### 🧵 `canon thread.suspend`
@@ -4835,63 +4831,6 @@ it transitively attempts to call `thread.suspend`.
 If `cancellable` is set, then `thread.suspend` will return a `Cancelled`
 value to indicate whether the supertask has already or concurrently requested
 cancellation. `thread.suspend` (and other cancellable operations) will only
-indicate cancellation once and thus, if a caller is not prepared to propagate
-cancellation, they can omit `cancellable` so that cancellation is instead
-delivered at a later `cancellable` call.
-
-
-### 🧵 `canon thread.resume-later`
-
-For a canonical definition:
-```wat
-(canon thread.resume-later (core func $resume-later))
-```
-validation specifies:
-* `$resume-later` is given type `(func (param $i i32))`
-
-Calling `$resume-later` invokes the following function which loads a thread at
-index `$i` from the current component instance's `threads` table, traps if it's
-not [suspended], and then marks that thread as ready to run at some
-nondeterministic point in the future chosen by the embedder.
-```python
-def canon_thread_resume_later(i):
-  thread = current_thread()
-  trap_if(not thread.task.inst.may_leave)
-  other_thread = thread.task.inst.threads.get(i)
-  trap_if(not other_thread.suspended())
-  other_thread.resume_later()
-  return []
-```
-`thread.resume-later` never suspends the [current thread] and so there is no
-possibility of cancellation and thus no `cancellable` immediate.
-
-
-### 🧵 `canon thread.yield-to`
-
-For a canonical definition:
-```wat
-(canon thread.yield-to $cancellable? (core func $yield-to))
-```
-validation specifies:
-* `$yield-to` is given type `(func (param $i i32) (result i32))`
-
-Calling `$yield-to` invokes the following function which loads a thread at
-index `$i` from the current component instance's `threads` table, traps if it's
-not [suspended], and then switches to that thread, leaving the [current thread]
-ready to run at some nondeterministic point in the future chosen by the
-embedder.
-```python
-def canon_thread_yield_to(cancellable, i):
-  thread = current_thread()
-  trap_if(not thread.task.inst.may_leave)
-  other_thread = thread.task.inst.threads.get(i)
-  trap_if(not other_thread.suspended())
-  cancelled = thread.yield_to(cancellable, other_thread)
-  return [cancelled]
-```
-If `cancellable` is set, then `thread.yield-to` will return a `Cancelled`
-value indicating whether the supertask has already or concurrently requested
-cancellation. `thread.yield-to` (and other cancellable operations) will only
 indicate cancellation once and thus, if a caller is not prepared to propagate
 cancellation, they can omit `cancellable` so that cancellation is instead
 delivered at a later `cancellable` call.
@@ -4928,6 +4867,67 @@ call tree of a synchronous function call.
 If `cancellable` is set, then `thread.yield` will return a `Cancelled`
 value indicating whether the supertask has already or concurrently requested
 cancellation. `thread.yield` (and other cancellable operations) will only
+indicate cancellation once and thus, if a caller is not prepared to propagate
+cancellation, they can omit `cancellable` so that cancellation is instead
+delivered at a later `cancellable` call.
+
+
+### 🧵 `canon thread.switch-to`
+
+For a canonical definition:
+```wat
+(canon thread.switch-to $cancellable? (core func $switch-to))
+```
+validation specifies:
+* `$switch-to` is given type `(func (param $i i32) (result i32))`
+
+Calling `$switch-to` invokes the following function which loads a thread at
+index `$i` from the current component instance's `threads` table, traps if it's
+not [suspended], and then switches to that thread, leaving the [current thread]
+suspended.
+```python
+def canon_thread_switch_to(cancellable, i):
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  other_thread = thread.task.inst.threads.get(i)
+  trap_if(not other_thread.suspended())
+  cancelled = thread.switch_to(cancellable, other_thread)
+  return [cancelled]
+```
+If `cancellable` is set, then `thread.switch-to` will return a `Cancelled`
+value to indicate whether the supertask has already or concurrently requested
+cancellation. `thread.switch-to` (and other cancellable operations) will only
+indicate cancellation once and thus, if a caller is not prepared to propagate
+cancellation, they can omit `cancellable` so that cancellation is instead
+delivered at a later `cancellable` call.
+
+
+### 🧵 `canon thread.yield-to`
+
+For a canonical definition:
+```wat
+(canon thread.yield-to $cancellable? (core func $yield-to))
+```
+validation specifies:
+* `$yield-to` is given type `(func (param $i i32) (result i32))`
+
+Calling `$yield-to` invokes the following function which loads a thread at
+index `$i` from the current component instance's `threads` table, traps if it's
+not [suspended], and then switches to that thread, leaving the [current thread]
+ready to run at some nondeterministic point in the future chosen by the
+embedder.
+```python
+def canon_thread_yield_to(cancellable, i):
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  other_thread = thread.task.inst.threads.get(i)
+  trap_if(not other_thread.suspended())
+  cancelled = thread.yield_to(cancellable, other_thread)
+  return [cancelled]
+```
+If `cancellable` is set, then `thread.yield-to` will return a `Cancelled`
+value indicating whether the supertask has already or concurrently requested
+cancellation. `thread.yield-to` (and other cancellable operations) will only
 indicate cancellation once and thus, if a caller is not prepared to propagate
 cancellation, they can omit `cancellable` so that cancellation is instead
 delivered at a later `cancellable` call.
