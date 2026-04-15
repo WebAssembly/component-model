@@ -565,7 +565,7 @@ per `ResourceHandle`.
 
 The `num_lends` field maintains a conservative approximation of the number of
 live handles that were lent from this `own` handle (by calls to `borrow`-taking
-functions). This count is maintained by the `ImportCall` bookkeeping functions
+functions). This count is maintained by the `Subtask` bookkeeping functions
 (above) and is ensured to be zero when an `own` handle is dropped.
 
 The `ResourceType` class represents a runtime instance of a resource type that
@@ -666,7 +666,7 @@ class Thread:
 The `index` field stores the index of the thread in its containing component
 instance's `threads` table and is initialized only once a thread is allowed to
 start executing (after the backpressure gate). The `storage` field holds the
-[thread-local storage] accessed by the `storage.{get,set}` built-ins. All the
+[thread-local storage] accessed by the `context.{get,set}` built-ins. All the
 other fields are used directly by `Thread` methods as shown next.
 
 When a `Thread` is created, an internal `threading.Thread` is started and
@@ -1765,7 +1765,7 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
     pending_on_copy_done(result)
 
   def cancel(self):
-    self.reset_pending_and_notify_pending(CopyResult.CANCELLED)
+    self.reset_and_notify_pending(CopyResult.CANCELLED)
 ```
 Dropping works the same in futures as in streams, except that a future
 writable end cannot be dropped without having written a value. This is guarded
@@ -2439,7 +2439,7 @@ The integral value of a `char` (a [Unicode Scalar Value]) is a valid unsigned
 ```python
 def char_to_i32(c):
   i = ord(c)
-  assert(0 <= i <= 0xD7FF or 0xD800 <= i <= 0x10FFFF)
+  assert(0 <= i <= 0xD7FF or 0xE000 <= i <= 0x10FFFF)
   return i
 ```
 
@@ -2839,7 +2839,7 @@ def flatten_types(ts, opts):
   return [ft for t in ts for ft in flatten_type(t, opts)]
 ```
 As shown here, the core signatures `async` functions use a lower limit on the
-maximum number of parameters (1) and results (0) passed as scalars before
+maximum number of parameters (4) and results (0) passed as scalars before
 falling back to passing through memory.
 
 Presenting the definition of `flatten_type` piecewise, we start with the
@@ -3366,7 +3366,7 @@ In both of the `async` cases below (with or without `callback`), the
 `task.return` built-in must be called, providing the return value as core wasm
 *parameters* to the `task.return` built-in (rather than as core function
 results as in the synchronous case). If `task.return` is *not* called by the
-time the `Task`'s last `Thread` exits, there is a trap (in `Task.thread_stop`).
+time the `Task`'s last `Thread` exits, there is a trap (in `Task.unregister_thread`).
 
 In the `async` non-`callback` ("stackful async") case, there is a single call
 to the core wasm callee which must return empty core results. Waiting for async
@@ -4491,13 +4491,13 @@ If the copy hasn't been cancelled, the synchronous case suspends the thread to
 wait for one of the `on_*` callbacks to eventually be called (which will set
 the pending event).
 
-The asynchronous case simply returns `BLOCKING` and the client code must wait
+The asynchronous case simply returns `BLOCKED` and the client code must wait
 as usual for a `{STREAM,FUTURE}_{READ,WRITE}` event. In this case, cancellation
 has served only to asynchronously request that the host relinquish the buffer
 ASAP without waiting for anything to be read or written.
 
-If `BLOCKING` is *not* returned, the pending event (which is necessarily a
-`stream_event`) is eagerly delivered to core wasm as the return value, thereby
+If `BLOCKED` is *not* returned, the pending event (which is necessarily a
+`stream_event` or `future_event`) is eagerly delivered to core wasm as the return value, thereby
 saving an additional turn of the event loop. In this case, the core wasm
 caller can assume that ownership of the buffer has been returned.
 

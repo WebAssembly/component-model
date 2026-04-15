@@ -989,7 +989,7 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
     pending_on_copy_done(result)
 
   def cancel(self):
-    self.reset_pending_and_notify_pending(CopyResult.CANCELLED)
+    self.reset_and_notify_pending(CopyResult.CANCELLED)
 
   def drop(self):
     if not self.dropped:
@@ -1453,7 +1453,7 @@ def core_i64_reinterpret_f64(f):
 
 def char_to_i32(c):
   i = ord(c)
-  assert(0 <= i <= 0xD7FF or 0xD800 <= i <= 0x10FFFF)
+  assert(0 <= i <= 0xD7FF or 0xE000 <= i <= 0x10FFFF)
   return i
 
 def store_string(cx, v: String, ptr):
