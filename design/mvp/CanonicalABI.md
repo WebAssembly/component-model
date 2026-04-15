@@ -176,15 +176,17 @@ class Supertask:
 class Call:
   request_cancellation: Callable[[], None]
 ```
-Critically, calling a `FuncInst` never "blocks" (i.e., waits on I/O); if the
-callee *would* block, the `FuncInst` immediately returns a `Call` object
-representing the ongoing asynchronous and internally creates a `Thread` that
-can make progress via `Store.tick`. The `OnStart` and `OnResolve` callbacks can
-be called any time during the initial `FuncInst` call or after while the `Call`
-is executing asynchronously. Before the `OnResolve` callback is called, the
-caller may call `request_cancellation` at most once to cooperatively request
-that the callee "hurry up" an call `OnResolve` (possibly, but not necessarily,
-passing `None` and/or skipping the call to `OnStart`).
+Critically, calling a `FuncInst` never blocks at the Python level; if the callee
+[blocks] at the wasm level, the Python `FuncInst` immediately returns a `Call`
+object representing the ongoing call which is now running as a `Thread` that can
+nondeterministically make progress via `Store.tick` in the future.
+
+The `OnStart` and `OnResolve` callbacks can be called any time during the
+initial `FuncInst` call or after while the `Call` is executing asynchronously.
+Before the `OnResolve` callback is called, the caller may call
+`request_cancellation` at most once to cooperatively request that the callee
+"hurry up" an call `OnResolve` (possibly, but not necessarily, passing `None`
+and/or skipping the call to `OnStart`).
 
 If the `FuncInst` calls `OnResolve` before returning; the returned `Call`
 object is somewhat vestigial since `request_cancellation` cannot be called.
@@ -4966,6 +4968,7 @@ def canon_thread_available_parallelism():
 [Thread]: Concurrency.md#threads-and-tasks
 [Current Thread]: Concurrency.md#current-thread-and-task
 [Current Task]: Concurrency.md#current-thread-and-task
+[Blocks]: Concurrency.md#blocking
 [Block]: Concurrency.md#blocking
 [Subtasks]: Concurrency.md#subtasks-and-supertasks
 [Readable and Writable Ends]: Concurrency.md#streams-and-futures
