@@ -525,7 +525,7 @@ that are used in preference to growing the table. The free list is represented
 as a Python list here, but an optimizing implementation could instead store the
 free list in the free elements of `array`.
 
-The limit of `2**28` ensures that the high 2 bits of table indices are unset
+The limit of `2**28` ensures that the high 4 bits of table indices are unset
 and available for other use in guest code (e.g., for tagging, packed words or
 sentinel values).
 
@@ -1285,10 +1285,11 @@ before or after calling `OnStart`):
 The `Subtask.add_lender` method is called by `lift_borrow` (below). This method
 increments the `num_lends` counter on the handle being lifted, which is guarded
 to be zero by `canon_resource_drop` (below). The `Subtask.deliver_resolve`
-method is called right before the `SUBTASK` `RETURNED` event is delivered to
-wasm, at which point all the borrowed handles are logically returned to the
-caller by decrementing all the `num_lend` counts that were initially
-incremented.
+method is called right before the `SUBTASK` resolve event is delivered to
+wasm (for any of the `RETURNED`, `CANCELLED_BEFORE_STARTED` or
+`CANCELLED_BEFORE_RETURNED` states), at which point all the borrowed handles
+are logically returned to the caller by decrementing all the `num_lend` counts
+that were initially incremented.
 ```python
   def add_lender(self, lending_handle):
     assert(not self.resolve_delivered() and not self.resolved())
@@ -1818,12 +1819,12 @@ definition (in `future_copy` below). The only difference is that
 or been notified of the reader dropping their end:
 ```python
 class ReadableFutureEnd(CopyEnd):
-  def copy(self, inst, src_buffer, on_copy_done):
-    self.shared.read(inst, src_buffer, on_copy_done)
+  def copy(self, inst, dst_buffer, on_copy_done):
+    self.shared.read(inst, dst_buffer, on_copy_done)
 
 class WritableFutureEnd(CopyEnd):
-  def copy(self, inst, dst_buffer, on_copy_done):
-    self.shared.write(inst, dst_buffer, on_copy_done)
+  def copy(self, inst, src_buffer, on_copy_done):
+    self.shared.write(inst, src_buffer, on_copy_done)
 
   def drop(self):
     trap_if(self.state != CopyState.DONE)

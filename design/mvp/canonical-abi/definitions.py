@@ -1021,12 +1021,12 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
       on_copy_done(CopyResult.COMPLETED)
 
 class ReadableFutureEnd(CopyEnd):
-  def copy(self, inst, src_buffer, on_copy_done):
-    self.shared.read(inst, src_buffer, on_copy_done)
+  def copy(self, inst, dst_buffer, on_copy_done):
+    self.shared.read(inst, dst_buffer, on_copy_done)
 
 class WritableFutureEnd(CopyEnd):
-  def copy(self, inst, dst_buffer, on_copy_done):
-    self.shared.write(inst, dst_buffer, on_copy_done)
+  def copy(self, inst, src_buffer, on_copy_done):
+    self.shared.write(inst, src_buffer, on_copy_done)
 
   def drop(self):
     trap_if(self.state != CopyState.DONE)
