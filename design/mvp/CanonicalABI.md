@@ -898,7 +898,7 @@ the closure fields directly in the component instance table.
 A waitable can belong to at most one "waitable set" (defined next) which is
 referred to by the `wset` field. A `Waitable`'s `pending_event` is delivered
 (via `get_pending_event`) when core wasm code waits on its waitable set (via
-`task.wait` or, when using `callback`, by returning to the event loop).
+`waitable-set.wait` or, when using `callback`, by returning to the event loop).
 ```python
 class Waitable:
   pending_event: Optional[Callable[[], EventTuple]]
@@ -2384,10 +2384,10 @@ def store_int(cx, v, ptr, nbytes, signed = False):
 ```
 
 Floats are stored directly into memory, with the sign and payload bits of NaN
-values modified non-deterministically. This reflects the practical reality that
+values modified nondeterministically. This reflects the practical reality that
 different languages, protocols and CPUs have different effects on NaNs.
 
-Although this non-determinism is expressed in the Python code below as
+Although this nondeterminism is expressed in the Python code below as
 generating a "random" NaN bit-pattern, native implementations do not need to
 use the same "random" algorithm, or even any random algorithm at all. Hosts
 may instead chose to canonicalize to an arbitrary fixed NaN value, or even to
@@ -4513,7 +4513,7 @@ For canonical definitions:
 (canon future.drop-writable $future_t (core func $f))
 ```
 validation specifies:
-* `$f` is given type `(func (param i32 i32))`
+* `$f` is given type `(func (param i32))`
 * `$stream_t`/`$future_t` must be a type of the form `(stream $t?)`/`(future $t?)`
 
 Calling `$f` removes the readable or writable end of the stream or future at
@@ -4767,7 +4767,7 @@ validation specifies:
 * `memory` must be present
 
 Calling `$f` calls the following function which uses the `$opts` immediate to
-(non-deterministically) lift the debug message, create a new `ErrorContext`
+(nondeterministically) lift the debug message, create a new `ErrorContext`
 value, store it in the current component instance's `handles` table and returns
 its index.
 ```python
@@ -4789,7 +4789,7 @@ def canon_error_context_new(opts, thread, ptr, tagged_code_units):
 Supporting the requirement (introduced in the
 [explainer](Explainer.md#error-context-type)) that wasm code does not depend on
 the contents of `error-context` values for behavioral correctness, the debug
-message is completely discarded non-deterministically or, in the deterministic
+message is completely discarded nondeterministically or, in the deterministic
 profile, always. Importantly (for performance), when the debug message is
 discarded, it is not even lifted and thus the O(N) well-formedness conditions
 are not checked. (Note that `host_defined_transformation` is not defined by the
@@ -4812,7 +4812,7 @@ validation specifies:
 
 Calling `$f` calls the following function which uses the `$opts` immediate to
 lowers the `ErrorContext`'s debug message. While *producing* an `error-context`
-value may non-deterministically discard or transform the debug message, a
+value may nondeterministically discard or transform the debug message, a
 single `error-context` value must return the same debug message from
 `error.debug-message` over time.
 ```python

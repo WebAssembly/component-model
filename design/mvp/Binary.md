@@ -34,7 +34,7 @@ section   ::=    section_0(<core:custom>)         => ϵ
             | a*:section_6(vec(<alias>))          => a*
             | t*:section_7(vec(<type>))           => t*
             | c*:section_8(vec(<canon>))          => c*
-            | s: section_9(<start>)               => [s]
+            | s: section_9(<start>)               => [s] 🪙
             | i*:section_10(vec(<import>))        => i*
             | e*:section_11(vec(<export>))        => e*
             | v*:section_12(vec(<value>))         => v* 🪙
@@ -87,7 +87,7 @@ sort                ::= 0x00 cs:<core:sort>                                => co
                       | 0x03                                               => type
                       | 0x04                                               => component
                       | 0x05                                               => instance
-inlineexport        ::= n:<exportname> si:<sortidx>                        => (export n si)
+inlineexport        ::= n:<exportname'> si:<sortidx>                       => (export n si)
 ```
 Notes:
 * Reused Core binary rules: [`core:name`], (variable-length encoded) [`core:u32`]
@@ -301,22 +301,24 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x09 rs:<resultlist> opts:<opts>                    => (canon task.return rs opts (core func)) 🔀
            | 0x05                                                => (canon task.cancel (core func)) 🔀
            | 0x0a 0x7f i:<u32>                                   => (canon context.get i32 i (core func)) 🔀
+           | 0x0a 0x7e i:<u32>                                   => (canon context.get i64 i (core func)) 🔀🐘
            | 0x0b 0x7f i:<u32>                                   => (canon context.set i32 i (core func)) 🔀
+           | 0x0b 0x7e i:<u32>                                   => (canon context.set i64 i (core func)) 🔀🐘
            | 0x0c cancel?:<cancel?>                              => (canon thread.yield cancel? (core func)) 🔀
            | 0x06 async?:<async?>                                => (canon subtask.cancel async? (core func)) 🔀
            | 0x0d                                                => (canon subtask.drop (core func)) 🔀
            | 0x0e t:<typeidx>                                    => (canon stream.new t (core func)) 🔀
            | 0x0f t:<typeidx> opts:<opts>                        => (canon stream.read t opts (core func)) 🔀
            | 0x10 t:<typeidx> opts:<opts>                        => (canon stream.write t opts (core func)) 🔀
-           | 0x11 t:<typeidx> async?:<async?>                    => (canon stream.cancel-read async? (core func)) 🔀
-           | 0x12 t:<typeidx> async?:<async?>                    => (canon stream.cancel-write async? (core func)) 🔀
+           | 0x11 t:<typeidx> async?:<async?>                    => (canon stream.cancel-read t async? (core func)) 🔀
+           | 0x12 t:<typeidx> async?:<async?>                    => (canon stream.cancel-write t async? (core func)) 🔀
            | 0x13 t:<typeidx>                                    => (canon stream.drop-readable t (core func)) 🔀
            | 0x14 t:<typeidx>                                    => (canon stream.drop-writable t (core func)) 🔀
            | 0x15 t:<typeidx>                                    => (canon future.new t (core func)) 🔀
            | 0x16 t:<typeidx> opts:<opts>                        => (canon future.read t opts (core func)) 🔀
            | 0x17 t:<typeidx> opts:<opts>                        => (canon future.write t opts (core func)) 🔀
-           | 0x18 t:<typeidx> async?:<async?>                    => (canon future.cancel-read async? (core func)) 🔀
-           | 0x19 t:<typeidx> async?:<async?>                    => (canon future.cancel-write async? (core func)) 🔀
+           | 0x18 t:<typeidx> async?:<async?>                    => (canon future.cancel-read t async? (core func)) 🔀
+           | 0x19 t:<typeidx> async?:<async?>                    => (canon future.cancel-write t async? (core func)) 🔀
            | 0x1a t:<typeidx>                                    => (canon future.drop-readable t (core func)) 🔀
            | 0x1b t:<typeidx>                                    => (canon future.drop-writable t (core func)) 🔀
            | 0x1c opts:<opts>                                    => (canon error-context.new opts (core func)) 📝
@@ -339,7 +341,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
 async?   ::= 0x00                                                =>
            | 0x01                                                => async
 cancel?  ::= 0x00                                                =>
-           | 0x01                                                => cancellable 🚟
+           | 0x01                                                => cancellable
 sh?      ::= 0x00                                                =>
            | 0x01                                                => shared 🧵②
 opts     ::= opt*:vec(<canonopt>)                                => opt*

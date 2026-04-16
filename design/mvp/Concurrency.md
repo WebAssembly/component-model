@@ -110,7 +110,7 @@ to be rewritten to use source-language concurrency mechanisms (like callbacks,
 `main()` and calls to `read()`, `write()` and `select()` can run without change
 in the Preview 3 `wasi:cli/command` world, which exports `run: async func() ->
 result`. Thus, `async` in WIT does not require the same kind of transitive
-source-code changes as source-level `async` in langauges like C#, Python, JS,
+source-code changes as source-level `async` in languages like C#, Python, JS,
 Rust and Dart.
 
 Because `async` exports impose little to no requirements on the guest
@@ -379,10 +379,10 @@ the following 3 thread built-ins. Once the thread is resumed, the thread can
 learn its own index by calling the [`thread.index`] built-in.
 
 A suspended thread (identified by thread-table index) can be resumed at some
-non-deterministic point in future via the [`thread.resume-later`] built-in. In
+nondeterministic point in future via the [`thread.resume-later`] built-in. In
 contrast, the [`thread.yield-to`] built-in switches execution to the given
 thread immediately, leaving the *calling* thread to be resumed at some
-non-deterministic point in the future. Lastly, the [`thread.switch-to`]
+nondeterministic point in the future. Lastly, the [`thread.switch-to`]
 built-in switches execution to the given thread immediately, like `yield-to`,
 but leaves the calling thread in the "suspended" state. These three functions
 can be used to resume both newly-created threads as well as threads that
@@ -658,7 +658,7 @@ component-instance-wide lock is implicitly acquired every time core wasm is
 executed. By returning to the event loop after every event (instead of once at
 the end of the task), stackless async exports release the lock between every
 event, allowing a higher degree of concurrency than synchronous exports.
-Stackfull async exports ignore the lock entirely and thus achieve the highest
+Stackful async exports ignore the lock entirely and thus achieve the highest
 degree of (cooperative) concurrency.
 
 Since non-`async` functions are not allowed to block (including due to
@@ -771,7 +771,7 @@ state and returns which state was reached. If called asynchronously, then if a
 cancellable subtask thread is resumed *and* the subtask reaches a resolved
 state before suspending itself for whatever reason `subtask.cancel` will return
 which state was reached. Otherwise, `subtask.cancel` will return a "blocked"
-sentinel value and the caller must [wait][#waitables-and-waitable-sets] via
+sentinel value and the caller must [wait](#waitables-and-waitable-sets) via
 waitable set until the subtask reaches a resolved state.
 
 The Component Model does not provide a mechanism to force prompt termination of
@@ -836,7 +836,7 @@ Despite the above, the following scenarios do behave deterministically:
   deterministically and immediately.
 * When both ends of a stream or future are owned by wasm components, the
   behavior of all read, write, cancel and drop operations is deterministic
-  (modulo any nondeterminitic execution that determines the ordering in which
+  (modulo any nondeterministic execution that determines the ordering in which
   the operations are performed).
 
 
@@ -939,7 +939,7 @@ Other example asynchronous lowered signatures:
 | `async func()`                     | `(func (result i32))` |
 | `async func() -> string`           | `(func (param $out-ptr i32) (result i32))` |
 | `async func(x: f32) -> f32`        | `(func (param $x f32) (param $out-ptr i32) (result i32))` |
-| `async func(s: string, t: string)` | `(func (param $s-ptr i32) (param $s-len i32) (result $t-ptr i32) (param $t-len i32) (result i32))` |
+| `async func(s: string, t: string)` | `(func (param $s-ptr i32) (param $s-len i32) (param $t-ptr i32) (param $t-len i32) (result i32))` |
 
 `future` and `stream` can appear anywhere in the parameter or result types. For example:
 ```wit
@@ -1174,8 +1174,8 @@ core wasm code between events, not externally-visible behavior.
     ...
   )
   (core module $Main
-    (import "libc" "mem" (memory 1))
-    (import "libc" "realloc" (func (param i32 i32 i32 i32) (result i32)))
+    (import "" "mem" (memory 1))
+    (import "" "realloc" (func (param i32 i32 i32 i32) (result i32)))
     (import "" "fetch" (func $fetch (param i32 i32 i32) (result i32)))
     (import "" "waitable-set.new" (func $new_waitable_set (result i32)))
     (import "" "waitable.join" (func $join (param i32 i32)))
@@ -1247,7 +1247,7 @@ It's also possible for `summarize` to call `task.return` called eagerly in the
 initial core `summarize` call.
 
 The `$event`, `$p1` and `$p2` parameters passed to `cb` are the same as the
-return values from `task.wait` in the previous example. The precise meaning of
+return values from `waitable-set.wait` in the previous example. The precise meaning of
 these values is defined by the Canonical ABI.
 
 
@@ -1290,7 +1290,7 @@ comes after:
 [Effect Type]: https://en.wikipedia.org/wiki/Effect_system
 [CPS Transform]: https://en.wikipedia.org/wiki/Continuation-passing_style
 [Asyncify]: https://emscripten.org/docs/porting/asyncify.html
-[Session Types]: https://en.wikipedia.org/wiki/Session_type
+[Session Type]: https://en.wikipedia.org/wiki/Session_type
 [Structured Concurrency]: https://en.wikipedia.org/wiki/Structured_concurrency
 [Unit]: https://en.wikipedia.org/wiki/Unit_type
 [FS or GS Segment Base Address]: https://docs.kernel.org/arch/x86/x86_64/fsgs.html

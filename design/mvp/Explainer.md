@@ -99,7 +99,7 @@ definition ::= core-prefix(<core:module>)
              | <alias>
              | <type>
              | <canon>
-             | <start> 🪺
+             | <start> 🪙
              | <import>
              | <export>
              | <value> 🪙
@@ -565,8 +565,8 @@ defvaltype    ::= bool
                 | (result <valtype>? (error <valtype>)?)
                 | (own <typeidx>)
                 | (borrow <typeidx>)
-                | (stream <typeidx>?) 🔀
-                | (future <typeidx>?) 🔀
+                | (stream <valtype>?) 🔀
+                | (future <valtype>?) 🔀
 valtype       ::= <typeidx>
                 | <defvaltype>
 resourcetype  ::= (resource (rep i32) (dtor <funcidx>)?)
@@ -582,7 +582,6 @@ instancedecl  ::= core-prefix(<core:type>)
                 | <type>
                 | <alias>
                 | <exportdecl>
-                | <value> 🪙
 importdecl    ::= (import "<importname>" bind-id(<externdesc>))
                 | (import "<importname>" <versionsuffix> bind-id(<externdesc>)) 🔗
 exportdecl    ::= (export "<exportname>" bind-id(<externdesc>))
@@ -617,7 +616,7 @@ sets of abstract values:
 | `u8`, `u16`, `u32`, `u64` | integers in the range [0, 2<sup>N</sup>-1] |
 | `f32`, `f64`              | [IEEE754] floating-point numbers, with a single NaN value |
 | `char`                    | [Unicode Scalar Values] |
-| `error-context` 📝        | an immutable, non-deterministic, host-defined value meant to aid in debugging |
+| `error-context` 📝        | an immutable, nondeterministic, host-defined value meant to aid in debugging |
 | `record`                  | heterogeneous [tuples] of named values |
 | `variant`                 | heterogeneous [tagged unions] of named values |
 | `list`                    | homogeneous, variable- or fixed-length [sequences] of values |
@@ -651,7 +650,7 @@ component-level there is a `bool` type with `true` and `false` values.
 
 ##### 📝 Error Context type
 
-Values of `error-context` type are immutable, non-deterministic, host-defined
+Values of `error-context` type are immutable, nondeterministic, host-defined
 and meant to be propagated from failure sources to callers in order to aid in
 debugging. Currently `error-context` values contain only a "debug message"
 string whose contents are determined by the host. Core wasm can create
@@ -661,7 +660,7 @@ wasm-provided string. In the future, `error-context` could be enhanced with
 other additional or more-structured context (like a backtrace or a chain of
 originating error contexts).
 
-The intention of this highly-non-deterministic semantics is to provide hosts
+The intention of this highly-nondeterministic semantics is to provide hosts
 the full range of flexibility to:
 * append a basic callstack suitable for forensic debugging in production;
 * optimize for performance in high-volume production scenarios by slicing or
@@ -1462,13 +1461,13 @@ canon ::= ...
         | (canon thread.suspend cancellable? (core func <id>?)) 🧵
         | (canon thread.resume-later (core func <id>?)) 🧵
         | (canon thread.yield-to cancellable? (core func <id>?)) 🧵
-        | (canon thread.yield cancellable? (core func <id>?)) 🧵
+        | (canon thread.yield cancellable? (core func <id>?)) 🔀
         | (canon error-context.new <canonopt>* (core func <id>?)) 📝
         | (canon error-context.debug-message <canonopt>* (core func <id>?)) 📝
         | (canon error-context.drop (core func <id>?)) 📝
         | (canon thread.spawn-ref shared? <typeidx> (core func <id>?)) 🧵②
         | (canon thread.spawn-indirect shared? <typeidx> <core:tableidx> (core func <id>?)) 🧵②
-        | (canon thread.available-parallelism (core func <id>?)) 🧵②
+        | (canon thread.available-parallelism shared? (core func <id>?)) 🧵②
 ```
 
 ##### Resource built-ins
@@ -1566,8 +1565,8 @@ See the [concurrency explainer] for background.
 
 The `context.get` built-in returns the `i`th element of the [current thread]'s
 [thread-local storage] array. Validation currently restricts `i` to be less
-than 2 and `T` to be `i32` or `i64`, but these restrictions may be relaxed in
-the future.
+than 2 and `T` to be `i32` (or, with 🐘, `i64`), but these restrictions may
+be relaxed in the future.
 
 Mixing `i32` and `i64` results in truncating or unsigned extending the
 stored values:
@@ -1588,8 +1587,8 @@ For details, see [Thread-Local Storage] in the concurrency explainer and
 
 The `context.set` built-in sets the `i`th element of the [current thread]'s
 [thread-local storage] array to the value `v`. Validation currently restricts
-`i` to be less than 2 and `T` to be `i32` or `i64`, but these restrictions may
-be relaxed in the future.
+`i` to be less than 2 and `T` to be `i32` (or, with 🐘, `i64`), but these
+restrictions may be relaxed in the future.
 
 Mixing `i32` and `i64` results in truncating or unsigned extending the
 stored values:
@@ -1844,7 +1843,8 @@ For details, see [Cancellation] in the concurrency explainer and
 | Canonical ABI signature    | `[subtask:i32] -> []`    |
 
 The `subtask.drop` built-in removes the indicated [subtask] from the current
-component instance's table, trapping if the subtask hasn't returned.
+component instance's table, trapping if wasm hasn't yet received the subtask's
+resolution (via `waitable-set.{wait,poll}` or `callback` event).
 
 For details, see [`canon_subtask_drop`] in the Canonical ABI explainer.
 
@@ -1998,7 +1998,8 @@ asynchronously), any subsequent operation on the future other than
 
 A component *may* call `future.drop-readable` *before* successfully reading a
 value to indicate a loss of interest. `future.drop-writable` will trap if
-called before successfully writing a value.
+called before successfully writing a value or being notified that the readable
+end was dropped.
 
 In the Canonical ABI, the `{readable,writable}-future-end` is passed as an
 `i32` index into the component instance's table followed by a single
@@ -2048,13 +2049,14 @@ For details, see [Streams and Futures] in the concurrency explainer and
 | Approximate WIT signature for `stream.drop-writable` | `func<stream<T?>>(e: writable-stream-end<T?>)` |
 | Approximate WIT signature for `future.drop-readable` | `func<future<T?>>(e: readable-future-end<T?>)` |
 | Approximate WIT signature for `future.drop-writable` | `func<future<T?>>(e: writable-future-end<T?>)` |
-| Canonical ABI signature                              | `[end:i32 err:i32] -> []`                      |
+| Canonical ABI signature                              | `[end:i32] -> []`                              |
 
 The `{stream,future}.drop-{readable,writable}` built-ins remove the indicated
 [stream or future] from the current component instance's table, trapping if the
 stream or future has a mismatched direction or type or are in the middle of a
 `read` or `write` or, in the special case of `future.drop-writable`, if a
-value has not already been written.
+value has not already been successfully written or the readable end has not
+already been dropped.
 
 For details, see [Streams and Futures] in the concurrency explainer and
 [`canon_stream_drop_readable`] in the Canonical ABI explainer.
@@ -2089,9 +2091,10 @@ dynamically checked to match the type `FuncT` (in the same manner as
 determined by the [`core:tabletype`] of the table. Lastly, the indexed function
 is called in the new thread with `c` as its first and only parameter.
 
-Currently, `FuncT` must be `(func (param i32))` or `(func (param i64))` and thus
-`c` must always be an `i32` or `i64`, but this restriction can be loosened in
-the future as the Canonical ABI is extended for [GC].
+Currently, `FuncT` must be `(func (param i32))` (or, with 🐘,
+`(func (param i64))`) and thus `c` must always be an `i32` (or `i64`), but
+this restriction can be loosened in the future as the Canonical ABI is
+extended for [GC].
 
 As explained in the [concurrency explainer], a thread created by
 `thread.new-indirect` is initially in a suspended state and must be resumed
@@ -2139,13 +2142,8 @@ before, switch to the runtime's scheduler to find something else to do. If
 `cancellable` is set, `thread.suspend` returns whether the current task was
 [cancelled] by the caller; otherwise, `thread.suspend` always returns `false`.
 
-If `thread.suspend` is called from a synchronous- or `async callback`-lifted
-export, no other threads that were implicitly created by a separate
-synchronous- or `async callback`-lifted export call can start or progress in
-the current component instance until `thread.suspend` returns (thereby
-ensuring non-reentrance of the core wasm code). However, explicitly-created
-threads and threads implicitly created by non-`callback` `async`-lifted
-("stackful async") exports may start or progress at any time.
+A non-`async`-typed function export that has not yet returned a value traps if
+it transitively attempts to call `thread.suspend`.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_suspend`] in the Canonical ABI explainer.
@@ -2189,7 +2187,7 @@ threads and threads implicitly created by non-`callback` `async`-lifted
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield_to`] in the Canonical ABI explainer.
 
-###### 🧵 `thread.yield`
+###### 🔀 `thread.yield`
 
 | Synopsis                   |                                |
 | -------------------------- | ------------------------------ |
@@ -2204,12 +2202,11 @@ thread to be resumed (as with `thread.yield-to`). If `cancellable` is set,
 otherwise, `thread.yield` always returns `false`.
 
 If `thread.yield` is called from a synchronous- or `async callback`-lifted
-export, no other threads that were implicitly created by a separate
-synchronous- or `async callback`-lifted export call can start or progress in
-the current component instance until `thread.yield` returns (thereby
-ensuring non-reentrance of the core wasm code). However, explicitly-created
-threads and threads implicitly created by non-`callback` `async`-lifted
-("stackful async") exports may start or progress at any time.
+export, it returns immediately without blocking (instead of trapping, as with
+other possibly-blocking operations like `waitable-set.wait`). This is because,
+unlike other built-ins, `thread.yield` may be scattered liberally throughout
+code that might show up in the transitive call tree of a synchronous function
+call.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield`] in the Canonical ABI explainer.
@@ -2218,7 +2215,7 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 
 | Synopsis                   |                                                                                            |
 | -------------------------- | ------------------------------------------------------------------------------------------ |
-| Approximate WIT signature  | `func<shared?,FuncT>(f: FuncT, c: FuncT.params[0]) -> bool`                                |
+| Approximate WIT signature  | `func<shared?,FuncT>(f: FuncT, c: FuncT.params[0]) -> thread`                              |
 | Canonical ABI signature    | `shared? [f:(ref null (shared (func (param FuncT.params[0]))) c:FuncT.params[0]] -> [i32]` |
 
 The `thread.spawn-ref` built-in is an optimization, fusing a call to
@@ -2231,10 +2228,10 @@ For details, see [`canon_thread_spawn_ref`] in the Canonical ABI explainer.
 
 ###### 🧵② `thread.spawn-indirect`
 
-| Synopsis                   |                                                                            |
-| -------------------------- | -------------------------------------------------------------------------- |
-| Approximate WIT signature  | `func<shared?,FuncT,table>(i: table.addrtype, c: FuncT.params[0]) -> bool` |
-| Canonical ABI signature    | `shared? [i:table.addrtype c:FuncT.params[0]] -> [i32]`                    |
+| Synopsis                   |                                                                              |
+| -------------------------- | ---------------------------------------------------------------------------- |
+| Approximate WIT signature  | `func<shared?,FuncT,table>(i: table.addrtype, c: FuncT.params[0]) -> thread` |
+| Canonical ABI signature    | `shared? [i:table.addrtype c:FuncT.params[0]] -> [i32]`                      |
 
 The `thread.spawn-indirect` built-in is an optimization, fusing a call to
 [`thread.new-indirect`](#-threadnew-indirect) with a call to
@@ -2249,7 +2246,7 @@ explainer.
 | Synopsis                   |                          |
 | -------------------------- | ------------------------ |
 | Approximate WIT signature  | `func<shared?>() -> u32` |
-| Canonical ABI signature    | `shared [] -> [i32]`     |
+| Canonical ABI signature    | `shared? [] -> [i32]`    |
 
 The `thread.available-parallelism` built-in returns the number of threads that
 can be expected to execute in parallel.
@@ -2272,7 +2269,7 @@ explainer.
 | Canonical ABI signature          | `[ptr:memory.addrtype len:memory.addrtype] -> [i32]` |
 
 The `error-context.new` built-in returns a new `error-context` value. The given
-string is non-deterministically transformed to produce the `error-context`'s
+string is nondeterministically transformed to produce the `error-context`'s
 internal [debug message](#error-context-type).
 
 In the Canonical ABI, the returned value is an index into the current component
