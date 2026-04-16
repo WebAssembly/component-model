@@ -3340,10 +3340,7 @@ and receiving the return value as core function results. Once the core results
 are lifted according to `lift_flat_values` above, the optional `post-return`
 function (specified as a `canonopt` immediate of `canon lift`) is called,
 passing the same core wasm results as parameters so that the `post-return`
-function can free any associated allocations. Since `Task.enter` acquired the
-`exclusive` lock and the `Task.exit` call here releases the `exclusive` lock,
-synchronous functions cannot overlap execution; attempts by callers to make
-overlapping calls will result in backpressure in `Task.enter`.
+function can free any associated allocations.
 ```python
     if not opts.async_:
       flat_results = call_and_trap_on_throw(callee, thread, flat_args)
