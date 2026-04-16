@@ -816,7 +816,7 @@ destructor function specified by the `dtor` immediate will be called (if
 present), allowing the implementing component to perform clean-up like freeing
 linear memory allocations. Destructors can be declared `async`, with the same
 meaning for the `async` and `callback` immediates as described below for `canon
-lift`.
+lift`. A destructor for a `resource (rep $T)` must have type `($T) -> ()`.
 
 The `instance` type constructor describes a list of named, typed definitions
 that can be imported or exported by a component. Informally, instance types
