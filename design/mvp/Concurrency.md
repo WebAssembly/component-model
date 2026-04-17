@@ -49,9 +49,9 @@ concurrency-specific goals and use cases:
   * promises, futures, streams and channels
   * callbacks, in languages with no other built-in concurrency mechanisms
 * Provide [fiber]-like stack-switching capabilities via Core WebAssembly
-  import calls in a way that complements, but doesn't depend on, new Core
-  WebAssembly proposals including [stack-switching] and
-  [shared-everything-threads].
+  import calls in a way that composes with, and is [specified in terms of],
+  but doesn't actually depend on, the Core WebAssembly [stack-switching]
+  proposal.
 * Allow polyfilling in browsers via JavaScript Promise Integration ([JSPI])
 * Avoid partitioning interfaces and components into separate ecosystems based
   on degree of concurrency; don't give components a "[color]".
@@ -350,11 +350,17 @@ feature is necessary in any case (due to iloops and traps).
 
 At any point in time while executing Core WebAssembly code or a [canonical
 built-in] called by Core WebAssembly code, there is a well-defined **current
-thread** whose containing task is the **current task**. The "current thread" is
-modelled in the Canonical ABI's Python code by explicitly passing a [`Thread`]
-object as an argument to all function calls so that the semantic "current
-thread" is always the value of the `thread` parameter. Threads store their
-containing task so that the "current task" is always `thread.task`.
+thread** whose containing task is the **current task**.
+
+The "current thread" is [specified in terms of] stack-switching with a
+`current-thread` effect for retrieving the current thread from the parent
+`resume` handler's state. However, due to structural invariants, engines can
+reliably optimize this `current-thread` effect by storing the current thread in
+the VM's execution state (or a special Core WebAssembly `global`) so that it
+could be cheaply loaded and/or kept in register state.
+
+Threads store their containing task so that the "current task" is always
+`current_thread.task`.
 
 Because there is always a well-defined current task and tasks are always
 created for calls to typed functions, it is therefore also always well-defined
@@ -489,6 +495,10 @@ Additionally, each of these potentially-blocking operations will trap if the
 exception, to allow it to be called arbitrarily from anywhere, `thread.yield`
 does not trap but instead behaves as a no-op if the current task's function
 type does not contain `async`.
+
+"Blocking" is [specified in terms of] stack-switching, with a `block` effect
+that suspends the current thread to produce a continuation that can be resumed
+once the reason for blocking is addressed.
 
 The [Canonical ABI explainer] defines the above behavior more precisely; search
 for `may_block` to see all the relevant points.
@@ -1332,6 +1342,7 @@ comes after:
 [`stream.cancel-write`]: Explainer.md#-streamcancel-read-streamcancel-write-futurecancel-read-and-futurecancel-write
 
 [Canonical ABI Explainer]: CanonicalABI.md
+[specified in terms of]: CanonicalABI.md#stack-switching
 [`canon_lift`]: CanonicalABI.md#canon-lift
 [`unpack_callback_result`]: CanonicalABI.md#canon-lift
 [`canon_lower`]: CanonicalABI.md#canon-lower
