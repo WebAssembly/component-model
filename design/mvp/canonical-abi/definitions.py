@@ -1864,6 +1864,7 @@ def lift_flat_list(cx, vi, elem_type, maybe_length, maybe_variable=False):
     if maybe_variable:
       lentype = varint_type(maybe_length)
       actual_len = lift_flat(cx, vi, lentype)
+      trap_if(actual_len > maybe_length)
     a = []
     for i in range(actual_len):
       a.append(lift_flat(cx, vi, elem_type))
