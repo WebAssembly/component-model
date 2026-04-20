@@ -1253,14 +1253,12 @@ class Subtask(Waitable):
     CANCELLED_BEFORE_RETURNED = 4
 
   state: State
-  callee: Optional[Call]
   lenders: Optional[list[ResourceHandle]]
   cancellation_requested: bool
 
   def __init__(self):
     Waitable.__init__(self)
     self.state = Subtask.State.STARTING
-    self.callee = None
     self.lenders = []
     self.cancellation_requested = False
 ```
