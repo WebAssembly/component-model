@@ -959,7 +959,7 @@ class WaitableSet:
       if w.has_pending_event():
         return w.get_pending_event()
 
-  def wait_until(self, ready_func, thread, cancellable) -> EventTuple:
+  def wait_for_event_and(self, ready_func, thread, cancellable) -> EventTuple:
     def ready_and_has_event():
       return ready_func() and self.has_pending_event()
     self.num_waiting += 1
@@ -970,8 +970,8 @@ class WaitableSet:
     self.num_waiting -= 1
     return event
 
-  def wait(self, thread, cancellable) -> EventTuple:
-    return self.wait_until(lambda: True, thread, cancellable)
+  def wait_for_event(self, thread, cancellable) -> EventTuple:
+    return self.wait_for_event_and(lambda: True, thread, cancellable)
 
   def poll(self, thread, cancellable) -> EventTuple:
     if thread.task.deliver_pending_cancel(cancellable):
@@ -989,7 +989,7 @@ The `random.shuffle` in `get_pending_event` give embedders the semantic freedom
 to schedule delivery of events nondeterministically (e.g., taking into account
 priorities); runtimes do not have to literally randomize event delivery.
 
-The readiness function passed to `WaitableSet.wait_until` allows the caller to
+The `ready_func` passed to `WaitableSet.wait_for_event_and` allows the caller to
 stipulate extra conditions that have to be met, *in addition* to there being an
 event ready for delivery. In particular, this is used by the `async callback`
 event loop to avoid overlapping callback execution.
@@ -3401,7 +3401,7 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
           trap_if(not task.may_block())
           wset = inst.handles.get(si)
           trap_if(not isinstance(wset, WaitableSet))
-          event = wset.wait_until(lambda: not inst.exclusive, thread, cancellable = True)
+          event = wset.wait_for_event_and(lambda: not inst.exclusive, thread, cancellable = True)
         case _:
           trap()
       assert(inst.exclusive is None)
@@ -3412,11 +3412,12 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
     task.exit(thread)
     return
 ```
-The `Thread.{wait,yield}_until` methods called by the event loop are the same
-methods called by the `yield` and `waitable-set.wait` built-ins. Thus, the
-main difference between stackful and stackless async is whether these
-suspending operations are performed from an empty or non-empty core wasm
-callstack (with the former allowing additional engine optimization).
+The `Thread.yield_until` and `WaitableSet.wait_for_event_and` methods called by
+the event loop are the same methods called by the `thread.yield` and
+`waitable-set.wait` built-ins. Thus, the main difference between stackful and
+stackless async is whether these suspending operations are performed from an
+empty or non-empty core wasm callstack (with the former allowing additional
+engine optimization).
 
 If a `Task` is not allowed to block (because it was created for a non-`async`-
 typed function call and has not yet returned a value), `YIELD` is always a
@@ -3973,7 +3974,7 @@ def canon_waitable_set_wait(cancellable, mem, thread, si, ptr):
   trap_if(not thread.task.may_block())
   wset = thread.task.inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
-  event = wset.wait(thread, cancellable)
+  event = wset.wait_for_event(thread, cancellable)
   return unpack_event(mem, thread, ptr, event)
 
 def unpack_event(mem, thread, ptr, e: EventTuple):
@@ -3986,9 +3987,6 @@ def unpack_event(mem, thread, ptr, e: EventTuple):
 A non-`async`-typed function export that has not yet returned a value
 unconditionally traps if it transitively attempts to call `wait` (regardless of
 whether there are any waitables with pending events).
-
-The `lambda: True` passed to `wait_until` means that `wait_until` will only
-wait for the given `wset` to have a pending event with no extra conditions.
 
 If `cancellable` is set, then `waitable-set.wait` will return whether the
 supertask has already or concurrently requested cancellation.

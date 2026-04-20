@@ -572,7 +572,7 @@ class WaitableSet:
       if w.has_pending_event():
         return w.get_pending_event()
 
-  def wait_until(self, ready_func, thread, cancellable) -> EventTuple:
+  def wait_for_event_and(self, ready_func, thread, cancellable) -> EventTuple:
     def ready_and_has_event():
       return ready_func() and self.has_pending_event()
     self.num_waiting += 1
@@ -583,8 +583,8 @@ class WaitableSet:
     self.num_waiting -= 1
     return event
 
-  def wait(self, thread, cancellable) -> EventTuple:
-    return self.wait_until(lambda: True, thread, cancellable)
+  def wait_for_event(self, thread, cancellable) -> EventTuple:
+    return self.wait_for_event_and(lambda: True, thread, cancellable)
 
   def poll(self, thread, cancellable) -> EventTuple:
     if thread.task.deliver_pending_cancel(cancellable):
@@ -2042,7 +2042,7 @@ def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
           trap_if(not task.may_block())
           wset = inst.handles.get(si)
           trap_if(not isinstance(wset, WaitableSet))
-          event = wset.wait_until(lambda: not inst.exclusive, thread, cancellable = True)
+          event = wset.wait_for_event_and(lambda: not inst.exclusive, thread, cancellable = True)
         case _:
           trap()
       assert(inst.exclusive is None)
@@ -2264,7 +2264,7 @@ def canon_waitable_set_wait(cancellable, mem, thread, si, ptr):
   trap_if(not thread.task.may_block())
   wset = thread.task.inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
-  event = wset.wait(thread, cancellable)
+  event = wset.wait_for_event(thread, cancellable)
   return unpack_event(mem, thread, ptr, event)
 
 def unpack_event(mem, thread, ptr, e: EventTuple):
