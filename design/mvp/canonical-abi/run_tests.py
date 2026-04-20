@@ -151,6 +151,12 @@ test(RecordType([FieldType('x',U8Type()),
 test(TupleType([TupleType([U8Type(),U8Type()]),U8Type()]), [1,2,3], {'0':{'0':1,'1':2},'1':3})
 test(ListType(U8Type(),3), [1,2,3], [1,2,3])
 test(ListType(ListType(U8Type(),2),3), [1,2,3,4,5,6], [[1,2],[3,4],[5,6]])
+# bounded (variable-length up to max) list tests
+test(ListType(U8Type(),3,True), [3, 1,2,3], [1,2,3])
+test(ListType(U8Type(),3,True), [2, 1,2,0], [1,2])
+test(ListType(U8Type(),3,True), [0, 0,0,0], [])
+test(ListType(U32Type(),2,True), [2, 10,20], [10,20])
+test(ListType(U32Type(),2,True), [1, 10,0], [10])
 # Empty flags types are not permitted yet.
 #t = FlagsType([])
 #test(t, [], {})
@@ -343,6 +349,10 @@ test_heap(ListType(ListType(U8Type(),2)), [[1,2],[3,4]], [0,2],
           [1,2, 3,4])
 test_heap(ListType(ListType(U32Type(),2)), [[1,2],[3,4]], [0,2],
           [1,0,0,0,2,0,0,0, 3,0,0,0,4,0,0,0])
+# bounded list heap tests
+# layout: [length_u8, elem0, ..., elemN-1, unused_slots...]
+test_heap(ListType(ListType(U8Type(),3,True)), [[1,2],[3]], [0,2],
+          [2, 1,2,0,  1, 3,0,0])
 test_heap(ListType(ListType(U32Type(),2)), None, [1,2],
           [0, 1,0,0,0,2,0,0,0, 3,0,0,0,4,0,0,0])
 test_heap(ListType(TupleType([U8Type(),U8Type(),U16Type(),U32Type()])),
