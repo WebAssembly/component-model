@@ -63,7 +63,7 @@ def mk_task(caller, on_resolve, thread_func):
   task = Task(opts, inst, FuncType([],[],async_=True), caller, on_resolve)
   thread = Thread(task, thread_func)
   thread.resume(Cancelled.FALSE)
-  return task
+  return task.request_cancellation
 
 def mk_done_task(caller):
   def empty(thread):

@@ -130,7 +130,7 @@ class Store:
   def __init__(self):
     self.waiting = []
 
-  def invoke(self, f: FuncInst, caller: Optional[Supertask], on_start, on_resolve) -> Call:
+  def invoke(self, f: FuncInst, caller: Optional[Supertask], on_start, on_resolve) -> OnCancel:
     host_caller = Supertask()
     host_caller.inst = None
     host_caller.supertask = caller
@@ -164,36 +164,24 @@ The `FuncInst` passed to `Store.invoke` is defined to take 3 parameters:
   of return values or, if cancellation has been requested, `None`.
 
 ```python
-FuncInst: Callable[[Optional[Supertask], OnStart, OnResolve], Call]
-
+FuncInst: Callable[[Optional[Supertask], OnStart, OnResolve], OnCancel]
 OnStart = Callable[[], list[any]]
 OnResolve = Callable[[Optional[list[any]]], None]
+OnCancel = Callable[[], None]
 
 class Supertask:
   inst: Optional[ComponentInstance]
   supertask: Optional[Supertask]
-
-class Call:
-  request_cancellation: Callable[[], None]
 ```
 Critically, calling a `FuncInst` never blocks at the Python level; if the callee
-[blocks] at the wasm level, the Python `FuncInst` immediately returns a `Call`
-object representing the ongoing call which is now running as a `Thread` that can
-nondeterministically make progress via `Store.tick` in the future.
-
-The `OnStart` and `OnResolve` callbacks can be called any time during the
-initial `FuncInst` call or after while the `Call` is executing asynchronously.
-Before the `OnResolve` callback is called, the caller may call
-`request_cancellation` at most once to cooperatively request that the callee
-"hurry up" an call `OnResolve` (possibly, but not necessarily, passing `None`
-and/or skipping the call to `OnStart`).
-
-If the `FuncInst` calls `OnResolve` before returning; the returned `Call`
-object is somewhat vestigial since `request_cancellation` cannot be called.
-However, as described in the [concurrency explainer], an async call's
-`Thread` can keep executing after calling `OnResolve`; there's just nothing
-(currently) that the caller can know or do about it (hence there are
-currently no other methods on `Call`).
+[blocks] at the wasm level, the Python `FuncInst` immediately returns. The
+`OnStart` and `OnResolve` callbacks may be called any time during the initial
+`FuncInst` call or afterwards, while the call is executing asynchronously. If
+the call returns and the `OnResolve` callback has *not* yet been called, the
+caller may call the returned `OnCancel` callback at most once to cooperatively
+request that the callee "hurry up" and call `OnResolve` (possibly, but not
+necessarily, passing `None` and/or skipping the call to `OnStart`). Otherwise,
+`OnCancel` may not be called.
 
 The optional `Supertask.inst` field either points to the `ComponentInstance`
 containing the supertask or, if `None`, indicates that the supertask is a host
@@ -1011,14 +999,13 @@ thread via `thread.new-indirect`.
 
 Tasks are represented here by the `Task` class and the [current task] is
 represented by the `Thread.task` field of the [current thread]. `Task`
-implements the abstract `Call` and `Supertask` interfaces defined as part of
-the [Embedding](#embedding) interface since `Task` serves as both the
-`Supertask` of calls it makes to imports as well as the `Call` object returned
-for calls to exports.
+implements the `Supertask` interface defined as part of the
+[Embedding](#embedding) interface since `Task` serves as the `Supertask` of
+calls it makes to imports.
 
 `Task` is introduced in chunks, starting with fields and initialization:
 ```python
-class Task(Call, Supertask):
+class Task(Supertask):
   class State(Enum):
     INITIAL = 1
     PENDING_CANCEL = 2
@@ -1157,16 +1144,16 @@ and the task has not yet returned a value to its caller.
 ```
 
 The `Task.request_cancellation` method is called by the host or wasm caller
-(via the `Call` interface of `Task`) to signal that they don't need the return
-value and that the caller should hurry up and call the `OnResolve` callback. If
-a task is waiting to start in `Task.enter` due to backpressure, then it is
-immediately cancelled without running any guest code. Otherwise, if *any* of a
-cancelled `Task`'s `Thread`s are expecting cancellation (e.g., when
-an `async callback` export returns to the event loop or when a `waitable-set.*`
-or `thread.*` built-in is called with `cancellable` set), `request_cancellation`
-immediately resumes that thread (picking one nondeterministically if there are
-multiple), giving the thread the chance to handle cancellation promptly
-(allowing `subtask.cancel` to complete eagerly without returning `BLOCKED`).
+to signal that they don't need the return value and that the caller should hurry
+up and call the `OnResolve` callback. If a task is waiting to start in
+`Task.enter` due to backpressure, then it is immediately cancelled without
+running any guest code. Otherwise, if *any* of a cancelled `Task`'s `Thread`s
+are expecting cancellation (e.g., when an `async callback` export returns to the
+event loop or when a `waitable-set.*` or `thread.*` built-in is called with
+`cancellable` set), `request_cancellation` immediately resumes that thread
+(picking one nondeterministically if there are multiple), giving the thread the
+chance to handle cancellation promptly (allowing `subtask.cancel` to complete
+eagerly without returning `BLOCKED`).
 ```python
   def request_cancellation(self):
     if self.waiting_to_enter is not None:
@@ -1253,12 +1240,14 @@ class Subtask(Waitable):
     CANCELLED_BEFORE_RETURNED = 4
 
   state: State
+  on_cancel: Optional[OnCancel]
   lenders: Optional[list[ResourceHandle]]
   cancellation_requested: bool
 
   def __init__(self):
     Waitable.__init__(self)
     self.state = Subtask.State.STARTING
+    self.on_cancel = None
     self.lenders = []
     self.cancellation_requested = False
 ```
@@ -3304,7 +3293,7 @@ return value into text printed to `stdout`.
 Based on this, `canon_lift` is defined in chunks as follows, starting with how
 a `lift`ed function starts executing:
 ```python
-def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
+def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> OnCancel:
   trap_if(call_might_be_recursive(caller, inst))
   task = Task(opts, inst, ft, caller, on_resolve)
   def thread_func(thread):
@@ -3445,7 +3434,7 @@ the [concurrency explainer] for more on this).
 ```python
   thread = Thread(task, thread_func)
   thread.resume(Cancelled.FALSE)
-  return task
+  return task.request_cancellation
 ```
 
 The bit-packing scheme used for the `i32` `packed` return value is defined as
@@ -3572,7 +3561,7 @@ above).
       nonlocal flat_results
       flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
 
-  subtask.callee = callee(thread.task, on_start, on_resolve)
+  subtask.on_cancel = callee(thread.task, on_start, on_resolve)
   assert(ft.async_ or subtask.state == Subtask.State.RETURNED)
 ```
 The `Subtask.state` field is updated by the callbacks to keep track of the
@@ -3581,9 +3570,10 @@ call progres. The `on_progress` variable starts as a no-op, but is used by the
 
 According to the `FuncInst` calling contract, the call to `callee` should never
 "block" (i.e., wait on I/O). If the `callee` *would* block, it will instead
-return a `Call` object which is stored in the `Subtask` (so that it can be used
-to `request_cancellation` in the future). Furthermore, if the function type
-does not have the `async` effect, the function *must* have returned a value.
+return an `OnCancel` callback which is stored in the `Subtask` (so that it can
+be used to request cancellation in the future). Furthermore, if the function
+type does not have the `async` effect, the function *must* have returned a
+value.
 
 In the synchronous case (when the `async` `canonopt` is not set), if the
 `callee` blocked before calling `on_resolve`, the synchronous caller's thread
@@ -4122,7 +4112,7 @@ def canon_subtask_cancel(async_, thread, i):
     assert(subtask.has_pending_event())
   else:
     subtask.cancellation_requested = True
-    subtask.callee.request_cancellation()
+    subtask.on_cancel()
     if not subtask.resolved():
       if not async_:
         thread.wait_until(subtask.resolved)

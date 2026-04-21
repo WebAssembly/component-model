@@ -189,7 +189,7 @@ class Store:
   def __init__(self):
     self.waiting = []
 
-  def invoke(self, f: FuncInst, caller: Optional[Supertask], on_start, on_resolve) -> Call:
+  def invoke(self, f: FuncInst, caller: Optional[Supertask], on_start, on_resolve) -> OnCancel:
     host_caller = Supertask()
     host_caller.inst = None
     host_caller.supertask = caller
@@ -202,17 +202,14 @@ class Store:
         thread.resume(Cancelled.FALSE)
         return
 
-FuncInst: Callable[[Optional[Supertask], OnStart, OnResolve], Call]
-
+FuncInst: Callable[[Optional[Supertask], OnStart, OnResolve], OnCancel]
 OnStart = Callable[[], list[any]]
 OnResolve = Callable[[Optional[list[any]]], None]
+OnCancel = Callable[[], None]
 
 class Supertask:
   inst: Optional[ComponentInstance]
   supertask: Optional[Supertask]
-
-class Call:
-  request_cancellation: Callable[[], None]
 
 
 ### Lifting and Lowering Context
@@ -600,7 +597,7 @@ class WaitableSet:
 
 #### Task State
 
-class Task(Call, Supertask):
+class Task(Supertask):
   class State(Enum):
     INITIAL = 1
     PENDING_CANCEL = 2
@@ -720,12 +717,14 @@ class Subtask(Waitable):
     CANCELLED_BEFORE_RETURNED = 4
 
   state: State
+  on_cancel: Optional[OnCancel]
   lenders: Optional[list[ResourceHandle]]
   cancellation_requested: bool
 
   def __init__(self):
     Waitable.__init__(self)
     self.state = Subtask.State.STARTING
+    self.on_cancel = None
     self.lenders = []
     self.cancellation_requested = False
 
@@ -1994,7 +1993,7 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
 
 ### `canon lift`
 
-def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
+def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> OnCancel:
   trap_if(call_might_be_recursive(caller, inst))
   task = Task(opts, inst, ft, caller, on_resolve)
   def thread_func(thread):
@@ -2053,7 +2052,7 @@ def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
 
   thread = Thread(task, thread_func)
   thread.resume(Cancelled.FALSE)
-  return task
+  return task.request_cancellation
 
 class CallbackCode(IntEnum):
   EXIT = 0
@@ -2119,7 +2118,7 @@ def canon_lower(opts, ft, callee: FuncInst, thread, flat_args):
       nonlocal flat_results
       flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
 
-  subtask.callee = callee(thread.task, on_start, on_resolve)
+  subtask.on_cancel = callee(thread.task, on_start, on_resolve)
   assert(ft.async_ or subtask.state == Subtask.State.RETURNED)
 
   if not opts.async_:
@@ -2319,7 +2318,7 @@ def canon_subtask_cancel(async_, thread, i):
     assert(subtask.has_pending_event())
   else:
     subtask.cancellation_requested = True
-    subtask.callee.request_cancellation()
+    subtask.on_cancel()
     if not subtask.resolved():
       if not async_:
         thread.wait_until(subtask.resolved)
