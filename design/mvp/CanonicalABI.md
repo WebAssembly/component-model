@@ -126,7 +126,7 @@ restricted manner:
 First, there are only two global [control tags] used with `suspend`:
 ```wat
 (tag $block (param $switch-to (ref null $Thread)) (result $cancelled bool))
-(tag $current-thread (result (ref $Thread)))
+(tag $current-thread (result (ref null $Thread)))
 ```
 Consequently, instead of having a single generic Python `suspend()` function,
 there are `block()` and `current_thread()` Python functions that implement
@@ -140,7 +140,19 @@ The `$current-thread` tag is used to retrieve the [current thread], which is
 semantically stored in the `resume` handler's local state (although an
 optimizing implementation would instead maintain the current thread in the VM's
 execution context (or a special Core WebAssembly `global`) so that it could be
-cheaply loaded and/or kept in register state).
+cheaply loaded and/or kept in register state). The entire control flow stack of
+any program containing components is always logically wrapped with a
+`$current-thread` handler that always returns `null`; before execution enters
+wasm, a new `$current-thread` handler will be added to return a valid `Thread`.
+
+Additionally, the code above sets Python's main thread's thread-local `Handler`
+to have `current_thread = None` so that `current_thread()` can be called by the
+[Embedding] interface on the main thread to `assert()` the structural reentrance
+rules that the host has to follow. Semantically, this means that *all* control
+flow is wrapped with a `$current-thread` handler (no `$block` handler) that
+returns `None`. However all wasm code executing inside a component must have
+gone through a `resume` via the Embedding interface and so `current_thread` is
+non-`None` everywhere *except* Embedding interface definitions.
 
 Second, there is only a single type of continuation passed to `resume` that
 corresponds to the `$block` tag (`$current-thread` continuations are
@@ -179,7 +191,7 @@ class Continuation:
 
 class Handler:
   lock: threading.Lock
-  current_thread: Thread
+  current_thread: Optional[Thread]
   cont: Optional[Continuation]
   block_arg: Optional[Thread]
 
@@ -260,9 +272,16 @@ part of the handler's local state. Thus, the handler can be "inlined" at the
 `suspend`-site by simply returning the `Thread` stored in thread-local storage
 by `resume`.
 ```python
-def current_thread() -> Thread:
+def current_thread() -> Optional[Thread]:
   return thread_local_handler.value.current_thread
+
+thread_local_handler.value = Handler()
+thread_local_handler.value.thread = None
 ```
+The code above initializes the Python main thread's thread-local `Handler` to
+have `current_thread` be `None`. This allows the [Embedding] interface, defined
+below, to `assert(not current_thread())` as a way to specify non-reentrance
+conditions that hosts must follow.
 
 Once Core WebAssembly gets stack-switching, the Component Model's `$block` and
 `$current-thread` tags would *not* be exposed to Core WebAssembly. Thus, an
@@ -313,6 +332,7 @@ class Store:
     return f(host_caller, on_start, on_resolve)
 
   def tick(self):
+    assert(not current_thread())
     random.shuffle(self.waiting)
     for thread in self.waiting:
       if thread.ready():
@@ -329,6 +349,12 @@ to choose which thread to schedule next (and hopefully an algorithm more
 efficient than the simple polling loop written above). The `Thread.ready` and
 `Thread.resume` methods along with how the `waiting` list is populated are all
 defined [below](#thread-state) as part of the `Thread` class.
+
+As `assert()`ed in `Store.tick`, `tick` may *not* be called recursively from a
+host import; `tick` may only be called at the top level. Since there is no such
+assert in `Store.invoke`, `invoke` *may* be called recursively; however there
+are additional trapping constraints on per-component-instance recursion (see
+`call_might_be_recursive`, defined below).
 
 The `FuncInst` passed to `Store.invoke` is defined to take 3 parameters:
 * an optional `caller` `Supertask` which is used to maintain the

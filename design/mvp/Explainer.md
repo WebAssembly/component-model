@@ -1735,10 +1735,10 @@ propagated once received.
 If `waitable-set.wait` is called from a synchronous- or `async callback`-lifted
 export, no other threads that were implicitly created by a separate
 synchronous- or `async callback`-lifted export call can start or progress in
-the current component instance until `waitable-set.wait` returns (thereby
-ensuring non-reentrance of the core wasm code). However, explicitly-created
-threads and threads implicitly created by non-`callback` `async`-lifted
-("stackful async") exports may start or progress at any time.
+the current component instance until `waitable-set.wait` returns (preserving
+[component invariant] #2). However, explicitly-created threads and threads
+implicitly created by non-`callback` `async`-lifted ("stackful async") exports
+may start or progress at any time.
 
 A `subtask` event notifies the supertask that its subtask is now in the given
 state (the meanings of which are described by the [concurrency explainer]).
@@ -2201,12 +2201,12 @@ thread to be resumed (as with `thread.yield-to`). If `cancellable` is set,
 `thread.yield` returns whether the current task was [cancelled] by the caller;
 otherwise, `thread.yield` always returns `false`.
 
-If `thread.yield` is called from a synchronous- or `async callback`-lifted
-export, it returns immediately without blocking (instead of trapping, as with
-other possibly-blocking operations like `waitable-set.wait`). This is because,
-unlike other built-ins, `thread.yield` may be scattered liberally throughout
-code that might show up in the transitive call tree of a synchronous function
-call.
+If `thread.yield` is called from a non-`async`-typed function that has not yet
+returned a value, it returns immediately without blocking (instead of trapping,
+as with other possibly-blocking operations like `waitable-set.wait`). This is
+because, unlike other built-ins, `thread.yield` may be scattered liberally
+throughout code that might show up in the transitive call tree of a synchronous
+function call.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield`] in the Canonical ABI explainer.
@@ -2919,13 +2919,16 @@ two runtime invariants:
    implicitly checked at every execution step by component functions. Thus,
    after a trap, it's no longer possible to observe the internal state of a
    component instance.
-2. The Component Model disallows reentrance by trapping if a callee's
+2. Add one for the exclusivity of lifting sync or `async callback`:
+   you can have a single global lienar memory stack
+3. The Component Model disallows reentrance by trapping if a callee's
    component-instance is already on the stack when the call starts.
    (For details, see [`call_might_be_recursive`](CanonicalABI.md#component-instance-state)
    in the Canonical ABI explainer.) This default prevents obscure
    composition-time bugs and also enables more-efficient non-reentrant
    runtime glue code. This rule will be relaxed by an opt-in
    function type attribute in the [future](Concurrency.md#todo).
+   TODO: update, how relates to 2 and deadlocks/recursive-locks in general
 
 
 ## JavaScript Embedding
