@@ -196,7 +196,7 @@ class Continuation:
 
 class Handler:
   lock: threading.Lock
-  current_thread: Thread
+  current_thread: Optional[Thread]
   cont: Optional[Continuation]
   block_arg: Optional[Thread]
 
@@ -243,11 +243,15 @@ def block(switch_to: Optional[Thread]) -> Cancelled:
   thread_local_handler.value = cont.handler
   return cont.block_result
 
-def current_thread() -> Thread:
+def current_thread() -> Optional[Thread]:
   return thread_local_handler.value.current_thread
+
+thread_local_handler.value = Handler()
+thread_local_handler.value.current_thread = None
 
 ### Component Instances
 
+# TODO: maybe move it back down to RuntimeState?
 class ComponentInstance:
   store: Store
   parent: Optional[ComponentInstance]
@@ -258,7 +262,7 @@ class ComponentInstance:
   exclusive: Optional[Task]
   num_waiting_to_enter: int
 
-  def __init__(self, store, parent = None):
+  def __init__(self, store, parent):
     assert(parent is None or parent.store is store)
     self.store = store
     self.parent = parent
@@ -269,31 +273,26 @@ class ComponentInstance:
     self.exclusive = None
     self.num_waiting_to_enter = 0
 
-  def reflexive_ancestors(self) -> set[ComponentInstance]:
-    s = set()
+  def root(self) -> RootComponentInstance:
     inst = self
-    while inst is not None:
-      s.add(inst)
+    while inst.parent is not None:
       inst = inst.parent
-    return s
+    return inst
 
-  def is_reflexive_ancestor_of(self, other):
-    while other is not None:
-      if self is other:
+  def is_ancestor_of(self, other):
+    ancestor = other.parent
+    while ancestor is not None:
+      if self is ancestor:
         return True
-      other = other.parent
+      ancestor = ancestor.parent
     return False
 
-def call_might_be_recursive(caller: Supertask, callee_inst: ComponentInstance):
-  if caller.inst is None:
-    while caller is not None:
-      if caller.inst and caller.inst.reflexive_ancestors() & callee_inst.reflexive_ancestors():
-        return True
-      caller = caller.supertask
-    return False
-  else:
-    return (caller.inst.is_reflexive_ancestor_of(callee_inst) or
-            callee_inst.is_reflexive_ancestor_of(caller.inst))
+class RootComponentInstance(ComponentInstance):
+  may_enter: bool
+
+  def __init__(self, store):
+    ComponentInstance.__init__(self, store, parent = None)
+    self.may_enter = True
 
 ### Threads
 
@@ -304,7 +303,8 @@ class Cancellable(IntEnum):
 class Thread:
   cont: Optional[Continuation]
   ready_func: Optional[Callable[[], bool]]
-  task: Task
+  store: Store
+  task: Optional[Task]
   cancellable: Cancellable
   index: Optional[int]
   storage: tuple[int,int]
@@ -321,13 +321,14 @@ class Thread:
   def ready(self):
     return self.waiting() and self.ready_func()
 
-  def __init__(self, task, thread_func):
+  def __init__(self, thread_func, store, task):
     def cont_func(cancelled):
       assert(self.running() and not cancelled)
       thread_func()
       return None
     self.cont = cont_new(cont_func)
     self.ready_func = None
+    self.store = store
     self.task = task
     self.cancellable = Cancellable.FALSE
     self.index = None
@@ -337,7 +338,7 @@ class Thread:
   def resume_later(self):
     assert(self.suspended())
     self.ready_func = lambda: True
-    self.task.inst.store.waiting.append(self)
+    self.store.waiting.append(self)
     assert(self.ready())
 
   def resume(self, cancelled = Cancelled.FALSE):
@@ -345,7 +346,7 @@ class Thread:
     if self.waiting():
       assert(cancelled or self.ready())
       self.ready_func = None
-      self.task.inst.store.waiting.remove(self)
+      self.store.waiting.remove(self)
     thread = self
     while thread is not None:
       cont = thread.cont
@@ -366,7 +367,7 @@ class Thread:
     if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):
       return Cancelled.FALSE
     self.ready_func = ready_func
-    self.task.inst.store.waiting.append(self)
+    self.store.waiting.append(self)
     return self.suspend(cancellable)
 
   def switch_to(self, cancellable, other: Thread) -> Cancelled:
@@ -379,18 +380,29 @@ class Thread:
   def yield_to(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running() and other.suspended())
     self.ready_func = lambda: True
-    self.task.inst.store.waiting.append(self)
+    self.store.waiting.append(self)
     return self.switch_to(cancellable, other)
 
+  def host_wait_until(self, ready_func):
+    assert(not self.task)
+    return self.wait_until(ready_func, Cancellable.TRUE)
+
+  def host_request_cancellation(self):
+    assert(not self.task and self.cancellable)
+    self.resume(Cancelled.TRUE)
+
 ## Embedding API
+
+CoreFuncInst = Callable[[list[CoreValType]], list[CoreValType]]
 
 OnStart = Callable[[], list[any]]
 OnResolve = Callable[[Optional[list[any]]], None]
 OnCancel = Callable[[], None]
-class Supertask:
-  inst: Optional[ComponentInstance]
-  supertask: Optional[Supertask]
-FuncInst = Callable[[Optional[Supertask], OnStart, OnResolve], OnCancel]
+FuncInst = tuple[Callable[[OnStart, OnResolve], OnCancel], Optional[ComponentInstance]]
+
+ReadyFunc = Callable[[], bool]
+WaitUntil = Callable[[ReadyFunc, Cancellable], Cancelled]
+HostFunc = Callable[[OnStart, OnResolve, WaitUntil], None]
 
 class Store:
   waiting: list[Thread]
@@ -398,18 +410,60 @@ class Store:
   def __init__(self):
     self.waiting = []
 
-  def invoke(self, f: FuncInst, caller: Optional[Supertask], \
-             on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
-    host_caller = Supertask()
-    host_caller.inst = None
-    host_caller.supertask = caller
-    return f(host_caller, on_start, on_resolve)
+  def alloc_host_func(self, host_func: HostFunc) -> FuncInst:
+    def func(on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
+      def thread_func():
+        host_func(on_start, on_resolve, current_thread().host_wait_until)
+      thread = Thread(thread_func, self, task = None)
+      thread.resume()
+      return thread.host_request_cancellation
+    return (func, None)
+
+  def lift(self, callee: CoreFuncInst, opts: CanonicalOptions, ft: FuncType,
+           inst: ComponentInstance) -> FuncInst:
+    def func(on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
+      return canon_lift(callee, opts, ft, inst, on_start, on_resolve)
+    return (func, inst)
+
+  def lower(self, callee: FuncInst, opts: CanonicalOptions, ft: FuncType,
+            caller_inst: ComponentInstance) -> CoreFuncInst:
+    def func(args: list[CoreValType]) -> list[CoreValType]:
+      (callee_func, callee_inst) = callee
+      if callee_inst:
+        if callee_inst.root() is not caller_inst.root():
+          trap_if(not callee_inst.root().may_enter)
+          callee_inst.root().may_enter = False
+        else:
+          trap_if(callee_inst is caller_inst
+                  or callee_inst.is_ancestor_of(caller_inst)
+                  or caller_inst.is_ancestor_of(callee_inst))
+      results = canon_lower(callee, opts, ft, args)
+      if callee_inst and callee_inst.root() is not caller_inst.root():
+        callee_inst.root().may_enter = True
+      return results
+    return func
+
+  def invoke(self, func_inst: FuncInst, on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
+    (func, inst) = func_inst
+    if inst is not None:
+      trap_if(not inst.root().may_enter)
+      inst.root().may_enter = False
+    on_cancel = func(on_start, on_resolve)
+    if inst is not None:
+      inst.root().may_enter = True
+    return on_cancel
 
   def tick(self):
+    trap_if(current_thread() is not None)
     random.shuffle(self.waiting)
     for thread in self.waiting:
       if thread.ready():
+        if thread.task:
+          assert(thread.task.inst.root().may_enter)
+          thread.task.inst.root().may_enter = False
         thread.resume()
+        if thread.task:
+          thread.task.inst.root().may_enter = True
         return
 
 ## Lifting and Lowering Context
@@ -538,7 +592,7 @@ class ResourceType(Type):
 
 ### Task State
 
-class Task(Supertask):
+class Task:
   class State(Enum):
     INITIAL = 1
     PENDING_CANCEL = 2
@@ -549,18 +603,16 @@ class Task(Supertask):
   opts: CanonicalOptions
   inst: ComponentInstance
   ft: FuncType
-  supertask: Supertask
   on_resolve: OnResolve
   num_borrows: int
   waiting_to_enter: Optional[Thread]
   threads: list[Thread]
 
-  def __init__(self, opts, inst, ft, supertask, on_resolve):
+  def __init__(self, opts, inst, ft, on_resolve):
     self.state = Task.State.INITIAL
     self.opts = opts
     self.inst = inst
     self.ft = ft
-    self.supertask = supertask
     self.on_resolve = on_resolve
     self.num_borrows = 0
     self.waiting_to_enter = None
@@ -2054,9 +2106,8 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
 
 ### `canon lift`
 
-def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> OnCancel:
-  trap_if(call_might_be_recursive(caller, inst))
-  task = Task(opts, inst, ft, caller, on_resolve)
+def canon_lift(callee, opts, ft, inst, on_start, on_resolve) -> OnCancel:
+  task = Task(opts, inst, ft, on_resolve)
   def thread_func():
     if not task.enter():
       return
@@ -2112,7 +2163,7 @@ def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> OnCancel
     task.exit()
     return
 
-  thread = Thread(task, thread_func)
+  thread = Thread(thread_func, task.inst.store, task)
   thread.resume()
   return task.request_cancellation
 
@@ -2138,7 +2189,7 @@ def call_and_trap_on_throw(callee, args):
 
 ### `canon lower`
 
-def canon_lower(opts, ft, callee: FuncInst, flat_args):
+def canon_lower(callee, opts, ft, flat_args):
   task = current_thread().task
   trap_if(not task.inst.may_leave)
   trap_if(not task.may_block() and ft.async_ and not opts.async_)
@@ -2181,7 +2232,8 @@ def canon_lower(opts, ft, callee: FuncInst, flat_args):
       nonlocal flat_results
       flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
 
-  subtask.on_cancel = callee(task, on_start, on_resolve)
+  (callee_func, callee_inst) = callee
+  subtask.on_cancel = callee_func(on_start, on_resolve)
   assert(ft.async_ or subtask.state == Subtask.State.RETURNED)
 
   if not opts.async_:
@@ -2235,8 +2287,9 @@ def canon_resource_drop(rt, i):
       callee_opts = CanonicalOptions(async_ = rt.dtor_async, callback = rt.dtor_callback)
       ft = FuncType([U32Type()],[], async_ = False)
       dtor = rt.dtor or (lambda rep: [])
-      callee = partial(canon_lift, callee_opts, rt.impl, ft, dtor)
-      [] = canon_lower(caller_opts, ft, callee, [h.rep])
+      callee = inst.store.lift(dtor, callee_opts, ft, rt.impl)
+      caller = inst.store.lower(callee, caller_opts, ft, inst)
+      [] = caller([h.rep])
   else:
     h.borrow_scope.num_borrows -= 1
   return []
@@ -2616,7 +2669,7 @@ def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], fi, c):
   def thread_func():
     [] = call_and_trap_on_throw(f.callee, [c])
     task.unregister_thread(new_thread)
-  new_thread = Thread(task, thread_func)
+  new_thread = Thread(thread_func, task.inst.store, task)
   assert(new_thread.suspended())
   task.register_thread(new_thread)
   return [new_thread.index]
