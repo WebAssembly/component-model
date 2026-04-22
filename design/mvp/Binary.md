@@ -285,8 +285,7 @@ Notes:
   `none` case of an optional immediate.)
 * 🔧 for fixed-sized lists (`0x67`) the length of the list must be larger than
   0 to pass validation; for bounded lists (`0x6c`) the maximum length must be
-  larger than 0 to pass validation.
-
+  between `1` and `2^28-1` to pass validation.
 
 ## Canonical Definitions
 
