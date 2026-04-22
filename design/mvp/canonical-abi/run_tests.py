@@ -151,6 +151,14 @@ test(RecordType([FieldType('x',U8Type()),
 test(TupleType([TupleType([U8Type(),U8Type()]),U8Type()]), [1,2,3], {'0':{'0':1,'1':2},'1':3})
 test(ListType(U8Type(),3), [1,2,3], [1,2,3])
 test(ListType(ListType(U8Type(),2),3), [1,2,3,4,5,6], [[1,2],[3,4],[5,6]])
+# bounded (variable-length up to max) list tests
+test(ListType(U8Type(),3,True), [3, 1,2,3], [1,2,3])
+test(ListType(U8Type(),3,True), [2, 1,2,0], [1,2])
+test(ListType(U8Type(),3,True), [0, 0,0,0], [])
+test(ListType(U32Type(),2,True), [2, 10,20], [10,20])
+test(ListType(U32Type(),2,True), [1, 10,0], [10])
+# actual_len > max_len must trap (flat)
+test(ListType(U8Type(),3,True), [4, 1,2,3], None)
 # Empty flags types are not permitted yet.
 #t = FlagsType([])
 #test(t, [], {})
@@ -343,6 +351,17 @@ test_heap(ListType(ListType(U8Type(),2)), [[1,2],[3,4]], [0,2],
           [1,2, 3,4])
 test_heap(ListType(ListType(U32Type(),2)), [[1,2],[3,4]], [0,2],
           [1,0,0,0,2,0,0,0, 3,0,0,0,4,0,0,0])
+# bounded list heap tests
+# layout: [length_u8, elem0, ..., elemN-1, unused_slots...]
+test_heap(ListType(ListType(U8Type(),3,True)), [[1,2],[3]], [0,2],
+          [2, 1,2,0,  1, 3,0,0])
+# actual_len > max_len must trap (heap)
+test_heap(ListType(ListType(U8Type(),3,True)), None, [0,1],
+          [4, 1,2,3])
+# alignment: U32 elements require 3 padding bytes after the U8 length prefix
+# layout per element: [length_u8, pad, pad, pad, elem0_u32, elem1_u32, unused_u32] = 16 bytes
+test_heap(ListType(ListType(U32Type(),3,True)), [[10,20]], [0,1],
+          [2, 0xff,0xff,0xff,  10,0,0,0, 20,0,0,0, 0,0,0,0])
 test_heap(ListType(ListType(U32Type(),2)), None, [1,2],
           [0, 1,0,0,0,2,0,0,0, 3,0,0,0,4,0,0,0])
 test_heap(ListType(TupleType([U8Type(),U8Type(),U16Type(),U32Type()])),
