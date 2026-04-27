@@ -51,16 +51,16 @@ def mk_cx(memory = MemInst(bytearray(), 'i32'), encoding = 'utf8', realloc = Non
   inst = ComponentInstance(Store())
   return LiftLowerContext(opts, inst)
 
-def run_lift(opts, inst, ft, callee, on_start, on_resolve):
-  lifted_func = partial(canon_lift, opts, inst, ft, callee)
-  task = inst.store.invoke(lifted_func, None, on_start, on_resolve)
+def lift_and_run(opts, inst, ft, callee, on_start, on_resolve):
+  func_inst = inst.store.lift(callee, ft, opts, inst)
+  _ = inst.store.invoke(func_inst, None, on_start, on_resolve)
   while inst.store.waiting:
     inst.store.tick()
 
-def mk_task(caller, on_resolve, thread_func):
+def mk_task(caller, on_start, on_resolve, thread_func):
   inst = ComponentInstance(caller.inst.store)
   opts = mk_opts(async_ = True)
-  task = Task(opts, inst, FuncType([],[],async_=True), caller, on_resolve)
+  task = Task(FuncType([],[],async_=True), opts, inst, caller, on_start, on_resolve)
   thread = Thread(task, thread_func)
   thread.resume(Cancelled.FALSE)
   return task.request_cancellation
@@ -68,7 +68,7 @@ def mk_task(caller, on_resolve, thread_func):
 def mk_done_task(caller):
   def empty():
     current_thread().task.state = Task.State.RESOLVED
-  return mk_task(caller, lambda _:(), empty)
+  return mk_task(caller, lambda:[], lambda _:(), empty)
 
 def mk_str(s):
   return (s, 'utf8', len(s.encode('utf-8')))
@@ -442,7 +442,7 @@ def test_roundtrips():
     def on_resolve(result):
       nonlocal got
       [got] = result
-    run_lift(callee_opts, callee_inst, ft, callee, on_start, on_resolve)
+    lift_and_run(callee_opts, callee_inst, ft, callee, on_start, on_resolve)
 
     if got != v:
       fail("test_roundtrip({},{}) got {}".format(t, v, got))
@@ -519,7 +519,7 @@ def test_handles():
       h1,
       h3
     ]
-    results = canon_lower(opts, host_ft, host_import, args)
+    results = store.lower(host_import, host_ft, opts, inst)(args)
     assert(len(results) == 1)
     assert(results[0] == 4)
     h4 = results[0]
@@ -566,7 +566,7 @@ def test_handles():
     nonlocal got
     got = results
 
-  run_lift(opts, inst, ft, core_wasm, on_start, on_resolve)
+  lift_and_run(opts, inst, ft, core_wasm, on_start, on_resolve)
 
   assert(len(got) == 3)
   assert(got[0] == 46)
@@ -591,7 +591,7 @@ def test_async_to_async():
     assert(len(args) == 0)
     [] = canon_task_return([U8Type()], producer_opts, [43])
     return []
-  eager_callee = partial(canon_lift, producer_opts, producer_inst, eager_ft, core_eager_producer)
+  eager_callee = store.lift(core_eager_producer, eager_ft, producer_opts, producer_inst)
 
   toggle_ft = FuncType([], [], async_=True)
   fut1_1 = RacyBool(False)
@@ -605,7 +605,7 @@ def test_async_to_async():
     thread.wait_until(fut1_2.is_set)
     [] = canon_backpressure_dec()
     return []
-  toggle_callee = partial(canon_lift, producer_opts, producer_inst, toggle_ft, core_toggle)
+  toggle_callee = store.lift(core_toggle, toggle_ft, producer_opts, producer_inst)
 
   fut2, fut3, fut4 = RacyBool(False), RacyBool(False), RacyBool(False)
   blocking_ft = FuncType([U8Type()], [U8Type()], async_=True)
@@ -618,28 +618,29 @@ def test_async_to_async():
     thread.wait_until(fut3.is_set)
     fut4.set()
     return []
-  blocking_callee = partial(canon_lift, producer_opts, producer_inst, blocking_ft, core_blocking_producer)
+  blocking_callee = store.lift(core_blocking_producer, blocking_ft, producer_opts, producer_inst)
 
   consumer_heap = Heap(20)
   consumer_opts = mk_opts(MemInst(consumer_heap.memory, 'i32'))
   consumer_opts.async_ = True
+  consumer_inst = ComponentInstance(store)
 
   def consumer(args):
     [b] = args
     [seti] = canon_waitable_set_new()
     ptr = consumer_heap.realloc(0, 0, 1, 1)
-    [ret] = canon_lower(consumer_opts, eager_ft, eager_callee, [ptr])
+    [ret] = store.lower(eager_callee, eager_ft, consumer_opts, consumer_inst)([ptr])
     assert(ret == Subtask.State.RETURNED)
     u8 = consumer_heap.memory[ptr]
     assert(u8 == 43)
-    [ret] = canon_lower(consumer_opts, toggle_ft, toggle_callee, [])
+    [ret] = store.lower(toggle_callee, toggle_ft, consumer_opts, consumer_inst)([])
     state,subi1 = unpack_result(ret)
     assert(subi1 == 2)
     assert(state == Subtask.State.STARTED)
     [] = canon_waitable_join(subi1, seti)
     retp = ptr
     consumer_heap.memory[retp] = 13
-    [ret] = canon_lower(consumer_opts, blocking_ft, blocking_callee, [83, retp])
+    [ret] = store.lower(blocking_callee, blocking_ft, consumer_opts, consumer_inst)([83, retp])
     state,subi2 = unpack_result(ret)
     assert(subi2 == 3)
     assert(state == Subtask.State.STARTING)
@@ -684,8 +685,7 @@ def test_async_to_async():
     nonlocal got
     got = results
 
-  consumer_inst = ComponentInstance(store)
-  run_lift(consumer_opts, consumer_inst, ft, consumer, on_start, on_resolve)
+  lift_and_run(consumer_opts, consumer_inst, ft, consumer, on_start, on_resolve)
   assert(len(got) == 1)
   assert(got[0] == 42)
 
@@ -704,22 +704,23 @@ def test_async_callback():
     return []
   fut1 = RacyBool(False)
   core_producer1 = partial(core_producer_pre, fut1)
-  producer1 = partial(canon_lift, producer_opts, producer_inst, producer_ft, core_producer1)
+  producer1 = store.lift(core_producer1, producer_ft, producer_opts, producer_inst)
   fut2 = RacyBool(False)
   core_producer2 = partial(core_producer_pre, fut2)
-  producer2 = partial(canon_lift, producer_opts, producer_inst, producer_ft, core_producer2)
+  producer2 = store.lift(core_producer2, producer_ft, producer_opts, producer_inst)
 
   consumer_ft = FuncType([],[U32Type()], async_ = True)
+  consumer_inst = ComponentInstance(store)
   seti = 0
   def consumer(args):
     assert(len(args) == 0)
 
-    [ret] = canon_lower(opts, producer_ft, producer1, [])
+    [ret] = store.lower(producer1, producer_ft, opts, consumer_inst)([])
     state,subi1 = unpack_result(ret)
     assert(subi1 == 1)
     assert(state == Subtask.State.STARTED)
 
-    [ret] = canon_lower(opts, producer_ft, producer2, [])
+    [ret] = store.lower(producer2, producer_ft, opts, consumer_inst)([])
     state,subi2 = unpack_result(ret)
     assert(subi2 == 2)
     assert(state == Subtask.State.STARTED)
@@ -764,7 +765,6 @@ def test_async_callback():
       case _:
         assert(False)
 
-  consumer_inst = ComponentInstance(store)
   def on_start(): return []
 
   got = None
@@ -776,7 +776,7 @@ def test_async_callback():
   opts.async_ = True
   opts.callback = callback
 
-  run_lift(opts, consumer_inst, consumer_ft, consumer, on_start, on_resolve)
+  lift_and_run(opts, consumer_inst, consumer_ft, consumer, on_start, on_resolve)
   assert(got[0] == 83)
 
 
@@ -821,14 +821,14 @@ def test_callback_interleaving():
   producer_opts = mk_opts()
   producer_opts.async_ = True
   producer_opts.callback = core_producer_callback
-  producer_callee = partial(canon_lift, producer_opts, producer_inst, producer_ft, core_producer)
+  producer_callee = store.lift(core_producer, producer_ft, producer_opts, producer_inst)
 
   sync_callee_ft = FuncType([], [U32Type()], async_ = True)
   def core_sync_callee(args):
     assert(len(args) == 0)
     return [100]
   sync_callee_opts = mk_opts()
-  sync_callee = partial(canon_lift, sync_callee_opts, producer_inst, sync_callee_ft, core_sync_callee)
+  sync_callee = store.lift(core_sync_callee, sync_callee_ft, sync_callee_opts, producer_inst)
 
   consumer_inst = ComponentInstance(store)
   consumer_ft = FuncType([], [], async_ = True)
@@ -851,7 +851,7 @@ def test_callback_interleaving():
     rfut23,wfut23 = unpack_new_ends(packed)
 
     producer_inst.backpressure = True
-    [ret] = canon_lower(consumer_opts, producer_ft, producer_callee, [0, rfut11, rfut12, rfut13, 0xdeadbeef])
+    [ret] = store.lower(producer_callee, producer_ft, consumer_opts, consumer_inst)([0, rfut11, rfut12, rfut13, 0xdeadbeef])
     state,todie = unpack_result(ret)
     assert(state == Subtask.State.STARTING)
     [ret] = canon_subtask_cancel(False, todie)
@@ -859,11 +859,11 @@ def test_callback_interleaving():
     producer_inst.backpressure = False
 
     subi1ret = 12
-    [ret] = canon_lower(consumer_opts, producer_ft, producer_callee, [0, rfut11, rfut12, rfut13, subi1ret])
+    [ret] = store.lower(producer_callee, producer_ft, consumer_opts, consumer_inst)([0, rfut11, rfut12, rfut13, subi1ret])
     state,subi1 = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
 
-    [ret] = canon_lower(consumer_opts, producer_ft, producer_callee, [1, rfut21, rfut22, rfut23, 0xdeadbeef])
+    [ret] = store.lower(producer_callee, producer_ft, consumer_opts, consumer_inst)([1, rfut21, rfut22, rfut23, 0xdeadbeef])
     state,todie = unpack_result(ret)
     assert(state == Subtask.State.STARTING)
 
@@ -871,7 +871,7 @@ def test_callback_interleaving():
     assert(ret == Subtask.State.CANCELLED_BEFORE_STARTED)
 
     subi2ret = 16
-    [ret] = canon_lower(consumer_opts, producer_ft, producer_callee, [1, rfut21, rfut22, rfut23, subi2ret])
+    [ret] = store.lower(producer_callee, producer_ft, consumer_opts, consumer_inst)([1, rfut21, rfut22, rfut23, subi2ret])
     state,subi2 = unpack_result(ret)
     assert(state == Subtask.State.STARTING)
 
@@ -931,7 +931,7 @@ def test_callback_interleaving():
     [] = canon_subtask_drop(subi2)
 
     subi3ret = 20
-    [ret] = canon_lower(consumer_opts, sync_callee_ft, sync_callee, [subi3ret])
+    [ret] = store.lower(sync_callee, sync_callee_ft, consumer_opts, consumer_inst)([subi3ret])
     state,subi3 = unpack_result(ret)
     assert(state == Subtask.State.STARTING)
     [] = canon_waitable_join(subi3, seti)
@@ -948,7 +948,7 @@ def test_callback_interleaving():
 
     return []
 
-  run_lift(mk_opts(), consumer_inst, consumer_ft, core_consumer, lambda:[], lambda _:())
+  lift_and_run(mk_opts(), consumer_inst, consumer_ft, core_consumer, lambda:[], lambda _:())
 
 
 def test_sync_ignores_backpressure():
@@ -964,13 +964,13 @@ def test_sync_ignores_backpressure():
     [ret] = canon_future_read(FutureType(None), sync_opts, fut, 0xdeadbeef)
     assert(ret == CopyResult.COMPLETED)
     return [42 + i]
-  async_callee = partial(canon_lift, sync_opts, callee_inst, async_ft, core_callee1)
+  async_callee = store.lift(core_callee1, async_ft, sync_opts, callee_inst)
 
   sync_ft = FuncType([U32Type()], [U32Type()])
   def core_callee2(args):
     [i] = args
     return [84 + i]
-  sync_callee = partial(canon_lift, sync_opts, callee_inst, sync_ft, core_callee2)
+  sync_callee = store.lift(core_callee2, sync_ft, sync_opts, callee_inst)
 
   caller_inst = ComponentInstance(store)
   caller_ft = FuncType([], [], async_ = True)
@@ -983,12 +983,12 @@ def test_sync_ignores_backpressure():
     rfut,wfut = unpack_new_ends(packed)
 
     retp1 = 4
-    [ret] = canon_lower(caller_opts, async_ft, async_callee, [1, rfut, retp1])
+    [ret] = store.lower(async_callee, async_ft, caller_opts, caller_inst)([1, rfut, retp1])
     state,subi = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
 
     retp2 = 8
-    [ret] = canon_lower(caller_opts, sync_ft, sync_callee, [2, retp2])
+    [ret] = store.lower(sync_callee, sync_ft, caller_opts, caller_inst)([2, retp2])
     assert(ret == Subtask.State.RETURNED)
     assert(caller_mem[retp2] == 86)
 
@@ -1006,7 +1006,7 @@ def test_sync_ignores_backpressure():
     [] = canon_subtask_drop(subi)
     return []
 
-  run_lift(mk_opts(), caller_inst, caller_ft, core_caller, lambda:[], lambda _:())
+  lift_and_run(mk_opts(), caller_inst, caller_ft, core_caller, lambda:[], lambda _:())
 
 def test_async_to_sync():
   store = Store()
@@ -1031,23 +1031,23 @@ def test_async_to_sync():
     producer2_done = True
     return []
 
-  producer1 = partial(canon_lift, producer_opts, producer_inst, producer_ft, producer1_core)
-  producer2 = partial(canon_lift, producer_opts, producer_inst, producer_ft, producer2_core)
+  producer1 = store.lift(producer1_core, producer_ft, producer_opts, producer_inst)
+  producer2 = store.lift(producer2_core, producer_ft, producer_opts, producer_inst)
 
   consumer_heap = Heap(20)
   consumer_opts = mk_opts(MemInst(consumer_heap.memory, 'i32'))
   consumer_opts.async_ = True
-
+  consumer_inst = ComponentInstance(store)
   consumer_ft = FuncType([],[U8Type()], async_ = True)
   def consumer(args):
     assert(len(args) == 0)
 
-    [ret] = canon_lower(consumer_opts, producer_ft, producer1, [])
+    [ret] = store.lower(producer1, producer_ft, consumer_opts, consumer_inst)([])
     state,subi1 = unpack_result(ret)
     assert(subi1 == 1)
     assert(state == Subtask.State.STARTED)
 
-    [ret] = canon_lower(consumer_opts, producer_ft, producer2, [])
+    [ret] = store.lower(producer2, producer_ft, consumer_opts, consumer_inst)([])
     state,subi2 = unpack_result(ret)
     assert(subi2 == 2)
     assert(state == Subtask.State.STARTING)
@@ -1082,7 +1082,6 @@ def test_async_to_sync():
     canon_task_return([U8Type()], consumer_opts, [83])
     return []
 
-  consumer_inst = ComponentInstance(store)
   def on_start(): return []
 
   got = None
@@ -1090,7 +1089,7 @@ def test_async_to_sync():
     nonlocal got
     got = results
 
-  run_lift(consumer_opts, consumer_inst, consumer_ft, consumer, on_start, on_resolve)
+  lift_and_run(consumer_opts, consumer_inst, consumer_ft, consumer, on_start, on_resolve)
   assert(got[0] == 83)
 
 
@@ -1120,22 +1119,22 @@ def test_async_backpressure():
     producer2_done = True
     return []
 
-  producer1 = partial(canon_lift, producer_opts, producer_inst, producer_ft, producer1_core)
-  producer2 = partial(canon_lift, producer_opts, producer_inst, producer_ft, producer2_core)
+  producer1 = store.lift(producer1_core, producer_ft, producer_opts, producer_inst)
+  producer2 = store.lift(producer2_core, producer_ft, producer_opts, producer_inst)
 
   consumer_heap = Heap(20)
   consumer_opts = mk_opts(MemInst(consumer_heap.memory, 'i32'), async_ = True)
-
+  consumer_inst = ComponentInstance(store)
   consumer_ft = FuncType([],[U8Type()], async_ = True)
   def consumer(args):
     assert(len(args) == 0)
 
-    [ret] = canon_lower(consumer_opts, producer_ft, producer1, [])
+    [ret] = store.lower(producer1, producer_ft, consumer_opts, consumer_inst)([])
     state,subi1 = unpack_result(ret)
     assert(subi1 == 1)
     assert(state == Subtask.State.STARTED)
 
-    [ret] = canon_lower(consumer_opts, producer_ft, producer2, [])
+    [ret] = store.lower(producer2, producer_ft, consumer_opts, consumer_inst)([])
     state,subi2 = unpack_result(ret)
     assert(subi2 == 2)
     assert(state == Subtask.State.STARTING)
@@ -1166,7 +1165,6 @@ def test_async_backpressure():
     canon_task_return([U8Type()], consumer_opts, [84])
     return []
 
-  consumer_inst = ComponentInstance(store)
   def on_start(): return []
 
   got = None
@@ -1174,7 +1172,7 @@ def test_async_backpressure():
     nonlocal got
     got = results
 
-  run_lift(consumer_opts, consumer_inst, consumer_ft, consumer, on_start, on_resolve)
+  lift_and_run(consumer_opts, consumer_inst, consumer_ft, consumer, on_start, on_resolve)
   assert(got[0] == 84)
 
 
@@ -1191,21 +1189,22 @@ def test_sync_using_wait():
     return []
   fut1 = RacyBool(False)
   core_hostcall1 = partial(core_hostcall_pre, fut1)
-  hostcall1 = partial(canon_lift, hostcall_opts, hostcall_inst, ft, core_hostcall1)
+  hostcall1 = store.lift(core_hostcall1, ft, hostcall_opts, hostcall_inst)
   fut2 = RacyBool(False)
   core_hostcall2 = partial(core_hostcall_pre, fut2)
-  hostcall2 = partial(canon_lift, hostcall_opts, hostcall_inst, ft, core_hostcall2)
+  hostcall2 = store.lift(core_hostcall2, ft, hostcall_opts, hostcall_inst)
 
   lower_heap = Heap(20)
   lower_opts = mk_opts(MemInst(lower_heap.memory, 'i32'))
   lower_opts.async_ = True
+  inst = ComponentInstance(store)
 
   def core_func(args):
-    [ret] = canon_lower(lower_opts, ft, hostcall1, [])
+    [ret] = store.lower(hostcall1, ft, lower_opts, inst)([])
     state,subi1 = unpack_result(ret)
     assert(subi1 == 1)
     assert(state == Subtask.State.STARTED)
-    [ret] = canon_lower(lower_opts, ft, hostcall2, [])
+    [ret] = store.lower(hostcall2, ft, lower_opts, inst)([])
     state,subi2 = unpack_result(ret)
     assert(subi2 == 2)
     assert(state == Subtask.State.STARTED)
@@ -1235,10 +1234,9 @@ def test_sync_using_wait():
 
     return []
 
-  inst = ComponentInstance(store)
   def on_start(): return []
   def on_resolve(results): pass
-  run_lift(mk_opts(), inst, ft, core_func, on_start, on_resolve)
+  lift_and_run(mk_opts(), inst, ft, core_func, on_start, on_resolve)
 
 
 class HostSource(ReadableStream):
@@ -1445,7 +1443,7 @@ def test_eager_stream_completion():
     [packed] = canon_stream_new(StreamType(U8Type()))
     rsi3,wsi3 = unpack_new_ends(packed)
     retp = 12
-    [ret] = canon_lower(opts, ft, host_import, [rsi3, retp])
+    [ret] = store.lower(host_import, ft, opts, inst)([rsi3, retp])
     assert(ret == Subtask.State.RETURNED)
     rsi4 = mem[retp]
     [ret] = canon_stream_write(StreamType(U8Type()), opts, wsi3, 0, 4)
@@ -1476,7 +1474,7 @@ def test_eager_stream_completion():
     [] = canon_stream_drop_writable(StreamType(U8Type()), wsi3)
     return []
 
-  run_lift(opts, inst, ft, core_func, on_start, on_resolve)
+  lift_and_run(opts, inst, ft, core_func, on_start, on_resolve)
   assert(dst_stream.received == [11,12,13,14,15,16,17,18])
 
 
@@ -1494,7 +1492,7 @@ def test_async_stream_ops():
     def thread_func():
       thread = current_thread()
       nonlocal host_import_incoming, host_import_outgoing
-      args = on_start()
+      args = thread.task.start()
       assert(len(args) == 1)
       assert(isinstance(args[0], ReadableStream))
       host_import_incoming = HostSink(args[0], chunk=4, remain = 0)
@@ -1517,7 +1515,7 @@ def test_async_stream_ops():
         host_import_outgoing.write(vs)
       host_import_outgoing.destroy_once_empty()
 
-    return mk_task(caller, on_resolve, thread_func)
+    return mk_task(caller, on_start, on_resolve, thread_func)
 
   src_stream = HostSource(U8Type(), [], chunk=4, destroy_if_empty = False)
   def on_start():
@@ -1550,7 +1548,7 @@ def test_async_stream_ops():
     assert(mem[0:4] == b'\x01\x02\x03\x04')
     [packed] = canon_stream_new(StreamType(U8Type()))
     rsi3,wsi3 = unpack_new_ends(packed)
-    [ret] = canon_lower(opts, ft, host_import, [rsi3, retp])
+    [ret] = store.lower(host_import, ft, opts, inst)([rsi3, retp])
     assert(ret == Subtask.State.RETURNED)
     rsi4 = mem[16]
     assert(rsi4 == 4)
@@ -1604,7 +1602,7 @@ def test_async_stream_ops():
     [] = canon_waitable_set_drop(seti)
     return []
 
-  run_lift(opts, inst, ft, core_func, on_start, on_resolve)
+  lift_and_run(opts, inst, ft, core_func, on_start, on_resolve)
   assert(dst_stream.received == [11,12,13,14,15,16,17,18])
 
 
@@ -1628,7 +1626,7 @@ def test_stream_forward():
   opts = mk_opts()
   inst = ComponentInstance(Store())
   ft = FuncType([StreamType(U8Type())], [StreamType(U8Type())])
-  run_lift(opts, inst, ft, core_func, on_start, on_resolve)
+  lift_and_run(opts, inst, ft, core_func, on_start, on_resolve)
   assert(src_stream is dst_stream)
 
 
@@ -1655,7 +1653,7 @@ def test_receive_own_stream():
     [ret] = canon_stream_write(StreamType(U8Type()), opts, wsi, 0, 4)
     assert(ret == definitions.BLOCKED)
     retp = 8
-    [ret] = canon_lower(opts, host_ft, host_import, [rsi, retp])
+    [ret] = store.lower(host_import, host_ft, opts, inst)([rsi, retp])
     assert(ret == Subtask.State.RETURNED)
     rsi2 = int.from_bytes(mem[retp : retp+4], 'little', signed=False)
     assert(rsi2 == 1)
@@ -1668,13 +1666,14 @@ def test_receive_own_stream():
   def on_start(): return []
   def on_resolve(results): assert(len(results) == 0)
   ft = FuncType([],[], async_ = True)
-  run_lift(mk_opts(), inst, ft, core_func, on_start, on_resolve)
+  lift_and_run(mk_opts(), inst, ft, core_func, on_start, on_resolve)
 
 
 def test_host_partial_reads_writes():
   store = Store()
   mem = bytearray(20)
   opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
+  inst = ComponentInstance(Store())
 
   src = HostSource(U8Type(), [1,2,3,4], chunk=2, destroy_if_empty = False)
   source_ft = FuncType([], [StreamType(U8Type())])
@@ -1695,7 +1694,7 @@ def test_host_partial_reads_writes():
   def core_func(args):
     assert(len(args) == 0)
     retp = 4
-    [ret] = canon_lower(opts, source_ft, host_source, [retp])
+    [ret] = store.lower(host_source, source_ft, opts, inst)([retp])
     assert(ret == Subtask.State.RETURNED)
     rsi = mem[retp]
     assert(rsi == 1)
@@ -1724,7 +1723,7 @@ def test_host_partial_reads_writes():
     rsi,wsi = unpack_new_ends(packed)
     assert(rsi == 1)
     assert(wsi == 3)
-    [ret] = canon_lower(opts, sink_ft, host_sink, [rsi])
+    [ret] = store.lower(host_sink, sink_ft, opts, inst)([rsi])
     assert(ret == Subtask.State.RETURNED)
     mem[0:6] = b'\x01\x02\x03\x04\x05\x06'
     [ret] = canon_stream_write(StreamType(U8Type()), opts, wsi, 0, 6)
@@ -1747,11 +1746,10 @@ def test_host_partial_reads_writes():
     return []
 
   opts2 = mk_opts()
-  inst = ComponentInstance(Store())
   def on_start(): return []
   def on_resolve(results): assert(len(results) == 0)
   ft = FuncType([],[], async_ = True)
-  run_lift(opts2, inst, ft, core_func, on_start, on_resolve)
+  lift_and_run(opts2, inst, ft, core_func, on_start, on_resolve)
 
 
 def test_wasm_to_wasm_stream():
@@ -1821,7 +1819,7 @@ def test_wasm_to_wasm_stream():
     [] = canon_error_context_drop(errctxi)
     return []
 
-  func1 = partial(canon_lift, opts1, inst1, ft1, core_func1)
+  func1 = store.lift(core_func1, ft1, opts1, inst1)
 
   inst2 = ComponentInstance(store)
   heap2 = Heap(24)
@@ -1834,7 +1832,7 @@ def test_wasm_to_wasm_stream():
     [] = canon_task_return([], opts2, [])
 
     retp = 16
-    [ret] = canon_lower(opts2, ft1, func1, [retp])
+    [ret] = store.lower(func1, ft1, opts2, inst2)([retp])
     assert(ret == Subtask.State.RETURNED)
     rsi = mem2[retp]
     assert(rsi == 1)
@@ -1884,7 +1882,7 @@ def test_wasm_to_wasm_stream():
     [] = canon_waitable_set_drop(seti)
     return []
 
-  run_lift(opts2, inst2, ft2, core_func2, lambda:[], lambda _:())
+  lift_and_run(opts2, inst2, ft2, core_func2, lambda:[], lambda _:())
 
 
 def test_wasm_to_wasm_stream_empty():
@@ -1934,7 +1932,7 @@ def test_wasm_to_wasm_stream_empty():
     [] = canon_error_context_drop(errctxi)
     return []
 
-  func1 = partial(canon_lift, opts1, inst1, ft1, core_func1)
+  func1 = store.lift(core_func1, ft1, opts1, inst1)
 
   inst2 = ComponentInstance(store)
   heap2 = Heap(10)
@@ -1947,7 +1945,7 @@ def test_wasm_to_wasm_stream_empty():
     [] = canon_task_return([], opts2, [])
 
     retp = 0
-    [ret] = canon_lower(opts2, ft1, func1, [retp])
+    [ret] = store.lower(func1, ft1, opts2, inst2)([retp])
     assert(ret == Subtask.State.RETURNED)
     rsi = mem2[0]
     assert(rsi == 1)
@@ -1983,7 +1981,7 @@ def test_wasm_to_wasm_stream_empty():
     [] = canon_stream_drop_readable(StreamType(None), rsi)
     return []
 
-  run_lift(opts2, inst2, ft2, core_func2, lambda:[], lambda _:())
+  lift_and_run(opts2, inst2, ft2, core_func2, lambda:[], lambda _:())
 
 
 def test_cancel_copy():
@@ -2016,7 +2014,7 @@ def test_cancel_copy():
 
     [packed] = canon_stream_new(StreamType(U8Type()))
     rsi,wsi = unpack_new_ends(packed)
-    [ret] = canon_lower(lower_opts, host_ft1, host_func1, [rsi])
+    [ret] = store.lower(host_func1, host_ft1, lower_opts, inst)([rsi])
     assert(ret == Subtask.State.RETURNED)
     mem[0:4] = b'\x0a\x0b\x0c\x0d'
     [ret] = canon_stream_write(StreamType(U8Type()), lower_opts, wsi, 0, 4)
@@ -2033,7 +2031,7 @@ def test_cancel_copy():
 
     [packed] = canon_stream_new(StreamType(U8Type()))
     rsi,wsi = unpack_new_ends(packed)
-    [ret] = canon_lower(lower_opts, host_ft1, host_func1, [rsi])
+    [ret] = store.lower(host_func1, host_ft1, lower_opts, inst)([rsi])
     assert(ret == Subtask.State.RETURNED)
     mem[0:4] = b'\x01\x02\x03\x04'
     [ret] = canon_stream_write(StreamType(U8Type()), lower_opts, wsi, 0, 4)
@@ -2049,7 +2047,7 @@ def test_cancel_copy():
     assert(host_sink.consume(100) is None)
 
     retp = 16
-    [ret] = canon_lower(lower_opts, host_ft2, host_func2, [retp])
+    [ret] = store.lower(host_func2, host_ft2, lower_opts, inst)([retp])
     assert(ret == Subtask.State.RETURNED)
     rsi = mem[retp]
     [ret] = canon_stream_read(StreamType(U8Type()), lower_opts, rsi, 0, 4)
@@ -2059,7 +2057,7 @@ def test_cancel_copy():
     assert(n == 0 and result == CopyResult.CANCELLED)
     [] = canon_stream_drop_readable(StreamType(U8Type()), rsi)
 
-    [ret] = canon_lower(lower_opts, host_ft2, host_func2, [retp])
+    [ret] = store.lower(host_func2, host_ft2, lower_opts, inst)([retp])
     assert(ret == Subtask.State.RETURNED)
     rsi = mem[retp]
     [ret] = canon_stream_read(StreamType(U8Type()), lower_opts, rsi, 0, 4)
@@ -2088,7 +2086,7 @@ def test_cancel_copy():
     return []
 
   caller_ft = FuncType([], [], async_ = True)
-  run_lift(lift_opts, inst, caller_ft, core_func, lambda:[], lambda _:())
+  lift_and_run(lift_opts, inst, caller_ft, core_func, lambda:[], lambda _:())
 
 
 class HostFutureSink:
@@ -2151,7 +2149,7 @@ def test_futures():
   def host_func(caller, on_start, on_resolve):
     def thread_func():
       thread = current_thread()
-      [future] = on_start()
+      [future] = thread.task.start()
       outgoing = HostFutureSource(U8Type())
       thread.task.return_([outgoing])
       incoming = HostFutureSink(U8Type())
@@ -2159,7 +2157,7 @@ def test_futures():
       thread.wait_until(incoming.has_v.is_set)
       assert(incoming.v == 42)
       outgoing.set_result(43)
-    return mk_task(caller, on_resolve, thread_func)
+    return mk_task(caller, on_start, on_resolve, thread_func)
 
   lift_opts = mk_opts()
   def core_func(args):
@@ -2168,7 +2166,7 @@ def test_futures():
     [packed] = canon_future_new(FutureType(U8Type()))
     rfi,wfi = unpack_new_ends(packed)
     retp = 16
-    [ret] = canon_lower(lower_opts, host_ft1, host_func, [rfi, retp])
+    [ret] = store.lower(host_func, host_ft1, lower_opts, inst)([rfi, retp])
     assert(ret == Subtask.State.RETURNED)
     rfi = mem[retp]
 
@@ -2195,7 +2193,7 @@ def test_futures():
 
     [packed] = canon_future_new(FutureType(U8Type()))
     rfi,wfi = unpack_new_ends(packed)
-    [ret] = canon_lower(lower_opts, host_ft1, host_func, [rfi, retp])
+    [ret] = store.lower(host_func, host_ft1, lower_opts, inst)([rfi, retp])
     assert(ret == Subtask.State.RETURNED)
     rfi = mem[retp]
 
@@ -2230,7 +2228,7 @@ def test_futures():
     return []
 
   caller_ft = FuncType([], [], async_ = True)
-  run_lift(lift_opts, inst, caller_ft, core_func, lambda:[], lambda _:())
+  lift_and_run(lift_opts, inst, caller_ft, core_func, lambda:[], lambda _:())
 
 
 def test_cancel_subtask():
@@ -2244,7 +2242,7 @@ def test_cancel_subtask():
 
   def core_callee1(args):
     assert(False)
-  callee1 = partial(canon_lift, callee_opts, callee_inst, ft, core_callee1)
+  callee1 = store.lift(core_callee1, ft, callee_opts, callee_inst)
 
   def core_callee2(args):
     [x] = args
@@ -2265,7 +2263,7 @@ def test_cancel_subtask():
       case _:
         assert(False)
     return []
-  callee2 = partial(canon_lift, callee_opts, callee_inst, ft, core_callee2)
+  callee2 = store.lift(core_callee2, ft, callee_opts, callee_inst)
 
   def core_callee3(args):
     [x] = args
@@ -2275,21 +2273,21 @@ def test_cancel_subtask():
     else:
       [] = canon_task_return([U8Type()], callee_opts, [83])
     return []
-  callee3 = partial(canon_lift, callee_opts, callee_inst, ft, core_callee3)
+  callee3 = store.lift(core_callee3, ft, callee_opts, callee_inst)
 
   host_fut4 = RacyBool(False)
   def host_import4(caller, on_start, on_resolve):
     def thread_func():
       thread = current_thread()
-      args = on_start()
+      args = thread.task.start()
       assert(len(args) == 1)
       assert(args[0] == 42)
       thread.wait_until(host_fut4.is_set)
       thread.task.return_([43])
-    return mk_task(caller, on_resolve, thread_func)
+    return mk_task(caller, on_start, on_resolve, thread_func)
   def core_callee4(args):
     [x] = args
-    [result] = canon_lower(sync_callee_opts, ft, host_import4, [42])
+    [result] = store.lower(host_import4, ft, sync_callee_opts, callee_inst)([42])
     assert(result == 43)
     try:
       [] = canon_task_cancel()
@@ -2303,31 +2301,31 @@ def test_cancel_subtask():
     assert(result == EventCode.NONE)
     [] = canon_task_cancel()
     return []
-  callee4 = partial(canon_lift, callee_opts, callee_inst, ft, core_callee4)
+  callee4 = store.lift(core_callee4, ft, callee_opts, callee_inst)
 
   host_fut5 = RacyBool(False)
   def host_import5(caller, on_start, on_resolve):
     def thread_func():
       thread = current_thread()
-      args = on_start()
+      args = thread.task.start()
       assert(len(args) == 1)
       assert(args[0] == 42)
       thread.wait_until(host_fut5.is_set)
       assert(thread.task.state == Task.State.PENDING_CANCEL)
       thread.wait_until(host_fut5.is_set)
       thread.task.return_([43])
-    return mk_task(caller, on_resolve, thread_func)
+    return mk_task(caller, on_start, on_resolve, thread_func)
   def core_callee5(args):
     [x] = args
     assert(x == 13)
-    [ret] = canon_lower(callee_opts, ft, host_import5, [42, 0])
+    [ret] = store.lower(host_import5, ft, callee_opts, callee_inst)([42, 0])
     state,subi = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
     [ret] = canon_subtask_cancel(False, subi)
     assert(ret == Subtask.State.RETURNED)
     [] = canon_task_return([U8Type()], callee_opts, [44])
     return []
-  callee5 = partial(canon_lift, callee_opts, callee_inst, ft, core_callee5)
+  callee5 = store.lift(core_callee5, ft, callee_opts, callee_inst)
 
   core_ftbl = Table()
   core_ft = CoreFuncType(['i32'], [])
@@ -2373,7 +2371,7 @@ def test_cancel_subtask():
     [] = canon_thread_resume_later(threadi2)
     [] = canon_thread_resume_later(threadi3)
     return []
-  callee6 = partial(canon_lift, callee_opts, callee_inst, ft, core_callee6)
+  callee6 = store.lift(core_callee6, ft, callee_opts, callee_inst)
 
   caller_heap = Heap(20)
   caller_opts = mk_opts(MemInst(caller_heap.memory, 'i32'), async_ = True)
@@ -2386,10 +2384,10 @@ def test_cancel_subtask():
     [seti] = canon_waitable_set_new()
 
     callee_inst.backpressure = True
-    [ret] = canon_lower(caller_opts, ft, callee1, [13, 0])
+    [ret] = store.lower(callee1, ft, caller_opts, caller_inst)([13, 0])
     state,subi1 = unpack_result(ret)
     assert(state == Subtask.State.STARTING)
-    [ret] = canon_lower(caller_opts, ft, callee1, [13, 0])
+    [ret] = store.lower(callee1, ft, caller_opts, caller_inst)([13, 0])
     state,subi2 = unpack_result(ret)
     assert(state == Subtask.State.STARTING)
     [ret] = canon_subtask_cancel(False, subi2)
@@ -2398,22 +2396,22 @@ def test_cancel_subtask():
     assert(ret == Subtask.State.CANCELLED_BEFORE_STARTED)
     callee_inst.backpressure = False
 
-    [ret] = canon_lower(caller_opts, ft, callee2, [1, 0])
+    [ret] = store.lower(callee2, ft, caller_opts, caller_inst)([1, 0])
     state,subi1 = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
-    [ret] = canon_lower(caller_opts, ft, callee2, [2, 0])
+    [ret] = store.lower(callee2, ft, caller_opts, caller_inst)([2, 0])
     state,subi2 = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
-    [ret] = canon_lower(caller_opts, ft, callee2, [3, 0])
+    [ret] = store.lower(callee2, ft, caller_opts, caller_inst)([3, 0])
     state,subi3 = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
-    [ret] = canon_lower(caller_opts, ft, callee2, [3, 0])
+    [ret] = store.lower(callee2, ft, caller_opts, caller_inst)([3, 0])
     state,subi3_2 = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
-    [ret] = canon_lower(caller_opts, ft, callee2, [4, 0])
+    [ret] = store.lower(callee2, ft, caller_opts, caller_inst)([4, 0])
     state,subi4 = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
-    [ret] = canon_lower(caller_opts, ft, callee2, [4, 0])
+    [ret] = store.lower(callee2, ft, caller_opts, caller_inst)([4, 0])
     state,subi4_2 = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
 
@@ -2467,7 +2465,7 @@ def test_cancel_subtask():
     [] = canon_subtask_drop(subi4_2)
 
     caller_heap.memory[0] = 13
-    [ret] = canon_lower(caller_opts, ft, callee3, [0, 0])
+    [ret] = store.lower(callee3, ft, caller_opts, caller_inst)([0, 0])
     state,subi = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
     while caller_inst.handles.get(subi).state == Subtask.State.STARTED:
@@ -2478,7 +2476,7 @@ def test_cancel_subtask():
     [] = canon_subtask_drop(subi)
 
     caller_heap.memory[0] = 13
-    [ret] = canon_lower(caller_opts, ft, callee3, [0, 0])
+    [ret] = store.lower(callee3, ft, caller_opts, caller_inst)([0, 0])
     state,subi = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
     [ret] = canon_subtask_cancel(True, subi)
@@ -2487,7 +2485,7 @@ def test_cancel_subtask():
     [] = canon_subtask_drop(subi)
 
     caller_heap.memory[0] = 13
-    [ret] = canon_lower(caller_opts, ft, callee4, [0, 0])
+    [ret] = store.lower(callee4, ft, caller_opts, caller_inst)([0, 0])
     state,subi = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
     [ret] = canon_subtask_cancel(True, subi)
@@ -2503,7 +2501,7 @@ def test_cancel_subtask():
     assert(caller_heap.memory[0] == 13)
     [] = canon_subtask_drop(subi)
 
-    [ret] = canon_lower(caller_opts, ft, callee5, [13, 0])
+    [ret] = store.lower(callee5, ft, caller_opts, caller_inst)([13, 0])
     state,subi = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
     [ret] = canon_subtask_cancel(True, subi)
@@ -2519,7 +2517,7 @@ def test_cancel_subtask():
     assert(caller_heap.memory[0] == 44)
     [] = canon_subtask_drop(subi)
 
-    [ret] = canon_lower(caller_opts, ft, callee6, [14, 0])
+    [ret] = store.lower(callee6, ft, caller_opts, caller_inst)([14, 0])
     state,subi = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
 
@@ -2546,7 +2544,7 @@ def test_cancel_subtask():
     nonlocal got
     got = results
 
-  run_lift(caller_opts, caller_inst, ft, core_caller, on_start, on_resolve)
+  lift_and_run(caller_opts, caller_inst, ft, core_caller, on_start, on_resolve)
 
   assert(len(got) == 1)
   assert(got[0] == 42)
@@ -2605,13 +2603,14 @@ def test_self_copy(elemt):
     [] = canon_waitable_set_drop(seti)
     return []
 
-  run_lift(sync_opts, inst, ft, core_func, lambda:[], lambda _:())
+  lift_and_run(sync_opts, inst, ft, core_func, lambda:[], lambda _:())
 
 
 def test_async_flat_params():
   store = Store()
   heap = Heap(1000)
   opts = mk_opts(MemInst(heap.memory, 'i32'), 'utf8', heap.realloc, async_ = True)
+  inst = ComponentInstance(store)
 
   ft1 = FuncType([F32Type(), F64Type(), U32Type(), S64Type()],[])
   def f1(caller, on_start, on_resolve):
@@ -2641,21 +2640,20 @@ def test_async_flat_params():
     return mk_done_task(caller)
 
   def core_func(args):
-    [ret] = canon_lower(opts, ft1, f1, [1.1, 2.2, 3, 4])
+    [ret] = store.lower(f1, ft1, opts, inst)([1.1, 2.2, 3, 4])
     assert(ret == Subtask.State.RETURNED)
 
-    [ret] = canon_lower(opts, ft2, f2, [1,2,3,4])
+    [ret] = store.lower(f2, ft2, opts, inst)([1,2,3,4])
     assert(ret == Subtask.State.RETURNED)
 
     heap.memory[12:20] = b'\x01\x00\x00\x00\x02\x03\x04\x05'
-    [ret] = canon_lower(opts, ft3, f3, [12])
+    [ret] = store.lower(f3, ft3, opts, inst)([12])
     assert(ret == Subtask.State.RETURNED)
 
     canon_task_return([], opts, [])
     return []
 
-  inst = ComponentInstance(store)
-  run_lift(opts, inst, FuncType([], []), core_func, lambda:[], lambda _:())
+  lift_and_run(opts, inst, FuncType([], []), core_func, lambda:[], lambda _:())
 
 def test_threads():
   store = Store()
@@ -2729,7 +2727,7 @@ def test_threads():
     [result] = v
 
   caller_ft = FuncType([], [U8Type()], async_ = True)
-  run_lift(opts, inst, caller_ft, core_func, lambda:[], on_resolve)
+  lift_and_run(opts, inst, caller_ft, core_func, lambda:[], on_resolve)
   assert(result == 42)
 
 def test_thread_cancel_callback():
@@ -2747,7 +2745,7 @@ def test_thread_cancel_callback():
     [] = canon_task_return([U32Type()], producer_opts1, [42])
     return [CallbackCode.EXIT]
   producer_opts1.callback = core_producer_callback1
-  producer_callee1 = partial(canon_lift, producer_opts1, producer_inst, producer_ft, core_producer1)
+  producer_callee1 = store.lift(core_producer1, producer_ft, producer_opts1, producer_inst)
 
   producer_opts2 = mk_opts(async_ = True)
   def core_producer2(args):
@@ -2759,7 +2757,7 @@ def test_thread_cancel_callback():
   def core_producer_callback2(args):
     assert(False)
   producer_opts2.callback = core_producer_callback2
-  producer_callee2 = partial(canon_lift, producer_opts2, producer_inst, producer_ft, core_producer2)
+  producer_callee2 = store.lift(core_producer2, producer_ft, producer_opts2, producer_inst)
 
   consumer_inst = ComponentInstance(store)
   consumer_ft = FuncType([], [], async_ = True)
@@ -2770,12 +2768,12 @@ def test_thread_cancel_callback():
     assert(len(args) == 0)
 
     retp1 = 8
-    [ret] = canon_lower(consumer_opts, producer_ft, producer_callee1, [retp1])
+    [ret] = store.lower(producer_callee1, producer_ft, consumer_opts, consumer_inst)([retp1])
     state,subi1 = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
 
     retp2 = 12
-    [ret] = canon_lower(consumer_opts, producer_ft, producer_callee2, [retp2])
+    [ret] = store.lower(producer_callee2, producer_ft, consumer_opts, consumer_inst)([retp2])
     state,subi2 = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
 
@@ -2800,7 +2798,7 @@ def test_thread_cancel_callback():
 
     return []
 
-  run_lift(mk_opts(), consumer_inst, consumer_ft, core_consumer, lambda:[], lambda _:())
+  lift_and_run(mk_opts(), consumer_inst, consumer_ft, core_consumer, lambda:[], lambda _:())
 
 def test_reentrance():
   def mk_task(supertask, inst):
