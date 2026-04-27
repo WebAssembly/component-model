@@ -4356,6 +4356,7 @@ specifies:
   * [`lower($t)` above](#canonopt-validation) defines required options for `stream.write`
   * [`lift($t)` above](#canonopt-validation) defines required options for `stream.read`
   * `memory` is required to be present
+* 🚝 - `async` is allowed to be omitted, otherwise it must be present
 
 The implementation of these built-ins funnels down to a single `stream_copy`
 function that is parameterized by the direction of the copy:
@@ -4478,6 +4479,7 @@ specifies:
   * [`lift($t)` above](#canonopt-validation) defines required options for `future.read`
   * [`lower($t)` above](#canonopt-validation) defines required options for `future.write`
   * `memory` is required to be present
+* 🚝 - `async` is allowed to be omitted, otherwise it must be present
 
 The implementation of these built-ins funnels down to a single `future_copy`
 function that is parameterized by the direction of the copy:
