@@ -1344,13 +1344,12 @@ cooperative threads (🧵), [`setInterval`] would also unfortunately delay
 returning the `EXIT` code and thus, without guest code intervention, would keep
 component instances alive until timeout limits were hit. The release of
 cooperative threads would offer a solution to this problem, but an awkward one.
-Instead, the [intention](#TODO) is to add a new built-in function (say,
-`thread.set-keep-alive`) to allow guest code to dynamically control its own
-threads' keep-alive flags, thereby allowing the JS event loop to clear its
-implicit thread's keep-alive flag once all `waitUntil` promises resolved,
-thereby allowing `setInterval` callbacks to keep running (while the host wants
-to keep the instance warm), but still indicating to the host that destruction is
-welcome at any time.
+Instead, the [intention](#TODO) is to add new built-in functions that would
+provide guest code more direct, dynamic control over its own keep-alive
+flags, thereby allowing the JS event loop to clear its keep-alive flag once all
+`waitUntil` promises resolved, thereby allowing `setInterval` callbacks to keep
+running (while the host wants to keep the instance warm), but still indicating
+to the host that destruction is welcome at any time.
 
 Lastly, the above discussion refers to component *instances*, however the host
 cannot tear down independent component instances when they are linked together
@@ -1373,8 +1372,8 @@ comes after:
 * zero-copy forwarding/splicing
 * allow the `stream<char>` type to validate; make it use `string-encoding`
   and not split code points
-* add mechanism to allow threads to control whether they intend to extend
-  their containing [component instance's lifetime](#component-instance-lifetime)
+* add built-ins providing guest code more control over its containing
+  [component instance's lifetime](#component-instance-lifetime)
 * some way to say "no more elements are coming for a while"
 * add an `async` effect on `component` type definitions allowing a component
   type to block during instantiation
