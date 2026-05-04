@@ -1590,6 +1590,7 @@ def test_async_stream_ops():
     [event] = canon_waitable_set_wait(True, MemInst(mem, 'i32'), seti, retp)
     assert(event == EventCode.STREAM_READ)
     assert(mem[retp+0] == rsi4)
+    [] = canon_waitable_join(rsi4, 0)
     result,n = unpack_result(mem[retp+4])
     assert(n == 4 and result == CopyResult.COMPLETED)
     [ret] = canon_stream_read(StreamType(U8Type()), sync_opts, rsi4, 0, 4)

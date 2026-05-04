@@ -710,10 +710,12 @@ EventTuple = tuple[EventCode, int, int]
 class Waitable:
   pending_event: Optional[Callable[[], EventTuple]]
   wset: Optional[WaitableSet]
+  has_sync_waiter: bool
 
   def __init__(self):
     self.pending_event = None
     self.wset = None
+    self.has_sync_waiter = False
 
   def set_pending_event(self, pending_event):
     self.pending_event = pending_event
@@ -721,12 +723,22 @@ class Waitable:
   def has_pending_event(self):
     return bool(self.pending_event)
 
+  def in_waitable_set(self):
+    return self.wset is not None
+
+  def wait_for_pending_event(self):
+    assert(not self.in_waitable_set() and not self.has_sync_waiter)
+    self.has_sync_waiter = True
+    current_thread().wait_until(self.has_pending_event, cancellable = False)
+    self.has_sync_waiter = False
+
   def get_pending_event(self) -> EventTuple:
     pending_event = self.pending_event
     self.pending_event = None
     return pending_event()
 
   def join(self, wset):
+    assert(not self.has_sync_waiter)
     if self.wset:
       self.wset.elems.remove(self)
     self.wset = wset
@@ -735,6 +747,7 @@ class Waitable:
 
   def drop(self):
     assert(not self.has_pending_event())
+    assert(not self.has_sync_waiter)
     self.join(None)
 
 class WaitableSet:
@@ -995,10 +1008,9 @@ def none_or_number_type(t):
 
 class CopyState(Enum):
   IDLE = 1
-  SYNC_COPYING = 2
-  ASYNC_COPYING = 3
-  CANCELLING_COPY = 4
-  DONE = 5
+  COPYING = 2
+  CANCELLING_COPY = 3
+  DONE = 4
 
 class CopyEnd(Waitable):
   state: CopyState
@@ -1013,7 +1025,7 @@ class CopyEnd(Waitable):
     match self.state:
       case CopyState.IDLE | CopyState.DONE:
         return False
-      case CopyState.SYNC_COPYING | CopyState.ASYNC_COPYING | CopyState.CANCELLING_COPY:
+      case CopyState.COPYING | CopyState.CANCELLING_COPY:
         return True
     assert(False)
 
@@ -2385,6 +2397,7 @@ def canon_waitable_join(wi, si):
   trap_if(not inst.may_leave)
   w = inst.handles.get(wi)
   trap_if(not isinstance(w, Waitable))
+  trap_if(w.has_sync_waiter)
   if si == 0:
     w.join(None)
   else:
@@ -2405,6 +2418,7 @@ def canon_subtask_cancel(async_, i):
   trap_if(not isinstance(subtask, Subtask))
   trap_if(subtask.resolve_delivered())
   trap_if(subtask.cancellation_requested)
+  trap_if(subtask.in_waitable_set() and not async_)
   if subtask.resolved():
     assert(subtask.has_pending_event())
   else:
@@ -2412,7 +2426,7 @@ def canon_subtask_cancel(async_, i):
     subtask.on_cancel()
     if not subtask.resolved():
       if not async_:
-        thread.wait_until(subtask.resolved)
+        subtask.wait_for_pending_event()
       else:
         return [BLOCKED]
   code,index,payload = subtask.get_pending_event()
@@ -2467,6 +2481,7 @@ def stream_copy(EndT, BufferT, event_code, stream_t, opts, i, ptr, n):
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_t.t)
   trap_if(e.state != CopyState.IDLE)
+  trap_if(e.in_waitable_set() and not opts.async_)
 
   assert(not isinstance(stream_t, CharType))
   assert(not contains_borrow(stream_t))
@@ -2475,6 +2490,7 @@ def stream_copy(EndT, BufferT, event_code, stream_t, opts, i, ptr, n):
 
   def stream_event(result, reclaim_buffer):
     reclaim_buffer()
+    assert(e.copying())
     if result == CopyResult.DROPPED:
       e.state = CopyState.DONE
     else:
@@ -2490,14 +2506,13 @@ def stream_copy(EndT, BufferT, event_code, stream_t, opts, i, ptr, n):
   def on_copy_done(result):
     e.set_pending_event(partial(stream_event, result, reclaim_buffer = lambda:()))
 
+  e.state = CopyState.COPYING
   e.copy(thread.task.inst, buffer, on_copy, on_copy_done)
 
   if not e.has_pending_event():
     if not opts.async_:
-      e.state = CopyState.SYNC_COPYING
-      thread.wait_until(e.has_pending_event)
+      e.wait_for_pending_event()
     else:
-      e.state = CopyState.ASYNC_COPYING
       return [BLOCKED]
   code,index,payload = e.get_pending_event()
   assert(code == event_code and index == i and payload != BLOCKED)
@@ -2522,6 +2537,7 @@ def future_copy(EndT, BufferT, event_code, future_t, opts, i, ptr):
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != future_t.t)
   trap_if(e.state != CopyState.IDLE)
+  trap_if(e.in_waitable_set() and not opts.async_)
 
   assert(not contains_borrow(future_t))
   cx = LiftLowerContext(opts, thread.task.inst, borrow_scope = None)
@@ -2529,6 +2545,7 @@ def future_copy(EndT, BufferT, event_code, future_t, opts, i, ptr):
 
   def future_event(result):
     assert((buffer.remain() == 0) == (result == CopyResult.COMPLETED))
+    assert(e.copying())
     if result == CopyResult.DROPPED or result == CopyResult.COMPLETED:
       e.state = CopyState.DONE
     else:
@@ -2539,14 +2556,13 @@ def future_copy(EndT, BufferT, event_code, future_t, opts, i, ptr):
     assert(result != CopyResult.DROPPED or event_code == EventCode.FUTURE_WRITE)
     e.set_pending_event(partial(future_event, result))
 
+  e.state = CopyState.COPYING
   e.copy(thread.task.inst, buffer, on_copy_done)
 
   if not e.has_pending_event():
     if not opts.async_:
-      e.state = CopyState.SYNC_COPYING
-      thread.wait_until(e.has_pending_event)
+      e.wait_for_pending_event()
     else:
-      e.state = CopyState.ASYNC_COPYING
       return [BLOCKED]
   code,index,payload = e.get_pending_event()
   assert(code == event_code and index == i)
@@ -2573,13 +2589,14 @@ def cancel_copy(EndT, event_code, stream_or_future_t, async_, i):
   e = thread.task.inst.handles.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_or_future_t.t)
-  trap_if(e.state != CopyState.ASYNC_COPYING)
+  trap_if(e.state != CopyState.COPYING or e.has_sync_waiter)
+  trap_if(e.in_waitable_set() and not async_)
   e.state = CopyState.CANCELLING_COPY
   if not e.has_pending_event():
     e.shared.cancel()
     if not e.has_pending_event():
       if not async_:
-        thread.wait_until(e.has_pending_event)
+        e.wait_for_pending_event()
       else:
         return [BLOCKED]
   code,index,payload = e.get_pending_event()
