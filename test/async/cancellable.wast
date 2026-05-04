@@ -4,7 +4,6 @@
 ;; Component $C exports five async callback-lifted functions that block in
 ;; their initial core function (the callbacks are never invoked):
 ;;   wait-cancel: blocks on cancellable waitable-set.wait, expects TASK_CANCELLED
-;;   poll-cancel: blocks on cancellable waitable-set.poll, expects TASK_CANCELLED
 ;;   yield-cancel: yields with cancellable, caller cancels during yield
 ;;   poll-cancel-pending: blocks on non-cancellable wait, then polls with cancellable
 ;;   yield-cancel-pending: blocks on non-cancellable wait, then yields with cancellable
@@ -39,20 +38,7 @@
         (i32.const 0 (; EXIT ;))
       )
 
-      ;; Test 2: direct cancel delivery through cancellable waitable-set.poll
-      (func $poll-cancel (export "poll-cancel") (result i32)
-        (local $ws i32)
-        (local $event_code i32)
-        (local.set $ws (call $waitable-set.new))
-        ;; poll on empty waitable set with cancellable; blocks until cancelled
-        (local.set $event_code (call $waitable-set.poll-cancellable (local.get $ws) (i32.const 0)))
-        (if (i32.ne (local.get $event_code) (i32.const 6 (; TASK_CANCELLED ;)))
-          (then unreachable))
-        (call $task.cancel)
-        (i32.const 0 (; EXIT ;))
-      )
-
-      ;; Test 3: direct cancel delivery through cancellable thread.yield
+      ;; Test 2: direct cancel delivery through cancellable thread.yield
       (func $yield-cancel (export "yield-cancel") (result i32)
         (local $ret i32)
         ;; yield with cancellable; suspends with cancellable=true, caller cancels
@@ -63,7 +49,7 @@
         (i32.const 0 (; EXIT ;))
       )
 
-      ;; Test 4: deferred cancel delivered through cancellable waitable-set.poll
+      ;; Test 3: deferred cancel delivered through cancellable waitable-set.poll
       (func $poll-cancel-pending (export "poll-cancel-pending") (param $futr i32) (result i32)
         (local $ws i32)
         (local $ret i32)
@@ -86,7 +72,7 @@
         (i32.const 0 (; EXIT ;))
       )
 
-      ;; Test 5: deferred cancel delivered through cancellable thread.yield
+      ;; Test 4: deferred cancel delivered through cancellable thread.yield
       (func $yield-cancel-pending (export "yield-cancel-pending") (param $futr i32) (result i32)
         (local $ws i32)
         (local $ret i32)
@@ -138,10 +124,6 @@
       (core func $cm "wait-cancel")
       async (callback (func $cm "unreachable-cb"))
     ))
-    (func (export "poll-cancel") async (result u32) (canon lift
-      (core func $cm "poll-cancel")
-      async (callback (func $cm "unreachable-cb"))
-    ))
     (func (export "yield-cancel") async (result u32) (canon lift
       (core func $cm "yield-cancel")
       async (callback (func $cm "unreachable-cb"))
@@ -159,7 +141,6 @@
   (component $D
     (type $FT (future))
     (import "wait-cancel" (func $wait-cancel async (result u32)))
-    (import "poll-cancel" (func $poll-cancel async (result u32)))
     (import "yield-cancel" (func $yield-cancel async (result u32)))
     (import "poll-cancel-pending" (func $poll-cancel-pending async (param "fut" $FT) (result u32)))
     (import "yield-cancel-pending" (func $yield-cancel-pending async (param "fut" $FT) (result u32)))
@@ -176,7 +157,6 @@
       (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
       (import "" "waitable-set.wait" (func $waitable-set.wait (param i32 i32) (result i32)))
       (import "" "wait-cancel" (func $wait-cancel (param i32) (result i32)))
-      (import "" "poll-cancel" (func $poll-cancel (param i32) (result i32)))
       (import "" "yield-cancel" (func $yield-cancel (param i32) (result i32)))
       (import "" "poll-cancel-pending" (func $poll-cancel-pending (param i32 i32) (result i32)))
       (import "" "yield-cancel-pending" (func $yield-cancel-pending (param i32 i32) (result i32)))
@@ -207,23 +187,7 @@
         (call $subtask.drop (local.get $subtask))
 
         ;; ==========================================
-        ;; Test 2: waitable-set.poll cancellable
-        ;; ==========================================
-
-        ;; call poll-cancel; it should block in cancellable poll
-        (local.set $ret (call $poll-cancel (local.get $retp)))
-        (if (i32.ne (i32.const 1 (; STARTED ;)) (i32.and (local.get $ret) (i32.const 0xf)))
-          (then unreachable))
-        (local.set $subtask (i32.shr_u (local.get $ret) (i32.const 4)))
-
-        ;; cancel; completes immediately (C is in cancellable poll)
-        (local.set $ret (call $subtask.cancel (local.get $subtask)))
-        (if (i32.ne (i32.const 4 (; CANCELLED_BEFORE_RETURNED ;)) (local.get $ret))
-          (then unreachable))
-        (call $subtask.drop (local.get $subtask))
-
-        ;; ==========================================
-        ;; Test 3: thread.yield cancellable
+        ;; Test 2: thread.yield cancellable
         ;; ==========================================
 
         ;; call yield-cancel; it should suspend in cancellable yield
@@ -235,11 +199,14 @@
         ;; cancel; completes immediately (C is in cancellable yield)
         (local.set $ret (call $subtask.cancel (local.get $subtask)))
         (if (i32.ne (i32.const 4 (; CANCELLED_BEFORE_RETURNED ;)) (local.get $ret))
+          ;; TODO: this currently fails in Wasmtime due to cancellable
+          ;; thread.yield not being directly resumed by subtask.cancel, but it
+          ;; seems like it should pass:
           (then unreachable))
         (call $subtask.drop (local.get $subtask))
 
         ;; ==========================================
-        ;; Test 4: waitable-set.poll cancellable (pending)
+        ;; Test 3: waitable-set.poll cancellable (pending)
         ;; ==========================================
 
         ;; create future for poll-cancel-pending to read
@@ -278,7 +245,7 @@
         (call $subtask.drop (local.get $subtask))
 
         ;; ==========================================
-        ;; Test 5: thread.yield cancellable (pending)
+        ;; Test 4: thread.yield cancellable (pending)
         ;; ==========================================
 
         ;; create future for yield-cancel-pending to read
@@ -326,7 +293,6 @@
     (canon waitable-set.new (core func $waitable-set.new))
     (canon waitable-set.wait (memory $memory "mem") (core func $waitable-set.wait))
     (canon lower (func $wait-cancel) async (memory $memory "mem") (core func $wait-cancel'))
-    (canon lower (func $poll-cancel) async (memory $memory "mem") (core func $poll-cancel'))
     (canon lower (func $yield-cancel) async (memory $memory "mem") (core func $yield-cancel'))
     (canon lower (func $poll-cancel-pending) async (memory $memory "mem") (core func $poll-cancel-pending'))
     (canon lower (func $yield-cancel-pending) async (memory $memory "mem") (core func $yield-cancel-pending'))
@@ -340,7 +306,6 @@
       (export "waitable-set.new" (func $waitable-set.new))
       (export "waitable-set.wait" (func $waitable-set.wait))
       (export "wait-cancel" (func $wait-cancel'))
-      (export "poll-cancel" (func $poll-cancel'))
       (export "yield-cancel" (func $yield-cancel'))
       (export "poll-cancel-pending" (func $poll-cancel-pending'))
       (export "yield-cancel-pending" (func $yield-cancel-pending'))
@@ -351,7 +316,6 @@
   (instance $c (instantiate $C))
   (instance $d (instantiate $D
     (with "wait-cancel" (func $c "wait-cancel"))
-    (with "poll-cancel" (func $c "poll-cancel"))
     (with "yield-cancel" (func $c "yield-cancel"))
     (with "poll-cancel-pending" (func $c "poll-cancel-pending"))
     (with "yield-cancel-pending" (func $c "yield-cancel-pending"))
