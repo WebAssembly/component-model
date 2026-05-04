@@ -420,7 +420,7 @@ current thread's thread-local storage can be read and written from core wasm
 code by calling the [`context.get`] and [`context.set`] built-ins.
 
 The thread-local storage array's length is currently fixed to contain exactly
-2 `i64`s with the goal of allowing this array to be stored inline in whatever
+2 elements with the goal of allowing this array to be stored inline in whatever
 existing runtime data structure is already efficiently reachable from ambient
 compiled wasm code. Because module instantiation is declarative in the
 Component Model, the imported `context.{get,set}` built-ins can be inlined by
@@ -432,11 +432,11 @@ natural place to store:
    thread-local features
 
 Both of `context.{get,set}` take an immediate argument of `i32` or `i64` to
-indicate the return or argument type. `context.set i32` will zero the high
-bits of the stored value and `context.get i32` will only read the low bits of
-the stored value.  Generally it is expected that 32-bit components always use
-the `i32` immediate and 64-bit components always use the `i64` immediate, but
-mixing these calls is still valid.
+indicate the return or argument type. As part of component-level validation, all
+`context.{get,set}` definitions within a single component are required to
+specify the *same* thread-local element type, so that there is no mixing of
+types between loads and stores. This restriction would allow Core WebAssembly
+reference types to be used as thread-local storage element types in the future.
 
 When threads are created explicitly by `thread.new-indirect`, the lifetime of
 the thread-local storage array ends when the function passed to
