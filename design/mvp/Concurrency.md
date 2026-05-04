@@ -74,16 +74,6 @@ the same way that they already bind to various OS's concurrent I/O APIs (such
 as `select`, `epoll`, `io_uring`, `kqueue` and Overlapped I/O) making the
 Component Model "just another OS" from the language toolchain's perspective.
 
-The new async ABI can be used alongside or instead of the existing Preview 2
-"sync ABI" to call or implement *any* WIT function type. When *calling* an
-imported function via the async ABI, if the callee [blocks](#blocking), control
-flow is returned immediately to the caller, and the callee continues executing
-concurrently. When *implementing* an exported function via the async ABI,
-multiple concurrent export calls are allowed to be made by the caller.
-Critically, both sync-ABI-calls-async-ABI and async-ABI-calls-sync-ABI pairings
-have well-defined, composable behavior for both inter-component and
-intra-component calls.
-
 In addition to adding a new async *ABI* for use by the language's compiler and
 runtime, the Component Model also adds a new `async` [effect type] that can be
 added to function types (in both WIT and raw component function type
@@ -102,6 +92,16 @@ returning a value. For hosts like browsers with event-loop concurrency, this
 invariant is necessary to allow non-`async` component exports to be called in
 synchronous contexts (like event listeners, callbacks, getters, setters and
 constructors).
+
+The new async ABI can be used alongside or instead of the existing Preview 2
+"sync ABI" to call or implement any `async`-typed functions. When *calling* an
+imported function via the async ABI, if the `async` callee [blocks](#blocking),
+control flow is returned immediately to the caller, and the callee continues
+executing concurrently. When *implementing* an `async` function via the async
+ABI, multiple concurrent export calls are allowed to be made by the caller.
+Critically, both sync-ABI-calls-async-ABI and async-ABI-calls-sync-ABI pairings
+have well-defined, composable behavior for both inter-component and
+intra-component calls.
 
 Because `async` function exports may be implemented with the *sync* ABI and
 then call `async` function imports using the *sync* ABI, traditional sync code
@@ -873,19 +873,12 @@ JS [top-level `await`] or I/O in C++ constructors executing during `start`.
 
 ## Async ABI
 
-At an ABI level, native async in the Component Model defines for every WIT
-function an async-oriented core function signature that can be used instead of
-or in addition to the existing (Preview-2-defined) synchronous core function
-signature. This async-oriented core function signature is intended to be called
-or implemented by generated bindings which then map the low-level core async
-protocol to the languages' higher-level native concurrency features.
-
-Note that *every* WIT-level function type can be lifted and lowered using the
-async (or sync) ABI. While calling a non-`async`-typed function import using
-the async ABI will never returned that the call "blocked" (as guaranteed by the
-Component Model trapping if the callee would have blocked), the async ABI is
-still allowed to be used (for the benefit of code generators that only want
-to think about one ABI).
+At an ABI level, native async in the Component Model defines for every
+`async`-typed function a non-blocking core function signature that can be
+used instead of or in addition to the existing (Preview-2-defined) synchronous
+core function signature. This non-blocking core function signature is intended
+to be called or implemented by generated bindings which then map the low-level
+core async protocol to the languages' higher-level native concurrency features.
 
 ### Async Import ABI
 
