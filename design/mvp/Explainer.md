@@ -569,10 +569,10 @@ defvaltype    ::= bool
                 | (future <valtype>?) 🔀
 valtype       ::= <typeidx>
                 | <defvaltype>
-resourcetype  ::= (resource (rep i32) (dtor <funcidx>)?)
-                | (resource (rep i32) (dtor async <funcidx> (callback <funcidx>)?)?) 🚝
-                | (resource (rep i64) (dtor <funcidx>)?) 🐘
-                | (resource (rep i64) (dtor async <funcidx> (callback <funcidx>)?)?) 🚝🐘
+resourcetype  ::= (resource (rep i32) (dtor <core:funcidx>)?)
+                | (resource (rep i32) (dtor async <core:funcidx> (callback <core:funcidx>)?)?) 🚝
+                | (resource (rep i64) (dtor <core:funcidx>)?) 🐘
+                | (resource (rep i64) (dtor async <core:funcidx> (callback <core:funcidx>)?)?) 🚝🐘
 functype      ::= (func async? (param "<label>" <valtype>)* (result <valtype>)?)
 componenttype ::= (component <componentdecl>*)
 instancetype  ::= (instance <instancedecl>*)
