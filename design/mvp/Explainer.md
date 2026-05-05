@@ -792,12 +792,14 @@ this can sometimes allow values to be represented differently. For example,
 of boolean fields uses a sequence of boolean-valued bytes.
 
 Since a `map` is a specialization of a list of (key, value) pairs without any
-additional semantic guarantee of key uniqueness, the Component Model does not
-forcibly prevent duplicate keys from appearing in the list. In the case of
-duplicate keys, the expectation for bindings generators is that for any given
-key, the *last* (key, value) pair in the list defines the value of the key in
-the map. To simplify bindings generation, `<keytype>`s is a conservative subset
-of `<valtype>`, but this subset could be expanded over time based on use cases.
+additional semantic guarantee of key uniqueness or ordering, the Component Model
+does not prevent duplicate keys from appearing in the list. Bindings generators
+*may* deduplicate and reorder keys as long as the *last* (key, value) pair in the
+original list defines the final value of the key. However, bindings generators
+are not *required* to deduplicate keys and may instead simply present the
+original list to guest code. To simplify bindings generation, `<keytype>` is a
+conservative subset of `<valtype>`, but this subset could be expanded over time
+based on use cases.
 
 Note that, at least initially, variants must have a non-empty list of
 cases. This could be relaxed in the future to allow an empty list of cases, with
