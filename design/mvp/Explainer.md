@@ -3084,6 +3084,8 @@ In particular, the Component Model maintains the following invariants:
 
 ### JS API
 
+***NOTE: This will be replaced by Web.md***
+
 The [JS API] currently provides `WebAssembly.compile(Streaming)` which take
 raw bytes from an `ArrayBuffer` or `Response` object and produces
 `WebAssembly.Module` objects that represent decoded and validated modules. To
