@@ -181,7 +181,62 @@ class FutureType(ValType):
 
 # START
 
-## Stack Switching
+## Component Instances
+
+class ComponentInstance:
+  store: Store
+  parent: Optional[ComponentInstance]
+  handles: Table[ResourceHandle | Waitable | WaitableSet | ErrorContext]
+  threads: Table[Thread]
+  may_leave: bool
+  backpressure: int
+  num_waiting_to_enter: int
+  exclusive: Optional[Task]
+
+  def __init__(self, store, parent = None):
+    assert(parent is None or parent.store is store)
+    self.store = store
+    self.parent = parent
+    self.handles = Table()
+    self.threads = Table()
+    self.may_leave = True
+    self.backpressure = 0
+    self.num_waiting_to_enter = 0
+    self.exclusive = None
+
+  def reflexive_ancestors(self) -> set[ComponentInstance]:
+    s = set()
+    inst = self
+    while inst is not None:
+      s.add(inst)
+      inst = inst.parent
+    return s
+
+  def is_reflexive_ancestor_of(self, other):
+    while other is not None:
+      if self is other:
+        return True
+      other = other.parent
+    return False
+
+class Supertask:
+  inst: Optional[ComponentInstance]
+  supertask: Optional[Supertask]
+
+def call_might_be_recursive(caller: Supertask, callee_inst: ComponentInstance):
+  if caller.inst is None:
+    while caller is not None:
+      if caller.inst and caller.inst.reflexive_ancestors() & callee_inst.reflexive_ancestors():
+        return True
+      caller = caller.supertask
+    return False
+  else:
+    return (caller.inst.is_reflexive_ancestor_of(callee_inst) or
+            callee_inst.is_reflexive_ancestor_of(caller.inst))
+
+## Concurrency
+
+### Stack Switching
 
 class Cancelled(IntEnum):
   FALSE = 0
@@ -250,224 +305,7 @@ def current_task() -> Task:
 def current_instance() -> ComponentInstance:
   return current_task().inst
 
-## Embedding API
-
-class Store:
-  waiting: list[Thread]
-
-  def __init__(self):
-    self.waiting = []
-
-  def invoke(self, f: FuncInst, caller: Optional[Supertask], on_start, on_resolve) -> OnCancel:
-    host_caller = Supertask()
-    host_caller.inst = None
-    host_caller.supertask = caller
-    return f(host_caller, on_start, on_resolve)
-
-  def lift(self, f: CoreFuncInst, ft: FuncType, opts: CanonicalOptions, inst: ComponentInstance) -> FuncInst:
-    def func_inst(caller: Supertask, on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
-      trap_if(call_might_be_recursive(caller, inst))
-      return canon_lift(f, ft, opts, inst, caller, on_start, on_resolve)
-    return func_inst
-
-  def lower(self, f: FuncInst, ft: FuncType, opts: CanonicalOptions, inst: ComponentInstance) -> CoreFuncInst:
-    def core_func_inst(args: list[CoreValType]) -> list[CoreValType]:
-      assert(current_instance() is inst)
-      return canon_lower(f, ft, opts, args)
-    return core_func_inst
-
-  def tick(self):
-    random.shuffle(self.waiting)
-    for thread in self.waiting:
-      if thread.ready():
-        thread.resume()
-        return
-
-OnStart = Callable[[], list[any]]
-OnResolve = Callable[[Optional[list[any]]], None]
-OnCancel = Callable[[], None]
-
-class Supertask:
-  inst: Optional[ComponentInstance]
-  supertask: Optional[Supertask]
-
-FuncInst = Callable[[Supertask, OnStart, OnResolve], OnCancel]
-CoreFuncInst = Callable[[list[CoreValType]], list[CoreValType]]
-
-## Lifting and Lowering Context
-
-class LiftLowerContext:
-  opts: LiftLowerOptions
-  inst: ComponentInstance
-  borrow_scope: Optional[Task|Subtask]
-
-  def __init__(self, opts, inst, borrow_scope = None):
-    self.opts = opts
-    self.inst = inst
-    self.borrow_scope = borrow_scope
-
-## Canonical ABI Options
-
-def ptr_size(ptr_type):
-  match ptr_type:
-    case 'i32':
-      return 4
-    case 'i64':
-      return 8
-
-@dataclass
-class MemInst:
-  bytes: bytearray
-  addrtype: Literal['i32', 'i64']
-
-  def __getitem__(self, i):
-    return self.bytes[i]
-
-  def __setitem__(self, i, v):
-    self.bytes[i] = v
-
-  def __len__(self):
-    return len(self.bytes)
-
-  def ptr_type(self):
-    return self.addrtype
-
-  def ptr_size(self):
-    return ptr_size(self.ptr_type())
-
-@dataclass
-class LiftOptions:
-  string_encoding: str = 'utf8'
-  memory: Optional[MemInst] = None
-
-  def equal(lhs, rhs):
-    return lhs.string_encoding == rhs.string_encoding and \
-           lhs.memory is rhs.memory
-
-@dataclass
-class LiftLowerOptions(LiftOptions):
-  realloc: Optional[Callable] = None
-
-@dataclass
-class CanonicalOptions(LiftLowerOptions):
-  post_return: Optional[Callable] = None
-  async_: bool = False
-  callback: Optional[Callable] = None
-
-## Runtime State
-
-### Component Instance State
-
-class ComponentInstance:
-  store: Store
-  parent: Optional[ComponentInstance]
-  handles: Table[ResourceHandle | Waitable | WaitableSet | ErrorContext]
-  threads: Table[Thread]
-  may_leave: bool
-  backpressure: int
-  exclusive: Optional[Task]
-  num_waiting_to_enter: int
-
-  def __init__(self, store, parent = None):
-    assert(parent is None or parent.store is store)
-    self.store = store
-    self.parent = parent
-    self.handles = Table()
-    self.threads = Table()
-    self.may_leave = True
-    self.backpressure = 0
-    self.exclusive = None
-    self.num_waiting_to_enter = 0
-
-  def reflexive_ancestors(self) -> set[ComponentInstance]:
-    s = set()
-    inst = self
-    while inst is not None:
-      s.add(inst)
-      inst = inst.parent
-    return s
-
-  def is_reflexive_ancestor_of(self, other):
-    while other is not None:
-      if self is other:
-        return True
-      other = other.parent
-    return False
-
-def call_might_be_recursive(caller: Supertask, callee_inst: ComponentInstance):
-  if caller.inst is None:
-    while caller is not None:
-      if caller.inst and caller.inst.reflexive_ancestors() & callee_inst.reflexive_ancestors():
-        return True
-      caller = caller.supertask
-    return False
-  else:
-    return (caller.inst.is_reflexive_ancestor_of(callee_inst) or
-            callee_inst.is_reflexive_ancestor_of(caller.inst))
-
-### Table State
-
-class Table:
-  array: list[any]
-  free: list[int]
-
-  MAX_LENGTH = 2**28 - 1
-
-  def __init__(self):
-    self.array = [None]
-    self.free = []
-
-  def get(self, i):
-    trap_if(i >= len(self.array))
-    trap_if(self.array[i] is None)
-    return self.array[i]
-
-  def add(self, e):
-    if self.free:
-      i = self.free.pop()
-      assert(self.array[i] is None)
-      self.array[i] = e
-    else:
-      i = len(self.array)
-      trap_if(i > Table.MAX_LENGTH)
-      self.array.append(e)
-    return i
-
-  def remove(self, i):
-    e = self.get(i)
-    self.array[i] = None
-    self.free.append(i)
-    return e
-
-### Resource State
-
-class ResourceHandle:
-  rt: ResourceType
-  rep: int
-  own: bool
-  borrow_scope: Optional[Task]
-  num_lends: int
-
-  def __init__(self, rt, rep, own, borrow_scope = None):
-    self.rt = rt
-    self.rep = rep
-    self.own = own
-    self.borrow_scope = borrow_scope
-    self.num_lends = 0
-
-class ResourceType(Type):
-  impl: ComponentInstance
-  dtor: Optional[Callable]
-  dtor_async: bool
-  dtor_callback: Optional[Callable]
-
-  def __init__(self, impl, dtor = None, dtor_async = False, dtor_callback = None):
-    self.impl = impl
-    self.dtor = dtor
-    self.dtor_async = dtor_async
-    self.dtor_callback = dtor_callback
-
-### Thread State
+### Threads
 
 class Thread:
   cont: Optional[Continuation]
@@ -572,96 +410,12 @@ class Thread:
     self.task.inst.store.waiting.append(self)
     return self.switch_to(cancellable, other)
 
-### Waitable State
+### Tasks
 
-class EventCode(IntEnum):
-  NONE = 0
-  SUBTASK = 1
-  STREAM_READ = 2
-  STREAM_WRITE = 3
-  FUTURE_READ = 4
-  FUTURE_WRITE = 5
-  TASK_CANCELLED = 6
-
-EventTuple = tuple[EventCode, int, int]
-
-class Waitable:
-  pending_event: Optional[Callable[[], EventTuple]]
-  wset: Optional[WaitableSet]
-
-  def __init__(self):
-    self.pending_event = None
-    self.wset = None
-
-  def set_pending_event(self, pending_event):
-    self.pending_event = pending_event
-
-  def has_pending_event(self):
-    return bool(self.pending_event)
-
-  def get_pending_event(self) -> EventTuple:
-    pending_event = self.pending_event
-    self.pending_event = None
-    return pending_event()
-
-  def join(self, wset):
-    if self.wset:
-      self.wset.elems.remove(self)
-    self.wset = wset
-    if wset:
-      wset.elems.append(self)
-
-  def drop(self):
-    assert(not self.has_pending_event())
-    self.join(None)
-
-class WaitableSet:
-  elems: list[Waitable]
-  num_waiting: int
-
-  def __init__(self):
-    self.elems = []
-    self.num_waiting = 0
-
-  def has_pending_event(self):
-    return any(w.has_pending_event() for w in self.elems)
-
-  def get_pending_event(self) -> EventTuple:
-    assert(self.has_pending_event())
-    random.shuffle(self.elems)
-    for w in self.elems:
-      assert(self is w.wset)
-      if w.has_pending_event():
-        return w.get_pending_event()
-
-  def wait_for_event_and(self, ready_func, cancellable) -> EventTuple:
-    def ready_and_has_event():
-      return ready_func() and self.has_pending_event()
-    self.num_waiting += 1
-    cancelled = current_thread().wait_until(ready_and_has_event, cancellable)
-    if cancelled:
-      event = (EventCode.TASK_CANCELLED, 0, 0)
-    else:
-      event = self.get_pending_event()
-    self.num_waiting -= 1
-    return event
-
-  def wait_for_event(self, cancellable) -> EventTuple:
-    return self.wait_for_event_and(lambda: True, cancellable)
-
-  def poll(self, cancellable) -> EventTuple:
-    if current_task().deliver_pending_cancel(cancellable):
-      return (EventCode.TASK_CANCELLED, 0, 0)
-    elif not self.has_pending_event():
-      return (EventCode.NONE, 0, 0)
-    else:
-      return self.get_pending_event()
-
-  def drop(self):
-    trap_if(len(self.elems) > 0)
-    trap_if(self.num_waiting > 0)
-
-### Task State
+OnStart = Callable[[], list[any]]
+OnResolve = Callable[[Optional[list[any]]], None]
+OnCancel = Callable[[], None]
+FuncInst = Callable[[Supertask, OnStart, OnResolve], OnCancel]
 
 class Task(Supertask):
   class State(Enum):
@@ -780,6 +534,254 @@ class Task(Supertask):
     trap_if(self.num_borrows > 0)
     self.on_resolve(None)
     self.state = Task.State.RESOLVED
+
+## Embedding API
+
+CoreFuncInst = Callable[[list[CoreValType]], list[CoreValType]]
+
+class Store:
+  waiting: list[Thread]
+
+  def __init__(self):
+    self.waiting = []
+
+  def invoke(self, f: FuncInst, caller: Optional[Supertask], on_start, on_resolve) -> OnCancel:
+    host_caller = Supertask()
+    host_caller.inst = None
+    host_caller.supertask = caller
+    return f(host_caller, on_start, on_resolve)
+
+  def lift(self, f: CoreFuncInst, ft: FuncType, opts: CanonicalOptions, inst: ComponentInstance) -> FuncInst:
+    def func_inst(caller: Supertask, on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
+      trap_if(call_might_be_recursive(caller, inst))
+      return canon_lift(f, ft, opts, inst, caller, on_start, on_resolve)
+    return func_inst
+
+  def lower(self, f: FuncInst, ft: FuncType, opts: CanonicalOptions, inst: ComponentInstance) -> CoreFuncInst:
+    def core_func_inst(args: list[CoreValType]) -> list[CoreValType]:
+      assert(current_instance() is inst)
+      return canon_lower(f, ft, opts, args)
+    return core_func_inst
+
+  def tick(self):
+    random.shuffle(self.waiting)
+    for thread in self.waiting:
+      if thread.ready():
+        thread.resume()
+        return
+
+## Lifting and Lowering Context
+
+class LiftLowerContext:
+  opts: LiftLowerOptions
+  inst: ComponentInstance
+  borrow_scope: Optional[Task|Subtask]
+
+  def __init__(self, opts, inst, borrow_scope = None):
+    self.opts = opts
+    self.inst = inst
+    self.borrow_scope = borrow_scope
+
+## Canonical ABI Options
+
+def ptr_size(ptr_type):
+  match ptr_type:
+    case 'i32':
+      return 4
+    case 'i64':
+      return 8
+
+@dataclass
+class MemInst:
+  bytes: bytearray
+  addrtype: Literal['i32', 'i64']
+
+  def __getitem__(self, i):
+    return self.bytes[i]
+
+  def __setitem__(self, i, v):
+    self.bytes[i] = v
+
+  def __len__(self):
+    return len(self.bytes)
+
+  def ptr_type(self):
+    return self.addrtype
+
+  def ptr_size(self):
+    return ptr_size(self.ptr_type())
+
+@dataclass
+class LiftOptions:
+  string_encoding: str = 'utf8'
+  memory: Optional[MemInst] = None
+
+  def equal(lhs, rhs):
+    return lhs.string_encoding == rhs.string_encoding and \
+           lhs.memory is rhs.memory
+
+@dataclass
+class LiftLowerOptions(LiftOptions):
+  realloc: Optional[Callable] = None
+
+@dataclass
+class CanonicalOptions(LiftLowerOptions):
+  post_return: Optional[Callable] = None
+  async_: bool = False
+  callback: Optional[Callable] = None
+
+## Runtime State
+
+### Table State
+
+class Table:
+  array: list[any]
+  free: list[int]
+
+  MAX_LENGTH = 2**28 - 1
+
+  def __init__(self):
+    self.array = [None]
+    self.free = []
+
+  def get(self, i):
+    trap_if(i >= len(self.array))
+    trap_if(self.array[i] is None)
+    return self.array[i]
+
+  def add(self, e):
+    if self.free:
+      i = self.free.pop()
+      assert(self.array[i] is None)
+      self.array[i] = e
+    else:
+      i = len(self.array)
+      trap_if(i > Table.MAX_LENGTH)
+      self.array.append(e)
+    return i
+
+  def remove(self, i):
+    e = self.get(i)
+    self.array[i] = None
+    self.free.append(i)
+    return e
+
+### Resource State
+
+class ResourceHandle:
+  rt: ResourceType
+  rep: int
+  own: bool
+  borrow_scope: Optional[Task]
+  num_lends: int
+
+  def __init__(self, rt, rep, own, borrow_scope = None):
+    self.rt = rt
+    self.rep = rep
+    self.own = own
+    self.borrow_scope = borrow_scope
+    self.num_lends = 0
+
+class ResourceType(Type):
+  impl: ComponentInstance
+  dtor: Optional[Callable]
+  dtor_async: bool
+  dtor_callback: Optional[Callable]
+
+  def __init__(self, impl, dtor = None, dtor_async = False, dtor_callback = None):
+    self.impl = impl
+    self.dtor = dtor
+    self.dtor_async = dtor_async
+    self.dtor_callback = dtor_callback
+
+### Waitable State
+
+class EventCode(IntEnum):
+  NONE = 0
+  SUBTASK = 1
+  STREAM_READ = 2
+  STREAM_WRITE = 3
+  FUTURE_READ = 4
+  FUTURE_WRITE = 5
+  TASK_CANCELLED = 6
+
+EventTuple = tuple[EventCode, int, int]
+
+class Waitable:
+  pending_event: Optional[Callable[[], EventTuple]]
+  wset: Optional[WaitableSet]
+
+  def __init__(self):
+    self.pending_event = None
+    self.wset = None
+
+  def set_pending_event(self, pending_event):
+    self.pending_event = pending_event
+
+  def has_pending_event(self):
+    return bool(self.pending_event)
+
+  def get_pending_event(self) -> EventTuple:
+    pending_event = self.pending_event
+    self.pending_event = None
+    return pending_event()
+
+  def join(self, wset):
+    if self.wset:
+      self.wset.elems.remove(self)
+    self.wset = wset
+    if wset:
+      wset.elems.append(self)
+
+  def drop(self):
+    assert(not self.has_pending_event())
+    self.join(None)
+
+class WaitableSet:
+  elems: list[Waitable]
+  num_waiting: int
+
+  def __init__(self):
+    self.elems = []
+    self.num_waiting = 0
+
+  def has_pending_event(self):
+    return any(w.has_pending_event() for w in self.elems)
+
+  def get_pending_event(self) -> EventTuple:
+    assert(self.has_pending_event())
+    random.shuffle(self.elems)
+    for w in self.elems:
+      assert(self is w.wset)
+      if w.has_pending_event():
+        return w.get_pending_event()
+
+  def wait_for_event_and(self, ready_func, cancellable) -> EventTuple:
+    def ready_and_has_event():
+      return ready_func() and self.has_pending_event()
+    self.num_waiting += 1
+    cancelled = current_thread().wait_until(ready_and_has_event, cancellable)
+    if cancelled:
+      event = (EventCode.TASK_CANCELLED, 0, 0)
+    else:
+      event = self.get_pending_event()
+    self.num_waiting -= 1
+    return event
+
+  def wait_for_event(self, cancellable) -> EventTuple:
+    return self.wait_for_event_and(lambda: True, cancellable)
+
+  def poll(self, cancellable) -> EventTuple:
+    if current_task().deliver_pending_cancel(cancellable):
+      return (EventCode.TASK_CANCELLED, 0, 0)
+    elif not self.has_pending_event():
+      return (EventCode.NONE, 0, 0)
+    else:
+      return self.get_pending_event()
+
+  def drop(self):
+    trap_if(len(self.elems) > 0)
+    trap_if(self.num_waiting > 0)
 
 ### Subtask State
 
@@ -2637,25 +2639,6 @@ def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], fi, c):
   task.register_thread(new_thread)
   return [new_thread.index]
 
-### 🧵 `canon thread.switch-to`
-
-def canon_thread_switch_to(cancellable, i):
-  thread = current_thread()
-  trap_if(not thread.task.inst.may_leave)
-  other_thread = thread.task.inst.threads.get(i)
-  trap_if(not other_thread.suspended())
-  cancelled = thread.switch_to(cancellable, other_thread)
-  return [cancelled]
-
-### 🧵 `canon thread.suspend`
-
-def canon_thread_suspend(cancellable):
-  thread = current_thread()
-  trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block())
-  cancelled = thread.suspend(cancellable)
-  return [cancelled]
-
 ### 🧵 `canon thread.resume-later`
 
 def canon_thread_resume_later(i):
@@ -2666,14 +2649,13 @@ def canon_thread_resume_later(i):
   other_thread.resume_later()
   return []
 
-### 🧵 `canon thread.yield-to`
+### 🧵 `canon thread.suspend`
 
-def canon_thread_yield_to(cancellable, i):
+def canon_thread_suspend(cancellable):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  other_thread = thread.task.inst.threads.get(i)
-  trap_if(not other_thread.suspended())
-  cancelled = thread.yield_to(cancellable, other_thread)
+  trap_if(not thread.task.may_block())
+  cancelled = thread.suspend(cancellable)
   return [cancelled]
 
 ### 🧵 `canon thread.yield`
@@ -2682,6 +2664,26 @@ def canon_thread_yield(cancellable):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   cancelled = thread.yield_(cancellable)
+  return [cancelled]
+
+### 🧵 `canon thread.switch-to`
+
+def canon_thread_switch_to(cancellable, i):
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  other_thread = thread.task.inst.threads.get(i)
+  trap_if(not other_thread.suspended())
+  cancelled = thread.switch_to(cancellable, other_thread)
+  return [cancelled]
+
+### 🧵 `canon thread.yield-to`
+
+def canon_thread_yield_to(cancellable, i):
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  other_thread = thread.task.inst.threads.get(i)
+  trap_if(not other_thread.suspended())
+  cancelled = thread.yield_to(cancellable, other_thread)
   return [cancelled]
 
 ### 📝 `canon error-context.new`

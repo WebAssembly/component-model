@@ -1454,9 +1454,9 @@ comes after:
 [`unpack_callback_result`]: CanonicalABI.md#canon-lift
 [`canon_lower`]: CanonicalABI.md#canon-lower
 [`Store`]: CanonicalABI.md#embedding
-[`ComponentInstance`]: CanonicalABI.md#component-instance-state
-[`Thread`]: CanonicalABI.md#thread-state
-[`Task`]: CanonicalABI.md#task-state
+[`ComponentInstance`]: CanonicalABI.md#component-instances
+[`Thread`]: CanonicalABI.md#threads
+[`Task`]: CanonicalABI.md#tasks
 [Stream State]: CanonicalABI.md#stream-state
 [Future State]: CanonicalABI.md#future-state
 

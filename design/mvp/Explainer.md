@@ -1457,11 +1457,11 @@ canon ::= ...
         | (canon future.drop-writable <typeidx> (core func <id>?)) 🔀
         | (canon thread.index (core func <id>?)) 🧵
         | (canon thread.new-indirect <typeidx> <core:tableidx> (core func <id>?)) 🧵
-        | (canon thread.switch-to cancellable? (core func <id>?)) 🧵
-        | (canon thread.suspend cancellable? (core func <id>?)) 🧵
         | (canon thread.resume-later (core func <id>?)) 🧵
-        | (canon thread.yield-to cancellable? (core func <id>?)) 🧵
+        | (canon thread.suspend cancellable? (core func <id>?)) 🧵
         | (canon thread.yield cancellable? (core func <id>?)) 🔀
+        | (canon thread.switch-to cancellable? (core func <id>?)) 🧵
+        | (canon thread.yield-to cancellable? (core func <id>?)) 🧵
         | (canon error-context.new <canonopt>* (core func <id>?)) 📝
         | (canon error-context.debug-message <canonopt>* (core func <id>?)) 📝
         | (canon error-context.drop (core func <id>?)) 📝
@@ -2104,6 +2104,64 @@ eagerly or lazily by [`thread.yield-to`](#-threadyield-to) or
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_new_indirect`] in the Canonical ABI explainer.
 
+###### 🧵 `thread.resume-later`
+
+| Synopsis                   |                   |
+| -------------------------- | ----------------- |
+| Approximate WIT signature  | `func(t: thread)` |
+| Canonical ABI signature    | `[t:i32] -> []`   |
+
+The `thread.resume-later` built-in changes the state of thread `t` from
+"suspended" to "ready" (trapping if `t` is not in a "suspended" state) so that
+the runtime can nondeterministically resume `t` at some point in the future.
+
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_thread_resume_later`] in the Canonical ABI explainer.
+
+###### 🧵 `thread.suspend`
+
+| Synopsis                   |                                |
+| -------------------------- | ------------------------------ |
+| Approximate WIT signature  | `func<cancellable?>() -> bool` |
+| Canonical ABI signature    | `[] -> [i32]`                  |
+
+The `thread.suspend` built-in suspends the [current thread] which,
+depending on the calling context, will either immediately switch control flow
+to an `async`-lowered caller or, if the current task has already suspended
+before, switch to the runtime's scheduler to find something else to do. If
+`cancellable` is set, `thread.suspend` returns whether the current task was
+[cancelled] by the caller; otherwise, `thread.suspend` always returns `false`.
+
+A non-`async`-typed function export that has not yet returned a value traps if
+it transitively attempts to call `thread.suspend`.
+
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_thread_suspend`] in the Canonical ABI explainer.
+
+###### 🔀 `thread.yield`
+
+| Synopsis                   |                                |
+| -------------------------- | ------------------------------ |
+| Approximate WIT signature  | `func<cancellable?>() -> bool` |
+| Canonical ABI signature    | `[] -> [i32]`                  |
+
+The `thread.yield` built-in allows the runtime to potentially switch to any
+other thread in the "ready" state, enabling a long-running computation to
+cooperatively interleave execution without specifically requesting another
+thread to be resumed (as with `thread.yield-to`). If `cancellable` is set,
+`thread.yield` returns whether the current task was [cancelled] by the caller;
+otherwise, `thread.yield` always returns `false`.
+
+If `thread.yield` is called from a synchronous- or `async callback`-lifted
+export, it returns immediately without blocking (instead of trapping, as with
+other possibly-blocking operations like `waitable-set.wait`). This is because,
+unlike other built-ins, `thread.yield` may be scattered liberally throughout
+code that might show up in the transitive call tree of a synchronous function
+call.
+
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_thread_yield`] in the Canonical ABI explainer.
+
 ###### 🧵 `thread.switch-to`
 
 | Synopsis                   |                                         |
@@ -2127,40 +2185,6 @@ threads and threads implicitly created by non-`callback` `async`-lifted
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_switch_to`] in the Canonical ABI explainer.
-
-###### 🧵 `thread.suspend`
-
-| Synopsis                   |                                |
-| -------------------------- | ------------------------------ |
-| Approximate WIT signature  | `func<cancellable?>() -> bool` |
-| Canonical ABI signature    | `[] -> [i32]`                  |
-
-The `thread.suspend` built-in suspends the [current thread] which,
-depending on the calling context, will either immediately switch control flow
-to an `async`-lowered caller or, if the current task has already suspended
-before, switch to the runtime's scheduler to find something else to do. If
-`cancellable` is set, `thread.suspend` returns whether the current task was
-[cancelled] by the caller; otherwise, `thread.suspend` always returns `false`.
-
-A non-`async`-typed function export that has not yet returned a value traps if
-it transitively attempts to call `thread.suspend`.
-
-For details, see [Thread Built-ins] in the concurrency explainer and
-[`canon_thread_suspend`] in the Canonical ABI explainer.
-
-###### 🧵 `thread.resume-later`
-
-| Synopsis                   |                   |
-| -------------------------- | ----------------- |
-| Approximate WIT signature  | `func(t: thread)` |
-| Canonical ABI signature    | `[t:i32] -> []`   |
-
-The `thread.resume-later` built-in changes the state of thread `t` from
-"suspended" to "ready" (trapping if `t` is not in a "suspended" state) so that
-the runtime can nondeterministically resume `t` at some point in the future.
-
-For details, see [Thread Built-ins] in the concurrency explainer and
-[`canon_thread_resume_later`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.yield-to`
 
@@ -2186,30 +2210,6 @@ threads and threads implicitly created by non-`callback` `async`-lifted
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield_to`] in the Canonical ABI explainer.
-
-###### 🔀 `thread.yield`
-
-| Synopsis                   |                                |
-| -------------------------- | ------------------------------ |
-| Approximate WIT signature  | `func<cancellable?>() -> bool` |
-| Canonical ABI signature    | `[] -> [i32]`                  |
-
-The `thread.yield` built-in allows the runtime to potentially switch to any
-other thread in the "ready" state, enabling a long-running computation to
-cooperatively interleave execution without specifically requesting another
-thread to be resumed (as with `thread.yield-to`). If `cancellable` is set,
-`thread.yield` returns whether the current task was [cancelled] by the caller;
-otherwise, `thread.yield` always returns `false`.
-
-If `thread.yield` is called from a synchronous- or `async callback`-lifted
-export, it returns immediately without blocking (instead of trapping, as with
-other possibly-blocking operations like `waitable-set.wait`). This is because,
-unlike other built-ins, `thread.yield` may be scattered liberally throughout
-code that might show up in the transitive call tree of a synchronous function
-call.
-
-For details, see [Thread Built-ins] in the concurrency explainer and
-[`canon_thread_yield`] in the Canonical ABI explainer.
 
 ###### 🧵② `thread.spawn-ref`
 
@@ -2921,7 +2921,7 @@ two runtime invariants:
    component instance.
 2. The Component Model disallows reentrance by trapping if a callee's
    component-instance is already on the stack when the call starts.
-   (For details, see [`call_might_be_recursive`](CanonicalABI.md#component-instance-state)
+   (For details, see [`call_might_be_recursive`](CanonicalABI.md#component-instances)
    in the Canonical ABI explainer.) This default prevents obscure
    composition-time bugs and also enables more-efficient non-reentrant
    runtime glue code. This rule will be relaxed by an opt-in
