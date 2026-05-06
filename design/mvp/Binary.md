@@ -201,6 +201,7 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x6f t*:vec(<valtype>)                  => (tuple t+)    (if |t*| > 0)
                 | 0x6e l*:vec(<label'>)                   => (flags l+)    (if 0 < |l*| <= 32)
                 | 0x6d l*:vec(<label'>)                   => (enum l+)     (if |l*| > 0)
+                | 0x6c t:<valtype> maxlen:<u32>           => (list t (le maxlen)) (if maxlen > 0) 🔧
                 | 0x6b t:<valtype>                        => (option t)
                 | 0x6a t?:<valtype>? u?:<valtype>?        => (result t? (error u)?)
                 | 0x69 i:<typeidx>                        => (own i)
@@ -284,8 +285,9 @@ Notes:
   to match the preceding `sort`.
 * (The `0x00` immediate of `case` may be reinterpreted in the future as the
   `none` case of an optional immediate.)
-* 🔧 for fixed-sized lists the length of the list must be larger than 0 to pass
-  validation.
+* 🔧 for fixed-sized lists (`0x67`) the length of the list must be larger than
+  0 to pass validation; for bounded lists (`0x6c`) the maximum length must be
+  larger than 0 to pass validation.
 
 
 ## Canonical Definitions
