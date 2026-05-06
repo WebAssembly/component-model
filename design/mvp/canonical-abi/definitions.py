@@ -493,10 +493,7 @@ class Thread:
 
   def resume(self, cancelled = Cancelled.FALSE):
     assert(not self.running() and (self.cancellable or not cancelled))
-    if self.waiting():
-      assert(cancelled or self.ready())
-      self.ready_func = None
-      self.task.inst.store.waiting.remove(self)
+    self.stop_waiting()
     thread = self
     while thread is not None:
       cont = thread.cont
@@ -505,9 +502,15 @@ class Thread:
       thread = switch_to
       cancelled = Cancelled.FALSE
 
+  def stop_waiting(self):
+    if self.waiting():
+      self.ready_func = None
+      self.task.inst.store.waiting.remove(self)
+
   def suspend(self, cancellable) -> Cancelled:
     assert(self.running() and self.task.may_block())
     if self.task.deliver_pending_cancel(cancellable):
+      self.stop_waiting()
       return Cancelled.TRUE
     self.cancellable = cancellable
     cancelled = block(switch_to = None)
@@ -538,6 +541,7 @@ class Thread:
   def switch_to(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running() and other.suspended())
     if self.task.deliver_pending_cancel(cancellable):
+      self.stop_waiting()
       return Cancelled.TRUE
     self.cancellable = cancellable
     cancelled = block(switch_to = other)
@@ -1941,7 +1945,7 @@ def lower_flat(cx, v, t):
     case F64Type()          : return [maybe_scramble_nan64(v)]
     case CharType()         : return [char_to_i32(v)]
     case StringType()       : return lower_flat_string(cx, v)
-    case ErrorContextType() : return lower_error_context(cx, v)
+    case ErrorContextType() : return [lower_error_context(cx, v)]
     case ListType(t, l)     : return lower_flat_list(cx, v, t, l)
     case RecordType(fields) : return lower_flat_record(cx, v, fields)
     case VariantType(cases) : return lower_flat_variant(cx, v, cases)

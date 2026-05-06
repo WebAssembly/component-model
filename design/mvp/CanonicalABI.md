@@ -675,7 +675,7 @@ class Table:
     return e
 ```
 `Table` maintains a dense array of elements that can contain holes created by
-the `remove` method (defined below). When table elements are accessed (e.g., by
+the `remove` method (defined above). When table elements are accessed (e.g., by
 `canon_lift` and `resource.rep`, below), there are thus both a bounds check and
 hole check necessary. Upon initialization, table element `0` is allocated and
 set to `None`, effectively reserving index `0` which is both useful for
@@ -711,10 +711,9 @@ class ResourceHandle:
     self.borrow_scope = borrow_scope
     self.num_lends = 0
 ```
-The `rt` and `rep` fields of `ResourceHandle` store the `rt` and `rep`
-parameters passed to the `resource.new` call that created this handle. The
-`rep` field is currently fixed to be an `i32`, but will be generalized in the
-future to other types.
+The `rt` and `rep` fields of `ResourceHandle` store the resource type and
+representation of the resource. The `rep` field is currently fixed to be an
+`i32`, but will be generalized in the future to other types.
 
 The `own` field indicates whether this element was created from an `own` type
 (or, if false, a `borrow` type).
@@ -726,9 +725,9 @@ time and thus an optimizing implementation doesn't need to store the `Task`
 per `ResourceHandle`.
 
 The `num_lends` field maintains a conservative approximation of the number of
-live handles that were lent from this `own` handle (by calls to `borrow`-taking
+live handles that were lent from this handle (by calls to `borrow`-taking
 functions). This count is maintained by the `Subtask` bookkeeping functions
-(above) and is ensured to be zero when an `own` handle is dropped.
+(below) and is ensured to be zero when an `own` handle is dropped.
 
 The `ResourceType` class represents a runtime instance of a resource type that
 has been created either by the host or a component instance (where multiple
@@ -850,10 +849,7 @@ thread to `switch_to`.
 ```python
   def resume(self, cancelled = Cancelled.FALSE):
     assert(not self.running() and (self.cancellable or not cancelled))
-    if self.waiting():
-      assert(cancelled or self.ready())
-      self.ready_func = None
-      self.task.inst.store.waiting.remove(self)
+    self.stop_waiting()
     thread = self
     while thread is not None:
       cont = thread.cont
@@ -861,6 +857,11 @@ thread to `switch_to`.
       (thread.cont, switch_to) = resume(cont, cancelled, thread)
       thread = switch_to
       cancelled = Cancelled.FALSE
+
+  def stop_waiting(self):
+    if self.waiting():
+      self.ready_func = None
+      self.task.inst.store.waiting.remove(self)
 ```
 The `Thread.resume` method propagates cancellation requests (from
 `Task.request_cancellation`) to the first continuation that is resumed, allowing
@@ -881,6 +882,7 @@ here which transfers control flow back to `Thread.resume()` via `block()`. The
   def suspend(self, cancellable) -> Cancelled:
     assert(self.running() and self.task.may_block())
     if self.task.deliver_pending_cancel(cancellable):
+      self.stop_waiting()
       return Cancelled.TRUE
     self.cancellable = cancellable
     cancelled = block(switch_to = None)
@@ -948,6 +950,7 @@ caller is `cancellable`. Then the current thread transfers control flow back to
   def switch_to(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running() and other.suspended())
     if self.task.deliver_pending_cancel(cancellable):
+      self.stop_waiting()
       return Cancelled.TRUE
     self.cancellable = cancellable
     cancelled = block(switch_to = other)
@@ -1271,7 +1274,7 @@ and the task has not yet returned a value to its caller.
 ```
 
 The `Task.request_cancellation` method is called by the host or wasm caller
-to signal that they don't need the return value and that the caller should hurry
+to signal that they don't need the return value and that the callee should hurry
 up and call the `OnResolve` callback. If a task is waiting to start in
 `Task.enter` due to backpressure, then it is immediately cancelled without
 running any guest code. Otherwise, if *any* of a cancelled `Task`'s `Thread`s
@@ -1572,8 +1575,8 @@ thus no more reads/writes are possible. The `CANCELLED` code is only possible
 after *this* end has performed a `{stream,future}.{read,write}` followed by a
 `{stream,future}.cancel-{read,write}`; `CANCELLED` notifies the wasm code
 that the cancellation finished and so ownership of the memory buffer has been
-returned to the wasm code. Lastly, `COMPLETED` indicates that at least one
-value has been copied and neither `DROPPED` nor `CANCELLED` apply.
+returned to the wasm code. Lastly, `COMPLETED` indicates that the copy is done
+and neither `DROPPED` nor `CANCELLED` apply.
 
 As with functions and buffers, native host code can be on either side of a
 stream. Thus, streams are defined in terms of abstract interfaces that can be
@@ -1698,9 +1701,8 @@ stored in the `pending_*` fields, requiring the reader to wait for the writer
 to rendezvous. If the writer was first to rendezvous, then there is already a
 pending `ReadableBuffer` to read from, and so the reader copies as much as it
 can (which may be less than a full buffer's worth) and eagerly completes the
-copy without blocking. In the final special case where both the reader and
-pending writer have zero-length buffers, the writer is notified, but the reader
-remains blocked:
+copy without blocking. In the final special case where the pending writer has a
+zero-length buffer, the writer is notified, but the reader remains blocked:
 ```python
   def read(self, inst, dst_buffer, on_copy, on_copy_done):
     if self.dropped:
@@ -1824,8 +1826,8 @@ As shown in `drop`, attempting to drop a readable or writable end while a copy
 is in progress or in the process of being cancelled traps. This means that
 client code must take care to wait for these operations to finish (potentially
 cancelling them via `stream.cancel-{read,write}`) before dropping. The
-`SYNC_COPY` vs. `ASYNC_COPY` distinction is tracked in the state to determine
-whether the copy operation can be cancelled.
+`SYNC_COPYING` vs. `ASYNC_COPYING` distinction is tracked in the state to
+determine whether the copy operation can be cancelled.
 
 The polymorphic `copy` method dispatches to either `ReadableStream.read` or
 `WritableStream.write` and allows the implementations of `stream.{read,write}`
@@ -2829,7 +2831,7 @@ def match_case(v, cases):
 ```
 
 Flags are converted from a dictionary to a bit-vector by iterating
-through the case-labels of the variant in the order they were listed in the
+through the labels of the flags type in the order they were listed in the
 type definition and OR-ing all the bits together. Flag lifting/lowering can be
 statically fused into array/integer operations (with a simple byte copy when
 the case lists are the same) to avoid any string operations in a similar manner
@@ -2953,9 +2955,9 @@ def flatten_functype(opts, ft, context):
 def flatten_types(ts, opts):
   return [ft for t in ts for ft in flatten_type(t, opts)]
 ```
-As shown here, the core signatures `async` functions use a lower limit on the
-maximum number of parameters (4) and results (0) passed as scalars before
-falling back to passing through memory.
+As shown here, the core signatures of `async`-lowered functions use a lower
+limit on the maximum number of parameters (4) and results (0) passed as scalars
+before falling back to passing through memory.
 
 Presenting the definition of `flatten_type` piecewise, we start with the
 top-level case analysis:
@@ -3108,7 +3110,7 @@ The contents of strings and variable-length lists are stored in memory so
 lifting these types is essentially the same as loading them from memory; the
 only difference is that the pointer and length come from ptr-sized values
 instead of from linear memory. Fixed-length lists are lifted the same way as a
-tuple (via `lift_flat_record` below).
+tuple.
 ```python
 def lift_flat_string(cx, vi):
   ptr = vi.next(cx.opts.memory.ptr_type())
@@ -3139,8 +3141,8 @@ Variants are also lifted recursively. Lifting a variant must carefully follow
 the definition of `flatten_variant` above, consuming the exact same core types
 regardless of the dynamic case payload being lifted. Because of the `join`
 performed by `flatten_variant`, we need a more-permissive value iterator that
-reinterprets between the different types appropriately and also traps if the
-high bits of an `i64` are set for a 32-bit type:
+reinterprets between the different types appropriately and also wraps
+`i64` values to 32-bit when needed:
 ```python
 def lift_flat_variant(cx, vi, cases):
   flat_types = flatten_variant(cases, cx.opts)
@@ -3201,7 +3203,7 @@ def lower_flat(cx, v, t):
     case F64Type()          : return [maybe_scramble_nan64(v)]
     case CharType()         : return [char_to_i32(v)]
     case StringType()       : return lower_flat_string(cx, v)
-    case ErrorContextType() : return lower_error_context(cx, v)
+    case ErrorContextType() : return [lower_error_context(cx, v)]
     case ListType(t, l)     : return lower_flat_list(cx, v, t, l)
     case RecordType(fields) : return lower_flat_record(cx, v, fields)
     case VariantType(cases) : return lower_flat_variant(cx, v, cases)
@@ -3215,8 +3217,8 @@ def lower_flat(cx, v, t):
 Since component-level values are assumed in-range and, as previously stated,
 core `i32` values are always internally represented as unsigned `int`s,
 unsigned integer values need no extra conversion. Signed integer values are
-converted to unsigned core `i32`s by 2s complement arithmetic (which again
-would be a no-op in hardware):
+converted to unsigned core `i32` or `i64` values by 2s complement arithmetic
+(which again would be a no-op in hardware):
 ```python
 def lower_flat_signed(i, core_bits):
   if i < 0:
@@ -3224,11 +3226,10 @@ def lower_flat_signed(i, core_bits):
   return [i]
 ```
 
-Since strings and variable-length lists are stored in linear memory, lifting
+Since strings and variable-length lists are stored in linear memory, lowering
 can reuse the previous definitions; only the resulting pointers are returned
-differently (as `i32` values instead of as a pair in linear memory).
-Fixed-length lists are lowered the same way as tuples (via `lower_flat_record`
-below).
+differently (as flat values instead of as a pair in linear memory).
+Fixed-length lists are lowered the same way as tuples.
 ```python
 def lower_flat_string(cx, v):
   ptr, packed_length = store_string_into_range(cx, v)
@@ -3392,7 +3393,7 @@ validation is performed:
 
 * `$callee` must have type `flatten_functype($opts, $ft, 'lift')`
 * `$f` is given type `$ft`
-* if a `post-return` is present, it has type `(func (param flatten_functype({}, $ft, 'lift').results))`
+* if a `post-return` is present, it has type `(func (param flatten_functype($opts, $ft, 'lift').results))`
 * requires options based on [`lift(param)`](#canonopt-validation) for all parameters in `ft`
 * requires options based on [`lower(result)`](#canonopt-validation) if `ft` has a result
 * if `len(flatten_types(ft.param_types())) > MAX_FLAT_PARAMS`, `realloc` is required
@@ -3641,7 +3642,7 @@ Each call to `canon_lower` creates a new `Subtask`. However, this `Subtask` is
 only added to the current component instance's `handles` table (below) if
 `async` is specified *and* `callee` blocks. In any case, this `Subtask` is used
 as the `LiftLowerContext.borrow_scope` for `borrow` arguments, ensuring that
-owned handles are not dropped before `Subtask.deliver_return` is called (below).
+owned handles are not dropped before `Subtask.deliver_resolve` is called (below).
 ```python
   subtask = Subtask()
   cx = LiftLowerContext(opts, thread.task.inst, subtask)
@@ -3732,7 +3733,7 @@ add a `Subtask` to the current component instance's `handles` table. Otherwise,
 the index of a new `Subtask` is returned, bit-packed with the current state of
 the `Subtask` (which will either be `STARTING` or `STARTED`). `STARTING` tells
 the caller that they need to keep the memory for both the arguments and results
-allocated; `STARTED` tells the caller that the arguments have been ready and
+allocated; `STARTED` tells the caller that the arguments have been read and
 thus any argument memory can be reused, but the result buffer has to be kept
 reserved.
 ```python
@@ -3754,7 +3755,7 @@ reserved.
       return [subtask.state | (subtaski << 4)]
 ```
 When `on_start` and `on_resolve` are called after this initial `async`-lowered
-call returns, the `on_progress` callback (called by `on_start` and `on_return`)
+call returns, the `on_progress` callback (called by `on_start` and `on_resolve`)
 will set a pending event on the `Subtask` (which derives `Waitable`) so that it
 can be waited on via `waitable-set.{wait,poll}` or, if a `callback` is used, by
 returning to the event loop. If `on_start` is called followed by `on_resolve`
@@ -4052,9 +4053,9 @@ The `trap_if(not task.opts.async_)` prevents `task.cancel` from being called by
 synchronously-lifted functions (which must always return a value by returning
 from the lifted core function).
 
-`Task.cancel` also traps if there has been no cancellation request (in which
-case the callee expects to receive a return value) or if the task has already
-returned a value or already called `task.cancel`.
+`Task.cancel` also traps if the cancellation has not been delivered to the task
+(in which case the callee should not yet know to cancel) or if the task has
+already returned a value or already called `task.cancel`.
 
 
 ### 🔀 `canon waitable-set.new`
@@ -4392,7 +4393,7 @@ condition could be relaxed to allow multiple pipelined reads or writes.)
 ```
 
 Then a readable or writable buffer is created which (in `Buffer`'s constructor)
-eagerly checks the alignment and bounds of (`i`, `n`). (In the future, the
+eagerly checks the alignment and bounds of (`ptr`, `n`). (In the future, the
 restriction on futures/streams containing `borrow`s could be relaxed by
 maintaining sufficient bookkeeping state to ensure that borrowed handles *or
 streams/futures of borrowed handles* could not outlive their originating call.
@@ -4709,9 +4710,10 @@ validation specifies
   * 🐘 - `U` is `i32` or `i64` as determined by `$ftbl`'s address type
 
 Calling `$new_indirect` invokes the following function which reads a `funcref`
-from `$ftbl` (trapping if out-of-bounds, null or the wrong type), calls the
-`funcref` passing the closure parameter `$c`, and returns the index of the new
-thread in the current component instance's `threads` table.
+from `$ftbl` (trapping if out-of-bounds, null or the wrong type), creates a new
+suspended thread that will call the `funcref` passing the closure parameter `$c`
+when resumed, and returns the index of the new thread in the current component
+instance's `threads` table.
 ```python
 @dataclass
 class CoreFuncRef:
@@ -4953,7 +4955,7 @@ Calling `$f` calls the following function which uses the `$opts` immediate to
 lowers the `ErrorContext`'s debug message. While *producing* an `error-context`
 value may nondeterministically discard or transform the debug message, a
 single `error-context` value must return the same debug message from
-`error.debug-message` over time.
+`error-context.debug-message` over time.
 ```python
 def canon_error_context_debug_message(opts, i, ptr):
   inst = current_thread().task.inst
@@ -5017,7 +5019,7 @@ parallel with all other threads.
 > parameters are allowed.
 
 Calling `$spawn_ref` invokes the following function which simply fuses the
-`thread.new_ref` and `thread.resume-later` built-ins, allowing
+`thread.new-ref` and `thread.resume-later` built-ins, allowing
 thread-creation to skip the intermediate "suspended" state transition.
 ```python
 def canon_thread_spawn_ref(shared, ft, f, c):
