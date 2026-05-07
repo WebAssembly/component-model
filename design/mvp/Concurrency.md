@@ -29,6 +29,7 @@ emojis. For an even higher-level introduction, see [these][wasmio-2024]
   * [Async Import ABI](#async-import-abi)
   * [Async Export ABI](#async-export-abi)
 * [Examples](#examples)
+* [Component Instance Lifetime](#component-instance-lifetime)
 * [TODO](#todo)
 
 
@@ -1261,6 +1262,105 @@ return values from `waitable-set.wait` in the previous example. The precise mean
 these values is defined by the Canonical ABI.
 
 
+## Component Instance Lifetime
+
+In settings like [service workers] and [serverless computing], a single
+component instance may handle multiple independent host events by having its
+exported functions called repeatedly (and, if they're `async`, concurrently). In
+settings like these, the number and lifetime of component instances and the
+degree of reuse is determined by host policies based on factors like
+utilization, available parallelism and security. However, when component
+instance lifetimes are flexible in this manner and don't have an obvious end
+(as opposed to a traditional CLI setting, where a component instance's lifetime
+conventionally ends right after `main()` returns), the host still needs to
+understand the expectations of component authors to enable portability.
+
+Before the addition of native concurrency support in Preview 3, a natural
+expectation is that, in the absence of atypical scenarios like timeouts or quota
+exhaustion, a component author can expect that their component instance will not
+be abruptly terminated during the execution of contained Core WebAssembly code.
+But other than that, component authors must conservatively assume that their
+component instance will be torn down at any time.
+
+With the addition of native concurrency support, these expectations must be
+nuanced to account for asynchronous Core WebAssembly execution. In particular,
+when using the stackless `async callback` ABI, an active task may have no active
+Core WebAssembly function invocation while it is `WAIT`ing on a Waitable Set.
+Analogously, when using the stackful `async` ABI, a Core WebAssembly function
+invocation will be suspended (as-if by the [stack-switching] proposal's
+`suspend` instruction) when it calls `waitable-set.wait` so that there is also
+no Core WebAssembly code actively executing (only a continuation stored in the
+component instance's table of threads).
+
+Now, before a task has [returned](#returning) its value, there is still a
+natural expectation that, even if there is *currently* no active Core
+WebAssembly execution, the task is still *logically* executing and thus the
+component instance will not be terminated (under normal circumstances; timeout
+or quota exhaustion could still abruptly terminate the instance). Furthermore,
+even if a component instance has no active tasks that haven't returned a value,
+if a component instance is holding the readable or writable end of a stream or
+future that the host holds the other end of, there is also a natural expectation
+that the host will keep the component instance alive until all the futures and
+streams have reached a closed state.
+
+As an example, even after `wasi:http/handler`'s `handle` function *returns* a
+`response` resource, the `handle` function's component instance is expected to
+be kept alive as long as it's holding the un-closed writable end of the
+`stream<u8>` contained by the returned `response`. If, on the other hand, the
+`stream<u8>` was forwarded from the return value of a host import, and so the
+component instance is not holding any writable end, this expectation doesn't
+apply and so all other conditions being met, the component instance can be
+eagerly torn down.
+
+The interesting question is what happens once all tasks have returned their
+values *and* all incoming and outgoing streams and futures have been closed if
+the component instance still contains live [threads](#threads-and-tasks) that
+are currently suspended (and so not actively executing Core WebAssembly code)
+but may potentially be resumed in the future to do important post-return work
+(like performing logging, billing or metrics operations that have been taken off
+the pre-return critical path for peformance reasons).
+
+If the component instance is conservatively kept alive (until a hard timeout),
+this may end up wasting resources for periodic background activities that run in
+an infinite (waiting) loop. In particular, cooperative threads used to implement
+pthreads are expected to sometimes be used in this manner. On the other hand,
+immediately tearing down a component instance as soon as the last byte of an
+outgoing stream is written and active Core WebAssembly execution returns or
+suspends will break the abovementioned post-return use cases if they involve
+waiting on `async` operations to complete.
+
+To resolve this tension, threads are implicitly distinguished by a "keep-alive"
+flag that determines whether the expectation is that the existence of the thread
+is intended to keep the containing component instance alive. In the initial
+release of Preview 3, this "keep-alive" flag is default *set* for the [implicit
+thread](#summary) created for a task and default *cleared* for the explicit
+threads created by `thread.new-indirect`. In particular, this means that an
+`async callback`-lifted function will keep its containing component instance
+alive until it returns the `EXIT` code (`0`).
+
+As an example, in JavaScript, the Service Worker API's [`waitUntil`] method
+would delay returning the `EXIT` code. In the initial 0.3.0 release without
+cooperative threads (🧵), [`setInterval`] would also unfortunately delay
+returning the `EXIT` code and thus, without guest code intervention, would keep
+component instances alive until timeout limits were hit. The release of
+cooperative threads would offer a solution to this problem, but an awkward one.
+Instead, the [intention](#TODO) is to add new built-in functions that would
+provide guest code more direct, dynamic control over its own keep-alive
+flags, thereby allowing the JS event loop to clear its keep-alive flag once all
+`waitUntil` promises resolved, thereby allowing `setInterval` callbacks to keep
+running (while the host wants to keep the instance warm), but still indicating
+to the host that destruction is welcome at any time.
+
+Lastly, the above discussion refers to component *instances*, however the host
+cannot tear down independent component instances when they are linked together
+(as this would leave dangling function imports). In general, components must be
+instantiated and destroyed as *trees*, where the host can only choose when to
+instantiate or destroy the *root* component of the tree, and all other child
+instances are instantiated/destroyed along with the root. Thus, when the above
+rules set an expectation that any component instance in a tree be kept alive,
+the whole tree would be kept alive.
+
+
 ## TODO
 
 Native async support is being proposed incrementally. The following features
@@ -1272,6 +1372,8 @@ comes after:
 * zero-copy forwarding/splicing
 * allow the `stream<char>` type to validate; make it use `string-encoding`
   and not split code points
+* add built-ins providing guest code more control over its containing
+  [component instance's lifetime](#component-instance-lifetime)
 * some way to say "no more elements are coming for a while"
 * add an `async` effect on `component` type definitions allowing a component
   type to block during instantiation
@@ -1312,10 +1414,15 @@ comes after:
 [Overlapped I/O]: https://en.wikipedia.org/wiki/Overlapped_I/O
 [`io_uring`]: https://en.wikipedia.org/wiki/Io_uring
 [`epoll`]: https://en.wikipedia.org/wiki/Epoll
+[Serverless Computing]: https://en.wikipedia.org/wiki/Serverless_computing
 
 [`select`]: https://pubs.opengroup.org/onlinepubs/007908799/xsh/select.html
 [`O_NONBLOCK`]: https://pubs.opengroup.org/onlinepubs/7908799/xsh/open.html
 [`pthread_create`]: https://pubs.opengroup.org/onlinepubs/7908799/xsh/pthread_create.html
+
+[Service Workers]: https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API
+[`waitUntil`]: https://developer.mozilla.org/en-US/docs/Web/API/ExtendableEvent/waitUntil
+[`setInterval`]: https://developer.mozilla.org/en-US/docs/Web/API/Window/setInterval
 
 [AST Explainer]: Explainer.md
 [Canonical Built-in]: Explainer.md#canonical-built-ins
