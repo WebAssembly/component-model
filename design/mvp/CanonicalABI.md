@@ -3965,22 +3965,20 @@ For a canonical definition:
 ```
 validation specifies:
 * `$t` must be `i32` (see [here][thread-local storage]).
-  * 🐘 - `$t` may also be `i64`
+  * 🐘 - `$t` may also be `i64`. All `context.get` and `context.set` built-ins
+    defined in a single component must specify the same `$t`.
 * `$i` must be less than `2`
 * `$f` is given type `(func (result $t))`
 
 Calling `$f` invokes the following function, which reads the [thread-local
-storage] of the [current thread], taking only the low 32-bits if `$t` is `i32`:
+storage] of the [current thread].
 ```python
-MASK_32BIT = (1 << 32) - 1
-
 def canon_context_get(t, i):
   thread = current_thread()
   assert(t == 'i32' or t == 'i64')
   assert(i < len(thread.storage))
   result = thread.storage[i]
-  if t == 'i32':
-    result &= MASK_32BIT
+  assert(result < (2 ** (ptr_size(t) * 8)))
   return [result]
 ```
 
@@ -3993,7 +3991,8 @@ For a canonical definition:
 ```
 validation specifies:
 * `$t` must be `i32` (see [here][thread-local storage])
-  * 🐘 - `$t` may also be `i64`
+  * 🐘 - `$t` may also be `i64`. All `context.get` and `context.set` built-ins
+    defined in a single component must specify the same `$t`.
 * `$i` must be less than `2`
 * `$f` is given type `(func (param $v $t))`
 
@@ -4003,8 +4002,8 @@ storage] of the [current thread]:
 def canon_context_set(t, i, v):
   thread = current_thread()
   assert(t == 'i32' or t == 'i64')
-  assert(v <= MASK_32BIT or t == 'i64')
   assert(i < len(thread.storage))
+  assert(v < (2 ** (ptr_size(t) * 8)))
   thread.storage[i] = v
   return []
 ```

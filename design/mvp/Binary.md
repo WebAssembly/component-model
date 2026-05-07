@@ -214,12 +214,9 @@ label'        ::= len:<u32> l:<label>                     => l    (if len = |l|)
                 | 0x01 t:<T>                              => t
 valtype       ::= i:<typeidx>                             => i
                 | pvt:<primvaltype>                       => pvt
-resourcetype  ::= 0x3f 0x7f f?:<core:funcidx>?            => (resource (rep i32) (dtor f)?)
-                | 0x3e 0x7f f:<core:funcidx>
-                            cb?:<core:funcidx>?           => (resource (rep i32) (dtor async f (callback cb)?)) 🚝
-                | 0x3f 0x7e f?:<core:funcidx>?            => (resource (rep i64) (dtor f)?) 🐘
-                | 0x3e 0x7e f:<core:funcidx>
-                            cb?:<core:funcidx>?           => (resource (rep i64) (dtor async f (callback cb)?)) 🚝🐘
+resourcetype  ::= 0x3f v:<valtype> f?:<core:funcidx>?     => (resource (rep v) (dtor f)?)
+                | 0x3e v:<valtype> f:<core:funcidx>
+                                   cb?:<core:funcidx>?    => (resource (rep v) (dtor async f (callback cb)?)) 🚝
 functype      ::= 0x40 ps:<paramlist> rs:<resultlist>     => (func ps rs)
                 | 0x43 ps:<paramlist> rs:<resultlist>     => (func async ps rs)
 paramlist     ::= lt*:vec(<labelvaltype>)                 => (param lt)*
@@ -302,10 +299,8 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x25                                                => (canon backpressure.dec (core func)) 🔀
            | 0x09 rs:<resultlist> opts:<opts>                    => (canon task.return rs opts (core func)) 🔀
            | 0x05                                                => (canon task.cancel (core func)) 🔀
-           | 0x0a 0x7f i:<u32>                                   => (canon context.get i32 i (core func)) 🔀
-           | 0x0a 0x7e i:<u32>                                   => (canon context.get i64 i (core func)) 🔀🐘
-           | 0x0b 0x7f i:<u32>                                   => (canon context.set i32 i (core func)) 🔀
-           | 0x0b 0x7e i:<u32>                                   => (canon context.set i64 i (core func)) 🔀🐘
+           | 0x0a v:<valtype> i:<u32>                            => (canon context.get v i (core func)) 🔀
+           | 0x0b v:<valtype> i:<u32>                            => (canon context.set v i (core func)) 🔀
            | 0x0c cancel?:<cancel?>                              => (canon thread.yield cancel? (core func)) 🔀
            | 0x06 async?:<async?>                                => (canon subtask.cancel async? (core func)) 🔀
            | 0x0d                                                => (canon subtask.drop (core func)) 🔀
