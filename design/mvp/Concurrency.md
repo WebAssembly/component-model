@@ -519,7 +519,7 @@ Specifically, waitable sets are created and used via the following built-ins:
 * [`waitable-set.new`]: return a new empty waitable set
 * [`waitable.join`]: add, move, or remove a given waitable to/from a given
   waitable set
-* [`waitable-set.wait`]: suspend until one of the waitables in the given set
+* [`waitable-set.wait`]: wait until one of the waitables in the given set
   has a pending event and then return that event
 * [`waitable-set.poll`]: if any of the waitables in the given set has a pending
   event, return that event; otherwise return a sentinel "none" value
@@ -780,7 +780,7 @@ wait cancellably and thus cancellation may be silently ignored.
 synchronously, `subtask.cancel` blocks until the subtask reaches a resolved
 state and returns which state was reached. If called asynchronously, then if a
 cancellable subtask thread is resumed *and* the subtask reaches a resolved
-state before suspending itself for whatever reason `subtask.cancel` will return
+state before blocking for whatever reason `subtask.cancel` will return
 which state was reached. Otherwise, `subtask.cancel` will return a "blocked"
 sentinel value and the caller must [wait](#waitables-and-waitable-sets) via
 waitable set until the subtask reaches a resolved state.
@@ -825,9 +825,9 @@ defined by the Component Model:
 * If multiple threads wait on or poll the same waitable set at the same time,
   the distribution of events to threads is nondeterministic.
 * Whenever a thread yields or waits on a waitable set with an already
-  pending event, whether the thread suspends and transfers execution to an
-  async caller is nondeterministic.
-* If multiple threads that previously suspended can be resumed at the same
+  pending event, whether or not the thread blocks and transfers execution to an
+  async caller or another thread is nondeterministic.
+* If multiple threads that previously blocked can be resumed at the same
   time, the order in which they are resumed is nondeterministic.
 * If multiple tasks are blocked by backpressure and the backpressure is
   disabled, the order in which these pending tasks start, along with how
@@ -838,10 +838,10 @@ defined by the Component Model:
 Despite the above, the following scenarios do behave deterministically:
 * If a component `a` asynchronously calls the export of another component `b`,
   control flow deterministically transfers to `b` and then back to `a` when
-  `b` returns or suspends.
+  `b` returns or blocks.
 * If a component `a` asynchronously cancels a subtask in another component `b`,
   control flow deterministically transfers to `b` and then back to `a` when `b`
-  resolves or suspends.
+  resolves or blocks.
 * If a component `a` asynchronously cancels a subtask in another component `b`
   that was blocked before starting due to backpressure, cancellation completes
   deterministically and immediately.
@@ -1326,7 +1326,7 @@ an infinite (waiting) loop. In particular, cooperative threads used to implement
 pthreads are expected to sometimes be used in this manner. On the other hand,
 immediately tearing down a component instance as soon as the last byte of an
 outgoing stream is written and active Core WebAssembly execution returns or
-suspends will break the abovementioned post-return use cases if they involve
+blocks will break the abovementioned post-return use cases if they involve
 waiting on `async` operations to complete.
 
 To resolve this tension, threads are implicitly distinguished by a "keep-alive"
