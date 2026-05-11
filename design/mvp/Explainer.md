@@ -2648,7 +2648,8 @@ and `b` to a component `c` and `/d/e/f` traverses the exports of `c` (where `d`
 and `e` must be component exports but `f` can be anything). Given this abstract
 definition, a number of concrete data sources can be interpreted by developer
 tooling as "registries":
-* a live registry (perhaps accessed via [`warg`])
+* a live registry (perhaps accessed via [`wkg`] and the [WebAssembly OCI
+  Artifact Layout])
 * a local filesystem directory (perhaps containing vendored dependencies)
 * a fixed set of host-provided functionality (see also the [built-in modules] proposal)
 * a programmatically-created tree data structure (such as the `importObject`
@@ -3321,9 +3322,10 @@ For some use-case-focused, worked examples, see:
 
 [Component Model Documentation]: https://component-model.bytecodealliance.org
 [`wizer`]: https://github.com/bytecodealliance/wizer
-[`warg`]: https://warg.io
+[`wkg`]: https://github.com/bytecodealliance/wasm-pkg-tools
 [SemVerRange]: https://semver.npmjs.com/
 [OCI Registry]: https://github.com/opencontainers/distribution-spec
+[WebAssembly OCI Artifact Layout]: https://tag-runtime.cncf.io/wgs/wasm/deliverables/wasm-oci-artifact/
 
 [Scoping and Layering]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8
 
