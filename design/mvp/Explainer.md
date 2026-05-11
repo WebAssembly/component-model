@@ -1723,14 +1723,6 @@ If `cancellable` is set, `waitable-set.wait` may return `task-cancelled`
 `task-cancelled` is returned at most once for a given task and thus must be
 propagated once received.
 
-If `waitable-set.wait` is called from a synchronous- or `async callback`-lifted
-export, no other threads that were implicitly created by a separate
-synchronous- or `async callback`-lifted export call can start or progress in
-the current component instance until `waitable-set.wait` returns (thereby
-ensuring non-reentrance of the core wasm code). However, explicitly-created
-threads and threads implicitly created by non-`callback` `async`-lifted
-("stackful async") exports may start or progress at any time.
-
 A `subtask` event notifies the supertask that its subtask is now in the given
 state (the meanings of which are described by the [concurrency explainer]).
 
@@ -2116,12 +2108,11 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 | Approximate WIT signature  | `func<cancellable?>() -> bool` |
 | Canonical ABI signature    | `[] -> [i32]`                  |
 
-The `thread.suspend` built-in suspends the [current thread] which,
-depending on the calling context, will either immediately switch control flow
-to an `async`-lowered caller or, if the current task has already suspended
-before, switch to the runtime's scheduler to find something else to do. If
-`cancellable` is set, `thread.suspend` returns whether the current task was
-[cancelled] by the caller; otherwise, `thread.suspend` always returns `false`.
+The `thread.suspend` built-in suspends the [current thread] until it is
+explicitly resumed by some other thread calling a built-in such as
+`thread.resume-later`. If `cancellable` is set, `thread.suspend` returns whether
+the current task was [cancelled] by the caller; otherwise, `thread.suspend`
+always returns `false`.
 
 A non-`async`-typed function export that has not yet returned a value traps if
 it transitively attempts to call `thread.suspend`.
@@ -2166,14 +2157,6 @@ state. If `cancellable` is set, `thread.switch-to` returns whether the current
 task was [cancelled] by the caller; otherwise, `thread.switch-to` always returns
 `false`.
 
-If `thread.switch-to` is called from a synchronous- or `async callback`-lifted
-export, no other threads that were implicitly created by a separate
-synchronous- or `async callback`-lifted export call can start or progress in
-the current component instance until `thread.switch-to` returns (thereby
-ensuring non-reentrance of the core wasm code). However, explicitly-created
-threads and threads implicitly created by non-`callback` `async`-lifted
-("stackful async") exports may start or progress at any time.
-
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_switch_to`] in the Canonical ABI explainer.
 
@@ -2190,14 +2173,6 @@ a "ready" state so that the runtime can nondeterministically resume the current
 thread at some point in the future. If `cancellable` is set, `thread.yield-to`
 returns whether the current task was [cancelled] by the caller; otherwise,
 `thread.yield-to` always returns `false`.
-
-If `thread.yield-to` is called from a synchronous- or `async callback`-lifted
-export, no other threads that were implicitly created by a separate
-synchronous- or `async callback`-lifted export call can start or progress in
-the current component instance until `thread.yield-to` returns (thereby
-ensuring non-reentrance of the core wasm code). However, explicitly-created
-threads and threads implicitly created by non-`callback` `async`-lifted
-("stackful async") exports may start or progress at any time.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield_to`] in the Canonical ABI explainer.
