@@ -1459,6 +1459,17 @@ of `wasi:http/handler` but uses the plain name `my-handler` instead of the full
 interface name, which is useful when a component wants to export the same
 interface multiple times or simply use a more descriptive name.
 
+Note that the `use-path` form can have an ambiguity with the nested packages
+feature (🪺) where `a:b` could mean two things. To resolve this `a:b` is lexed
+as a single token instead of separate tokens, meaning:
+
+```wit
+world w {
+    import a:b;  // error: can't import a package
+    import a: b; // ok, assuming `b` names an interface in scope
+}
+```
+
 Note that worlds can import types and define their own types to be exported
 from the root of a component and used within functions imported and exported.
 The `interface` item here additionally defines the grammar for IDs used to refer
