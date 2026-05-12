@@ -34,7 +34,7 @@ section   ::=    section_0(<core:custom>)         => ϵ
             | a*:section_6(vec(<alias>))          => a*
             | t*:section_7(vec(<type>))           => t*
             | c*:section_8(vec(<canon>))          => c*
-            | s: section_9(<start>)               => [s]
+            | s: section_9(<start>)               => [s] 🪙
             | i*:section_10(vec(<import>))        => i*
             | e*:section_11(vec(<export>))        => e*
             | v*:section_12(vec(<value>))         => v* 🪙
@@ -69,6 +69,7 @@ core:sort           ::= 0x00                                               => fu
                       | 0x01                                               => table
                       | 0x02                                               => memory
                       | 0x03                                               => global
+                      | 0x04                                               => tag
                       | 0x10                                               => type
                       | 0x11                                               => module
                       | 0x12                                               => instance
@@ -86,7 +87,7 @@ sort                ::= 0x00 cs:<core:sort>                                => co
                       | 0x03                                               => type
                       | 0x04                                               => component
                       | 0x05                                               => instance
-inlineexport        ::= n:<exportname> si:<sortidx>                        => (export n si)
+inlineexport        ::= n:<exportname'> si:<sortidx>                       => (export n si)
 ```
 Notes:
 * Reused Core binary rules: [`core:name`], (variable-length encoded) [`core:u32`]
@@ -206,6 +207,7 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x68 i:<typeidx>                        => (borrow i)
                 | 0x66 t?:<valtype>?                      => (stream t?) 🔀
                 | 0x65 t?:<valtype>?                      => (future t?) 🔀
+                | 0x63 k:<valtype> v:<valtype>            => (map k v) (if k is in <keytype>) 🗺️
 labelvaltype  ::= l:<label'> t:<valtype>                  => l t
 case          ::= l:<label'> t?:<valtype>? 0x00           => (case l t?)
 label'        ::= len:<u32> l:<label>                     => l    (if len = |l|)
@@ -213,8 +215,9 @@ label'        ::= len:<u32> l:<label>                     => l    (if len = |l|)
                 | 0x01 t:<T>                              => t
 valtype       ::= i:<typeidx>                             => i
                 | pvt:<primvaltype>                       => pvt
-resourcetype  ::= 0x3f 0x7f f?:<funcidx>?                 => (resource (rep i32) (dtor f)?)
-                | 0x3e 0x7f f:<funcidx> cb?:<funcidx>?    => (resource (rep i32) (dtor async f (callback cb)?)) 🚝
+resourcetype  ::= 0x3f v:<valtype> f?:<core:funcidx>?     => (resource (rep v) (dtor f)?)
+                | 0x3e v:<valtype> f:<core:funcidx>
+                                   cb?:<core:funcidx>?    => (resource (rep v) (dtor async f (callback cb)?)) 🚝
 functype      ::= 0x40 ps:<paramlist> rs:<resultlist>     => (func ps rs)
                 | 0x43 ps:<paramlist> rs:<resultlist>     => (func async ps rs)
 paramlist     ::= lt*:vec(<labelvaltype>)                 => (param lt)*
@@ -297,23 +300,23 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x25                                                => (canon backpressure.dec (core func)) 🔀
            | 0x09 rs:<resultlist> opts:<opts>                    => (canon task.return rs opts (core func)) 🔀
            | 0x05                                                => (canon task.cancel (core func)) 🔀
-           | 0x0a 0x7f i:<u32>                                   => (canon context.get i32 i (core func)) 🔀
-           | 0x0b 0x7f i:<u32>                                   => (canon context.set i32 i (core func)) 🔀
+           | 0x0a v:<valtype> i:<u32>                            => (canon context.get v i (core func)) 🔀
+           | 0x0b v:<valtype> i:<u32>                            => (canon context.set v i (core func)) 🔀
            | 0x0c cancel?:<cancel?>                              => (canon thread.yield cancel? (core func)) 🔀
            | 0x06 async?:<async?>                                => (canon subtask.cancel async? (core func)) 🔀
            | 0x0d                                                => (canon subtask.drop (core func)) 🔀
            | 0x0e t:<typeidx>                                    => (canon stream.new t (core func)) 🔀
            | 0x0f t:<typeidx> opts:<opts>                        => (canon stream.read t opts (core func)) 🔀
            | 0x10 t:<typeidx> opts:<opts>                        => (canon stream.write t opts (core func)) 🔀
-           | 0x11 t:<typeidx> async?:<async?>                    => (canon stream.cancel-read async? (core func)) 🔀
-           | 0x12 t:<typeidx> async?:<async?>                    => (canon stream.cancel-write async? (core func)) 🔀
+           | 0x11 t:<typeidx> async?:<async?>                    => (canon stream.cancel-read t async? (core func)) 🔀
+           | 0x12 t:<typeidx> async?:<async?>                    => (canon stream.cancel-write t async? (core func)) 🔀
            | 0x13 t:<typeidx>                                    => (canon stream.drop-readable t (core func)) 🔀
            | 0x14 t:<typeidx>                                    => (canon stream.drop-writable t (core func)) 🔀
            | 0x15 t:<typeidx>                                    => (canon future.new t (core func)) 🔀
            | 0x16 t:<typeidx> opts:<opts>                        => (canon future.read t opts (core func)) 🔀
            | 0x17 t:<typeidx> opts:<opts>                        => (canon future.write t opts (core func)) 🔀
-           | 0x18 t:<typeidx> async?:<async?>                    => (canon future.cancel-read async? (core func)) 🔀
-           | 0x19 t:<typeidx> async?:<async?>                    => (canon future.cancel-write async? (core func)) 🔀
+           | 0x18 t:<typeidx> async?:<async?>                    => (canon future.cancel-read t async? (core func)) 🔀
+           | 0x19 t:<typeidx> async?:<async?>                    => (canon future.cancel-write t async? (core func)) 🔀
            | 0x1a t:<typeidx>                                    => (canon future.drop-readable t (core func)) 🔀
            | 0x1b t:<typeidx>                                    => (canon future.drop-writable t (core func)) 🔀
            | 0x1c opts:<opts>                                    => (canon error-context.new opts (core func)) 📝
@@ -336,7 +339,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
 async?   ::= 0x00                                                =>
            | 0x01                                                => async
 cancel?  ::= 0x00                                                =>
-           | 0x01                                                => cancellable 🚟
+           | 0x01                                                => cancellable
 sh?      ::= 0x00                                                =>
            | 0x01                                                => shared 🧵②
 opts     ::= opt*:vec(<canonopt>)                                => opt*
@@ -389,10 +392,12 @@ in the explainer.)
 import         ::= in:<importname'> ed:<externdesc>                     => (import in ed)
 export         ::= en:<exportname'> si:<sortidx> ed?:<externdesc>?      => (export en si ed?)
 importname'    ::= 0x00 len:<u32> in:<importname>                       => in     (if len = |in|)
-                 | 0x01 len:<u32> in:<importname> vs:<versionsuffix'>   => in vs  (if len = |in|) 🔗
-exportname'    ::= 0x00 len:<u32> en:<exportname>                       => en     (if len = |en|)
-                 | 0x01 len:<u32> en:<exportname> vs:<versionsuffix'>   => in vs  (if len = |in|) 🔗
-versionsuffix' ::= len:<u32> vs:<semversuffix>                          => (versionsuffix vs)  (if len = |vs|) 🔗
+                 | 0x01 len:<u32> in:<importname>                       => in     (if len = |in|)
+                 | 0x02 len:<u32> in:<importname> vs:<versionsuffix>    => in vs  (if len = |in|) 🔗
+exportname'    ::= 0x00 len:<u32> in:<exportname>                       => in     (if len = |in|)
+                 | 0x01 len:<u32> in:<exportname>                       => in     (if len = |in|)
+                 | 0x02 len:<u32> in:<exportname> vs:<versionsuffix>    => in vs  (if len = |in|) 🔗
+versionsuffix  ::= len:<u32> vs:<semversuffix>                          => (versionsuffix vs)  (if len = |vs|) 🔗
 ```
 
 Notes:
@@ -406,6 +411,8 @@ Notes:
   of the inferred `externdesc` of the `sortidx`.
 * `<importname>` and `<exportname>` refer to the productions defined in the
   [text format](Explainer.md#import-and-export-definitions).
+* `<importname'>` and `<exportname'>` will [be cleaned up for a 1.0
+  release](##binary-format-warts-to-fix-in-a-10-release).
 * The `<importname>`s of a component must all be [strongly-unique]. Separately,
   the `<exportname>`s of a component must also all be [strongly-unique].
 * Validation requires that `[constructor]`, `[method]` and `[static]` annotated
@@ -523,9 +530,9 @@ named once.
 * The two `depname` cases should be merged into one (`dep=<...>`)
 * The two `list` type codes should be merged into one with an optional immediate
   and similarly for `func`.
-* The `0x00` variant of `importname'` and `exportname'` will be removed. Any
-  remaining variant(s) will be renumbered or the prefix byte will be removed or
-  repurposed.
+* The `0x00` and `0x01` variant of `importname'` and `exportname'` will be
+  removed. Any remaining variant(s) will be renumbered or the prefix byte will
+  be removed or repurposed.
 * Most built-ins should have a `<canonopt>*` immediate instead of an ad hoc
   subset of `canonopt`s.
 * Add optional `shared` immediate to all canonical definitions (explicitly or

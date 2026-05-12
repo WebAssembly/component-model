@@ -160,6 +160,11 @@ class ResultType(ValType):
   error: Optional[ValType]
 
 @dataclass
+class MapType(ValType):
+  k: ValType # <keytype>
+  v: ValType
+
+@dataclass
 class FlagsType(ValType):
   labels: list[str]
 
@@ -181,77 +186,7 @@ class FutureType(ValType):
 
 # START
 
-### Embedding API
-
-class Store:
-  pending: list[Thread]
-
-  def __init__(self):
-    self.pending = []
-
-  def invoke(self, f: FuncInst, caller: Optional[Supertask], on_start, on_resolve) -> Call:
-    host_caller = Supertask()
-    host_caller.inst = None
-    host_caller.supertask = caller
-    return f(host_caller, on_start, on_resolve)
-
-  def tick(self):
-    random.shuffle(self.pending)
-    for thread in self.pending:
-      if thread.ready():
-        thread.resume()
-        return
-
-FuncInst: Callable[[Optional[Supertask], OnStart, OnResolve], Call]
-
-OnStart = Callable[[], list[any]]
-OnResolve = Callable[[Optional[list[any]]], None]
-
-class Supertask:
-  inst: Optional[ComponentInstance]
-  supertask: Optional[Supertask]
-
-class Call:
-  request_cancellation: Callable[[], None]
-
-
-### Lifting and Lowering Context
-
-class LiftLowerContext:
-  opts: LiftLowerOptions
-  inst: ComponentInstance
-  borrow_scope: Optional[Task|Subtask]
-
-  def __init__(self, opts, inst, borrow_scope = None):
-    self.opts = opts
-    self.inst = inst
-    self.borrow_scope = borrow_scope
-
-
-### Canonical ABI Options
-
-@dataclass
-class LiftOptions:
-  string_encoding: str = 'utf8'
-  memory: Optional[bytearray] = None
-
-  def equal(lhs, rhs):
-    return lhs.string_encoding == rhs.string_encoding and \
-           lhs.memory is rhs.memory
-
-@dataclass
-class LiftLowerOptions(LiftOptions):
-  realloc: Optional[Callable] = None
-
-@dataclass
-class CanonicalOptions(LiftLowerOptions):
-  post_return: Optional[Callable] = None
-  async_: bool = False
-  callback: Optional[Callable] = None
-
-### Runtime State
-
-#### Component Instance State
+## Component Instances
 
 class ComponentInstance:
   store: Store
@@ -260,8 +195,8 @@ class ComponentInstance:
   threads: Table[Thread]
   may_leave: bool
   backpressure: int
-  exclusive: bool
   num_waiting_to_enter: int
+  exclusive: Optional[Task]
 
   def __init__(self, store, parent = None):
     assert(parent is None or parent.store is store)
@@ -271,8 +206,8 @@ class ComponentInstance:
     self.threads = Table()
     self.may_leave = True
     self.backpressure = 0
-    self.exclusive = False
     self.num_waiting_to_enter = 0
+    self.exclusive = None
 
   def reflexive_ancestors(self) -> set[ComponentInstance]:
     s = set()
@@ -289,6 +224,10 @@ class ComponentInstance:
       other = other.parent
     return False
 
+class Supertask:
+  inst: Optional[ComponentInstance]
+  supertask: Optional[Supertask]
+
 def call_might_be_recursive(caller: Supertask, callee_inst: ComponentInstance):
   if caller.inst is None:
     while caller is not None:
@@ -300,7 +239,405 @@ def call_might_be_recursive(caller: Supertask, callee_inst: ComponentInstance):
     return (caller.inst.is_reflexive_ancestor_of(callee_inst) or
             callee_inst.is_reflexive_ancestor_of(caller.inst))
 
-#### Table State
+## Concurrency
+
+### Stack Switching
+
+class Cancelled(IntEnum):
+  FALSE = 0
+  TRUE = 1
+
+class Continuation:
+  lock: threading.Lock
+  handler: Handler
+  block_result: Cancelled
+
+class Handler:
+  lock: threading.Lock
+  current_thread: Thread
+  cont: Optional[Continuation]
+  block_arg: Optional[Thread]
+
+thread_local_handler = threading.local()
+
+def new_already_acquired_lock() -> threading.Lock:
+  lock = threading.Lock()
+  lock.acquire()
+  return lock
+
+def cont_new(f: Callable[[Cancelled], Optional[Thread]]) -> Continuation:
+  cont = Continuation()
+  cont.lock = new_already_acquired_lock()
+  def thread_base():
+    cont.lock.acquire()
+    thread_local_handler.value = cont.handler
+    block_arg = f(cont.block_result)
+    handler = thread_local_handler.value
+    handler.cont = None
+    handler.block_arg = block_arg
+    handler.lock.release()
+  threading.Thread(target = thread_base).start()
+  return cont
+
+def resume(cont: Continuation, block_result: Cancelled, current_thread: Thread) -> \
+           tuple[Optional[Continuation], Optional[Thread]]:
+  handler = Handler()
+  handler.lock = new_already_acquired_lock()
+  handler.current_thread = current_thread
+  cont.handler = handler
+  cont.block_result = block_result
+  cont.lock.release()
+  handler.lock.acquire()
+  return (handler.cont, handler.block_arg)
+
+def block(switch_to: Optional[Thread]) -> Cancelled:
+  cont = Continuation()
+  cont.lock = new_already_acquired_lock()
+  handler = thread_local_handler.value
+  handler.cont = cont
+  handler.block_arg = switch_to
+  handler.lock.release()
+  cont.lock.acquire()
+  thread_local_handler.value = cont.handler
+  return cont.block_result
+
+def current_thread() -> Thread:
+  return thread_local_handler.value.current_thread
+
+def current_task() -> Task:
+  return current_thread().task
+
+def current_instance() -> ComponentInstance:
+  return current_task().inst
+
+### Threads
+
+class Thread:
+  cont: Optional[Continuation]
+  ready_func: Optional[Callable[[], bool]]
+  task: Task
+  cancellable: bool
+  index: Optional[int]
+  storage: tuple[int,int]
+
+  def running(self):
+    return self.cont is None
+
+  def suspended(self):
+    return not self.running() and self.ready_func is None
+
+  def waiting(self):
+    return not self.running() and self.ready_func is not None
+
+  def ready(self):
+    assert(self.waiting())
+    return self.ready_func()
+
+  def __init__(self, task, thread_func):
+    def cont_func(cancelled):
+      assert(self.running() and not cancelled)
+      thread_func()
+      return None
+    self.cont = cont_new(cont_func)
+    self.ready_func = None
+    self.task = task
+    self.cancellable = False
+    self.index = None
+    self.storage = [0,0]
+    assert(self.suspended())
+
+  def resume_later(self):
+    assert(self.suspended())
+    self.ready_func = lambda: True
+    self.task.inst.store.waiting.append(self)
+    assert(self.ready())
+
+  def resume(self, cancelled = Cancelled.FALSE):
+    assert(not self.running() and (self.cancellable or not cancelled))
+    self.stop_waiting()
+    thread = self
+    while thread is not None:
+      cont = thread.cont
+      thread.cont = None
+      (thread.cont, switch_to) = resume(cont, cancelled, thread)
+      thread = switch_to
+      cancelled = Cancelled.FALSE
+
+  def stop_waiting(self):
+    if self.waiting():
+      self.ready_func = None
+      self.task.inst.store.waiting.remove(self)
+
+  def suspend(self, cancellable) -> Cancelled:
+    assert(self.running() and self.task.may_block())
+    if self.task.deliver_pending_cancel(cancellable):
+      self.stop_waiting()
+      return Cancelled.TRUE
+    self.cancellable = cancellable
+    cancelled = block(switch_to = None)
+    assert(self.running() and (cancellable or not cancelled))
+    return cancelled
+
+  def wait_until(self, ready_func, cancellable = False) -> Cancelled:
+    assert(self.running() and self.task.may_block())
+    if self.task.deliver_pending_cancel(cancellable):
+      return Cancelled.TRUE
+    if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):
+      return Cancelled.FALSE
+    self.ready_func = ready_func
+    self.task.inst.store.waiting.append(self)
+    return self.suspend(cancellable)
+
+  def yield_until(self, ready_func, cancellable) -> Cancelled:
+    assert(self.running())
+    if self.task.may_block():
+      return self.wait_until(ready_func, cancellable)
+    else:
+      assert(ready_func())
+      return Cancelled.FALSE
+
+  def yield_(self, cancellable) -> Cancelled:
+    return self.yield_until(lambda: True, cancellable)
+
+  def switch_to(self, cancellable, other: Thread) -> Cancelled:
+    assert(self.running() and other.suspended())
+    if self.task.deliver_pending_cancel(cancellable):
+      self.stop_waiting()
+      return Cancelled.TRUE
+    self.cancellable = cancellable
+    cancelled = block(switch_to = other)
+    assert(self.running() and (cancellable or not cancelled))
+    return cancelled
+
+  def yield_to(self, cancellable, other: Thread) -> Cancelled:
+    assert(self.running() and other.suspended())
+    self.ready_func = lambda: True
+    self.task.inst.store.waiting.append(self)
+    return self.switch_to(cancellable, other)
+
+### Tasks
+
+OnStart = Callable[[], list[any]]
+OnResolve = Callable[[Optional[list[any]]], None]
+OnCancel = Callable[[], None]
+FuncInst = Callable[[Supertask, OnStart, OnResolve], OnCancel]
+
+class Task(Supertask):
+  class State(Enum):
+    INITIAL = 1
+    STARTED = 2
+    PENDING_CANCEL = 3
+    CANCEL_DELIVERED = 4
+    RESOLVED = 5
+
+  ft: FuncType
+  opts: CanonicalOptions
+  inst: ComponentInstance
+  supertask: Supertask
+  on_start: OnStart
+  on_resolve: OnResolve
+  state: State
+  num_borrows: int
+  waiting_to_enter: Optional[Thread]
+  threads: list[Thread]
+
+  def __init__(self, ft, opts, inst, supertask, on_start, on_resolve):
+    self.ft = ft
+    self.opts = opts
+    self.inst = inst
+    self.supertask = supertask
+    self.on_start = on_start
+    self.on_resolve = on_resolve
+    self.state = Task.State.INITIAL
+    self.num_borrows = 0
+    self.waiting_to_enter = None
+    self.threads = []
+
+  def needs_exclusive(self):
+    return not self.opts.async_ or self.opts.callback
+
+  def may_block(self):
+    return self.ft.async_ or self.state == Task.State.RESOLVED
+
+  def enter_implicit_thread(self):
+    assert(self.state == Task.State.INITIAL)
+    thread = current_thread()
+    if self.ft.async_:
+      def has_backpressure():
+        return (self.inst.backpressure > 0 or
+                (self.needs_exclusive() and self.inst.exclusive is not None))
+      if has_backpressure() or self.inst.num_waiting_to_enter > 0:
+        self.inst.num_waiting_to_enter += 1
+        self.waiting_to_enter = thread
+        cancelled = thread.wait_until(lambda: not has_backpressure(), cancellable = True)
+        self.waiting_to_enter = None
+        self.inst.num_waiting_to_enter -= 1
+        if cancelled:
+          self.cancel()
+          return False
+      if self.needs_exclusive():
+        assert(self.inst.exclusive is None)
+        self.inst.exclusive = self
+    self.register_thread(thread)
+    return True
+
+  def register_thread(self, thread):
+    assert(thread not in self.threads and thread.task is self)
+    self.threads.append(thread)
+    assert(thread.index is None)
+    thread.index = self.inst.threads.add(thread)
+
+  def exit_implicit_thread(self):
+    self.unregister_thread(current_thread())
+    if self.ft.async_ and self.needs_exclusive():
+      assert(self.inst.exclusive is self)
+      self.inst.exclusive = None
+
+  def unregister_thread(self, thread):
+    assert(thread in self.threads and thread.task is self)
+    self.threads.remove(thread)
+    if len(self.threads) == 0:
+      trap_if(self.state != Task.State.RESOLVED)
+      assert(self.num_borrows == 0)
+    assert(thread.index is not None)
+    self.inst.threads.remove(thread.index)
+
+  def request_cancellation(self):
+    if self.state == Task.State.INITIAL:
+      self.state = Task.State.CANCEL_DELIVERED
+      self.waiting_to_enter.resume(Cancelled.TRUE)
+      return
+    assert(self.state == Task.State.STARTED)
+    if not self.needs_exclusive() or not self.inst.exclusive or self.inst.exclusive is self:
+      candidates = { t for t in self.threads if t.cancellable }
+      if candidates:
+        self.state = Task.State.CANCEL_DELIVERED
+        random.choice(list(candidates)).resume(Cancelled.TRUE)
+        return
+    self.state = Task.State.PENDING_CANCEL
+
+  def deliver_pending_cancel(self, cancellable) -> bool:
+    if cancellable and self.state == Task.State.PENDING_CANCEL:
+      self.state = Task.State.CANCEL_DELIVERED
+      return True
+    return False
+
+  def start(self) -> list[any]:
+    assert(self.state == Task.State.INITIAL)
+    self.state = Task.State.STARTED
+    return self.on_start()
+
+  def return_(self, result):
+    trap_if(self.state == Task.State.RESOLVED)
+    trap_if(self.num_borrows > 0)
+    assert(result is not None)
+    self.on_resolve(result)
+    self.state = Task.State.RESOLVED
+
+  def cancel(self):
+    trap_if(self.state != Task.State.CANCEL_DELIVERED)
+    trap_if(self.num_borrows > 0)
+    self.on_resolve(None)
+    self.state = Task.State.RESOLVED
+
+## Embedding API
+
+CoreFuncInst = Callable[[list[CoreValType]], list[CoreValType]]
+
+class Store:
+  waiting: list[Thread]
+
+  def __init__(self):
+    self.waiting = []
+
+  def invoke(self, f: FuncInst, caller: Optional[Supertask], on_start, on_resolve) -> OnCancel:
+    host_caller = Supertask()
+    host_caller.inst = None
+    host_caller.supertask = caller
+    return f(host_caller, on_start, on_resolve)
+
+  def lift(self, f: CoreFuncInst, ft: FuncType, opts: CanonicalOptions, inst: ComponentInstance) -> FuncInst:
+    def func_inst(caller: Supertask, on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
+      trap_if(call_might_be_recursive(caller, inst))
+      return canon_lift(f, ft, opts, inst, caller, on_start, on_resolve)
+    return func_inst
+
+  def lower(self, f: FuncInst, ft: FuncType, opts: CanonicalOptions, inst: ComponentInstance) -> CoreFuncInst:
+    def core_func_inst(args: list[CoreValType]) -> list[CoreValType]:
+      assert(current_instance() is inst)
+      return canon_lower(f, ft, opts, args)
+    return core_func_inst
+
+  def tick(self):
+    random.shuffle(self.waiting)
+    for thread in self.waiting:
+      if thread.ready():
+        thread.resume()
+        return
+
+## Lifting and Lowering Context
+
+class LiftLowerContext:
+  opts: LiftLowerOptions
+  inst: ComponentInstance
+  borrow_scope: Optional[Task|Subtask]
+
+  def __init__(self, opts, inst, borrow_scope = None):
+    self.opts = opts
+    self.inst = inst
+    self.borrow_scope = borrow_scope
+
+## Canonical ABI Options
+
+def ptr_size(ptr_type):
+  match ptr_type:
+    case 'i32':
+      return 4
+    case 'i64':
+      return 8
+
+@dataclass
+class MemInst:
+  bytes: bytearray
+  addrtype: Literal['i32', 'i64']
+
+  def __getitem__(self, i):
+    return self.bytes[i]
+
+  def __setitem__(self, i, v):
+    self.bytes[i] = v
+
+  def __len__(self):
+    return len(self.bytes)
+
+  def ptr_type(self):
+    return self.addrtype
+
+  def ptr_size(self):
+    return ptr_size(self.ptr_type())
+
+@dataclass
+class LiftOptions:
+  string_encoding: str = 'utf8'
+  memory: Optional[MemInst] = None
+
+  def equal(lhs, rhs):
+    return lhs.string_encoding == rhs.string_encoding and \
+           lhs.memory is rhs.memory
+
+@dataclass
+class LiftLowerOptions(LiftOptions):
+  realloc: Optional[Callable] = None
+
+@dataclass
+class CanonicalOptions(LiftLowerOptions):
+  post_return: Optional[Callable] = None
+  async_: bool = False
+  callback: Optional[Callable] = None
+
+## Runtime State
+
+### Table State
 
 class Table:
   array: list[any]
@@ -334,7 +671,7 @@ class Table:
     self.free.append(i)
     return e
 
-#### Resource State
+### Resource State
 
 class ResourceHandle:
   rt: ResourceType
@@ -362,134 +699,7 @@ class ResourceType(Type):
     self.dtor_async = dtor_async
     self.dtor_callback = dtor_callback
 
-#### Thread State
-
-class SuspendResult(IntEnum):
-  NOT_CANCELLED = 0
-  CANCELLED = 1
-
-class Thread:
-  task: Task
-  fiber: threading.Thread
-  fiber_lock: threading.Lock
-  parent_lock: Optional[threading.Lock]
-  ready_func: Optional[Callable[[], bool]]
-  cancellable: bool
-  suspend_result: Optional[SuspendResult]
-  in_event_loop: bool
-  index: Optional[int]
-  context: list[int]
-
-  CONTEXT_LENGTH = 2
-
-  def running(self):
-    return self.parent_lock is not None
-
-  def suspended(self):
-    return not self.running() and self.ready_func is None
-
-  def pending(self):
-    return not self.running() and self.ready_func is not None
-
-  def ready(self):
-    assert(self.pending())
-    return self.ready_func()
-
-  def __init__(self, task, thread_func):
-    self.task = task
-    self.fiber_lock = threading.Lock()
-    self.fiber_lock.acquire()
-    self.parent_lock = None
-    self.ready_func = None
-    self.cancellable = False
-    self.suspend_result = None
-    self.in_event_loop = False
-    self.index = None
-    self.context = [0] * Thread.CONTEXT_LENGTH
-    def fiber_func():
-      self.fiber_lock.acquire()
-      assert(self.running() and self.suspend_result == SuspendResult.NOT_CANCELLED)
-      self.suspend_result = None
-      thread_func(self)
-      assert(self.running())
-      self.task.thread_stop(self)
-      if self.index is not None:
-        self.task.inst.threads.remove(self.index)
-      self.parent_lock.release()
-    self.fiber = threading.Thread(target = fiber_func)
-    self.fiber.start()
-    self.task.thread_start(self)
-    assert(self.suspended())
-
-  def resume(self, suspend_result = SuspendResult.NOT_CANCELLED):
-    assert(not self.running() and self.suspend_result is None)
-    if self.ready_func:
-      assert(suspend_result == SuspendResult.CANCELLED or self.ready_func())
-      self.ready_func = None
-      self.task.inst.store.pending.remove(self)
-    assert(self.cancellable or suspend_result == SuspendResult.NOT_CANCELLED)
-    self.suspend_result = suspend_result
-    self.parent_lock = threading.Lock()
-    self.parent_lock.acquire()
-    self.fiber_lock.release()
-    self.parent_lock.acquire()
-    self.parent_lock = None
-    assert(not self.running())
-
-  def suspend(self, cancellable) -> SuspendResult:
-    assert(self.task.may_block())
-    assert(self.running() and not self.cancellable and self.suspend_result is None)
-    self.cancellable = cancellable
-    self.parent_lock.release()
-    self.fiber_lock.acquire()
-    assert(self.running())
-    self.cancellable = False
-    suspend_result = self.suspend_result
-    self.suspend_result = None
-    assert(suspend_result is not None)
-    assert(cancellable or suspend_result == SuspendResult.NOT_CANCELLED)
-    return suspend_result
-
-  def resume_later(self):
-    assert(self.suspended())
-    self.ready_func = lambda: True
-    self.task.inst.store.pending.append(self)
-
-  def suspend_until(self, ready_func, cancellable = False) -> SuspendResult:
-    assert(self.task.may_block())
-    assert(self.running())
-    if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):
-      return SuspendResult.NOT_CANCELLED
-    self.ready_func = ready_func
-    self.task.inst.store.pending.append(self)
-    return self.suspend(cancellable)
-
-  def switch_to(self, cancellable, other: Thread) -> SuspendResult:
-    assert(self.running() and not self.cancellable and self.suspend_result is None)
-    assert(other.suspended() and other.suspend_result is None)
-    self.cancellable = cancellable
-    other.suspend_result = SuspendResult.NOT_CANCELLED
-    assert(self.parent_lock and not other.parent_lock)
-    other.parent_lock = self.parent_lock
-    self.parent_lock = None
-    assert(not self.running() and other.running())
-    other.fiber_lock.release()
-    self.fiber_lock.acquire()
-    assert(self.running())
-    self.cancellable = False
-    suspend_result = self.suspend_result
-    self.suspend_result = None
-    assert(suspend_result is not None)
-    assert(cancellable or suspend_result == SuspendResult.NOT_CANCELLED)
-    return suspend_result
-
-  def yield_to(self, cancellable, other: Thread) -> SuspendResult:
-    assert(not self.ready_func)
-    self.ready_func = lambda: True
-    self.task.inst.store.pending.append(self)
-    return self.switch_to(cancellable, other)
-
-#### Waitable State
+### Waitable State
 
 class EventCode(IntEnum):
   NONE = 0
@@ -505,10 +715,12 @@ EventTuple = tuple[EventCode, int, int]
 class Waitable:
   pending_event: Optional[Callable[[], EventTuple]]
   wset: Optional[WaitableSet]
+  has_sync_waiter: bool
 
   def __init__(self):
     self.pending_event = None
     self.wset = None
+    self.has_sync_waiter = False
 
   def set_pending_event(self, pending_event):
     self.pending_event = pending_event
@@ -516,12 +728,22 @@ class Waitable:
   def has_pending_event(self):
     return bool(self.pending_event)
 
+  def in_waitable_set(self):
+    return self.wset is not None
+
+  def wait_for_pending_event(self):
+    assert(not self.in_waitable_set() and not self.has_sync_waiter)
+    self.has_sync_waiter = True
+    current_thread().wait_until(self.has_pending_event, cancellable = False)
+    self.has_sync_waiter = False
+
   def get_pending_event(self) -> EventTuple:
     pending_event = self.pending_event
     self.pending_event = None
     return pending_event()
 
   def join(self, wset):
+    assert(not self.has_sync_waiter)
     if self.wset:
       self.wset.elems.remove(self)
     self.wset = wset
@@ -530,6 +752,7 @@ class Waitable:
 
   def drop(self):
     assert(not self.has_pending_event())
+    assert(not self.has_sync_waiter)
     self.join(None)
 
 class WaitableSet:
@@ -551,156 +774,34 @@ class WaitableSet:
       if w.has_pending_event():
         return w.get_pending_event()
 
+  def wait_for_event_and(self, ready_func, cancellable) -> EventTuple:
+    def ready_and_has_event():
+      return ready_func() and self.has_pending_event()
+    self.num_waiting += 1
+    cancelled = current_thread().wait_until(ready_and_has_event, cancellable)
+    if cancelled:
+      event = (EventCode.TASK_CANCELLED, 0, 0)
+    else:
+      event = self.get_pending_event()
+    self.num_waiting -= 1
+    return event
+
+  def wait_for_event(self, cancellable) -> EventTuple:
+    return self.wait_for_event_and(lambda: True, cancellable)
+
+  def poll(self, cancellable) -> EventTuple:
+    if current_task().deliver_pending_cancel(cancellable):
+      return (EventCode.TASK_CANCELLED, 0, 0)
+    elif not self.has_pending_event():
+      return (EventCode.NONE, 0, 0)
+    else:
+      return self.get_pending_event()
+
   def drop(self):
     trap_if(len(self.elems) > 0)
     trap_if(self.num_waiting > 0)
 
-#### Task State
-
-class Task(Call, Supertask):
-  class State(Enum):
-    INITIAL = 1
-    PENDING_CANCEL = 2
-    CANCEL_DELIVERED = 3
-    RESOLVED = 4
-
-  state: State
-  opts: CanonicalOptions
-  inst: ComponentInstance
-  ft: FuncType
-  supertask: Supertask
-  on_resolve: OnResolve
-  num_borrows: int
-  threads: list[Thread]
-
-  def __init__(self, opts, inst, ft, supertask, on_resolve):
-    self.state = Task.State.INITIAL
-    self.opts = opts
-    self.inst = inst
-    self.ft = ft
-    self.supertask = supertask
-    self.on_resolve = on_resolve
-    self.num_borrows = 0
-    self.threads = []
-
-  def thread_start(self, thread):
-    assert(thread not in self.threads and thread.task is self)
-    self.threads.append(thread)
-
-  def thread_stop(self, thread):
-    assert(thread in self.threads and thread.task is self)
-    self.threads.remove(thread)
-    if len(self.threads) == 0:
-      trap_if(self.state != Task.State.RESOLVED)
-      assert(self.num_borrows == 0)
-
-  def needs_exclusive(self):
-    return not self.opts.async_ or self.opts.callback
-
-  def may_block(self):
-    return self.ft.async_ or self.state == Task.State.RESOLVED
-
-  def enter(self, thread):
-    assert(thread in self.threads and thread.task is self)
-    if not self.ft.async_:
-      return True
-    def has_backpressure():
-      return self.inst.backpressure > 0 or (self.needs_exclusive() and self.inst.exclusive)
-    if has_backpressure() or self.inst.num_waiting_to_enter > 0:
-      self.inst.num_waiting_to_enter += 1
-      result = thread.suspend_until(lambda: not has_backpressure(), cancellable = True)
-      self.inst.num_waiting_to_enter -= 1
-      if result == SuspendResult.CANCELLED:
-        self.cancel()
-        return False
-    if self.needs_exclusive():
-      assert(not self.inst.exclusive)
-      self.inst.exclusive = True
-    return True
-
-  def exit(self):
-    assert(len(self.threads) > 0)
-    if not self.ft.async_:
-      return
-    if self.needs_exclusive():
-      assert(self.inst.exclusive)
-      self.inst.exclusive = False
-
-  def request_cancellation(self):
-    assert(self.state == Task.State.INITIAL)
-    random.shuffle(self.threads)
-    for thread in self.threads:
-      if thread.cancellable and not (thread.in_event_loop and self.inst.exclusive):
-        self.state = Task.State.CANCEL_DELIVERED
-        thread.resume(SuspendResult.CANCELLED)
-        return
-    self.state = Task.State.PENDING_CANCEL
-
-  def deliver_pending_cancel(self, cancellable) -> bool:
-    if cancellable and self.state == Task.State.PENDING_CANCEL:
-      self.state = Task.State.CANCEL_DELIVERED
-      return True
-    return False
-
-  def suspend(self, thread, cancellable) -> SuspendResult:
-    assert(thread in self.threads and thread.task is self)
-    if self.deliver_pending_cancel(cancellable):
-      return SuspendResult.CANCELLED
-    return thread.suspend(cancellable)
-
-  def suspend_until(self, ready_func, thread, cancellable) -> SuspendResult:
-    assert(thread in self.threads and thread.task is self)
-    if self.deliver_pending_cancel(cancellable):
-      return SuspendResult.CANCELLED
-    return thread.suspend_until(ready_func, cancellable)
-
-  def switch_to(self, thread, cancellable, other_thread) -> SuspendResult:
-    assert(thread in self.threads and thread.task is self)
-    if self.deliver_pending_cancel(cancellable):
-      return SuspendResult.CANCELLED
-    return thread.switch_to(cancellable, other_thread)
-
-  def yield_to(self, thread, cancellable, other_thread) -> SuspendResult:
-    assert(thread in self.threads and thread.task is self)
-    if self.deliver_pending_cancel(cancellable):
-      return SuspendResult.CANCELLED
-    return thread.yield_to(cancellable, other_thread)
-
-  def wait_until(self, ready_func, thread, wset, cancellable) -> EventTuple:
-    assert(thread in self.threads and thread.task is self)
-    wset.num_waiting += 1
-    def ready_and_has_event():
-      return ready_func() and wset.has_pending_event()
-    match self.suspend_until(ready_and_has_event, thread, cancellable):
-      case SuspendResult.CANCELLED:
-        event = (EventCode.TASK_CANCELLED, 0, 0)
-      case SuspendResult.NOT_CANCELLED:
-        event = wset.get_pending_event()
-    wset.num_waiting -= 1
-    return event
-
-  def yield_until(self, ready_func, thread, cancellable) -> EventTuple:
-    assert(thread in self.threads and thread.task is self)
-    match self.suspend_until(ready_func, thread, cancellable):
-      case SuspendResult.CANCELLED:
-        return (EventCode.TASK_CANCELLED, 0, 0)
-      case SuspendResult.NOT_CANCELLED:
-        return (EventCode.NONE, 0, 0)
-
-  def return_(self, result):
-    trap_if(self.state == Task.State.RESOLVED)
-    trap_if(self.num_borrows > 0)
-    assert(result is not None)
-    self.on_resolve(result)
-    self.state = Task.State.RESOLVED
-
-  def cancel(self):
-    trap_if(self.state != Task.State.CANCEL_DELIVERED)
-    trap_if(self.num_borrows > 0)
-    self.on_resolve(None)
-    self.state = Task.State.RESOLVED
-
-#### Subtask State
+### Subtask State
 
 class Subtask(Waitable):
   class State(IntEnum):
@@ -711,14 +812,14 @@ class Subtask(Waitable):
     CANCELLED_BEFORE_RETURNED = 4
 
   state: State
-  callee: Optional[Call]
+  on_cancel: Optional[OnCancel]
   lenders: Optional[list[ResourceHandle]]
   cancellation_requested: bool
 
   def __init__(self):
     Waitable.__init__(self)
     self.state = Subtask.State.STARTING
-    self.callee = None
+    self.on_cancel = None
     self.lenders = []
     self.cancellation_requested = False
 
@@ -751,7 +852,7 @@ class Subtask(Waitable):
     trap_if(not self.resolve_delivered())
     Waitable.drop(self)
 
-#### Buffer State
+### Buffer State
 
 class Buffer:
   MAX_LENGTH = 2**28 - 1
@@ -775,8 +876,8 @@ class BufferGuestImpl(Buffer):
   def __init__(self, t, cx, ptr, length):
     trap_if(length > Buffer.MAX_LENGTH)
     if t and length > 0:
-      trap_if(ptr != align_to(ptr, alignment(t)))
-      trap_if(ptr + length * elem_size(t) > len(cx.opts.memory))
+      trap_if(ptr != align_to(ptr, alignment(t, cx.opts.memory.ptr_type())))
+      trap_if(ptr + length * elem_size(t, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
     self.cx = cx
     self.t = t
     self.ptr = ptr
@@ -794,7 +895,7 @@ class ReadableBufferGuestImpl(BufferGuestImpl):
     assert(n <= self.remain())
     if self.t:
       vs = load_list_from_valid_range(self.cx, self.ptr, n, self.t)
-      self.ptr += n * elem_size(self.t)
+      self.ptr += n * elem_size(self.t, self.cx.opts.memory.ptr_type())
     else:
       vs = n * [()]
     self.progress += n
@@ -805,12 +906,12 @@ class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
     assert(len(vs) <= self.remain())
     if self.t:
       store_list_into_valid_range(self.cx, vs, self.ptr, self.t)
-      self.ptr += len(vs) * elem_size(self.t)
+      self.ptr += len(vs) * elem_size(self.t, self.cx.opts.memory.ptr_type())
     else:
       assert(all(v == () for v in vs))
     self.progress += len(vs)
 
-#### Stream State
+### Stream State
 
 class CopyResult(IntEnum):
   COMPLETED = 0
@@ -912,10 +1013,9 @@ def none_or_number_type(t):
 
 class CopyState(Enum):
   IDLE = 1
-  SYNC_COPYING = 2
-  ASYNC_COPYING = 3
-  CANCELLING_COPY = 4
-  DONE = 5
+  COPYING = 2
+  CANCELLING_COPY = 3
+  DONE = 4
 
 class CopyEnd(Waitable):
   state: CopyState
@@ -930,7 +1030,7 @@ class CopyEnd(Waitable):
     match self.state:
       case CopyState.IDLE | CopyState.DONE:
         return False
-      case CopyState.SYNC_COPYING | CopyState.ASYNC_COPYING | CopyState.CANCELLING_COPY:
+      case CopyState.COPYING | CopyState.CANCELLING_COPY:
         return True
     assert(False)
 
@@ -947,7 +1047,7 @@ class WritableStreamEnd(CopyEnd):
   def copy(self, inst, src, on_copy, on_copy_done):
     self.shared.write(inst, src, on_copy, on_copy_done)
 
-#### Future State
+### Future State
 
 class ReadableFuture(SharedBase):
   read: Callable[[ComponentInstance, WritableBuffer, OnCopyDone], None]
@@ -980,7 +1080,7 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
     pending_on_copy_done(result)
 
   def cancel(self):
-    self.reset_pending_and_notify_pending(CopyResult.CANCELLED)
+    self.reset_and_notify_pending(CopyResult.CANCELLED)
 
   def drop(self):
     if not self.dropped:
@@ -1012,18 +1112,18 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
       on_copy_done(CopyResult.COMPLETED)
 
 class ReadableFutureEnd(CopyEnd):
-  def copy(self, inst, src_buffer, on_copy_done):
-    self.shared.read(inst, src_buffer, on_copy_done)
+  def copy(self, inst, dst_buffer, on_copy_done):
+    self.shared.read(inst, dst_buffer, on_copy_done)
 
 class WritableFutureEnd(CopyEnd):
-  def copy(self, inst, dst_buffer, on_copy_done):
-    self.shared.write(inst, dst_buffer, on_copy_done)
+  def copy(self, inst, src_buffer, on_copy_done):
+    self.shared.write(inst, src_buffer, on_copy_done)
 
   def drop(self):
     trap_if(self.state != CopyState.DONE)
     CopyEnd.drop(self)
 
-### Despecialization
+## Despecialization
 
 def despecialize(t):
   match t:
@@ -1031,9 +1131,10 @@ def despecialize(t):
     case EnumType(labels)    : return VariantType([ CaseType(l, None) for l in labels ])
     case OptionType(t)       : return VariantType([ CaseType("none", None), CaseType("some", t) ])
     case ResultType(ok, err) : return VariantType([ CaseType("ok", ok), CaseType("error", err) ])
+    case MapType(k, v)       : return ListType(despecialize(TupleType([k, v])))
     case _                   : return t
 
-### Type Predicates
+## Type Predicates
 
 def contains_borrow(t):
   return contains(t, lambda u: isinstance(u, BorrowType))
@@ -1060,9 +1161,9 @@ def contains(t, p):
       assert(False)
 
 
-### Alignment
+## Alignment
 
-def alignment(t):
+def alignment(t, ptr_type):
   match despecialize(t):
     case BoolType()                  : return 1
     case S8Type() | U8Type()         : return 1
@@ -1072,28 +1173,28 @@ def alignment(t):
     case F32Type()                   : return 4
     case F64Type()                   : return 8
     case CharType()                  : return 4
-    case StringType()                : return 4
+    case StringType()                : return ptr_size(ptr_type)
     case ErrorContextType()          : return 4
-    case ListType(t, l)              : return alignment_list(t, l)
-    case RecordType(fields)          : return alignment_record(fields)
-    case VariantType(cases)          : return alignment_variant(cases)
+    case ListType(t, l)              : return alignment_list(t, l, ptr_type)
+    case RecordType(fields)          : return alignment_record(fields, ptr_type)
+    case VariantType(cases)          : return alignment_variant(cases, ptr_type)
     case FlagsType(labels)           : return alignment_flags(labels)
     case OwnType() | BorrowType()    : return 4
     case StreamType() | FutureType() : return 4
 
-def alignment_list(elem_type, maybe_length):
+def alignment_list(elem_type, maybe_length, ptr_type):
   if maybe_length is not None:
-    return alignment(elem_type)
-  return 4
+    return alignment(elem_type, ptr_type)
+  return ptr_size(ptr_type)
 
-def alignment_record(fields):
+def alignment_record(fields, ptr_type):
   a = 1
   for f in fields:
-    a = max(a, alignment(f.t))
+    a = max(a, alignment(f.t, ptr_type))
   return a
 
-def alignment_variant(cases):
-  return max(alignment(discriminant_type(cases)), max_case_alignment(cases))
+def alignment_variant(cases, ptr_type):
+  return max(alignment(discriminant_type(cases), ptr_type), max_case_alignment(cases, ptr_type))
 
 def discriminant_type(cases):
   n = len(cases)
@@ -1104,11 +1205,11 @@ def discriminant_type(cases):
     case 2: return U16Type()
     case 3: return U32Type()
 
-def max_case_alignment(cases):
+def max_case_alignment(cases, ptr_type):
   a = 1
   for c in cases:
     if c.t is not None:
-      a = max(a, alignment(c.t))
+      a = max(a, alignment(c.t, ptr_type))
   return a
 
 def alignment_flags(labels):
@@ -1118,9 +1219,9 @@ def alignment_flags(labels):
   if n <= 16: return 2
   return 4
 
-### Element Size
+## Element Size
 
-def elem_size(t):
+def elem_size(t, ptr_type):
   match despecialize(t):
     case BoolType()                  : return 1
     case S8Type() | U8Type()         : return 1
@@ -1130,40 +1231,40 @@ def elem_size(t):
     case F32Type()                   : return 4
     case F64Type()                   : return 8
     case CharType()                  : return 4
-    case StringType()                : return 8
+    case StringType()                : return 2 * ptr_size(ptr_type)
     case ErrorContextType()          : return 4
-    case ListType(t, l)              : return elem_size_list(t, l)
-    case RecordType(fields)          : return elem_size_record(fields)
-    case VariantType(cases)          : return elem_size_variant(cases)
+    case ListType(t, l)              : return elem_size_list(t, l, ptr_type)
+    case RecordType(fields)          : return elem_size_record(fields, ptr_type)
+    case VariantType(cases)          : return elem_size_variant(cases, ptr_type)
     case FlagsType(labels)           : return elem_size_flags(labels)
     case OwnType() | BorrowType()    : return 4
     case StreamType() | FutureType() : return 4
 
-def elem_size_list(elem_type, maybe_length):
+def elem_size_list(elem_type, maybe_length, ptr_type):
   if maybe_length is not None:
-    return maybe_length * elem_size(elem_type)
-  return 8
+    return maybe_length * elem_size(elem_type, ptr_type)
+  return 2 * ptr_size(ptr_type)
 
-def elem_size_record(fields):
+def elem_size_record(fields, ptr_type):
   s = 0
   for f in fields:
-    s = align_to(s, alignment(f.t))
-    s += elem_size(f.t)
+    s = align_to(s, alignment(f.t, ptr_type))
+    s += elem_size(f.t, ptr_type)
   assert(s > 0)
-  return align_to(s, alignment_record(fields))
+  return align_to(s, alignment_record(fields, ptr_type))
 
 def align_to(ptr, alignment):
   return math.ceil(ptr / alignment) * alignment
 
-def elem_size_variant(cases):
-  s = elem_size(discriminant_type(cases))
-  s = align_to(s, max_case_alignment(cases))
+def elem_size_variant(cases, ptr_type):
+  s = elem_size(discriminant_type(cases), ptr_type)
+  s = align_to(s, max_case_alignment(cases, ptr_type))
   cs = 0
   for c in cases:
     if c.t is not None:
-      cs = max(cs, elem_size(c.t))
+      cs = max(cs, elem_size(c.t, ptr_type))
   s += cs
-  return align_to(s, alignment_variant(cases))
+  return align_to(s, alignment_variant(cases, ptr_type))
 
 def elem_size_flags(labels):
   n = len(labels)
@@ -1172,11 +1273,11 @@ def elem_size_flags(labels):
   if n <= 16: return 2
   return 4
 
-### Loading
+## Loading
 
 def load(cx, ptr, t):
-  assert(ptr == align_to(ptr, alignment(t)))
-  assert(ptr + elem_size(t) <= len(cx.opts.memory))
+  assert(ptr == align_to(ptr, alignment(t, cx.opts.memory.ptr_type())))
+  assert(ptr + elem_size(t, cx.opts.memory.ptr_type()) <= len(cx.opts.memory))
   match despecialize(t):
     case BoolType()         : return convert_int_to_bool(load_int(cx, ptr, 1))
     case U8Type()           : return load_int(cx, ptr, 1)
@@ -1245,13 +1346,19 @@ def convert_i32_to_char(cx, i):
 String = tuple[str, str, int]
 
 def load_string(cx, ptr) -> String:
-  begin = load_int(cx, ptr, 4)
-  tagged_code_units = load_int(cx, ptr + 4, 4)
+  begin = load_int(cx, ptr, cx.opts.memory.ptr_size())
+  tagged_code_units = load_int(cx, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
   return load_string_from_range(cx, begin, tagged_code_units)
 
-UTF16_TAG = 1 << 31
+def utf16_tag(ptr_type):
+  return 1 << (ptr_size(ptr_type) * 8 - 1)
+
+REALLOC_I32_MAX = 2**32 - 1
+MAX_STRING_BYTE_LENGTH = (1 << 28) - 1
+assert(REALLOC_I32_MAX > 2 * MAX_STRING_BYTE_LENGTH)
 
 def load_string_from_range(cx, ptr, tagged_code_units) -> String:
+  tag = utf16_tag(cx.opts.memory.ptr_type())
   match cx.opts.string_encoding:
     case 'utf8':
       alignment = 1
@@ -1263,13 +1370,14 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
       encoding = 'utf-16-le'
     case 'latin1+utf16':
       alignment = 2
-      if bool(tagged_code_units & UTF16_TAG):
-        byte_length = 2 * (tagged_code_units ^ UTF16_TAG)
+      if bool(tagged_code_units & tag):
+        byte_length = 2 * (tagged_code_units ^ tag)
         encoding = 'utf-16-le'
       else:
         byte_length = tagged_code_units
         encoding = 'latin-1'
 
+  trap_if(byte_length > MAX_STRING_BYTE_LENGTH)
   trap_if(ptr != align_to(ptr, alignment))
   trap_if(ptr + byte_length > len(cx.opts.memory))
   try:
@@ -1284,39 +1392,43 @@ def lift_error_context(cx, i):
   trap_if(not isinstance(errctx, ErrorContext))
   return errctx
 
+MAX_LIST_BYTE_LENGTH = (1 << 28) - 1
+assert(REALLOC_I32_MAX > 2 * MAX_LIST_BYTE_LENGTH)
+
 def load_list(cx, ptr, elem_type, maybe_length):
   if maybe_length is not None:
     return load_list_from_valid_range(cx, ptr, maybe_length, elem_type)
-  begin = load_int(cx, ptr, 4)
-  length = load_int(cx, ptr + 4, 4)
+  begin = load_int(cx, ptr, cx.opts.memory.ptr_size())
+  length = load_int(cx, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
   return load_list_from_range(cx, begin, length, elem_type)
 
 def load_list_from_range(cx, ptr, length, elem_type):
-  trap_if(ptr != align_to(ptr, alignment(elem_type)))
-  trap_if(ptr + length * elem_size(elem_type) > len(cx.opts.memory))
+  trap_if(length * elem_size(elem_type, cx.opts.memory.ptr_type()) > MAX_LIST_BYTE_LENGTH)
+  trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type())))
+  trap_if(ptr + length * elem_size(elem_type, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
   return load_list_from_valid_range(cx, ptr, length, elem_type)
 
 def load_list_from_valid_range(cx, ptr, length, elem_type):
   a = []
   for i in range(length):
-    a.append(load(cx, ptr + i * elem_size(elem_type), elem_type))
+    a.append(load(cx, ptr + i * elem_size(elem_type, cx.opts.memory.ptr_type()), elem_type))
   return a
 
 def load_record(cx, ptr, fields):
   record = {}
   for field in fields:
-    ptr = align_to(ptr, alignment(field.t))
+    ptr = align_to(ptr, alignment(field.t, cx.opts.memory.ptr_type()))
     record[field.label] = load(cx, ptr, field.t)
-    ptr += elem_size(field.t)
+    ptr += elem_size(field.t, cx.opts.memory.ptr_type())
   return record
 
 def load_variant(cx, ptr, cases):
-  disc_size = elem_size(discriminant_type(cases))
+  disc_size = elem_size(discriminant_type(cases), cx.opts.memory.ptr_type())
   case_index = load_int(cx, ptr, disc_size)
   ptr += disc_size
   trap_if(case_index >= len(cases))
   c = cases[case_index]
-  ptr = align_to(ptr, max_case_alignment(cases))
+  ptr = align_to(ptr, max_case_alignment(cases, cx.opts.memory.ptr_type()))
   if c.t is None:
     return { c.label: None }
   return { c.label: load(cx, ptr, c.t) }
@@ -1362,11 +1474,11 @@ def lift_async_value(ReadableEndT, cx, i, t):
   trap_if(e.state != CopyState.IDLE)
   return e.shared
 
-### Storing
+## Storing
 
 def store(cx, v, t, ptr):
-  assert(ptr == align_to(ptr, alignment(t)))
-  assert(ptr + elem_size(t) <= len(cx.opts.memory))
+  assert(ptr == align_to(ptr, alignment(t, cx.opts.memory.ptr_type())))
+  assert(ptr + elem_size(t, cx.opts.memory.ptr_type()) <= len(cx.opts.memory))
   match despecialize(t):
     case BoolType()         : store_int(cx, int(bool(v)), ptr, 1)
     case U8Type()           : store_int(cx, v, ptr, 1)
@@ -1433,21 +1545,22 @@ def core_i64_reinterpret_f64(f):
 
 def char_to_i32(c):
   i = ord(c)
-  assert(0 <= i <= 0xD7FF or 0xD800 <= i <= 0x10FFFF)
+  assert(0 <= i <= 0xD7FF or 0xE000 <= i <= 0x10FFFF)
   return i
 
 def store_string(cx, v: String, ptr):
   begin, tagged_code_units = store_string_into_range(cx, v)
-  store_int(cx, begin, ptr, 4)
-  store_int(cx, tagged_code_units, ptr + 4, 4)
+  store_int(cx, begin, ptr, cx.opts.memory.ptr_size())
+  store_int(cx, tagged_code_units, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
 
 def store_string_into_range(cx, v: String):
   src, src_encoding, src_tagged_code_units = v
+  tag = utf16_tag(cx.opts.memory.ptr_type())
 
   if src_encoding == 'latin1+utf16':
-    if bool(src_tagged_code_units & UTF16_TAG):
+    if bool(src_tagged_code_units & tag):
       src_simple_encoding = 'utf16'
-      src_code_units = src_tagged_code_units ^ UTF16_TAG
+      src_code_units = src_tagged_code_units ^ tag
     else:
       src_simple_encoding = 'latin1'
       src_code_units = src_tagged_code_units
@@ -1475,11 +1588,9 @@ def store_string_into_range(cx, v: String):
             case 'latin1'   : return store_string_copy(cx, src, src_code_units, 1, 2, 'latin-1')
             case 'utf16'    : return store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units)
 
-MAX_STRING_BYTE_LENGTH = (1 << 31) - 1
-
 def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment, dst_encoding):
   dst_byte_length = dst_code_unit_size * src_code_units
-  trap_if(dst_byte_length > MAX_STRING_BYTE_LENGTH)
+  assert(dst_byte_length <= REALLOC_I32_MAX)
   ptr = cx.opts.realloc(0, 0, dst_alignment, dst_byte_length)
   trap_if(ptr != align_to(ptr, dst_alignment))
   trap_if(ptr + dst_byte_length > len(cx.opts.memory))
@@ -1497,14 +1608,14 @@ def store_latin1_to_utf8(cx, src, src_code_units):
   return store_string_to_utf8(cx, src, src_code_units, worst_case_size)
 
 def store_string_to_utf8(cx, src, src_code_units, worst_case_size):
-  assert(src_code_units <= MAX_STRING_BYTE_LENGTH)
+  assert(src_code_units <= REALLOC_I32_MAX)
   ptr = cx.opts.realloc(0, 0, 1, src_code_units)
   trap_if(ptr + src_code_units > len(cx.opts.memory))
   for i,code_point in enumerate(src):
     if ord(code_point) < 2**7:
       cx.opts.memory[ptr + i] = ord(code_point)
     else:
-      trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
+      assert(worst_case_size <= REALLOC_I32_MAX)
       ptr = cx.opts.realloc(ptr, src_code_units, 1, worst_case_size)
       trap_if(ptr + worst_case_size > len(cx.opts.memory))
       encoded = src.encode('utf-8')
@@ -1517,7 +1628,7 @@ def store_string_to_utf8(cx, src, src_code_units, worst_case_size):
 
 def store_utf8_to_utf16(cx, src, src_code_units):
   worst_case_size = 2 * src_code_units
-  trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
+  assert(worst_case_size <= REALLOC_I32_MAX)
   ptr = cx.opts.realloc(0, 0, 2, worst_case_size)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + worst_case_size > len(cx.opts.memory))
@@ -1531,7 +1642,7 @@ def store_utf8_to_utf16(cx, src, src_code_units):
   return (ptr, code_units)
 
 def store_string_to_latin1_or_utf16(cx, src, src_code_units):
-  assert(src_code_units <= MAX_STRING_BYTE_LENGTH)
+  assert(src_code_units <= REALLOC_I32_MAX)
   ptr = cx.opts.realloc(0, 0, 2, src_code_units)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + src_code_units > len(cx.opts.memory))
@@ -1542,7 +1653,7 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
       dst_byte_length += 1
     else:
       worst_case_size = 2 * src_code_units
-      trap_if(worst_case_size > MAX_STRING_BYTE_LENGTH)
+      assert(worst_case_size <= REALLOC_I32_MAX)
       ptr = cx.opts.realloc(ptr, src_code_units, 2, worst_case_size)
       trap_if(ptr != align_to(ptr, 2))
       trap_if(ptr + worst_case_size > len(cx.opts.memory))
@@ -1555,7 +1666,7 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
         ptr = cx.opts.realloc(ptr, worst_case_size, 2, len(encoded))
         trap_if(ptr != align_to(ptr, 2))
         trap_if(ptr + len(encoded) > len(cx.opts.memory))
-      tagged_code_units = int(len(encoded) / 2) | UTF16_TAG
+      tagged_code_units = int(len(encoded) / 2) | utf16_tag(cx.opts.memory.ptr_type())
       return (ptr, tagged_code_units)
   if dst_byte_length < src_code_units:
     ptr = cx.opts.realloc(ptr, src_code_units, 2, dst_byte_length)
@@ -1565,14 +1676,14 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
 
 def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   src_byte_length = 2 * src_code_units
-  trap_if(src_byte_length > MAX_STRING_BYTE_LENGTH)
+  assert(src_byte_length <= REALLOC_I32_MAX)
   ptr = cx.opts.realloc(0, 0, 2, src_byte_length)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + src_byte_length > len(cx.opts.memory))
   encoded = src.encode('utf-16-le')
   cx.opts.memory[ptr : ptr+len(encoded)] = encoded
   if any(ord(c) >= (1 << 8) for c in src):
-    tagged_code_units = int(len(encoded) / 2) | UTF16_TAG
+    tagged_code_units = int(len(encoded) / 2) | utf16_tag(cx.opts.memory.ptr_type())
     return (ptr, tagged_code_units)
   latin1_size = int(len(encoded) / 2)
   for i in range(latin1_size):
@@ -1590,34 +1701,34 @@ def store_list(cx, v, ptr, elem_type, maybe_length):
     store_list_into_valid_range(cx, v, ptr, elem_type)
     return
   begin, length = store_list_into_range(cx, v, elem_type)
-  store_int(cx, begin, ptr, 4)
-  store_int(cx, length, ptr + 4, 4)
+  store_int(cx, begin, ptr, cx.opts.memory.ptr_size())
+  store_int(cx, length, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
 
 def store_list_into_range(cx, v, elem_type):
-  byte_length = len(v) * elem_size(elem_type)
-  trap_if(byte_length >= (1 << 32))
-  ptr = cx.opts.realloc(0, 0, alignment(elem_type), byte_length)
-  trap_if(ptr != align_to(ptr, alignment(elem_type)))
+  byte_length = len(v) * elem_size(elem_type, cx.opts.memory.ptr_type())
+  assert(byte_length <= REALLOC_I32_MAX)
+  ptr = cx.opts.realloc(0, 0, alignment(elem_type, cx.opts.memory.ptr_type()), byte_length)
+  trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type())))
   trap_if(ptr + byte_length > len(cx.opts.memory))
   store_list_into_valid_range(cx, v, ptr, elem_type)
   return (ptr, len(v))
 
 def store_list_into_valid_range(cx, v, ptr, elem_type):
   for i,e in enumerate(v):
-    store(cx, e, elem_type, ptr + i * elem_size(elem_type))
+    store(cx, e, elem_type, ptr + i * elem_size(elem_type, cx.opts.memory.ptr_type()))
 
 def store_record(cx, v, ptr, fields):
   for f in fields:
-    ptr = align_to(ptr, alignment(f.t))
+    ptr = align_to(ptr, alignment(f.t, cx.opts.memory.ptr_type()))
     store(cx, v[f.label], f.t, ptr)
-    ptr += elem_size(f.t)
+    ptr += elem_size(f.t, cx.opts.memory.ptr_type())
 
 def store_variant(cx, v, ptr, cases):
   case_index, case_value = match_case(v, cases)
-  disc_size = elem_size(discriminant_type(cases))
+  disc_size = elem_size(discriminant_type(cases), cx.opts.memory.ptr_type())
   store_int(cx, case_index, ptr, disc_size)
   ptr += disc_size
-  ptr = align_to(ptr, max_case_alignment(cases))
+  ptr = align_to(ptr, max_case_alignment(cases, cx.opts.memory.ptr_type()))
   c = cases[case_index]
   if c.t is not None:
     store(cx, case_value, c.t, ptr)
@@ -1662,47 +1773,47 @@ def lower_future(cx, v, t):
   assert(not contains_borrow(t))
   return cx.inst.handles.add(ReadableFutureEnd(v))
 
-### Flattening
+## Flattening
 
 MAX_FLAT_PARAMS = 16
 MAX_FLAT_ASYNC_PARAMS = 4
 MAX_FLAT_RESULTS = 1
 
 def flatten_functype(opts, ft, context):
-  flat_params = flatten_types(ft.param_types())
-  flat_results = flatten_types(ft.result_type())
+  flat_params = flatten_types(ft.param_types(), opts)
+  flat_results = flatten_types(ft.result_type(), opts)
   if not opts.async_:
     if len(flat_params) > MAX_FLAT_PARAMS:
-      flat_params = ['i32']
+      flat_params = [opts.memory.ptr_type()]
     if len(flat_results) > MAX_FLAT_RESULTS:
       match context:
         case 'lift':
-          flat_results = ['i32']
+          flat_results = [opts.memory.ptr_type()]
         case 'lower':
-          flat_params += ['i32']
+          flat_params += [opts.memory.ptr_type()]
           flat_results = []
     return CoreFuncType(flat_params, flat_results)
   else:
     match context:
       case 'lift':
         if len(flat_params) > MAX_FLAT_PARAMS:
-          flat_params = ['i32']
+          flat_params = [opts.memory.ptr_type()]
         if opts.callback:
           flat_results = ['i32']
         else:
           flat_results = []
       case 'lower':
         if len(flat_params) > MAX_FLAT_ASYNC_PARAMS:
-          flat_params = ['i32']
+          flat_params = [opts.memory.ptr_type()]
         if len(flat_results) > 0:
-          flat_params += ['i32']
+          flat_params += [opts.memory.ptr_type()]
         flat_results = ['i32']
     return CoreFuncType(flat_params, flat_results)
 
-def flatten_types(ts):
-  return [ft for t in ts for ft in flatten_type(t)]
+def flatten_types(ts, opts):
+  return [ft for t in ts for ft in flatten_type(t, opts)]
 
-def flatten_type(t):
+def flatten_type(t, opts):
   match despecialize(t):
     case BoolType()                       : return ['i32']
     case U8Type() | U16Type() | U32Type() : return ['i32']
@@ -1711,43 +1822,43 @@ def flatten_type(t):
     case F32Type()                        : return ['f32']
     case F64Type()                        : return ['f64']
     case CharType()                       : return ['i32']
-    case StringType()                     : return ['i32', 'i32']
+    case StringType()                     : return [opts.memory.ptr_type(), opts.memory.ptr_type()]
     case ErrorContextType()               : return ['i32']
-    case ListType(t, l)                   : return flatten_list(t, l)
-    case RecordType(fields)               : return flatten_record(fields)
-    case VariantType(cases)               : return flatten_variant(cases)
+    case ListType(t, l)                   : return flatten_list(t, l, opts)
+    case RecordType(fields)               : return flatten_record(fields, opts)
+    case VariantType(cases)               : return flatten_variant(cases, opts)
     case FlagsType(labels)                : return ['i32']
     case OwnType() | BorrowType()         : return ['i32']
     case StreamType() | FutureType()      : return ['i32']
 
-def flatten_list(elem_type, maybe_length):
+def flatten_list(elem_type, maybe_length, opts):
   if maybe_length is not None:
-    return flatten_type(elem_type) * maybe_length
-  return ['i32', 'i32']
+    return flatten_type(elem_type, opts) * maybe_length
+  return [opts.memory.ptr_type(), opts.memory.ptr_type()]
 
-def flatten_record(fields):
+def flatten_record(fields, opts):
   flat = []
   for f in fields:
-    flat += flatten_type(f.t)
+    flat += flatten_type(f.t, opts)
   return flat
 
-def flatten_variant(cases):
+def flatten_variant(cases, opts):
   flat = []
   for c in cases:
     if c.t is not None:
-      for i,ft in enumerate(flatten_type(c.t)):
+      for i,ft in enumerate(flatten_type(c.t, opts)):
         if i < len(flat):
           flat[i] = join(flat[i], ft)
         else:
           flat.append(ft)
-  return flatten_type(discriminant_type(cases)) + flat
+  return flatten_type(discriminant_type(cases), opts) + flat
 
 def join(a, b):
   if a == b: return a
   if (a == 'i32' and b == 'f32') or (a == 'f32' and b == 'i32'): return 'i32'
   return 'i64'
 
-### Flat Lifting
+## Flat Lifting
 
 class CoreValueIter:
   values: list[int|float]
@@ -1810,8 +1921,8 @@ def lift_flat_signed(vi, core_width, t_width):
   return i
 
 def lift_flat_string(cx, vi):
-  ptr = vi.next('i32')
-  packed_length = vi.next('i32')
+  ptr = vi.next(cx.opts.memory.ptr_type())
+  packed_length = vi.next(cx.opts.memory.ptr_type())
   return load_string_from_range(cx, ptr, packed_length)
 
 def lift_flat_list(cx, vi, elem_type, maybe_length):
@@ -1820,8 +1931,8 @@ def lift_flat_list(cx, vi, elem_type, maybe_length):
     for i in range(maybe_length):
       a.append(lift_flat(cx, vi, elem_type))
     return a
-  ptr = vi.next('i32')
-  length = vi.next('i32')
+  ptr = vi.next(cx.opts.memory.ptr_type())
+  length = vi.next(cx.opts.memory.ptr_type())
   return load_list_from_range(cx, ptr, length, elem_type)
 
 def lift_flat_record(cx, vi, fields):
@@ -1831,7 +1942,7 @@ def lift_flat_record(cx, vi, fields):
   return record
 
 def lift_flat_variant(cx, vi, cases):
-  flat_types = flatten_variant(cases)
+  flat_types = flatten_variant(cases, cx.opts)
   assert(flat_types.pop(0) == 'i32')
   case_index = vi.next('i32')
   trap_if(case_index >= len(cases))
@@ -1863,7 +1974,7 @@ def lift_flat_flags(vi, labels):
   i = vi.next('i32')
   return unpack_flags_from_int(i, labels)
 
-### Flat Lowering
+## Flat Lowering
 
 def lower_flat(cx, v, t):
   match despecialize(t):
@@ -1880,7 +1991,7 @@ def lower_flat(cx, v, t):
     case F64Type()          : return [maybe_scramble_nan64(v)]
     case CharType()         : return [char_to_i32(v)]
     case StringType()       : return lower_flat_string(cx, v)
-    case ErrorContextType() : return lower_error_context(cx, v)
+    case ErrorContextType() : return [lower_error_context(cx, v)]
     case ListType(t, l)     : return lower_flat_list(cx, v, t, l)
     case RecordType(fields) : return lower_flat_record(cx, v, fields)
     case VariantType(cases) : return lower_flat_variant(cx, v, cases)
@@ -1917,14 +2028,14 @@ def lower_flat_record(cx, v, fields):
 
 def lower_flat_variant(cx, v, cases):
   case_index, case_value = match_case(v, cases)
-  flat_types = flatten_variant(cases)
+  flat_types = flatten_variant(cases, cx.opts)
   assert(flat_types.pop(0) == 'i32')
   c = cases[case_index]
   if c.t is None:
     payload = []
   else:
     payload = lower_flat(cx, case_value, c.t)
-    for i,(fv,have) in enumerate(zip(payload, flatten_type(c.t))):
+    for i,(fv,have) in enumerate(zip(payload, flatten_type(c.t, cx.opts))):
       want = flat_types.pop(0)
       match (have, want):
         case ('f32', 'i32') : payload[i] = encode_float_as_i32(fv)
@@ -1940,33 +2051,33 @@ def lower_flat_flags(v, labels):
   assert(0 < len(labels) <= 32)
   return [pack_flags_into_int(v, labels)]
 
-### Lifting and Lowering Values
+## Lifting and Lowering Values
 
 def lift_flat_values(cx, max_flat, vi, ts):
-  flat_types = flatten_types(ts)
+  flat_types = flatten_types(ts, cx.opts)
   if len(flat_types) > max_flat:
-    ptr = vi.next('i32')
+    ptr = vi.next(cx.opts.memory.ptr_type())
     tuple_type = TupleType(ts)
-    trap_if(ptr != align_to(ptr, alignment(tuple_type)))
-    trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
+    trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts.memory.ptr_type())))
+    trap_if(ptr + elem_size(tuple_type, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
     return list(load(cx, ptr, tuple_type).values())
   else:
     return [ lift_flat(cx, vi, t) for t in ts ]
 
 def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
   cx.inst.may_leave = False
-  flat_types = flatten_types(ts)
+  flat_types = flatten_types(ts, cx.opts)
   if len(flat_types) > max_flat:
     tuple_type = TupleType(ts)
     tuple_value = {str(i): v for i,v in enumerate(vs)}
     if out_param is None:
-      ptr = cx.opts.realloc(0, 0, alignment(tuple_type), elem_size(tuple_type))
+      ptr = cx.opts.realloc(0, 0, alignment(tuple_type, cx.opts.memory.ptr_type()), elem_size(tuple_type, cx.opts.memory.ptr_type()))
       flat_vals = [ptr]
     else:
-      ptr = out_param.next('i32')
+      ptr = out_param.next(cx.opts.memory.ptr_type())
       flat_vals = []
-    trap_if(ptr != align_to(ptr, alignment(tuple_type)))
-    trap_if(ptr + elem_size(tuple_type) > len(cx.opts.memory))
+    trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts.memory.ptr_type())))
+    trap_if(ptr + elem_size(tuple_type, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
     store(cx, tuple_value, tuple_type, ptr)
   else:
     flat_vals = []
@@ -1975,71 +2086,70 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
   cx.inst.may_leave = True
   return flat_vals
 
+## Canonical Definitions
+
 ### `canon lift`
 
-def canon_lift(opts, inst, ft, callee, caller, on_start, on_resolve) -> Call:
-  trap_if(call_might_be_recursive(caller, inst))
-  task = Task(opts, inst, ft, caller, on_resolve)
-  def thread_func(thread):
-    if not task.enter(thread):
+def canon_lift(callee, ft, opts, inst, caller, on_start, on_resolve) -> OnCancel:
+  def thread_func():
+    if not task.enter_implicit_thread():
       return
 
-    assert(thread.index is None)
-    thread.index = inst.threads.add(thread)
-
     cx = LiftLowerContext(opts, inst, task)
-    args = on_start()
+    args = task.start()
     flat_args = lower_flat_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
     flat_ft = flatten_functype(opts, ft, 'lift')
     assert(types_match_values(flat_ft.params, flat_args))
 
     if not opts.async_:
-      flat_results = call_and_trap_on_throw(callee, thread, flat_args)
+      flat_results = call_and_trap_on_throw(callee, flat_args)
       assert(types_match_values(flat_ft.results, flat_results))
       result = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_type())
       task.return_(result)
       if opts.post_return is not None:
         inst.may_leave = False
-        [] = call_and_trap_on_throw(opts.post_return, thread, flat_results)
+        [] = call_and_trap_on_throw(opts.post_return, flat_results)
         inst.may_leave = True
-      task.exit()
+      task.exit_implicit_thread()
       return
 
     if not opts.callback:
-      [] = call_and_trap_on_throw(callee, thread, flat_args)
+      [] = call_and_trap_on_throw(callee, flat_args)
       assert(types_match_values(flat_ft.results, []))
-      task.exit()
+      task.exit_implicit_thread()
       return
 
-    [packed] = call_and_trap_on_throw(callee, thread, flat_args)
+    [packed] = call_and_trap_on_throw(callee, flat_args)
     code,si = unpack_callback_result(packed)
     while code != CallbackCode.EXIT:
-      thread.in_event_loop = True
-      inst.exclusive = False
+      assert(inst.exclusive is task)
+      inst.exclusive = None
       match code:
         case CallbackCode.YIELD:
-          if task.may_block():
-            event = task.yield_until(lambda: not inst.exclusive, thread, cancellable = True)
+          cancelled = thread.yield_until(lambda: not inst.exclusive, cancellable = True)
+          if cancelled:
+            event = (EventCode.TASK_CANCELLED, 0, 0)
           else:
             event = (EventCode.NONE, 0, 0)
         case CallbackCode.WAIT:
           trap_if(not task.may_block())
           wset = inst.handles.get(si)
           trap_if(not isinstance(wset, WaitableSet))
-          event = task.wait_until(lambda: not inst.exclusive, thread, wset, cancellable = True)
+          event = wset.wait_for_event_and(lambda: not inst.exclusive, cancellable = True)
         case _:
           trap()
-      thread.in_event_loop = False
-      inst.exclusive = True
+      assert(inst.exclusive is None)
+      inst.exclusive = task
       event_code, p1, p2 = event
-      [packed] = call_and_trap_on_throw(opts.callback, thread, [event_code, p1, p2])
+      [packed] = call_and_trap_on_throw(opts.callback, [event_code, p1, p2])
       code,si = unpack_callback_result(packed)
-    task.exit()
+    task.exit_implicit_thread()
     return
 
+  task = Task(ft, opts, inst, caller, on_start, on_resolve)
   thread = Thread(task, thread_func)
   thread.resume()
-  return task
+  return task.request_cancellation
 
 class CallbackCode(IntEnum):
   EXIT = 0
@@ -2055,15 +2165,16 @@ def unpack_callback_result(packed):
   waitable_set_index = packed >> 4
   return (CallbackCode(code), waitable_set_index)
 
-def call_and_trap_on_throw(callee, thread, args):
+def call_and_trap_on_throw(callee, args):
   try:
-    return callee(thread, args)
+    return callee(args)
   except CoreWebAssemblyException:
     trap()
 
 ### `canon lower`
 
-def canon_lower(opts, ft, callee: FuncInst, thread, flat_args):
+def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValType]:
+  thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   trap_if(not thread.task.may_block() and ft.async_ and not opts.async_)
 
@@ -2105,12 +2216,12 @@ def canon_lower(opts, ft, callee: FuncInst, thread, flat_args):
       nonlocal flat_results
       flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
 
-  subtask.callee = callee(thread.task, on_start, on_resolve)
+  subtask.on_cancel = callee(thread.task, on_start, on_resolve)
   assert(ft.async_ or subtask.state == Subtask.State.RETURNED)
 
   if not opts.async_:
     if not subtask.resolved():
-      thread.suspend_until(subtask.resolved)
+      thread.wait_until(subtask.resolved)
     assert(types_match_values(flat_ft.results, flat_results))
     subtask.deliver_resolve()
     return flat_results
@@ -2133,17 +2244,18 @@ def canon_lower(opts, ft, callee: FuncInst, thread, flat_args):
 
 ### `canon resource.new`
 
-def canon_resource_new(rt, thread, rep):
-  trap_if(not thread.task.inst.may_leave)
+def canon_resource_new(rt, rep):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
   h = ResourceHandle(rt, rep, own = True)
-  i = thread.task.inst.handles.add(h)
+  i = inst.handles.add(h)
   return [i]
 
 ### `canon resource.drop`
 
-def canon_resource_drop(rt, thread, i):
-  trap_if(not thread.task.inst.may_leave)
-  inst = thread.task.inst
+def canon_resource_drop(rt, i):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
   h = inst.handles.remove(i)
   trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not rt)
@@ -2154,66 +2266,72 @@ def canon_resource_drop(rt, thread, i):
       if rt.dtor:
         rt.dtor(h.rep)
     else:
-      if rt.dtor:
-        caller_opts = CanonicalOptions(async_ = False)
-        callee_opts = CanonicalOptions(async_ = rt.dtor_async, callback = rt.dtor_callback)
-        ft = FuncType([U32Type()],[], async_ = False)
-        callee = partial(canon_lift, callee_opts, rt.impl, ft, rt.dtor)
-        [] = canon_lower(caller_opts, ft, callee, thread, [h.rep])
-      else:
-        trap_if(call_might_be_recursive(thread.task, rt.impl))
+      caller_opts = CanonicalOptions(async_ = False)
+      callee_opts = CanonicalOptions(async_ = rt.dtor_async, callback = rt.dtor_callback)
+      ft = FuncType([U32Type()],[], async_ = False)
+      dtor = rt.dtor or (lambda rep: [])
+      callee = inst.store.lift(dtor, ft, callee_opts, rt.impl)
+      caller = inst.store.lower(callee, ft, caller_opts, inst)
+      caller([h.rep])
   else:
     h.borrow_scope.num_borrows -= 1
   return []
 
 ### `canon resource.rep`
 
-def canon_resource_rep(rt, thread, i):
-  h = thread.task.inst.handles.get(i)
+def canon_resource_rep(rt, i):
+  h = current_instance().handles.get(i)
   trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not rt)
   return [h.rep]
 
 ### 🔀 `canon context.get`
 
-def canon_context_get(t, i, thread):
-  assert(t == 'i32')
-  assert(i < Thread.CONTEXT_LENGTH)
-  return [thread.context[i]]
+def canon_context_get(t, i):
+  thread = current_thread()
+  assert(t == 'i32' or t == 'i64')
+  assert(i < len(thread.storage))
+  result = thread.storage[i]
+  assert(result < (2 ** (ptr_size(t) * 8)))
+  return [result]
 
 ### 🔀 `canon context.set`
 
-def canon_context_set(t, i, thread, v):
-  assert(t == 'i32')
-  assert(i < Thread.CONTEXT_LENGTH)
-  thread.context[i] = v
+def canon_context_set(t, i, v):
+  thread = current_thread()
+  assert(t == 'i32' or t == 'i64')
+  assert(i < len(thread.storage))
+  assert(v < (2 ** (ptr_size(t) * 8)))
+  thread.storage[i] = v
   return []
 
 ### 🔀 `canon backpressure.set`
 
-def canon_backpressure_set(thread, flat_args):
+def canon_backpressure_set(flat_args):
   assert(len(flat_args) == 1)
-  thread.task.inst.backpressure = int(bool(flat_args[0]))
+  current_instance().backpressure = int(bool(flat_args[0]))
   return []
 
 ### 🔀 `canon backpressure.{inc,dec}`
 
-def canon_backpressure_inc(thread):
-  assert(0 <= thread.task.inst.backpressure < 2**16)
-  thread.task.inst.backpressure += 1
-  trap_if(thread.task.inst.backpressure == 2**16)
+def canon_backpressure_inc():
+  inst = current_instance()
+  assert(0 <= inst.backpressure < 2**16)
+  inst.backpressure += 1
+  trap_if(inst.backpressure == 2**16)
   return []
 
-def canon_backpressure_dec(thread):
-  assert(0 <= thread.task.inst.backpressure < 2**16)
-  thread.task.inst.backpressure -= 1
-  trap_if(thread.task.inst.backpressure < 0)
+def canon_backpressure_dec():
+  inst = current_instance()
+  assert(0 <= inst.backpressure < 2**16)
+  inst.backpressure -= 1
+  trap_if(inst.backpressure < 0)
   return []
 
 ### 🔀 `canon task.return`
 
-def canon_task_return(thread, result_type, opts: LiftOptions, flat_args):
-  task = thread.task
+def canon_task_return(result_type, opts: LiftOptions, flat_args):
+  task = current_task()
   trap_if(not task.inst.may_leave)
   trap_if(not task.opts.async_)
   trap_if(result_type != task.ft.result)
@@ -2225,8 +2343,8 @@ def canon_task_return(thread, result_type, opts: LiftOptions, flat_args):
 
 ### 🔀 `canon task.cancel`
 
-def canon_task_cancel(thread):
-  task = thread.task
+def canon_task_cancel():
+  task = current_task()
   trap_if(not task.inst.may_leave)
   trap_if(not task.opts.async_)
   task.cancel()
@@ -2234,60 +2352,62 @@ def canon_task_cancel(thread):
 
 ### 🔀 `canon waitable-set.new`
 
-def canon_waitable_set_new(thread):
-  trap_if(not thread.task.inst.may_leave)
-  return [ thread.task.inst.handles.add(WaitableSet()) ]
+def canon_waitable_set_new():
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  i = inst.handles.add(WaitableSet())
+  return [i]
 
 ### 🔀 `canon waitable-set.wait`
 
-def canon_waitable_set_wait(cancellable, mem, thread, si, ptr):
-  trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block())
-  wset = thread.task.inst.handles.get(si)
+def canon_waitable_set_wait(cancellable, mem, si, ptr):
+  task = current_task()
+  trap_if(not task.inst.may_leave)
+  trap_if(not task.may_block())
+  wset = task.inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
-  event = thread.task.wait_until(lambda: True, thread, wset, cancellable)
-  return unpack_event(mem, thread, ptr, event)
+  event = wset.wait_for_event(cancellable)
+  return unpack_event(mem, task.inst, ptr, event)
 
-def unpack_event(mem, thread, ptr, e: EventTuple):
+def unpack_event(mem, inst, ptr, e: EventTuple):
   event, p1, p2 = e
-  cx = LiftLowerContext(LiftLowerOptions(memory = mem), thread.task.inst)
+  cx = LiftLowerContext(LiftLowerOptions(memory = mem), inst)
   store(cx, p1, U32Type(), ptr)
   store(cx, p2, U32Type(), ptr + 4)
   return [event]
 
 ### 🔀 `canon waitable-set.poll`
 
-def canon_waitable_set_poll(cancellable, mem, thread, si, ptr):
-  trap_if(not thread.task.inst.may_leave)
-  wset = thread.task.inst.handles.get(si)
+def canon_waitable_set_poll(cancellable, mem, si, ptr):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  wset = inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
-  if thread.task.deliver_pending_cancel(cancellable):
-    event = (EventCode.TASK_CANCELLED, 0, 0)
-  elif not wset.has_pending_event():
-    event = (EventCode.NONE, 0, 0)
-  else:
-    event = wset.get_pending_event()
-  return unpack_event(mem, thread, ptr, event)
+  event = wset.poll(cancellable)
+  return unpack_event(mem, inst, ptr, event)
 
 ### 🔀 `canon waitable-set.drop`
 
-def canon_waitable_set_drop(thread, i):
-  trap_if(not thread.task.inst.may_leave)
-  wset = thread.task.inst.handles.remove(i)
+def canon_waitable_set_drop(i):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  wset = inst.handles.remove(i)
   trap_if(not isinstance(wset, WaitableSet))
   wset.drop()
   return []
 
 ### 🔀 `canon waitable.join`
 
-def canon_waitable_join(thread, wi, si):
-  trap_if(not thread.task.inst.may_leave)
-  w = thread.task.inst.handles.get(wi)
+def canon_waitable_join(wi, si):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  w = inst.handles.get(wi)
   trap_if(not isinstance(w, Waitable))
+  trap_if(w.has_sync_waiter)
   if si == 0:
     w.join(None)
   else:
-    wset = thread.task.inst.handles.get(si)
+    wset = inst.handles.get(si)
     trap_if(not isinstance(wset, WaitableSet))
     w.join(wset)
   return []
@@ -2296,21 +2416,23 @@ def canon_waitable_join(thread, wi, si):
 
 BLOCKED = 0xffff_ffff
 
-def canon_subtask_cancel(async_, thread, i):
+def canon_subtask_cancel(async_, i):
+  thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   trap_if(not thread.task.may_block() and not async_)
   subtask = thread.task.inst.handles.get(i)
   trap_if(not isinstance(subtask, Subtask))
   trap_if(subtask.resolve_delivered())
   trap_if(subtask.cancellation_requested)
+  trap_if(subtask.in_waitable_set() and not async_)
   if subtask.resolved():
     assert(subtask.has_pending_event())
   else:
     subtask.cancellation_requested = True
-    subtask.callee.request_cancellation()
+    subtask.on_cancel()
     if not subtask.resolved():
       if not async_:
-        thread.suspend_until(subtask.resolved)
+        subtask.wait_for_pending_event()
       else:
         return [BLOCKED]
   code,index,payload = subtask.get_pending_event()
@@ -2320,40 +2442,44 @@ def canon_subtask_cancel(async_, thread, i):
 
 ### 🔀 `canon subtask.drop`
 
-def canon_subtask_drop(thread, i):
-  trap_if(not thread.task.inst.may_leave)
-  s = thread.task.inst.handles.remove(i)
+def canon_subtask_drop(i):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  s = inst.handles.remove(i)
   trap_if(not isinstance(s, Subtask))
   s.drop()
   return []
 
 ### 🔀 `canon {stream,future}.new`
 
-def canon_stream_new(stream_t, thread):
-  trap_if(not thread.task.inst.may_leave)
+def canon_stream_new(stream_t):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
   shared = SharedStreamImpl(stream_t.t)
-  ri = thread.task.inst.handles.add(ReadableStreamEnd(shared))
-  wi = thread.task.inst.handles.add(WritableStreamEnd(shared))
+  ri = inst.handles.add(ReadableStreamEnd(shared))
+  wi = inst.handles.add(WritableStreamEnd(shared))
   return [ ri | (wi << 32) ]
 
-def canon_future_new(future_t, thread):
-  trap_if(not thread.task.inst.may_leave)
+def canon_future_new(future_t):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
   shared = SharedFutureImpl(future_t.t)
-  ri = thread.task.inst.handles.add(ReadableFutureEnd(shared))
-  wi = thread.task.inst.handles.add(WritableFutureEnd(shared))
+  ri = inst.handles.add(ReadableFutureEnd(shared))
+  wi = inst.handles.add(WritableFutureEnd(shared))
   return [ ri | (wi << 32) ]
 
 ### 🔀 `canon stream.{read,write}`
 
-def canon_stream_read(stream_t, opts, thread, i, ptr, n):
+def canon_stream_read(stream_t, opts, i, ptr, n):
   return stream_copy(ReadableStreamEnd, WritableBufferGuestImpl, EventCode.STREAM_READ,
-                     stream_t, opts, thread, i, ptr, n)
+                     stream_t, opts, i, ptr, n)
 
-def canon_stream_write(stream_t, opts, thread, i, ptr, n):
+def canon_stream_write(stream_t, opts, i, ptr, n):
   return stream_copy(WritableStreamEnd, ReadableBufferGuestImpl, EventCode.STREAM_WRITE,
-                     stream_t, opts, thread, i, ptr, n)
+                     stream_t, opts, i, ptr, n)
 
-def stream_copy(EndT, BufferT, event_code, stream_t, opts, thread, i, ptr, n):
+def stream_copy(EndT, BufferT, event_code, stream_t, opts, i, ptr, n):
+  thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   trap_if(not thread.task.may_block() and not opts.async_)
 
@@ -2361,6 +2487,7 @@ def stream_copy(EndT, BufferT, event_code, stream_t, opts, thread, i, ptr, n):
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_t.t)
   trap_if(e.state != CopyState.IDLE)
+  trap_if(e.in_waitable_set() and not opts.async_)
 
   assert(not isinstance(stream_t, CharType))
   assert(not contains_borrow(stream_t))
@@ -2369,6 +2496,7 @@ def stream_copy(EndT, BufferT, event_code, stream_t, opts, thread, i, ptr, n):
 
   def stream_event(result, reclaim_buffer):
     reclaim_buffer()
+    assert(e.copying())
     if result == CopyResult.DROPPED:
       e.state = CopyState.DONE
     else:
@@ -2384,14 +2512,13 @@ def stream_copy(EndT, BufferT, event_code, stream_t, opts, thread, i, ptr, n):
   def on_copy_done(result):
     e.set_pending_event(partial(stream_event, result, reclaim_buffer = lambda:()))
 
+  e.state = CopyState.COPYING
   e.copy(thread.task.inst, buffer, on_copy, on_copy_done)
 
   if not e.has_pending_event():
     if not opts.async_:
-      e.state = CopyState.SYNC_COPYING
-      thread.suspend_until(e.has_pending_event)
+      e.wait_for_pending_event()
     else:
-      e.state = CopyState.ASYNC_COPYING
       return [BLOCKED]
   code,index,payload = e.get_pending_event()
   assert(code == event_code and index == i and payload != BLOCKED)
@@ -2399,15 +2526,16 @@ def stream_copy(EndT, BufferT, event_code, stream_t, opts, thread, i, ptr, n):
 
 ### 🔀 `canon future.{read,write}`
 
-def canon_future_read(future_t, opts, thread, i, ptr):
+def canon_future_read(future_t, opts, i, ptr):
   return future_copy(ReadableFutureEnd, WritableBufferGuestImpl, EventCode.FUTURE_READ,
-                     future_t, opts, thread, i, ptr)
+                     future_t, opts, i, ptr)
 
-def canon_future_write(future_t, opts, thread, i, ptr):
+def canon_future_write(future_t, opts, i, ptr):
   return future_copy(WritableFutureEnd, ReadableBufferGuestImpl, EventCode.FUTURE_WRITE,
-                     future_t, opts, thread, i, ptr)
+                     future_t, opts, i, ptr)
 
-def future_copy(EndT, BufferT, event_code, future_t, opts, thread, i, ptr):
+def future_copy(EndT, BufferT, event_code, future_t, opts, i, ptr):
+  thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   trap_if(not thread.task.may_block() and not opts.async_)
 
@@ -2415,6 +2543,7 @@ def future_copy(EndT, BufferT, event_code, future_t, opts, thread, i, ptr):
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != future_t.t)
   trap_if(e.state != CopyState.IDLE)
+  trap_if(e.in_waitable_set() and not opts.async_)
 
   assert(not contains_borrow(future_t))
   cx = LiftLowerContext(opts, thread.task.inst, borrow_scope = None)
@@ -2422,6 +2551,7 @@ def future_copy(EndT, BufferT, event_code, future_t, opts, thread, i, ptr):
 
   def future_event(result):
     assert((buffer.remain() == 0) == (result == CopyResult.COMPLETED))
+    assert(e.copying())
     if result == CopyResult.DROPPED or result == CopyResult.COMPLETED:
       e.state = CopyState.DONE
     else:
@@ -2432,14 +2562,13 @@ def future_copy(EndT, BufferT, event_code, future_t, opts, thread, i, ptr):
     assert(result != CopyResult.DROPPED or event_code == EventCode.FUTURE_WRITE)
     e.set_pending_event(partial(future_event, result))
 
+  e.state = CopyState.COPYING
   e.copy(thread.task.inst, buffer, on_copy_done)
 
   if not e.has_pending_event():
     if not opts.async_:
-      e.state = CopyState.SYNC_COPYING
-      thread.suspend_until(e.has_pending_event)
+      e.wait_for_pending_event()
     else:
-      e.state = CopyState.ASYNC_COPYING
       return [BLOCKED]
   code,index,payload = e.get_pending_event()
   assert(code == event_code and index == i)
@@ -2447,31 +2576,33 @@ def future_copy(EndT, BufferT, event_code, future_t, opts, thread, i, ptr):
 
 ### 🔀 `canon {stream,future}.cancel-{read,write}`
 
-def canon_stream_cancel_read(stream_t, async_, thread, i):
-  return cancel_copy(ReadableStreamEnd, EventCode.STREAM_READ, stream_t, async_, thread, i)
+def canon_stream_cancel_read(stream_t, async_, i):
+  return cancel_copy(ReadableStreamEnd, EventCode.STREAM_READ, stream_t, async_, i)
 
-def canon_stream_cancel_write(stream_t, async_, thread, i):
-  return cancel_copy(WritableStreamEnd, EventCode.STREAM_WRITE, stream_t, async_, thread, i)
+def canon_stream_cancel_write(stream_t, async_, i):
+  return cancel_copy(WritableStreamEnd, EventCode.STREAM_WRITE, stream_t, async_, i)
 
-def canon_future_cancel_read(future_t, async_, thread, i):
-  return cancel_copy(ReadableFutureEnd, EventCode.FUTURE_READ, future_t, async_, thread, i)
+def canon_future_cancel_read(future_t, async_, i):
+  return cancel_copy(ReadableFutureEnd, EventCode.FUTURE_READ, future_t, async_, i)
 
-def canon_future_cancel_write(future_t, async_, thread, i):
-  return cancel_copy(WritableFutureEnd, EventCode.FUTURE_WRITE, future_t, async_, thread, i)
+def canon_future_cancel_write(future_t, async_, i):
+  return cancel_copy(WritableFutureEnd, EventCode.FUTURE_WRITE, future_t, async_, i)
 
-def cancel_copy(EndT, event_code, stream_or_future_t, async_, thread, i):
+def cancel_copy(EndT, event_code, stream_or_future_t, async_, i):
+  thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   trap_if(not thread.task.may_block() and not async_)
   e = thread.task.inst.handles.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_or_future_t.t)
-  trap_if(e.state != CopyState.ASYNC_COPYING)
+  trap_if(e.state != CopyState.COPYING or e.has_sync_waiter)
+  trap_if(e.in_waitable_set() and not async_)
   e.state = CopyState.CANCELLING_COPY
   if not e.has_pending_event():
     e.shared.cancel()
     if not e.has_pending_event():
       if not async_:
-        thread.suspend_until(e.has_pending_event)
+        e.wait_for_pending_event()
       else:
         return [BLOCKED]
   code,index,payload = e.get_pending_event()
@@ -2480,21 +2611,22 @@ def cancel_copy(EndT, event_code, stream_or_future_t, async_, thread, i):
 
 ### 🔀 `canon {stream,future}.drop-{readable,writable}`
 
-def canon_stream_drop_readable(stream_t, thread, i):
-  return drop(ReadableStreamEnd, stream_t, thread, i)
+def canon_stream_drop_readable(stream_t, i):
+  return drop(ReadableStreamEnd, stream_t, i)
 
-def canon_stream_drop_writable(stream_t, thread, hi):
-  return drop(WritableStreamEnd, stream_t, thread, hi)
+def canon_stream_drop_writable(stream_t, hi):
+  return drop(WritableStreamEnd, stream_t, hi)
 
-def canon_future_drop_readable(future_t, thread, i):
-  return drop(ReadableFutureEnd, future_t, thread, i)
+def canon_future_drop_readable(future_t, i):
+  return drop(ReadableFutureEnd, future_t, i)
 
-def canon_future_drop_writable(future_t, thread, hi):
-  return drop(WritableFutureEnd, future_t, thread, hi)
+def canon_future_drop_writable(future_t, hi):
+  return drop(WritableFutureEnd, future_t, hi)
 
-def drop(EndT, stream_or_future_t, thread, hi):
-  trap_if(not thread.task.inst.may_leave)
-  e = thread.task.inst.handles.remove(hi)
+def drop(EndT, stream_or_future_t, hi):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  e = inst.handles.remove(hi)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_or_future_t.t)
   e.drop()
@@ -2502,7 +2634,8 @@ def drop(EndT, stream_or_future_t, thread, hi):
 
 ### 🧵 `canon thread.index`
 
-def canon_thread_index(thread):
+def canon_thread_index():
+  thread = current_thread()
   assert(thread.index is not None)
   return [thread.index]
 
@@ -2511,67 +2644,68 @@ def canon_thread_index(thread):
 @dataclass
 class CoreFuncRef:
   t: CoreFuncType
-  callee: Callable[[Thread, list[CoreValType]], list[CoreValType]]
+  callee: Callable[[list[CoreValType]], list[CoreValType]]
 
-def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], thread, fi, c):
-  trap_if(not thread.task.inst.may_leave)
+def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], fi, c):
+  task = current_task()
+  trap_if(not task.inst.may_leave)
   f = ftbl.get(fi)
-  assert(ft == CoreFuncType(['i32'], []))
+  assert(ft == CoreFuncType(['i32'], []) or ft == CoreFuncType(['i64'], []))
   trap_if(f.t != ft)
-  def thread_func(thread):
-    [] = call_and_trap_on_throw(f.callee, thread, [c])
-  new_thread = Thread(thread.task, thread_func)
+  def thread_func():
+    [] = call_and_trap_on_throw(f.callee, [c])
+    task.unregister_thread(new_thread)
+  new_thread = Thread(task, thread_func)
   assert(new_thread.suspended())
-  new_thread.index = thread.task.inst.threads.add(new_thread)
+  task.register_thread(new_thread)
   return [new_thread.index]
-
-### 🧵 `canon thread.switch-to`
-
-def canon_thread_switch_to(cancellable, thread, i):
-  trap_if(not thread.task.inst.may_leave)
-  other_thread = thread.task.inst.threads.get(i)
-  trap_if(not other_thread.suspended())
-  suspend_result = thread.task.switch_to(thread, cancellable, other_thread)
-  return [suspend_result]
-
-### 🧵 `canon thread.suspend`
-
-def canon_thread_suspend(cancellable, thread):
-  trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block())
-  suspend_result = thread.task.suspend(thread, cancellable)
-  return [suspend_result]
 
 ### 🧵 `canon thread.resume-later`
 
-def canon_thread_resume_later(thread, i):
-  trap_if(not thread.task.inst.may_leave)
-  other_thread = thread.task.inst.threads.get(i)
+def canon_thread_resume_later(i):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  other_thread = inst.threads.get(i)
   trap_if(not other_thread.suspended())
   other_thread.resume_later()
   return []
 
-### 🧵 `canon thread.yield-to`
+### 🧵 `canon thread.suspend`
 
-def canon_thread_yield_to(cancellable, thread, i):
+def canon_thread_suspend(cancellable):
+  thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  other_thread = thread.task.inst.threads.get(i)
-  trap_if(not other_thread.suspended())
-  suspend_result = thread.task.yield_to(thread, cancellable, other_thread)
-  return [suspend_result]
+  trap_if(not thread.task.may_block())
+  cancelled = thread.suspend(cancellable)
+  return [cancelled]
 
 ### 🧵 `canon thread.yield`
 
-def canon_thread_yield(cancellable, thread):
+def canon_thread_yield(cancellable):
+  thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  if not thread.task.may_block():
-    return [SuspendResult.NOT_CANCELLED]
-  event_code,_,_ = thread.task.yield_until(lambda: True, thread, cancellable)
-  match event_code:
-    case EventCode.NONE:
-      return [SuspendResult.NOT_CANCELLED]
-    case EventCode.TASK_CANCELLED:
-      return [SuspendResult.CANCELLED]
+  cancelled = thread.yield_(cancellable)
+  return [cancelled]
+
+### 🧵 `canon thread.switch-to`
+
+def canon_thread_switch_to(cancellable, i):
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  other_thread = thread.task.inst.threads.get(i)
+  trap_if(not other_thread.suspended())
+  cancelled = thread.switch_to(cancellable, other_thread)
+  return [cancelled]
+
+### 🧵 `canon thread.yield-to`
+
+def canon_thread_yield_to(cancellable, i):
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  other_thread = thread.task.inst.threads.get(i)
+  trap_if(not other_thread.suspended())
+  cancelled = thread.yield_to(cancellable, other_thread)
+  return [cancelled]
 
 ### 📝 `canon error-context.new`
 
@@ -2579,31 +2713,34 @@ def canon_thread_yield(cancellable, thread):
 class ErrorContext:
   debug_message: String
 
-def canon_error_context_new(opts, thread, ptr, tagged_code_units):
-  trap_if(not thread.task.inst.may_leave)
+def canon_error_context_new(opts, ptr, tagged_code_units):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
   if DETERMINISTIC_PROFILE or random.randint(0,1):
     s = String(('', 'utf8', 0))
   else:
-    cx = LiftLowerContext(opts, thread.task.inst)
+    cx = LiftLowerContext(opts, inst)
     s = load_string_from_range(cx, ptr, tagged_code_units)
     s = host_defined_transformation(s)
-  i = thread.task.inst.handles.add(ErrorContext(s))
+  i = inst.handles.add(ErrorContext(s))
   return [i]
 
 ### 📝 `canon error-context.debug-message`
 
-def canon_error_context_debug_message(opts, thread, i, ptr):
-  trap_if(not thread.task.inst.may_leave)
-  errctx = thread.task.inst.handles.get(i)
+def canon_error_context_debug_message(opts, i, ptr):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  errctx = inst.handles.get(i)
   trap_if(not isinstance(errctx, ErrorContext))
-  cx = LiftLowerContext(opts, thread.task.inst)
+  cx = LiftLowerContext(opts, inst)
   store_string(cx, errctx.debug_message, ptr)
   return []
 
 ### 📝 `canon error-context.drop`
 
-def canon_error_context_drop(thread, i):
-  trap_if(not thread.task.inst.may_leave)
-  errctx = thread.task.inst.handles.remove(i)
+def canon_error_context_drop(i):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  errctx = inst.handles.remove(i)
   trap_if(not isinstance(errctx, ErrorContext))
   return []

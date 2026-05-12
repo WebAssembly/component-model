@@ -17,7 +17,7 @@ traps or runaway resource memory/CPU usage. A post-MVP "blast zone" feature
 would allow a parent component to dynamically instantiate a child component in
 a separate "blast zone" such that a trap in the blast zone could be safely and
 predictably handled by the parent outside the blast zone. Furthermore, the
-parent could use a non-deterministic timeout or resource quota trigger to
+parent could use a nondeterministic timeout or resource quota trigger to
 preemptively inject a trap into the blast zone.
 
 

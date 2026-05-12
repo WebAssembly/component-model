@@ -1070,6 +1070,7 @@ keyword ::= 'as'
           | 'include'
           | 'interface'
           | 'list'
+          | 'map'
           | 'option'
           | 'own'
           | 'package'
@@ -1785,6 +1786,7 @@ ty ::= 'u8' | 'u16' | 'u32' | 'u64'
      | list
      | option
      | result
+     | map
      | handle
      | future
      | stream
@@ -1805,6 +1807,11 @@ result ::= 'result' '<' ty ',' ty '>'
          | 'result' '<' '_' ',' ty '>'
          | 'result' '<' ty '>'
          | 'result'
+
+map ::= 'map' '<' kt ',' ty '>'
+kt ::= 'u8' | 'u16' | 'u32' | 'u64'
+     | 's8' | 's16' | 's32' | 's64'
+     | 'char' | 'bool' | 'string'
 
 future ::= 'future' '<' ty '>'
          | 'future'
@@ -1844,6 +1851,11 @@ variant result {
 
 These types are so frequently used and frequently have language-specific
 meanings though so they're also provided as first-class types.
+
+🗺️ The `map` type is semantically equivalent to a list of pairs of keys and
+values but is meant to be represented by bindings generators in the source
+language as a mapping from keys to values (e.g., as an associative array or or
+hash table) where, in the case of duplicate keys, the last key's value is used.
 
 The `future` and `stream` types are described as part of the [concurrency
 explainer](Concurrency.md#streams-and-futures).
