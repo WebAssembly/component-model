@@ -369,7 +369,7 @@ world union-my-world-b {
 🏷️ When a world being included contains plain-named imports or exports that
 reference a named interface (using the `id: use-path` syntax), the `with`
 keyword renames the plain-name label while preserving the underlying
-`[implements=<I>]` annotation in the encoding. For example:
+`(implements "I")` annotation in the encoding. For example:
 
 ```wit
 package local:demo;
@@ -1431,7 +1431,9 @@ export-item ::= 'export' id ':' extern-type
 import-item ::= 'import' id ':' extern-type
               | 'import' use-path ';'
 
-extern-type ::= func-type ';' | 'interface' '{' interface-items* '}' | use-path ';' 🏷️
+extern-type ::= func-type ';'
+              | 'interface' '{' interface-items* '}'
+              | use-path ';' 🏷️
 ```
 
 🏷️ The third case of `extern-type` allows a named interface to be imported or
@@ -2144,7 +2146,7 @@ packages, allowing a compiled `world` definition to be fully self-contained and
 able to be used to compile a component without additional type information.
 
 🏷️ When a world imports or exports a named interface with a custom plain name
-(using the `id: use-path` syntax), the encoding uses the `[implements=<I>]`
+(using the `id: use-path` syntax), the encoding uses the `(implements "I")`
 annotation defined in [Explainer.md](Explainer.md#import-and-export-definitions) to indicate which
 interface the instance implements. For example, the following WIT:
 
@@ -2167,10 +2169,10 @@ is encoded as:
 (component
   (type (export "w") (component
     (export "local:demo/w" (component
-      (import "[implements=<local:demo/store>]one" (instance
+      (import "one" (implements "local:demo/store") (instance
         (export "get" (func (param "key" string) (result (option string))))
       ))
-      (import "[implements=<local:demo/store>]two" (instance
+      (import "two" (implements "local:demo/store") (instance
         (export "get" (func (param "key" string) (result (option string))))
       ))
     ))
@@ -2183,10 +2185,10 @@ is encoded as:
 )
 ```
 
-The `[implements=<local:demo/store>]` prefix tells bindings generators and
+The `(implements "local:demo/store")` prefix tells bindings generators and
 toolchains which interface each plain-named instance import implements, while
 the labels `one` and `two` provide distinct plain names. This is a case of
-the general `[implements=<interfacename>]label` pattern described in
+the general `(implements ..)` pattern described in
 [Explainer.md](Explainer.md#import-and-export-definitions).
 
 Putting this all together, the following WIT definitions:

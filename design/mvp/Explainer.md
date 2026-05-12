@@ -2534,7 +2534,6 @@ plainname         ::= <label>
                     | '[constructor]' <label>
                     | '[method]' <label> '.' <label>
                     | '[static]' <label> '.' <label>
-                    | '[implements=<' <interfacename> '>]' <label> 🏷️
 label             ::= <first-fragment> ( '-' <fragment> )*
 first-fragment    ::= <first-word>
                     | <first-acronym>
@@ -2683,29 +2682,29 @@ annotations trigger additional type-validation rules (listed in
 * Similarly, an import or export named `[method]R.foo` must be a function whose
   first parameter must be `(param "self" (borrow $R))`.
 
-🏷️ When an instance import or export is annotated with `[implements=<I>]L`, it
-indicates that the instance implements interface `I` but is given the plain
-name `L`. This enables a component to import or export the same interface
-multiple times with different plain names. For example:
+🏷️ When an instance import or export is named `L` and annotated with
+`(implements "I")`, it indicates that the instance implements interface `I` but
+is given the plain name `L`. This enables a component to import or export the
+same interface multiple times with different plain names. For example:
 
 ```wat
 (component
-  (import "[implements=<wasi:keyvalue/store>]primary" (instance ...))
-  (import "[implements=<wasi:keyvalue/store>]secondary" (instance ...))
+  (import "primary" (implements "wasi:keyvalue/store") (instance ...))
+  (import "secondary" (implements "wasi:keyvalue/store") (instance ...))
 )
 ```
 
 Here, both imports implement `wasi:keyvalue/store` but have distinct plain
 names `primary` and `secondary`. Bindings generators can use the
-`[implements=<I>]` annotation to know which interface the instance implements,
+`implements` annotation to know which interface the instance implements,
 enabling them to share value type bindings across both imports. (Note that
 resource types defined in the interface, such as `bucket`, are treated as
 distinct for each import, since each may have a different implementation.)
 
 The `interfacename` also helps hosts and clients of a component. A host that
-sees `[implements=<wasi:keyvalue/store>]primary` knows to supply a
+sees `(implements "wasi:keyvalue/store>")` knows to supply a
 `wasi:keyvalue/store` implementation for that import, even though the import
-name is just `primary`. Similarly, a client composing components can use the
+name is something else. Similarly, a client composing components can use the
 annotation to match compatible imports and exports across components.
 
 When a function's type is `async`, bindings generators are expected to
@@ -2850,10 +2849,10 @@ Values]) are **strongly-unique**:
   * The names are strongly-unique if the resulting strings are unequal.
 
 Thus, the following set of names are strongly-unique and can thus all be imports (or exports) of the same component (or component type or instance type):
-* `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[method]foo.baz`, `foo:bar/baz`, `[implements=<foo:bar/baz>]bar`, `[implements=<foo:bar/baz>]quux`
+* `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[method]foo.baz`, `foo:bar/baz`
 
 but attempting to add *any* of the following names would be a validation error:
-* `foo`, `foo-BAR`, `[constructor]foo-BAR`, `[method]foo.foo`, `[method]foo.BAR`, `[implements=<a:b/c>]foo`, `foo:bar/baz`, `bar`, `[implements=<x:y/z>]bar`
+* `foo`, `foo-BAR`, `[constructor]foo-BAR`, `[method]foo.foo`, `[method]foo.BAR`, `foo:bar/baz`, `bar`
 
 Note that additional validation rules involving types apply to names with
 annotations. For example, the validation rules for `[constructor]foo` require
