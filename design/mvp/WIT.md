@@ -383,12 +383,14 @@ world base {
 }
 
 world extended {
+    import cache: func();
     include base with { cache as my-cache }
 }
 ```
 
-In this case, `extended` has a single import with the plain name `my-cache`
-that implements `local:demo/store`, equivalent to writing
+In this case, `extended` requires a `with` during its `include` because
+the plain-name `cache` is already taken in the world. The import here is renamed
+to `my-cache` that implements `local:demo/store`, equivalent to writing
 `import my-cache: store;` directly.
 
 Unlike interface names (which are automatically de-duplicated when two
