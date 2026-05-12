@@ -2150,13 +2150,17 @@ able to be used to compile a component without additional type information.
 🏷️ When a world imports or exports a named interface with a custom plain name
 (using the `id: use-path` syntax), the encoding uses the `(implements "I")`
 annotation defined in [Explainer.md](Explainer.md#import-and-export-definitions) to indicate which
-interface the instance implements. For example, the following WIT:
+interface the instance implements. Note though that each copy implements a
+unique version of the interface in question. For example, the following WIT:
 
 ```wit
 package local:demo;
 
 interface store {
-    get: func(key: string) -> option<string>;
+    resource bucket {
+        constructor(name: string);
+        get: func(key: string) -> option<string>;
+    }
 }
 
 world w {
@@ -2169,19 +2173,25 @@ is encoded as:
 
 ```wat
 (component
+  (type (export "store") (component
+    (export "local:demo/store" (instance
+      (export "bucket" (type $b (sub resource)))
+      (export "[constructor]bucket" (func (param "name" string) (result (own $b))))
+      (export "[method]bucket.get" (func (param "self" (borrow $b)) (param "key" string) (result (option string))))
+    ))
+  ))
   (type (export "w") (component
     (export "local:demo/w" (component
       (import "one" (implements "local:demo/store") (instance
-        (export "get" (func (param "key" string) (result (option string))))
+        (export "bucket" (type $b (sub resource)))
+        (export "[constructor]bucket" (func (param "name" string) (result (own $b))))
+        (export "[method]bucket.get" (func (param "self" (borrow $b)) (param "key" string) (result (option string))))
       ))
       (import "two" (implements "local:demo/store") (instance
-        (export "get" (func (param "key" string) (result (option string))))
+        (export "bucket" (type $b (sub resource)))
+        (export "[constructor]bucket" (func (param "name" string) (result (own $b))))
+        (export "[method]bucket.get" (func (param "self" (borrow $b)) (param "key" string) (result (option string))))
       ))
-    ))
-  ))
-  (type (export "store") (component
-    (export "local:demo/store" (instance
-      (export "get" (func (param "key" string) (result (option string))))
     ))
   ))
 )
@@ -2191,7 +2201,74 @@ The `(implements "local:demo/store")` prefix tells bindings generators and
 toolchains which interface each plain-named instance import implements, while
 the labels `one` and `two` provide distinct plain names. This is a case of
 the general `(implements ..)` pattern described in
-[Explainer.md](Explainer.md#import-and-export-definitions).
+[Explainer.md](Explainer.md#import-and-export-definitions). Also note here that
+two copies of the `"bucket"` resource are imported for the `local:demo/w` world.
+This is because the interfaces `one` and `two` duplicate the `store` interface.
+Note that this can import just a single `bucket` resource by extracting out the
+resource definition into a separate interface. For example:
+
+```wit
+package local:demo;
+
+interface types {
+    resource bucket {
+        get: func(key: string) -> option<string>;
+    }
+}
+
+interface store {
+    use types.{bucket};
+    open: func(name: string) -> bucket;
+}
+
+world w {
+    import one: store;
+    import two: store;
+}
+```
+
+is encoded as:
+
+```wat
+(component
+  (type (export "types") (component
+    (export "local:demo/types" (instance
+      (export "bucket" (type $b (sub resource)))
+      (export "[method]bucket.get" (func (param "self" (borrow $b)) (param "key" string) (result (option string))))
+    ))
+  ))
+  (type (export "store") (component
+    (import "local:demo/types" (instance $types
+      (export "bucket" (type $b (sub resource)))
+    ))
+    (alias export $types "bucket" (type $b))
+    (export "local:demo/store" (instance
+      (export "bucket" (type $b' (eq $b)))
+      (export "open" (func (param "name" string) (result (own $b'))))
+    ))
+  ))
+  (type (export "w") (component
+    (export "local:demo/w" (component
+      (import "local:demo/types" (instance $types
+        (export "bucket" (type $b (sub resource)))
+      ))
+      (alias export $types "bucket" (type $b))
+      (import "one" (implements "local:demo/store") (instance
+        (export "bucket" (type $b' (eq $b)))
+        (export "open" (func (param "name" string) (result (own $b'))))
+      ))
+      (import "two" (implements "local:demo/store") (instance
+        (export "bucket" (type $b' (eq $b)))
+        (export "open" (func (param "name" string) (result (own $b'))))
+      ))
+    ))
+  ))
+)
+```
+
+Where in this example the `local:demo/w` world imports only a single `bucket`
+resource under the `local:demo/types` interface. This resource is then used
+by the `one` and `two` export.
 
 Putting this all together, the following WIT definitions:
 
