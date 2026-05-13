@@ -861,7 +861,7 @@ above definition ensures the following properties:
 * When backpressure is disabled then reenabled, no new tasks start, even
   tasks that were blocked and then unblocked by the first occurrence of
   backpressure (i.e., disabling backpressure never unleashes an unstoppable
-  thundering heard of pending tasks).
+  thundering herd of pending tasks).
 
 Once a task's implicit thread has cleared the backpressure gate, it is added to
 the lists of threads running inside the current task and component instance by
