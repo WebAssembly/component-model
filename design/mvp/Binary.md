@@ -393,13 +393,10 @@ import         ::= in:<importname'> ed:<externdesc>                     => (impo
 export         ::= en:<exportname'> si:<sortidx> ed?:<externdesc>?      => (export en si ed?)
 importname'    ::= 0x00 len:<u32> in:<importname>                       => in      (if len = |in|)
                  | 0x01 len:<u32> in:<importname>                       => in      (if len = |in|)
-                 | 0x02 len:<u32> in:<importname> vs:<versionsuffix>    => in vs   (if len = |in|) 🔗
-                 | 0x03 len:<u32> in:<importname> opts:vec(<nameopt>)   => in opts (if len = |in|) 🏷️
+                 | 0x02 len:<u32> in:<importname> opts:vec(<nameopt>)   => in opts (if len = |in|) 🏷️/🔗
 exportname'    ::= 0x00 len:<u32> in:<exportname>                       => in      (if len = |in|)
                  | 0x01 len:<u32> in:<exportname>                       => in      (if len = |in|)
-                 | 0x02 len:<u32> in:<exportname> vs:<versionsuffix>    => in vs   (if len = |in|) 🔗
-                 | 0x03 len:<u32> in:<importname> opts:vec(<nameopt>)   => in opts (if len = |in|) 🏷️
-versionsuffix  ::= len:<u32> vs:<semversuffix>                          => (versionsuffix vs)  (if len = |vs|) 🔗
+                 | 0x02 len:<u32> in:<importname> opts:vec(<nameopt>)   => in opts (if len = |in|) 🏷️/🔗
 nameopt        ::= 0x00 len:<u32> n:<interfacename>                     => (implements i) 🏷️
                  | 0x01 len:<u32> vs:<semversuffix>                     => (versionsuffix vs) 🔗
 ```
