@@ -720,16 +720,16 @@ spec-level function type, where the host can be the caller, the callee or even
 OnStart = Callable[[], list[any]]
 OnResolve = Callable[[Optional[list[any]]], None]
 OnCancel = Callable[[], None]
-FuncInst = Callable[[Supertask, OnStart, OnResolve], OnCancel]
+FuncInst = Callable[[OnStart, OnResolve, Supertask], OnCancel]
 ```
 The three parameters of `FuncInst` are:
-* an optional caller `Supertask` which is used to maintain the
-  [async callstack][Structured Concurrency] and enforce the
-  non-reentrance [component invariant];
 * an `OnStart` callback that is called by the callee when it is ready to
   receive its arguments after waiting for any [backpressure] to subside;
 * an `OnResolve` callback that is called by the callee when it is ready to
   return its value or, if cancellation has been requested, `None`.
+* a calling `Supertask` which is used to maintain the
+  [async callstack][Structured Concurrency] and enforce the
+  non-reentrance [component invariant];
 
 Critically, if the callee [blocks] at the wasm level, the spec-level `FuncInst`
 returns immediately to the caller while continuing to execute the callee in a
@@ -756,21 +756,21 @@ class Task(Supertask):
   ft: FuncType
   opts: CanonicalOptions
   inst: ComponentInstance
-  supertask: Supertask
   on_start: OnStart
   on_resolve: OnResolve
+  supertask: Supertask
   state: State
   num_borrows: int
   waiting_to_enter: Optional[Thread]
   threads: list[Thread]
 
-  def __init__(self, ft, opts, inst, supertask, on_start, on_resolve):
+  def __init__(self, ft, opts, inst, on_start, on_resolve, supertask):
     self.ft = ft
     self.opts = opts
     self.inst = inst
-    self.supertask = supertask
     self.on_start = on_start
     self.on_resolve = on_resolve
+    self.supertask = supertask
     self.state = Task.State.INITIAL
     self.num_borrows = 0
     self.waiting_to_enter = None
@@ -1009,8 +1009,6 @@ However, for the purpose of specifying the Canonical ABI, `Store.lift` and
 `Store.lower` are sufficient to specify how execution enters and exits component
 instances.
 ```python
-CoreFuncInst = Callable[[list[CoreValType]], list[CoreValType]]
-
 class Store:
   waiting: list[Thread]
 
@@ -1018,15 +1016,17 @@ class Store:
     self.waiting = []
 
   def invoke(self, f: FuncInst, caller: Optional[Supertask], on_start, on_resolve) -> OnCancel:
-    host_caller = Supertask()
-    host_caller.inst = None
-    host_caller.supertask = caller
-    return f(host_caller, on_start, on_resolve)
+    host = Supertask()
+    host.inst = None
+    host.supertask = caller
+    return f(on_start, on_resolve, caller = host)
+
+  CoreFuncInst = Callable[[list[CoreValType]], list[CoreValType]]
 
   def lift(self, f: CoreFuncInst, ft: FuncType, opts: CanonicalOptions, inst: ComponentInstance) -> FuncInst:
-    def func_inst(caller: Supertask, on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
+    def func_inst(on_start: OnStart, on_resolve: OnResolve, caller: Supertask) -> OnCancel:
       trap_if(call_might_be_recursive(caller, inst))
-      return canon_lift(f, ft, opts, inst, caller, on_start, on_resolve)
+      return canon_lift(f, ft, opts, inst, on_start, on_resolve, caller)
     return func_inst
 
   def lower(self, f: FuncInst, ft: FuncType, opts: CanonicalOptions, inst: ComponentInstance) -> CoreFuncInst:
@@ -3514,14 +3514,14 @@ When instantiating a component instance, the runtime calls `Store.lift` (defined
 above) to capture the `$callee`, `$ft` and `$opts` immediates of `canon lift`
 along with the component instance being instantiated. These are then passed into
 `canon_lift` every time the generated `FuncInst` is called, along with the
-runtime `Supertask`, `OnStart` and `OnResolve` arguments.
+runtime `OnStart`, `OnResolve` and `Supertask` arguments.
 
 Based on this, `canon_lift` is defined in chunks as follows. The whole call
 executes in a new *implicit thread* defined here by `thread_func`. The first
 thing this implicit thread does is to wait for any backpressure, as defined by
 `Task.enter_implicit_thread` above:
 ```python
-def canon_lift(callee, ft, opts, inst, caller, on_start, on_resolve) -> OnCancel:
+def canon_lift(callee, ft, opts, inst, on_start, on_resolve, caller) -> OnCancel:
   def thread_func():
     if not task.enter_implicit_thread():
       return
@@ -3653,7 +3653,7 @@ required by the `FuncInst` calling contract. Lastly, `canon_lift` returns
 `Task.request_cancellation`, bound to the call's new task, as the required
 `OnCancel` value.
 ```python
-  task = Task(ft, opts, inst, caller, on_start, on_resolve)
+  task = Task(ft, opts, inst, on_start, on_resolve, caller)
   thread = Thread(task, thread_func)
   thread.resume()
   return task.request_cancellation
@@ -3793,7 +3793,7 @@ above).
       nonlocal flat_results
       flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
 
-  subtask.on_cancel = callee(thread.task, on_start, on_resolve)
+  subtask.on_cancel = callee(on_start, on_resolve, caller = thread.task)
   assert(ft.async_ or subtask.state == Subtask.State.RETURNED)
 ```
 The `Subtask.state` field is updated by the callbacks to keep track of the

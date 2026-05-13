@@ -57,10 +57,10 @@ def lift_and_run(opts, inst, ft, callee, on_start, on_resolve):
   while inst.store.waiting:
     inst.store.tick()
 
-def mk_task(caller, on_start, on_resolve, thread_func):
+def mk_task(on_start, on_resolve, caller, thread_func):
   inst = ComponentInstance(caller.inst.store)
   opts = mk_opts(async_ = True)
-  task = Task(FuncType([],[],async_=True), opts, inst, caller, on_start, on_resolve)
+  task = Task(FuncType([],[],async_=True), opts, inst, on_start, on_resolve, caller)
   thread = Thread(task, thread_func)
   thread.resume(Cancelled.FALSE)
   return task.request_cancellation
@@ -68,7 +68,7 @@ def mk_task(caller, on_start, on_resolve, thread_func):
 def mk_done_task(caller):
   def empty():
     current_thread().task.state = Task.State.RESOLVED
-  return mk_task(caller, lambda:[], lambda _:(), empty)
+  return mk_task(lambda:[], lambda _:(), caller, empty)
 
 def mk_str(s):
   return (s, 'utf8', len(s.encode('utf-8')))
@@ -486,7 +486,7 @@ def test_handles():
   rt2 = ResourceType(inst, dtor) # only usable in exports
   opts = mk_opts()
 
-  def host_import(caller, on_start, on_resolve):
+  def host_import(on_start, on_resolve, caller):
     args = on_start()
     assert(len(args) == 2)
     assert(args[0] == 42)
@@ -1405,7 +1405,7 @@ def test_eager_stream_completion():
   opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
   sync_opts = mk_opts(memory=MemInst(mem, 'i32'), async_=False)
 
-  def host_import(caller, on_start, on_resolve):
+  def host_import(on_start, on_resolve, caller):
     args = on_start()
     assert(len(args) == 1)
     assert(isinstance(args[0], ReadableStream))
@@ -1490,7 +1490,7 @@ def test_async_stream_ops():
 
   host_import_incoming = None
   host_import_outgoing = None
-  def host_import(caller, on_start, on_resolve):
+  def host_import(on_start, on_resolve, caller):
     def thread_func():
       thread = current_thread()
       nonlocal host_import_incoming, host_import_outgoing
@@ -1517,7 +1517,7 @@ def test_async_stream_ops():
         host_import_outgoing.write(vs)
       host_import_outgoing.destroy_once_empty()
 
-    return mk_task(caller, on_start, on_resolve, thread_func)
+    return mk_task(on_start, on_resolve, caller, thread_func)
 
   src_stream = HostSource(U8Type(), [], chunk=4, destroy_if_empty = False)
   def on_start():
@@ -1640,7 +1640,7 @@ def test_receive_own_stream():
   opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
 
   host_ft = FuncType([StreamType(U8Type())], [StreamType(U8Type())])
-  def host_import(caller, on_start, on_resolve):
+  def host_import(on_start, on_resolve, caller):
     args = on_start()
     assert(len(args) == 1)
     assert(isinstance(args[0], ReadableStream))
@@ -1680,14 +1680,14 @@ def test_host_partial_reads_writes():
 
   src = HostSource(U8Type(), [1,2,3,4], chunk=2, destroy_if_empty = False)
   source_ft = FuncType([], [StreamType(U8Type())])
-  def host_source(caller, on_start, on_resolve):
+  def host_source(on_start, on_resolve, caller):
     [] = on_start()
     on_resolve([src])
     return mk_done_task(caller)
 
   dst = None
   sink_ft = FuncType([StreamType(U8Type())], [])
-  def host_sink(caller, on_start, on_resolve):
+  def host_sink(on_start, on_resolve, caller):
     nonlocal dst
     [s] = on_start()
     dst = HostSink(s, chunk=1, remain=2)
@@ -1995,7 +1995,7 @@ def test_cancel_copy():
 
   host_ft1 = FuncType([StreamType(U8Type())],[])
   host_sink = None
-  def host_func1(caller, on_start, on_resolve):
+  def host_func1(on_start, on_resolve, caller):
     nonlocal host_sink
     [stream] = on_start()
     host_sink = HostSink(stream, 2, remain = 0)
@@ -2004,7 +2004,7 @@ def test_cancel_copy():
 
   host_ft2 = FuncType([], [StreamType(U8Type())])
   host_source = None
-  def host_func2(caller, on_start, on_resolve):
+  def host_func2(on_start, on_resolve, caller):
     nonlocal host_source
     [] = on_start()
     host_source = HostSource(U8Type(), [], chunk=2, destroy_if_empty = False)
@@ -2149,7 +2149,7 @@ def test_futures():
   lower_opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
 
   host_ft1 = FuncType([FutureType(U8Type())],[FutureType(U8Type())])
-  def host_func(caller, on_start, on_resolve):
+  def host_func(on_start, on_resolve, caller):
     def thread_func():
       thread = current_thread()
       [future] = thread.task.start()
@@ -2160,7 +2160,7 @@ def test_futures():
       thread.wait_until(incoming.has_v.is_set)
       assert(incoming.v == 42)
       outgoing.set_result(43)
-    return mk_task(caller, on_start, on_resolve, thread_func)
+    return mk_task(on_start, on_resolve, caller, thread_func)
 
   lift_opts = mk_opts()
   def core_func(args):
@@ -2279,7 +2279,7 @@ def test_cancel_subtask():
   callee3 = store.lift(core_callee3, ft, callee_opts, callee_inst)
 
   host_fut4 = RacyBool(False)
-  def host_import4(caller, on_start, on_resolve):
+  def host_import4(on_start, on_resolve, caller):
     def thread_func():
       thread = current_thread()
       args = thread.task.start()
@@ -2287,7 +2287,7 @@ def test_cancel_subtask():
       assert(args[0] == 42)
       thread.wait_until(host_fut4.is_set)
       thread.task.return_([43])
-    return mk_task(caller, on_start, on_resolve, thread_func)
+    return mk_task(on_start, on_resolve, caller, thread_func)
   def core_callee4(args):
     [x] = args
     [result] = store.lower(host_import4, ft, sync_callee_opts, callee_inst)([42])
@@ -2307,7 +2307,7 @@ def test_cancel_subtask():
   callee4 = store.lift(core_callee4, ft, callee_opts, callee_inst)
 
   host_fut5 = RacyBool(False)
-  def host_import5(caller, on_start, on_resolve):
+  def host_import5(on_start, on_resolve, caller):
     def thread_func():
       thread = current_thread()
       args = thread.task.start()
@@ -2317,7 +2317,7 @@ def test_cancel_subtask():
       assert(thread.task.state == Task.State.PENDING_CANCEL)
       thread.wait_until(host_fut5.is_set)
       thread.task.return_([43])
-    return mk_task(caller, on_start, on_resolve, thread_func)
+    return mk_task(on_start, on_resolve, caller, thread_func)
   def core_callee5(args):
     [x] = args
     assert(x == 13)
@@ -2616,7 +2616,7 @@ def test_async_flat_params():
   inst = ComponentInstance(store)
 
   ft1 = FuncType([F32Type(), F64Type(), U32Type(), S64Type()],[])
-  def f1(caller, on_start, on_resolve):
+  def f1(on_start, on_resolve, caller):
     args = on_start()
     assert(len(args) == 4)
     assert(args[0] == 1.1)
@@ -2627,7 +2627,7 @@ def test_async_flat_params():
     return mk_done_task(caller)
 
   ft2 = FuncType([U32Type(),U8Type(),U8Type(),U8Type()],[])
-  def f2(caller, on_start, on_resolve):
+  def f2(on_start, on_resolve, caller):
     args = on_start()
     assert(len(args) == 4)
     assert(args == [1,2,3,4])
@@ -2635,7 +2635,7 @@ def test_async_flat_params():
     return mk_done_task(caller)
 
   ft3 = FuncType([U32Type(),U8Type(),U8Type(),U8Type(),U8Type()],[])
-  def f3(caller, on_start, on_resolve):
+  def f3(on_start, on_resolve, caller):
     args = on_start()
     assert(len(args) == 5)
     assert(args == [1,2,3,4,5])
