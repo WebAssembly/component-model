@@ -59,6 +59,7 @@ implemented, considered stable and included in a future milestone:
 * 🔗: canonical interface names
 * 🐘: [memory64]
 * 🗺️: the `map` type
+* 🏷️: `implements` annotations for plain-named interface imports/exports
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
 this repo merges and supersedes the [module-linking] and [interface-types]
@@ -2681,6 +2682,31 @@ annotations trigger additional type-validation rules (listed in
 * Similarly, an import or export named `[method]R.foo` must be a function whose
   first parameter must be `(param "self" (borrow $R))`.
 
+🏷️ When an instance import or export is named `L` and annotated with
+`(implements "I")`, it indicates that the instance implements interface `I` but
+is given the plain name `L`. This enables a component to import or export the
+same interface multiple times with different plain names. For example:
+
+```wat
+(component
+  (import "primary" (implements "wasi:keyvalue/store") (instance ...))
+  (import "secondary" (implements "wasi:keyvalue/store") (instance ...))
+)
+```
+
+Here, both imports implement `wasi:keyvalue/store` but have distinct plain
+names `primary` and `secondary`. Bindings generators can use the
+`implements` annotation to know which interface the instance implements,
+enabling them to share value type bindings across both imports. (Note that
+resource types defined in the interface, such as `bucket`, are treated as
+distinct for each import, since each may have a different implementation.)
+
+The `interfacename` also helps hosts and clients of a component. A host that
+sees `(implements "wasi:keyvalue/store>")` knows to supply a
+`wasi:keyvalue/store` implementation for that import, even though the import
+name is something else. Similarly, a client composing components can use the
+annotation to match compatible imports and exports across components.
+
 When a function's type is `async`, bindings generators are expected to
 emit whatever asynchronous language construct is appropriate (such as an
 `async` function in JS, Python or Rust). See the [concurrency explainer] for
@@ -2822,11 +2848,11 @@ Values]) are **strongly-unique**:
   * Strip any `[...]` annotation prefix from both names.
   * The names are strongly-unique if the resulting strings are unequal.
 
-Thus, the following names are strongly-unique:
-* `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[method]foo.baz`
+Thus, the following set of names are strongly-unique and can thus all be imports (or exports) of the same component (or component type or instance type):
+* `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[method]foo.baz`, `foo:bar/baz`
 
 but attempting to add *any* of the following names would be a validation error:
-* `foo`, `foo-BAR`, `[constructor]foo-BAR`, `[method]foo.foo`, `[method]foo.BAR`
+* `foo`, `foo-BAR`, `[constructor]foo-BAR`, `[method]foo.foo`, `[method]foo.BAR`, `foo:bar/baz`, `bar`
 
 Note that additional validation rules involving types apply to names with
 annotations. For example, the validation rules for `[constructor]foo` require
