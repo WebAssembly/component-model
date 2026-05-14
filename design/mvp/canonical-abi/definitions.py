@@ -454,6 +454,7 @@ class Task(Supertask):
     self.threads = []
 
   def needs_exclusive(self):
+    assert(self.ft.async_)
     return not self.opts.async_ or self.opts.callback
 
   def may_block(self):
@@ -690,14 +691,10 @@ class ResourceHandle:
 class ResourceType(Type):
   impl: ComponentInstance
   dtor: Optional[Callable]
-  dtor_async: bool
-  dtor_callback: Optional[Callable]
 
-  def __init__(self, impl, dtor = None, dtor_async = False, dtor_callback = None):
+  def __init__(self, impl, dtor = None):
     self.impl = impl
     self.dtor = dtor
-    self.dtor_async = dtor_async
-    self.dtor_callback = dtor_callback
 
 ### Waitable State
 
@@ -2122,7 +2119,7 @@ def canon_lift(callee, ft, opts, inst, on_start, on_resolve, caller) -> OnCancel
     [packed] = call_and_trap_on_throw(callee, flat_args)
     code,si = unpack_callback_result(packed)
     while code != CallbackCode.EXIT:
-      assert(inst.exclusive is task)
+      assert(task.needs_exclusive() and inst.exclusive is task)
       inst.exclusive = None
       match code:
         case CallbackCode.YIELD:
@@ -2266,12 +2263,11 @@ def canon_resource_drop(rt, i):
       if rt.dtor:
         rt.dtor(h.rep)
     else:
-      caller_opts = CanonicalOptions(async_ = False)
-      callee_opts = CanonicalOptions(async_ = rt.dtor_async, callback = rt.dtor_callback)
-      ft = FuncType([U32Type()],[], async_ = False)
+      ft = FuncType([U32Type()], [], async_ = False)
       dtor = rt.dtor or (lambda rep: [])
-      callee = inst.store.lift(dtor, ft, callee_opts, rt.impl)
-      caller = inst.store.lower(callee, ft, caller_opts, inst)
+      opts = CanonicalOptions(async_ = False)
+      callee = inst.store.lift(dtor, ft, opts, rt.impl)
+      caller = inst.store.lower(callee, ft, opts, inst)
       caller([h.rep])
   else:
     h.borrow_scope.num_borrows -= 1

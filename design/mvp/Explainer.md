@@ -573,9 +573,7 @@ valtype       ::= <typeidx>
                 | <defvaltype>
 keytype       ::= bool | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64 | char | string 🗺️
 resourcetype  ::= (resource (rep i32) (dtor <core:funcidx>)?)
-                | (resource (rep i32) (dtor async <core:funcidx> (callback <core:funcidx>)?)?) 🚝
                 | (resource (rep i64) (dtor <core:funcidx>)?) 🐘
-                | (resource (rep i64) (dtor async <core:funcidx> (callback <core:funcidx>)?)?) 🚝🐘
 functype      ::= (func async? (param "<label>" <valtype>)* (result <valtype>)?)
 componenttype ::= (component <componentdecl>*)
 instancetype  ::= (instance <instancedecl>*)
@@ -828,9 +826,8 @@ is currently fixed to `i32` or `i64`, but will potentially be relaxed to include
 other types. When the last handle to a resource is dropped, the resource's
 destructor function specified by the `dtor` immediate will be called (if
 present), allowing the implementing component to perform clean-up like freeing
-linear memory allocations. Destructors can be declared `async`, with the same
-meaning for the `async` and `callback` immediates as described below for `canon
-lift`. A destructor for a `resource (rep $T)` must have type `($T) -> ()`.
+linear memory allocations. A destructor for a `resource (rep $T)` must have type
+`($T) -> ()`.
 
 The `instance` type constructor describes a list of named, typed definitions
 that can be imported or exported by a component. Informally, instance types
@@ -1342,13 +1339,10 @@ be deallocated and destructors called. This immediate is always optional but,
 if present, is validated to have parameters matching the callee's return type
 and empty results.
 
-🔀 The `async` option specifies that the component wants to make (for imports)
-or support (for exports) multiple concurrent (asynchronous) calls. This option
-can be applied to any component-level function type and changes the derived
-Canonical ABI significantly. See the [concurrency explainer] for more details.
-When a function signature contains a `future` or `stream`, validation of `canon
-lower` requires the `async` option to be set (since a synchronous call to a
-function using these types is highly likely to deadlock).
+🔀 The `async` option may only be used with `async` function types and specifies
+that the component wants to make (for imports) or support (for exports) multiple
+concurrent (asynchronous) calls. This option changes the derived Canonical ABI
+significantly; see the [concurrency explainer] for more details.
 
 🔀 The `(callback ...)` option may only be present in `canon lift` when the
 `async` option has also been set and specifies a core function that is
