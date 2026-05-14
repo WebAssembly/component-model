@@ -685,26 +685,26 @@ the "started" state.
 
 ### Returning
 
-The way an async export call returns its value is by calling [`task.return`],
-passing the core values that are to be lifted as *parameters*.
+The way an `async` export returns its value using the async ABI is by calling
+[`task.return`], passing the core values that are to be lifted as *parameters*.
+When using the async ABI, *any* of the threads contained by a task can call
+`task.return`; there is no "main thread" of a task. When the last thread of a
+task returns, there is a trap if `task.return` has not been called. Thus, *some*
+thread (either the thread created implicitly for the initial export call or some
+thread transitively created by that thread) must call `task.return`.
 
 Returning values by calling `task.return` allows a task to continue executing
-even after it has passed its initial results to the caller. This can be useful
-for various finalization tasks (freeing memory or performing logging, billing
-or metrics operations) that don't need to be on the critical path of returning
-a value to the caller, but the major use of executing code after `task.return`
-is to continue to read and write from streams and futures. For example, a
-stream transformer function of type `func(in: stream<T>) -> stream<U>` will
-immediately `task.return` a stream created via `stream.new` and then sit in a
-loop interleaving `stream.read`s (of the readable end passed for `in`) and
-`stream.write`s (of the writable end it `stream.new`ed) before exiting the
-task.
-
-*Any* of the threads contained by a task can call `task.return`; there is no
-"main thread" of a task. When the last thread of a task returns, there is a
-trap if `task.return` has not been called. Thus, *some* thread (either the
-thread created implicitly for the initial export call or some thread
-transitively created by that thread) must call `task.return`.
+even after it has passed its initial results to the caller. This is also
+possible even with the sync ABI by using cooperative threads. Continuing
+to execute after returning a value can be useful for various finalization tasks
+(freeing memory or performing logging, billing or metrics operations) that don't
+need to be on the critical path of returning a value to the caller, but the
+major use of executing code after `task.return` is to continue to read and write
+from streams and futures. For example, a stream transformer function of type
+`func(in: stream<T>) -> stream<U>` will immediately `task.return` a stream
+created via `stream.new` and then sit in a loop interleaving `stream.read`s (of
+the readable end passed for `in`) and `stream.write`s (of the writable end it
+`stream.new`ed) before exiting the task.
 
 Once `task.return` is called, the task is in the "returned" state. Calling
 `task.return` when not in the "started" state traps. Once in a "returned" state,
