@@ -3565,7 +3565,7 @@ performed for a component. These are defined as:
 
 For a canonical definition:
 ```wat
-(canon lift $callee:<funcidx> $opts:<canonopt>* (func $f (type $ft)))
+(canon lift $callee $opts (func $f (type $ft)))
 ```
 
 In addition to [general validation of `$opts`](#canonopt-validation) the additional
