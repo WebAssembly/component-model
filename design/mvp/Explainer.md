@@ -7,8 +7,8 @@ more user-focused explanation, take a look at the
 
 * [Gated features](#gated-features)
 * [Grammar](#grammar)
+  * [Index spaces](#index-spaces)
   * [Component definitions](#component-definitions)
-    * [Index spaces](#index-spaces)
   * [Instance definitions](#instance-definitions)
   * [Alias definitions](#alias-definitions)
   * [Type definitions](#type-definitions)
@@ -81,15 +81,79 @@ succinctness, with just enough detail to write examples and define a [binary
 format](Binary.md) in the style of the [Binary Format Section], deferring full
 precision to the [formal specification](../../spec/).
 
-The main way the grammar hand-waves is regarding definition uses, where indices
-referring to `X` definitions (written `<Xidx>`) should, in the real text
-format, explicitly allow identifiers (`<id>`), checking at parse time that the
-identifier resolves to an `X` definition and then embedding the resolved index
-into the AST.
-
 Additionally, standard [abbreviations] defined by the Core WebAssembly text
 format (e.g., inline export definitions) are assumed but not explicitly defined
 below.
+
+
+### Index Spaces
+
+As with Core WebAssembly, the Component Model appends each definition to an
+[index space], allowing earlier definitions to be referred to by later
+definitions in the text and binary format via unsigned integer index.
+
+There are 5 component-level index spaces (components, component instances,
+functions, types and values 🪙), 6 core index spaces already in the Core
+WebAssembly specification (functions, tables, memories, globals, tags and types)
+and 2 additional core index spaces (modules and module instances) that are not in
+the Core WebAssembly specification at the moment, but, with [module-linking],
+could be in the future. These 13 index spaces correspond 1:1 with the terminals
+of `sort` shown below and so "sort" and "index space" can be used
+interchangeably. The grammar rule for `sort` prefixes the Core WebAssembly sorts
+with `core` to disambiguate current and future overlaps.
+```ebnf
+core:sort     ::= func
+                | table
+                | memory
+                | global
+                | tag
+                | type
+                | module
+                | instance
+componentsort ::= component
+                | instance
+                | func
+                | type
+                | value 🪙
+sort          ::= componentsort
+                | core <core:sort>
+```
+
+As with Core WebAssembly, for each index space `X`, there is an `{X}idx` grammar
+rule that parses indices as either a direct `u32` or a [`core:id`] that is
+resolved to a `u32` according to the usual Core WebAssembly text format rules.
+When the text format accepts indices in one of several different index spaces,
+the sort is required to be written explicitly using the `externidx` rule, which
+embeds an expanded version of [`core:externidx`] prefixed with `core`.
+```ebnf
+idx              ::= <u32> | <core:id>
+core:{Xᵢ}sortidx ::= (Xᵢ <idx>)                                     (for Xᵢ ∈ <core:sort>)
+core:{Xᵢ}idx     ::= <idx> | <core:{Xᵢ}sortidx>                     (for Xᵢ ∈ <core:sort>)
+core:externidx   ::= <core:{X₁}sortidx> | ... | <core:{Xₙ}sortidx>  (for X₁,…,Xₙ ∈ <core:sort>)
+{Xᵢ}sortidx      ::= (Xᵢ <idx>)                                     (for Xᵢ ∈ <componentsort>)
+{Xᵢ}idx          ::= <idx> | <{Xᵢ}sortidx>                          (for Xᵢ ∈ <componentsort>)
+externidx        ::= <{X₁}sortidx> | ... | <{Xₙ}sortidx>            (for X₁,…,Xₙ ∈ <componentsort>)
+                   | core-prefix(<core:externidx>)
+
+where core-prefix(<X>) is defined:
+ if <X> parses (<Y>), then core-prefix(<X>) parses (core <Y>)
+ if <X> parses <idx>, then core-prefix(<X>) parses <idx>
+```
+The -`sortidx` schemas generate rules like `funcsortidx` and `core:funcsortidx`
+which both parse `(func $foo)` and `(func 0)`. The -`idx` schemas generate rules
+like `funcidx`/`core:funcidx` that extend `funcsortidx`/`core:funcsortidx` to
+also parse plain identifiers (like `$foo`) and `u32` indices (like `0`).
+
+The `core-prefix` meta-function is used here and below to transform a rule for
+parsing a parenthesized definition without `core` into the same definition but
+with a `core` token right after the leftmost parenthesis. For example, since
+`<core:externidx>` parses `(func $f)`, `core-prefix(<core:externidx>)` parses
+`(core func $f)`. This allows `<core:*>` rules (which don't include a `core`
+token) to be used inside `(core ...)` expressions and `core-prefix(<core:*>)`
+rules to be used outside `(core ...)` expressions (at component-level) to
+explicitly mark where a `core` token might be required. The exception in
+`core-prefix` for `<idx>` means that, for example, `core-prefix(<core:funcidx>)`
+accepts both `(core func $foo)` and plain `$foo`.
 
 
 ### Component Definitions
@@ -109,21 +173,45 @@ definition ::= core-prefix(<core:module>)
              | <import>
              | <export>
              | <value> 🪙
-
-where core-prefix(X) parses '(' 'core' Y ')' when X parses '(' Y ')'
 ```
-Components are like Core WebAssembly modules in that their contained
-definitions are acyclic: definitions can only refer to preceding definitions
-(in the AST, text format and binary format). However, unlike modules,
-components can arbitrarily interleave different kinds of definitions.
 
-The `core-prefix` meta-function transforms a grammatical rule for parsing a
-Core WebAssembly definition into a grammatical rule for parsing the same
-definition, but with a `core` token added right after the leftmost paren.
-For example, `core:module` accepts `(module (func))` so
-`core-prefix(<core:module>)` accepts `(core module (func))`. Note that the
-inner `func` doesn't need a `core` prefix; the `core` token is used to mark the
-*transition* from parsing component definitions into core definitions.
+As suggested by this grammar, unlike in Core WebAssembly modules, component
+`definition`s can be in any order and a single kind of `definition` can appear
+multiple times, interleaved with other kinds of `definition`s. Moreover, the
+order of `definition`s in the text format is significant and, unlike Core
+WebAssembly, `definition`s are not reordered and grouped by the text format.
+Furthermore, component `definition`s are strictly *acyclic*, such that a given
+`definition` (in the text or binary format) can only refer to identifiers or
+indices introduced by preceding definitions. Based on this, while the following
+two core modules are both valid and equivalent (with the first being "desugared"
+into the second):
+```wat
+(module
+  (import "" "f" (func (type $FT)))
+  (type $FT (func))
+)
+(module
+  (type (func))
+  (import "" "f" (func (type 0)))
+)
+```
+only the latter component is valid:
+```wat
+;;(component
+;;  (import "f" (func (type $FT))) ❌ $FT not defined
+;;  (type $FT (func))
+;;)
+(component
+  (type $FT (func))
+  (import "f" (func (type $FT)))
+)
+```
+
+As defined in the previous section, `core-prefix(<X>)` adds a `core` token after
+the leftmost parenthesis of `<X>` and so, e.g., `core-prefix(<core:module>)`
+parses `(core module ...)` instead of `(module ...)`. The `core` prefix
+disambiguates current and future overlaps between core- and component-level
+definitions (like `func`, `instance` and `type`).
 
 The [`core:module`] production is unmodified by the Component Model and thus
 components embed Core WebAssembly (text and binary format) modules as currently
@@ -163,64 +251,6 @@ next), nothing will be instantiated or executed at runtime; everything here is
 dead code.
 
 
-#### Index Spaces
-
-[Like Core WebAssembly][Core Indices], the Component Model places each
-`definition` into one of a fixed set of *index spaces*, allowing the
-definition to be referred to by subsequent definitions (in the text and binary
-format) via a nonnegative integral *index*. When defining, validating and
-executing a component, there are 5 component-level index spaces:
-* (component) functions
-* (component) values 🪙
-* (component) types
-* component instances
-* components
-
-6 core index spaces that also exist in the Core WebAssembly specification:
-* (core) functions
-* (core) tables
-* (core) memories
-* (core) globals
-* (core) tags
-* (core) types
-
-and 2 additional core index spaces that contain core definition introduced by
-the Component Model that are not in Core WebAssembly (yet: the [module-linking]
-proposal would add them):
-* module instances
-* modules
-
-for a total of 13 index spaces that need to be maintained by an implementation
-when, e.g., validating a component. These 13 index spaces correspond 1:1 with
-the terminals of the `sort` production defined below and thus "sort" and
-"index space" can be used interchangeably.
-
-Also [like Core WebAssembly][Core Identifiers], the Component Model text format
-allows *identifiers* to be used in place of these indices, which are resolved
-when parsing into indices in the AST (upon which validation and execution is
-defined). Thus, the following two components are equivalent:
-```wat
-(component
-  (core module (; empty ;))
-  (component   (; empty ;))
-  (core module (; empty ;))
-  (export "C" (component 0))
-  (export "M1" (core module 0))
-  (export "M2" (core module 1))
-)
-```
-```wat
-(component
-  (core module $M1 (; empty ;))
-  (component $C    (; empty ;))
-  (core module $M2 (; empty ;))
-  (export "C" (component $C))
-  (export "M1" (core module $M1))
-  (export "M2" (core module $M2))
-)
-```
-
-
 ### Instance Definitions
 
 Whereas modules and components represent immutable *code*, instances associate
@@ -234,21 +264,12 @@ multiple different styles of traditional [linking](Linking.md).
 
 The syntax for defining a core module instance is:
 ```ebnf
-core:instance       ::= (instance <id>? <core:instancexpr>)
+core:instance       ::= (instance <id>? <core:instanceexpr>)
 core:instanceexpr   ::= (instantiate <core:moduleidx> <core:instantiatearg>*)
                       | <core:inlineexport>*
-core:instantiatearg ::= (with <core:name> (instance <core:instanceidx>))
+core:instantiatearg ::= (with <core:name> (instance <idx>))
                       | (with <core:name> (instance <core:inlineexport>*))
-core:sortidx        ::= (<core:sort> <u32>)
-core:sort           ::= func
-                      | table
-                      | memory
-                      | global
-                      | tag
-                      | type
-                      | module
-                      | instance
-core:inlineexport   ::= (export <core:name> <core:sortidx>)
+core:inlineexport   ::= (export <core:name> <core:externidx>)
 ```
 where [`core:name`] is the WebAssembly text format's quoted string literal.
 
@@ -260,10 +281,6 @@ modules are resolved as follows:
 2. The second import name is looked up in the named list of exports of the core
    module instance found by the first step to select the imported core
    definition.
-
-Each `core:sort` corresponds 1:1 with a distinct [index space] that contains
-only core definitions of that *sort*. The `u32` field of `core:sortidx`
-indexes into the sort's associated index space to select a definition.
 
 Based on this, we can link two core modules `$A` and `$B` together with the
 following component:
@@ -291,39 +308,25 @@ an example of these, we'll also need the `alias` definitions introduced in the
 next section.
 
 The syntax for defining component instances is symmetric to core module
-instances, but with an expanded component-level definition of `sort`:
+instances above:
 ```ebnf
 instance       ::= (instance <id>? <instanceexpr>)
 instanceexpr   ::= (instantiate <componentidx> <instantiatearg>*)
                  | <inlineexport>*
-instantiatearg ::= (with <name> <sortidx>)
+instantiatearg ::= (with <name> <externidx>)
                  | (with <name> (instance <inlineexport>*))
 name           ::= <core:name>
-sortidx        ::= (<sort> <u32>)
-sort           ::= core <core:sort>
-                 | func
-                 | value 🪙
-                 | type
-                 | component
-                 | instance
-inlineexport   ::= (export <externnamelit> <attribute>* <sortidx>)
+inlineexport   ::= (export <externnamelit> <externidx>)
+                 | (export <externnamelit> <versionsuffix> <externidx>) 🔗
 ```
-Because component-level function, type and instance definitions are different
-than core-level function, type and instance definitions, they are put into
-disjoint index spaces which are indexed separately. Components may import
-and export various core definitions (when they are compatible with the
-[shared-nothing] model, which currently means only `module`, but may in the
-future include `data`). Thus, component-level `sort` injects the full set
-of `core:sort`, so that they may be referenced (leaving it up to validation
-rules to throw out the core sorts that aren't allowed in various contexts).
+Components may import and export various core definitions when they are
+compatible with the [shared-nothing] model, which currently means only `module`
+(since modules are pure immutable code) but may in the future include, e.g.,
+`data` (since data segments are pure immutable data).
 
 Component-level `name` literals reuse the Core WebAssembly text format's
 [`core:name`] quoted-string-literal syntax which includes literals such as
 `"a"`, `"☃︎"`, `"\7f"` and `"\u{7fff}"`.
-
-🪙 The `value` sort refers to a value that is provided and consumed during
-instantiation. How this works is described in the
-[value definitions](#value-definitions) section.
 
 To see a non-trivial example of component instantiation, we'll first need to
 introduce a few other definitions below that allow components to import, define
@@ -338,24 +341,66 @@ there are three kinds of "targets" for an alias: the `export` of a component
 instance, the `core export` of a core module instance and a definition of an
 `outer` component (containing the current component):
 ```ebnf
-alias            ::= (alias export <instanceidx> <name> (<sort> <id>?))
-                   | (alias core export <core:instanceidx> <core:name> (core <core:sort> <id>?))
-                   | (alias outer <u32> <u32> (<outeraliassort> <id>?))
+alias            ::= (alias export <idx> <name> (<sort> <id>?))
+                   | (alias core export <idx> <core:name> (core-prefix(<core:sort>) <id>?))
+                   | (alias outer <idx> <idx> (<outeraliassort> <id>?))
 outeraliassort   ::= core module
                    | core type
                    | component
                    | type
 ```
-If present, the `id` of the alias is bound to the new index added by the alias
-and can be used anywhere a normal `id` can be used.
+An `alias` definition adds a new index into the index space of the declared
+sort, binding the optional `<id>?`, if present, to the new index.
 
-In the case of `export` aliases, validation ensures `name` is an export in the
-target instance and has a matching sort.
+In the case of `export` aliases, validation requires `<idx>` to select an
+instance in the instance index space and `name` must match an export in the type
+of that instance. For example, the following export alias allows `$P` to extract
+the `foo` function of its child component `$C` and re-export it directly from
+`$P`:
+```wat
+(component $P
+  (component $C
+    ...
+    (export "foo" (func $foo-impl))
+  )
+  (instance $c (instantiate $C))
+  (alias export $c "foo" (func $foo-alias))
+  (export "foo" (func $foo-alias))
+)
+```
 
-In the case of `outer` aliases, the `u32` pair serves as a [de Bruijn index],
-with the first `u32` being the number of enclosing `component`s or `type`s to
-skip and the second `u32` being an index into the target's `outeraliassort`'s
-index space. In particular, the first `u32` can be `0`, in which case the outer
+Additional syntactic sugar is added for allowing export aliases to be defined
+*inline* as a syntactic generalization of the `{X}sortidx` grammar rules
+defined [above](#index-spaces) for each core- and component-level sort `X`:
+```ebnf
+core:{Xᵢ}sortidx ::= ... | (Xᵢ <idx> <name>+)    (for Xᵢ ∈ <core:sort>)
+{Xᵢ}sortidx      ::= ... | (Xᵢ <idx> <name>+)    (for Xᵢ ∈ <componentsort>)
+```
+Each `<name>` projects an export of an instance: the first `<name>` projects
+from `<idx>` (which must select an instance) and each subsequent `<name>`
+projects from the (instance) result of the preceding alias. Because the
+`{X}sortidx` rules are included in all the core- and component-level `{X}idx`
+and `externidx` rules defined [above](#index-spaces), an inline export alias `(X
+$id "name1" "name2" ...)` can be used anywhere that a normal `(X $id)` can be
+used, and with the same `core`-prefixing rules.
+
+For example, the following example is equivalent to the previous example,
+avoiding the need to explicitly define `$foo-alias`:
+```wat
+(component $P
+  (component $C
+    ...
+    (export "foo" (func $foo-impl))
+  )
+  (instance $c (instantiate $C))
+  (export "foo" (func $c "foo"))
+)
+```
+
+In the case of `outer` aliases, the `<idx>` pair serves as a [de Bruijn index],
+with the first `<idx>` being the number of enclosing `component`s or `type`s to
+skip and the second `<idx>` being an index into the target's `outeraliassort`'s
+index space. In particular, the first `<idx>` can be `0`, in which case the outer
 alias refers to the current `component`/`type`. To maintain the acyclicity of
 module instantiation, outer aliases are only allowed to refer to *preceding*
 outer definitions. `outer` aliases are currently restricted to only refer to
@@ -396,37 +441,9 @@ aliased by `$E`:
 )
 ```
 
-Both kinds of aliases come with syntactic sugar for implicitly declaring them
-inline:
-
-For `export` aliases, the inline sugar extends the definition of `sortidx`
-and the various sort-specific indices:
-```ebnf
-sortidx     ::= (<sort> <u32>)          ;; as above
-              | <inlinealias>
-Xidx        ::= <u32>                   ;; as above
-              | <inlinealias>
-inlinealias ::= (<sort> <u32> <name>+)
-```
-If `<sort>` refers to a `<core:sort>`, then the `<u32>` of `inlinealias` is a
-`<core:instanceidx>`; otherwise it's an `<instanceidx>`. For example, the
-following snippet uses two inline function aliases:
-```wat
-(instance $j (instantiate $J (with "f" (func $i "f"))))
-(export "x" (func $j "g" "h"))
-```
-which are desugared into:
-```wat
-(alias export $i "f" (func $f_alias))
-(instance $j (instantiate $J (with "f" (func $f_alias))))
-(alias export $j "g" (instance $g_alias))
-(alias export $g_alias "h" (func $h_alias))
-(export "x" (func $h_alias))
-```
-
-For `outer` aliases, the inline sugar is simply the identifier of the outer
-definition, resolved using normal lexical scoping rules. For example, the
-following component:
+For `outer` aliases, there is also inline syntactic sugar, which is simply to
+use the identifier of the outer definition, resolved using normal lexical
+scoping rules. For example, the following component:
 ```wat
 (component
   (component $C ...)
@@ -478,7 +495,7 @@ With what's defined so far, we're able to link modules with arbitrary renamings:
   ))
   (core instance $b3 (instantiate $B
     (with "a" (instance
-      (export "one" (func $a "three"))            ;; renaming, using <inlinealias>
+      (export "one" (func $a "three"))            ;; renaming, using inline alias sugar
     ))
   ))
 )
@@ -502,7 +519,7 @@ core:moduledecl  ::= <core:importdecl>
                    | <core:type>
                    | <core:alias>
                    | <core:exportdecl>
-core:alias       ::= (alias outer <u32> <u32> (type <id>?))
+core:alias       ::= (alias outer <idx> <idx> (type <id>?))
 core:importdecl  ::= (import <core:name> <core:name> <core:externtype>)
 core:exportdecl  ::= (export <core:name> strip-id(<core:externtype>))
 
@@ -605,8 +622,8 @@ defvaltype    ::= bool
 valtype       ::= <typeidx>
                 | <defvaltype>
 keytype       ::= bool | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64 | char | string 🗺️
-resourcetype  ::= (resource (rep i32) (dtor <core:funcidx>)?)
-                | (resource (rep i64) (dtor <core:funcidx>)?) 🐘
+resourcetype  ::= (resource (rep i32) (dtor core-prefix(<core:funcidx>))?)
+                | (resource (rep i64) (dtor core-prefix(<core:funcidx>))?) 🐘
 functype      ::= (func async? (param <labellit> <valtype>)* (result <valtype>)?)
 componenttype ::= (component <componentdecl>*)
 instancetype  ::= (instance <instancedecl>*)
@@ -618,7 +635,7 @@ instancedecl  ::= core-prefix(<core:type>)
                 | <exportdecl>
 importdecl    ::= (import <externnamelit> <attribute>* bind-id(<externtype>))
 exportdecl    ::= (export <externnamelit> <attribute>* bind-id(<externtype>))
-externtype    ::= (<sort> (type <u32>) )
+externtype    ::= (<sort> (type <idx>) )
                 | core-prefix(<core:moduletype>)
                 | <functype>
                 | <componenttype>
@@ -1361,16 +1378,16 @@ two directions:
 Canonical definitions specify one of these two wrapping directions, the function
 to wrap and a list of configuration options:
 ```ebnf
-canon    ::= (canon lift core-prefix(<core:funcidx>) <canonopt>* bind-id(<externtype>))
-           | (canon lower <funcidx> <canonopt>* (core func <id>?))
+canon    ::= (canon lift core-prefix(<core:funcsortidx>) <canonopt>* bind-id(<externtype>))
+           | (canon lower <funcsortidx> <canonopt>* (core func <id>?))
 canonopt ::= string-encoding=utf8
            | string-encoding=utf16
            | string-encoding=latin1+utf16
-           | (memory <core:memidx>)
-           | (realloc <core:funcidx>)
-           | (post-return <core:funcidx>)
+           | (memory core-prefix(<core:memoryidx>))
+           | (realloc core-prefix(<core:funcidx>))
+           | (post-return core-prefix(<core:funcidx>))
            | async 🔀
-           | (callback <core:funcidx>) 🔀
+           | (callback core-prefix(<core:funcidx>)) 🔀
 ```
 While the production `externtype` accepts any `sort`, the validation rules
 for `canon lift` would only allow the `func` sort. In the future, other sorts
@@ -1448,8 +1465,22 @@ definitions can also be written in an inverted form that puts the sort first:
 (func $g ...type... (canon lift ...)) ≡ (canon lift ... (func $g ...type...))
 (core func $h (canon lower ...))      ≡ (canon lower ... (core func $h))
 ```
-Note: in the future, `canon` may be generalized to define other sorts than
-functions (such as types), hence the explicit `sort`.
+
+For example:
+```wat
+(canon lower (func $f)
+  (realloc (core func $libc "realloc")) (memory (core memory $libc "mem"))
+  (core func $f_lower))
+```
+can be equivalently written:
+```wat
+(core func $f_lower
+  (canon lower (func $f)
+    (realloc (core func $libc "realloc")) (memory (core memory $libc "mem"))))
+```
+As the latter demonstrates, the `core-prefix`ed `canonopt` rules defined above
+still require a `core` prefix even though they are now lexically nested inside a
+`(core ...)` expression (which the text format otherwise avoids).
 
 Using canonical function definitions, we can finally write a non-trivial
 component that takes a string, does some logging, then returns a string.
@@ -1465,7 +1496,7 @@ component that takes a string, does some logging, then returns a string.
   (core instance $libc (instantiate $Libc))
   (core func $log (canon lower
     (func $logging "log")
-    (memory (core memory $libc "mem")) (realloc (func $libc "realloc"))
+    (memory (core memory $libc "mem")) (realloc (core func $libc "realloc"))
   ))
   (core module $Main
     (import "libc" "memory" (memory 1))
@@ -1481,7 +1512,7 @@ component that takes a string, does some logging, then returns a string.
   ))
   (func $run (param string) (result string) (canon lift
     (core func $main "run")
-    (memory (core memory $libc "mem")) (realloc (func $libc "realloc"))
+    (memory (core memory $libc "mem")) (realloc (core func $libc "realloc"))
   ))
   (export "run" (func $run))
 )
@@ -1515,8 +1546,8 @@ canon ::= ...
         | (canon task.return (result <valtype>)? <canonopt>* (core func <id>?)) 🔀
         | (canon task.cancel (core func <id>?)) 🔀
         | (canon waitable-set.new (core func <id>?)) 🔀
-        | (canon waitable-set.wait cancellable? (memory <core:memidx>) (core func <id>?)) 🔀
-        | (canon waitable-set.poll cancellable? (memory <core:memidx>) (core func <id>?)) 🔀
+        | (canon waitable-set.wait cancellable? (memory core-prefix(<core:memoryidx>)) (core func <id>?)) 🔀
+        | (canon waitable-set.poll cancellable? (memory core-prefix(<core:memoryidx>)) (core func <id>?)) 🔀
         | (canon waitable-set.drop (core func <id>?)) 🔀
         | (canon waitable.join (core func <id>?)) 🔀
         | (canon subtask.cancel async? (core func <id>?)) 🔀
@@ -1536,7 +1567,7 @@ canon ::= ...
         | (canon future.drop-readable <typeidx> (core func <id>?)) 🔀
         | (canon future.drop-writable <typeidx> (core func <id>?)) 🔀
         | (canon thread.index (core func <id>?)) 🧵
-        | (canon thread.new-indirect <typeidx> <core:tableidx> (core func <id>?)) 🧵
+        | (canon thread.new-indirect core-prefix(<core:typeidx>) core-prefix(<core:tableidx>) (core func <id>?)) 🧵
         | (canon thread.resume-later (core func <id>?)) 🧵
         | (canon thread.suspend cancellable? (core func <id>?)) 🧵
         | (canon thread.yield cancellable? (core func <id>?)) 🔀
@@ -1547,8 +1578,8 @@ canon ::= ...
         | (canon error-context.new <canonopt>* (core func <id>?)) 📝
         | (canon error-context.debug-message <canonopt>* (core func <id>?)) 📝
         | (canon error-context.drop (core func <id>?)) 📝
-        | (canon thread.spawn-ref shared? <typeidx> (core func <id>?)) 🧵②
-        | (canon thread.spawn-indirect shared? <typeidx> <core:tableidx> (core func <id>?)) 🧵②
+        | (canon thread.spawn-ref shared? core-prefix(<core:typeidx>) (core func <id>?)) 🧵②
+        | (canon thread.spawn-indirect shared? core-prefix(<core:typeidx>) core-prefix(<core:tableidx>) (core func <id>?)) 🧵②
         | (canon thread.available-parallelism shared? (core func <id>?)) 🧵②
 ```
 
@@ -1609,7 +1640,7 @@ allowing it to create and return new resources to its client:
 (component
   (import "Libc" (core module $Libc ...))
   (core instance $libc (instantiate $Libc))
-  (type $R (resource (rep i32) (dtor (func $libc "free"))))
+  (type $R (resource (rep i32) (dtor (core func $libc "free"))))
   (core func $R_new (param i32) (result i32)
     (canon resource.new $R)
   )
@@ -2554,7 +2585,7 @@ exported string at instantiation time:
   (core instance $main (instantiate $Main (with "libc" (instance $libc))))
   (func $start (param string) (result string) (canon lift
     (core func $main "start")
-    (memory (core memory $libc "mem")) (realloc (func $libc "realloc"))
+    (memory (core memory $libc "mem")) (realloc (core func $libc "realloc"))
   ))
   (start $start (value $name) (result (value $greeting)))
   (export "greeting" (value $greeting))
@@ -2590,13 +2621,13 @@ definitions append a new element to the index space of the imported/exported
 case of imports, the identifier is bound just like Core WebAssembly, as part of
 the `externtype` (e.g., `(import "x" (func $x))` binds the identifier `$x`). In
 the case of exports, the `<id>?` right after the `export` is bound while the
-`<id>` inside the `<sortidx>` is a reference to the preceding definition being
+`<id>` inside the `<externidx>` is a reference to the preceding definition being
 exported (e.g., `(export $x "x" (func $f))` binds a new identifier `$x`).
 
 Given this, the syntax of imports and exports are defined as follows:
 ```ebnf
 import        ::= (import <externnamelit> <attribute>* bind-id(<externtype>))
-export        ::= (export <id>? <externnamelit> <attribute>* <sortidx> <externtype>?)
+export        ::= (export <id>? <externnamelit> <attribute>* <externidx> <externtype>?)
 attribute     ::= <versionsuffix> 🔗
                 | <implements> 🏷️
                 | <externid> 🏷️
@@ -2606,8 +2637,8 @@ externid      ::= (external-id <name>) 🏷️
 ```
 Imports and exports both have a *name* (`externnamelit`) and a list of
 *attributes* (`attribute*`). Imports always include a type (`externtype`).
-Exports always refer to a preceding definition (`sortidx`) whose type is used by
-default as the type of the export. However, this "inferred" type can be
+Exports always refer to a preceding definition (`externidx`) whose type is used
+by default as the type of the export. However, this "inferred" type can be
 overridden with an optional type ascription (`externtype`) which must be
 compatible with the exported definition's type.
 
@@ -3233,12 +3264,11 @@ For some use-case-focused, worked examples, see:
 [Structure Section]: https://webassembly.github.io/spec/core/syntax/index.html
 [Text Format Section]: https://webassembly.github.io/spec/core/text/index.html
 [Binary Format Section]: https://webassembly.github.io/spec/core/binary/index.html
-[Core Indices]: https://webassembly.github.io/spec/core/syntax/modules.html#indices
-[Core Identifiers]: https://webassembly.github.io/spec/core/text/values.html#text-id
-
 [Index Space]: https://webassembly.github.io/spec/core/syntax/modules.html#indices
 [Abbreviations]: https://webassembly.github.io/spec/core/text/conventions.html#abbreviations
 
+[`core:id`]: https://webassembly.github.io/spec/core/text/values.html#text-id
+[`core:externidx`]: https://webassembly.github.io/spec/core/text/modules.html#text-externidx
 [`core:i64`]: https://webassembly.github.io/spec/core/text/values.html#text-int
 [`core:f64`]: https://webassembly.github.io/spec/core/syntax/values.html#floating-point
 [`core:stringchar`]: https://webassembly.github.io/spec/core/text/values.html#text-string
