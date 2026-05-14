@@ -707,8 +707,9 @@ thread created implicitly for the initial export call or some thread
 transitively created by that thread) must call `task.return`.
 
 Once `task.return` is called, the task is in the "returned" state. Calling
-`task.return` when not in the "started" state traps. Once in a "returned"
-state, non-`async` functions are allowed to block.
+`task.return` when not in the "started" state traps. Once in a "returned" state,
+non-`async` functions may block using cooperative threads that were created
+before the synchronous task's implicit thread returned.
 
 ### Borrows
 
