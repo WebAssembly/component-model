@@ -123,10 +123,11 @@ class ComponentInstance:
   parent: Optional[ComponentInstance]
   handles: Table[ResourceHandle | Waitable | WaitableSet | ErrorContext]
   threads: Table[Thread]
+  may_enter: bool
   may_leave: bool
   backpressure: int
   num_waiting_to_enter: int
-  exclusive: Optional[Task]
+  exclusive_thread: Optional[Thread]
 
   def __init__(self, store, parent = None):
     assert(parent is None or parent.store is store)
@@ -134,10 +135,11 @@ class ComponentInstance:
     self.parent = parent
     self.handles = Table()
     self.threads = Table()
+    self.may_enter = True
     self.may_leave = True
     self.backpressure = 0
     self.num_waiting_to_enter = 0
-    self.exclusive = None
+    self.exclusive_thread = None
 ```
 Components are always instantiated in the context of a *store* (analogous to the
 Core WebAssembly [`store`]) which is saved immutably in the instance's `store`
@@ -155,127 +157,118 @@ by the host, `None`, in the `parent` field. Thus, the set of component instances
 in a store forms a forest rooted by the component instances that were
 instantiated directly by the host.
 
-Based on this, the "reflexive ancestors" of a component instance (i.e., itself
-and all parent component instances up to the root component instance) can be
-enumerated and tested via these two helper functions:
+The `ComponentInstance.may_enter_from`, `enter_from` and `leave_to` methods
+defined here are used to guard and record execution entering and exiting a
+component instance. These methods are used by the `Store` methods and
+`Task.request_cancellation`, defined below, to ensure [Component Invariant] #2.
 ```python
-  def reflexive_ancestors(self) -> set[ComponentInstance]:
-    s = set()
-    inst = self
-    while inst is not None:
-      s.add(inst)
-      inst = inst.parent
+  def may_enter_from(self, caller: Optional[ComponentInstance]):
+    for inst in self.entering_set(caller):
+      if not inst.may_enter:
+        return False
+    return True
+
+  def enter_from(self, caller: Optional[ComponentInstance]):
+    for inst in self.entering_set(caller):
+      assert(inst.may_enter)
+      inst.may_enter = False
+
+  def leave_to(self, caller: Optional[ComponentInstance]):
+    for inst in self.entering_set(caller):
+      assert(not inst.may_enter)
+      inst.may_enter = True
+
+  def entering_set(self, caller: Optional[ComponentInstance]) -> set[ComponentInstance]:
+    if caller:
+      return self.self_and_ancestors() - caller.self_and_ancestors()
+    else:
+      return self.self_and_ancestors()
+
+  def self_and_ancestors(self) -> set[ComponentInstance]:
+    s = { self }
+    ancestor = self.parent
+    while ancestor is not None:
+      s.add(ancestor)
+      ancestor = ancestor.parent
     return s
+```
+In `may_enter_from`, `enter_from` and `leave_to`, the `caller` parameter is
+either the caller's `ComponentInstance` in a component-to-component call or
+`None` for a host-to-component call. This `caller` is used to avoid trapping in
+the case of a parent component [donut wrapping] a child component and being
+reentered by a child component import call which by definition does not violate
+[Component Invariant] #2.
 
-  def is_reflexive_ancestor_of(self, other):
-    while other is not None:
-      if self is other:
-        return True
-      other = other.parent
-    return False
+To distinguish and allow donut-wrapping-reentrance, we say that entering a
+component instance C also implicitly enters all of C's transitive parents
+("ancestors") but when calling from one component into another, any component
+instance *already* entered by the caller (including itself) is *subtracted* from
+the set of component instances being entered by the callee because execution is
+not "entering" but rather "staying inside" those instances held in common.
+
+For example, given a parent component instance `P` which contains core module
+instances `M1` and `M2` and child component instances `C1` and `C2`,
+`may_enter_from` allows every call in this callstack to succeed:
+```
+     +-------------------------------------------------+
+     |                        P                        |
+     | +-----------+   +----+   +----+   +-----------+ |
+host-->| M1 (in P) |-->| C1 |-->| C2 |-->| M2 (in P) | |
+     | +-----------+   +----+   +----+   +-----------+ |
+     +-------------------------------------------------+
+```
+In particular, when the host first calls into `P` (via `lift`ed `M1`),
+`P.entering_set(None)` is `{ P }`, so `P.may_enter` is tested and then set to
+`False`. When `P` calls into `C1`, `C1.entering_set(P)` is `{ C1 }` (since
+`P.self_and_ancestors() = { P }` is subtracted from `C1.self_and_ancestors() =
+{ C1, P }`) and thus `C1.may_enter` is tested and set to `False`. When `C1`
+calls `C2`, `C2.entering_set(C1)` is `{ C2 }`, so `C2.may_enter` is also set to
+`False`. And then finally when `C2` calls back into `P` (via `lift`ed `M2`),
+`P.entering_set(C2)` is empty (because `C2.self_and_ancestors() = { C2, P }` is
+subtracted from `P.self_and_ancestors() = { P }`) and thus there is no
+`trap_if(not P.may_enter)` (which would have otherwise failed).
+
+If now `P` tries to call from `M2` back into `C1` (using the power of
+`call_indirect`), there *would* be a trap, since `C1.entering_set(P)` is
+`{ C1 }` and `C1.may_enter` is already `False`:
+```
+     +-----------------------------------------------------------+
+     |                            P                              |
+     | +-----------+   +----+   +----+   +-----------+    +----+ |
+host-->| M1 (in P) |-->| C1 |-->| C2 |-->| M2 (in P) |-X->| C1 | |
+     | +-----------+   +----+   +----+   +-----------+    +----+ |
+     +-----------------------------------------------------------+
 ```
 
-How the host instantiates and invokes root components is up to the host and not
-specified by the Component Model. Exports of previously-instantiated root
-components *may* be supplied as the imports of subsequently-instantiated root
-components. Due to the ordered nature of instantiation, root components cannot
-directly import each others' exports in a cyclic manner. However, the host *may*
-attempt to perform cyclic component-to-host-to-component calls using host
-powers.
-
-Because a child component is fully encapsulated by its parent component (with
-all child imports specified by the parent's `instantiate` expression and access
-to all child exports controlled by the parent through its private instance index
-space), the host does not have direct control over how a child component is
-instantiated or invoked. However, if a child's ancestors transitively forward
-the root component's host-supplied imports to the child, direct child-to-host
-calls are possible. Symmetrically, if a child's ancestors transitively
-re-export the child's exports from the root component, direct host-to-child
-calls are possible.
-
-Recursive component calls are technically possible using either host powers (as
-mentioned above) or via a parent component lowering a child component's export
-to a `funcref` and then recursively calling this `funcref` from a lifted parent
-function passed as an import to the child. However, for the time being, both
-cases are prevented via trap for several reasons:
-* automatic [backpressure] would otherwise deadlock in unpredictable and
-  surprising ways;
-* by default, most code does not expect [recursive reentrance] and will break
-  in subtle and potentially security sensitive ways if allowed;
-* to properly handle recursive reentrance, an extra ABI parameter is required
-  to link recursive calls and this requires opting in via some
-  [TBD](Concurrency.md#TODO) function effect type or canonical ABI option.
-
-To detect and prevent recursive calls, the runtime tracks the dynamic call
-stack via a linked list of `Supertask` nodes. The `inst` field of `Supertask`
-either points to the `ComponentInstance` of the calling component or, if
-`None`, indicates that the caller is the host.
-```python
-class Supertask:
-  inst: Optional[ComponentInstance]
-  supertask: Optional[Supertask]
+Alternatively, let's say `P` also contains a third child `C3` whose exports are
+re-exported by `P` so that they can be called directly by the host. Then if `M2`
+calls back out into the host and the host tries to call `C3` directly, it also
+traps since `C3.entering_set(None)` is `{ C3, P }` and `P.may_enter` is already
+set to `False`:
+```
+     +-------------------------------------------------+       +--------+
+     |                            P                    |       |   P    |
+     | +-----------+   +----+   +----+   +-----------+ |       | +----+ |
+host-->| M1 (in P) |-->| C1 |-->| C2 |-->| M2 (in P) |-->host-X->| C3 | |
+     | +-----------+   +----+   +----+   +-----------+ |       | +----+ |
+     +-------------------------------------------------+       +--------+
 ```
 
-The `call_might_be_recursive` predicate is used by `Store.lift` to
-conservatively detect recursive reentrance and subsequently trap.
-```python
-def call_might_be_recursive(caller: Supertask, callee_inst: ComponentInstance):
-  if caller.inst is None:
-    while caller is not None:
-      if caller.inst and caller.inst.reflexive_ancestors() & callee_inst.reflexive_ancestors():
-        return True
-      caller = caller.supertask
-    return False
-  else:
-    return (caller.inst.is_reflexive_ancestor_of(callee_inst) or
-            callee_inst.is_reflexive_ancestor_of(caller.inst))
-```
-The first case (where `caller.inst` is `None`) covers host-to-component calls.
-By testing whether any of the callers' reflexive anecestor sets intersect the
-callee's ancestor set, the following case is considered recursive:
-```
-     +-------+
-     |   A   |<-.
-     | +---+ |  |
-host-->| B |-->host
-     | +---+ |
-     +-------+
-```
-Here, when attempting to recursively call back into `A`, `caller` points to the
-following stack:
-```
-|inst=None| --supertask--> |inst=B| --supertask--> |inst=None| --supertask--> None
-```
-while `A` does not appear as the `inst` of any `Supertask` on this stack,
-`B.reflexive_ancestors()` is `{ B, A }`, so the loop correctly determines that
-`A` is being reentered. This ensures that child components are kept an
-encapsulated detail of the parent.
-
-The second case (where `caller.inst` is not `None`) covers component-to-
-component calls by conservatively rejecting any call from a component to its
-anecestor or descendant (thereby preventing any possible recursion via ancestor
-`funcref`). Thus, the following sibling-to-sibling component call is allowed:
-```
-     +----------------+
-     |      P         |
-     | +----+  +----+ |
-host-->| C1 |->| C2 | |
-     | +----+  +----+ |
-     +----------------+
-```
-while the following child-to-parent and parent-to-child calls are disallowed:
-```
-     +----------+        +----------+
-     | +---+    |        |    +---+ |
-host-->| C |->P |  host->| P->| C | |
-     | +---+    |        |    +---+ |
-     +----------+        +----------+
-```
-This conservative approximation allows `call_might_be_recursive` to be computed
-ahead-of-time when compiling a fused component-to-component adapter (where both
-caller and callee intances and their relationship are statically known). In the
-future this check will be relaxed and more sophisticated optimizations can be
-used to statically eliminate the check in common cases.
+From an optimizing compiler's perspective, the `set[ComponentInstance]` returned
+by `entering_set` is known *statically* when compiling a component-to-component
+trampoline and thus the compiler can fully unroll the `for` loops in
+`may_enter_from`, `enter_from` and `leave_to` into fixed sequences of branches
+and stores with fixed memory locations for the `may_enter` flags. Furthermore,
+because component-to-component reentrance is only possible via [donut wrapping]
+and donut wrapping is only possible when a parent component contains a `canon
+lower` definition, whenever the compiler sees a component with no `canon lower`
+definitions, it can mark the `may_enter` flags of all its direct children as
+*optimized-out* and then completely ignore them. Since donut wrapping is rare,
+this means that, in practice, only root component instances' `may_enter` flags
+will be tested and only for host-to-component or component-to-component calls
+between different root components (linked by the host). Thus, the overall cost
+of reentrance should be very low, in exchange for allowing the producer
+toolchain to not have to safely handle reentrance at every single import call.
 
 The other fields of `ComponentInstance` are described below as they are used.
 
@@ -720,16 +713,14 @@ spec-level function type, where the host can be the caller, the callee or even
 OnStart = Callable[[], list[any]]
 OnResolve = Callable[[Optional[list[any]]], None]
 OnCancel = Callable[[], None]
-FuncInst = Callable[[OnStart, OnResolve, Supertask], OnCancel]
+FuncInst = Callable[[OnStart, OnResolve, Optional[ComponentInstance]], OnCancel]
 ```
 The three parameters of `FuncInst` are:
 * an `OnStart` callback that is called by the callee when it is ready to
   receive its arguments after waiting for any [backpressure] to subside;
 * an `OnResolve` callback that is called by the callee when it is ready to
   return its value or, if cancellation has been requested, `None`.
-* a calling `Supertask` which is used to maintain the
-  [async callstack][Structured Concurrency] and enforce the
-  non-reentrance [component invariant];
+* the caller's `ComponentInstance`, if the caller is not the host
 
 Critically, if the callee [blocks] at the wasm level, the spec-level `FuncInst`
 returns immediately to the caller while continuing to execute the callee in a
@@ -745,7 +736,7 @@ call creates a `Task` object to track the state of the call and ensure that the
 wasm guest code adheres to the above `FuncInst` calling convention (or else
 traps). `Task` is introduced in chunks, starting with fields and initialization:
 ```python
-class Task(Supertask):
+class Task:
   class State(Enum):
     INITIAL = 1
     STARTED = 2
@@ -758,34 +749,40 @@ class Task(Supertask):
   inst: ComponentInstance
   on_start: OnStart
   on_resolve: OnResolve
-  supertask: Supertask
+  caller: Optional[ComponentInstance]
   state: State
   num_borrows: int
-  waiting_to_enter: Optional[Thread]
+  implicit_thread: Optional[Thread]
   threads: list[Thread]
 
-  def __init__(self, ft, opts, inst, on_start, on_resolve, supertask):
+  def __init__(self, ft, opts, inst, on_start, on_resolve, caller):
     self.ft = ft
     self.opts = opts
     self.inst = inst
     self.on_start = on_start
     self.on_resolve = on_resolve
-    self.supertask = supertask
+    self.caller = caller
     self.state = Task.State.INITIAL
     self.num_borrows = 0
-    self.waiting_to_enter = None
+    self.implicit_thread = None
     self.threads = []
 ```
 
-The `Task.needs_exclusive` predicate returns whether the Canonical ABI options
-indicate that the core wasm being executed does not expect to be reentered
-(e.g., because the code is using a single global linear memory shadow stack).
-Concretely, this is assumed to be the case when core wasm is lifted
-synchronously or with `async callback`. This predicate is used by the other
-`Task` methods to determine whether to acquire/release the component instance's
-`exclusive` lock.
+The `Task.needs_exclusive` predicate returns whether this task's implicit thread
+(`Task.implicit_thread`) has *not* opted in to multiple concurrent linear memory
+shadow stacks (via "stackful" lift) and thus, according to [Component Invariant]
+#3, requires serialization with all the other implicit threads in the component
+instance that have similarly not opted in. This question only applies to
+`async`-typed functions, since synchronous functions can't block and thus can
+always execute in a LIFO fashion using a single linear memory shadow stack. When
+`needs_exclusive` is true, core wasm execution is gated on acquiring the
+`ComponentInstance.exclusive_thread` lock. Due to cooperativity, the
+`exclusive_thread` "lock" is simply a mutable field holding either `None`, when
+unlocked, or, when locked, a reference to the `Task.implicit_thread` currently
+holding the lock.
 ```python
   def needs_exclusive(self):
+    assert(self.ft.async_)
     return not self.opts.async_ or self.opts.callback
 ```
 
@@ -808,7 +805,7 @@ of backpressure:
     `backpressure.{inc,dec}` which modify the `ComponentInstance.backpressure`
     counter.
  2. *Implicit backpressure* triggered when `Task.needs_exclusive()` is true and
-    the `exclusive` lock is already held.
+    the `ComponentInstance.exclusive_thread` lock is already held.
  3. *Residual backpressure* triggered by explicit or implicit backpressure
     having been enabled then disabled, but there still being tasks waiting to
     enter that need to be given the chance to start without getting starved
@@ -823,24 +820,22 @@ exports.
 ```python
   def enter_implicit_thread(self):
     assert(self.state == Task.State.INITIAL)
-    thread = current_thread()
+    self.implicit_thread = current_thread()
     if self.ft.async_:
       def has_backpressure():
         return (self.inst.backpressure > 0 or
-                (self.needs_exclusive() and self.inst.exclusive is not None))
+                (self.needs_exclusive() and self.inst.exclusive_thread is not None))
       if has_backpressure() or self.inst.num_waiting_to_enter > 0:
         self.inst.num_waiting_to_enter += 1
-        self.waiting_to_enter = thread
-        cancelled = thread.wait_until(lambda: not has_backpressure(), cancellable = True)
-        self.waiting_to_enter = None
+        cancelled = self.implicit_thread.wait_until(lambda: not has_backpressure(), cancellable = True)
         self.inst.num_waiting_to_enter -= 1
         if cancelled:
           self.cancel()
           return False
       if self.needs_exclusive():
-        assert(self.inst.exclusive is None)
-        self.inst.exclusive = self
-    self.register_thread(thread)
+        assert(self.inst.exclusive_thread is None)
+        self.inst.exclusive_thread = self.implicit_thread
+    self.register_thread(self.implicit_thread)
     return True
 
   def register_thread(self, thread):
@@ -855,9 +850,7 @@ implicit thread due to backpressure, the above definition allows the host to
 arbitrarily select which threads to resume in which order. Additionally, the
 above definition ensures the following properties:
 * While a callee is waiting to enter, if the caller requests cancellation,
-  the callee is immediately cancelled. The `Task.waiting_to_enter` field is
-  used by `Task.request_cancellation` below to know which thread to
-  `resume` with `Cancelled.TRUE`.
+  the callee is immediately cancelled.
 * When backpressure is disabled then reenabled, no new tasks start, even
   tasks that were blocked and then unblocked by the first occurrence of
   backpressure (i.e., disabling backpressure never unleashes an unstoppable
@@ -869,16 +862,17 @@ the lists of threads running inside the current task and component instance by
 
 Symmetrically, the `Task.exit_implicit_thread` method is called before a task's
 implicit thread returns to reverse the effects of `Task.enter_implicit_thread`.
-In particular, for a synchronous or `async callback` task, it clears `exclusive`
-to allow the next such task to start. `Task.unregister_thread` (which is also
-called by `thread.new-indirect`, below) traps if the task's last thread is
-unregistered and the task has not yet returned a value to its caller.
+In particular, if the `exclusive_thread` lock was acquired, it is released.
+`Task.unregister_thread` (which is also called by `thread.new-indirect`, below)
+traps if the task's last thread is unregistered and the task has not yet
+returned a value to its caller.
 ```python
   def exit_implicit_thread(self):
-    self.unregister_thread(current_thread())
+    assert(current_thread() is self.implicit_thread)
+    self.unregister_thread(self.implicit_thread)
     if self.ft.async_ and self.needs_exclusive():
-      assert(self.inst.exclusive is self)
-      self.inst.exclusive = None
+      assert(self.inst.exclusive_thread is self.implicit_thread)
+      self.inst.exclusive_thread = None
 
   def unregister_thread(self, thread):
     assert(thread in self.threads and thread.task is self)
@@ -892,36 +886,40 @@ unregistered and the task has not yet returned a value to its caller.
 
 The `Task.request_cancellation` method is called by the host or wasm caller to
 signal that they don't need the return value and that the callee should hurry up
-and call the `OnResolve` callback. If a task is waiting to start in
-`Task.enter_implicit_thread` due to backpressure, then it is immediately
-cancelled without running any guest code. Otherwise, if *any* of a cancelled
-task's threads are expecting cancellation (e.g., when an `async callback` export
-returns to the event loop or when a `waitable-set.*` or `thread.*` built-in is
-called with `cancellable` set), `request_cancellation` immediately resumes that
-thread (picking one nondeterministically if there are multiple), giving the
-thread the chance to handle cancellation promptly (allowing `subtask.cancel` to
-complete eagerly without returning `BLOCKED`).
+and call the `OnResolve` callback. If a task's implicit thread is waiting to
+start (in `Task.enter_implicit_thread`) due to backpressure, then it is
+immediately cancelled without running any guest code. Otherwise, if any of a
+cancelled task's threads are expecting cancellation (e.g., when an `async
+callback` export returns to the event loop or when `waitable-set.wait` or a
+`thread.*` built-in is called with `cancellable` set), `request_cancellation`
+considers resuming that thread (picking one nondeterministically if there are
+multiple), giving the thread the chance to handle cancellation promptly so that
+`subtask.cancel` completes without blocking.
 ```python
   def request_cancellation(self):
+    assert(not self.caller or self.caller is current_instance())
     if self.state == Task.State.INITIAL:
       self.state = Task.State.CANCEL_DELIVERED
-      self.waiting_to_enter.resume(Cancelled.TRUE)
-      return
-    assert(self.state == Task.State.STARTED)
-    if not self.needs_exclusive() or not self.inst.exclusive or self.inst.exclusive is self:
+      self.implicit_thread.resume(Cancelled.TRUE)
+    else:
+      assert(self.state == Task.State.STARTED)
       candidates = { t for t in self.threads if t.cancellable }
-      if candidates:
+      if self.needs_exclusive() and self.inst.exclusive_thread not in { None, self.implicit_thread }:
+        candidates.discard(self.implicit_thread)
+      if candidates and self.inst.may_enter_from(self.caller):
         self.state = Task.State.CANCEL_DELIVERED
+        self.inst.enter_from(self.caller)
         random.choice(list(candidates)).resume(Cancelled.TRUE)
-        return
-    self.state = Task.State.PENDING_CANCEL
+        self.inst.leave_to(self.caller)
+      else:
+        self.state = Task.State.PENDING_CANCEL
 ```
-As handled above, cancellation must avoid running two `needs_exclusive` tasks at
-the same time in the corner case where the first task starts and blocks and then
-the other task is cancelled. However, a single `needs_exclusive` task that
-starts and blocks calling a built-in with `cancellable` set *can* be immediately
-resumed. Thus, the `exclusive` lock tracks *which* task is exclusively running
-to distinguish these cases.
+As handled above, cancellation must additionally avoid resuming a `cancellable`
+thread when doing so would violate [Component Invariant] #2 or #3. In
+particular, invariant #2 requires not resuming any thread while the task's
+containing component instance may not be reentered and invariant #3 requires not
+resuming a `needs_exclusive` task's implicit thread while another task's
+implicit thread is running exclusively.
 
 If cancellation cannot be immediately delivered by `Task.request_cancellation`,
 the request is remembered in `Task.state` and delivered at the next opportunity
@@ -981,86 +979,132 @@ call `task.cancel`.
 
 ## Embedding
 
-A WebAssembly Component Model implementation will typically be *embedded* into
-a *host* environment. An *embedder* implements the connection between such a
-host environment and the WebAssembly semantics as defined by the rest of the
-Python definitions below. A full Embedding interface would contain functions
-for decoding, validating, instantiating and interrogating components, just like
-the [Core WebAssembly Embedding]. However, for the purpose of defining the
-runtime behavior of the Canonical ABI, the Embedding interface here just
-includes functions for the embedder to:
-1. construct a Component Model `Store`, analogous to [`store_init`]ing a Core
-   WebAssembly [`store`];
-2. `invoke` a Component Model `FuncInst`, analogous to [`func_invoke`]ing a
-   Core WebAssembly [`funcinst`];
-3. `lift` a Core WebAssembly function into a `FuncInst`, given the `canon lift`
-   immediates and containing component instance;
-4. `lower` a `FuncInst` into a Core WebAssembly function, given the
-   `canon lower` immediates and containing component instance; and
-5. allow a cooperative thread (created during a previous call to `invoke`) to
-   execute until blocking or exiting.
+A WebAssembly Component Model implementation will typically be *embedded* into a
+*host* environment. An *embedder* implements the connection between such a host
+environment and the Component Model semantics defined here. A full Embedding
+interface would contain functions for decoding, validating, instantiating and
+interrogating components, just like the [Core WebAssembly Embedding]. However,
+the Embedding interface here just covers the subset that is necessary to define
+the behavior of the Canonical ABI.
 
-In a proper Embedding API, `Store.lift` and `Store.lower` would be replaced by a
-single, higher-level `Store.instantiate` function of type `Component ->
-ComponentInstance`, analogous to Core WebAssembly's [`module_instantiate`], that
-called `Store.lift` for each `canon lift` definition in the component being
-instantiated and, similarly, `Store.lower` for each `canon lower` definition.
-However, for the purpose of specifying the Canonical ABI, `Store.lift` and
-`Store.lower` are sufficient to specify how execution enters and exits component
-instances.
+The Embedding interface is defined as the methods of the `Store` class, which is
+the Component Model's version of a Core WebAssembly [`store`]. Defining `Store`
+in chunks, the `Store` constructor is analogous to Core WebAssembly
+[`store_init`] and defines the initial state of the `Store`:
 ```python
 class Store:
   waiting: list[Thread]
+  nesting_depth: int
 
   def __init__(self):
     self.waiting = []
+    self.nesting_depth = 0
+```
+The `waiting` field is populated by `Thread` methods, as defined above, and the
+`nesting_depth` field is purely a specification device used by `Store` methods
+below to define the valid host call interleavings.
 
-  def invoke(self, f: FuncInst, caller: Optional[Supertask], on_start, on_resolve) -> OnCancel:
-    host = Supertask()
-    host.inst = None
-    host.supertask = caller
-    return f(on_start, on_resolve, caller = host)
+The `Store.invoke` method is analogous to Core WebAssembly's [`func_invoke`] and
+takes a `FuncInst` (analogous to a Core WebAssembly [`funcinst`]) along with its
+runtime `OnStart` and `OnResolve` arguments (which are described above alongside
+their definitions). The `Store.nesting_depth` field tracks whether there are any
+active `Store.invoke` calls for the benefit of `Store.tick`, defined below.
+```python
+  def invoke(self, f: FuncInst, on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
+    self.nesting_depth += 1
+    on_cancel = f(on_start, on_resolve, caller = None)
+    self.nesting_depth -= 1
+    return on_cancel
+```
+The `FuncInst` passed to `Store.invoke` can be either a guest function (produced
+by `Store.lift`, defined next) or (in the special case of component re-exports)
+a host function. Symmetrically, `FuncInst`s can be called either from the host
+(via `Store.invoke`) or core wasm code (via `Store.lower`). `Store.invoke`
+passes a `None` `caller` to signal that the host is the caller.
 
+The `Store.lift` method is called for each `canon lift` definition in a
+component to wrap a core wasm `CoreFuncInst` into a component-level `FuncInst`,
+passing `canon lift`'s immediate arguments as well as the containing component
+instance. Similarly, `Store.lower` is called for each `canon lower` definition
+in a component to wrap a component-level `FuncInst` into a core wasm
+`CoreFuncInst`. (In a complete Embedding API, `Store.lift` and `Store.lower`
+would be replaced by a single, higher-level `Store.instantiate` method of type
+`Component -> ComponentInstance`, analogous to the Core WebAssembly's
+[`module_instantiate`]. But for the Canonical ABI, just `lift` and `lower` are
+sufficient to define relevant ABI behavior.)
+```python
   CoreFuncInst = Callable[[list[CoreValType]], list[CoreValType]]
 
   def lift(self, f: CoreFuncInst, ft: FuncType, opts: CanonicalOptions, inst: ComponentInstance) -> FuncInst:
-    def func_inst(on_start: OnStart, on_resolve: OnResolve, caller: Supertask) -> OnCancel:
-      trap_if(call_might_be_recursive(caller, inst))
-      return canon_lift(f, ft, opts, inst, on_start, on_resolve, caller)
+    def func_inst(on_start: OnStart, on_resolve: OnResolve, caller: Optional[ComponentInstance]) -> OnCancel:
+      assert(not caller or caller is current_instance())
+      trap_if(not inst.may_enter_from(caller))
+      inst.enter_from(caller)
+      on_cancel = canon_lift(f, ft, opts, inst, on_start, on_resolve, caller)
+      inst.leave_to(caller)
+      return on_cancel
     return func_inst
 
   def lower(self, f: FuncInst, ft: FuncType, opts: CanonicalOptions, inst: ComponentInstance) -> CoreFuncInst:
     def core_func_inst(args: list[CoreValType]) -> list[CoreValType]:
-      assert(current_instance() is inst)
-      return canon_lower(f, ft, opts, args)
+      assert(inst is current_instance())
+      assert(all(not i.may_enter for i in inst.self_and_ancestors()))
+      results = canon_lower(f, ft, opts, args)
+      assert(all(not i.may_enter for i in inst.self_and_ancestors()))
+      return results
     return core_func_inst
-
-  def tick(self):
-    random.shuffle(self.waiting)
-    for thread in self.waiting:
-      if thread.ready():
-        thread.resume()
-        return
 ```
-The `FuncInst` passed to `Store.invoke` is described above and can represent
-either a guest function (produced by `Store.lift`) or (in the special case of a
-component re-export of a host import) a host function. `Store.invoke` describes
-how a `FuncInst` is invoked by the host, but `FuncInst`s can also be invoked by
-guest code that calls the `CoreFuncInst` produced by `Store.lower`.
+Before entering a component via core wasm export call, the `FuncInst` wrapper
+produced by `Store.lift` traps if entering the component would violate
+[Component Invariant] #2, and then records that the instance was entered by
+calling `ComponentInstance.enter_from`. The rest of the trampoline is defined by
+`canon_lift` below. Importantly though, `canon_lift` will return immediately if
+it [blocks], thereby calling `ComponentInstance.leave_to` and allowing
+reentrance (via `Store.invoke` or `Store.tick`) without trapping.
 
-When a `FuncInst` is produced by lifting core wasm guest code, it is guarded
-by a call to `call_might_be_recursive`, which is described above.
+Before temporarily leaving a component via core wasm import call, the
+`CoreFuncInst` wrapper produced by `Store.lower` asserts that the `may_enter`
+flags of the current component instance and all its ancestors are already
+`False` (as set by `ComponentInstance.enter_from` in `Store.lift`). Thus,
+by default, reentrance is disallowed. *However*, if the lowered `FuncInst`
+callee [blocks] before returning a value and the `canon lower` definition didn't
+specify the `async` ABI option (which opts in to the non-blocking async ABI),
+`canon_lower` will *block* until the callee returns (via `Thread.wait_until`,
+defined above) which will suspend the current thread and return from
+`canon_lift` to `Store.lift` which then calls `ComponentInstance.leave_to` to
+enable reentrance for as long as `Thread.wait_until` stays blocked. Thus,
+in accordance with [Component Invariant] #2, synchronous (blocking) calls to
+`async`-typed function imports *may* be reentered during `canon_lower`.
 
-The `Store.tick` method does not have an analogue in Core WebAssembly and
-enables [native concurrency support](Concurrency.md) in the Component Model. The
-expectation is that the host will interleave calls to `invoke` with calls to
-`tick`, repeatedly calling `tick` until there is no more work to do or the
-store is destroyed. The nondeterministic `random.shuffle` indicates that the
-embedder is allowed to use any algorithm (involving priorities, fairness, etc)
-to choose which thread to schedule next (and hopefully an algorithm more
-efficient than the simple polling loop written above). The `Thread.ready` and
-`Thread.resume` methods along with how the `waiting` list is populated are all
-defined [above](#threads) as part of the `Thread` class.
+Lastly, the `Store.tick` method does not have an analogue in Core WebAssembly
+but is necessary to enable native concurrency support in the Component Model.
+`Store.tick` allows the runtime to nondeterministically resume a thread that
+previously [blocked] but is now ready. As defined above, `Thread.resume` will
+execute the thread until it either returns or [blocks] again. Thus, each call to
+`Store.tick` just allows a single thread to make a single quantum of cooperative
+progress and the expectation is that the host heuristically interleaves calls to
+`Store.invoke` with calls to `Store.tick` so that concurrent tasks can complete
+while new tasks are being started.
+```python
+  def tick(self):
+    assert(self.nesting_depth == 0)
+    assert(all(thread.task.inst.may_enter_from(None) for thread in self.waiting))
+    self.nesting_depth += 1
+    candidates = { thread for thread in self.waiting if thread.ready() }
+    if candidates:
+      thread = random.choice(list(candidates))
+      thread.task.inst.enter_from(None)
+      thread.resume()
+      thread.task.inst.leave_to(None)
+    self.nesting_depth -= 1
+```
+As shown above, `Store.nesting_depth` is greater than zero while calling
+`Store.invoke` and thus the first `assert` prohibits the host from calling
+`Store.tick` during an active `Store.invoke`. This prohibition ensures that the
+second `assert` holds, which is that all component instances in the store can be
+(re)entered. If this were *not* the case, a random thread might be resumed while
+one of its imports' component instances was on the stack and not reenterable,
+leading to a spurious trap when it was called.
 
 
 ## Lifting and Lowering Context
@@ -1283,14 +1327,10 @@ the `rt` field of `ResourceHandle` (above) and thus resource type equality is
 class ResourceType(Type):
   impl: ComponentInstance
   dtor: Optional[Callable]
-  dtor_async: bool
-  dtor_callback: Optional[Callable]
 
-  def __init__(self, impl, dtor = None, dtor_async = False, dtor_callback = None):
+  def __init__(self, impl, dtor = None):
     self.impl = impl
     self.dtor = dtor
-    self.dtor_async = dtor_async
-    self.dtor_callback = dtor_callback
 ```
 
 
@@ -3470,7 +3510,9 @@ present, is validated as such:
 * if `realloc` is present then `memory` must be present
 * `post-return` - only allowed on [`canon lift`](#canon-lift), which has rules
   for validation
-* 🔀 `async` - cannot be present with `post-return`
+* 🔀 `async` - is only allowed when used with an `async` function type in
+  [`canon lift`](#canon-lift) or [`canon lower`](#canon-lower) and cannot be
+  present with `post-return`
 * 🔀,not(🚟) `async` - `callback` must also be present. Note that with the 🚟
   feature (the "stackful" ABI), this restriction is lifted.
 * 🔀 `callback` - the function has type `(func (param i32 i32 i32) (result i32))`
@@ -3514,7 +3556,7 @@ When instantiating a component instance, the runtime calls `Store.lift` (defined
 above) to capture the `$callee`, `$ft` and `$opts` immediates of `canon lift`
 along with the component instance being instantiated. These are then passed into
 `canon_lift` every time the generated `FuncInst` is called, along with the
-runtime `OnStart`, `OnResolve` and `Supertask` arguments.
+runtime `on_start`, `on_resolve` and `caller` arguments.
 
 Based on this, `canon_lift` is defined in chunks as follows. The whole call
 executes in a new *implicit thread* defined here by `thread_func`. The first
@@ -3579,7 +3621,7 @@ In the `async` non-`callback` ("stackful async") case, there is a single call
 to the core wasm callee which must return empty core results. Waiting for async
 I/O happens by the callee synchronously calling built-ins like
 `waitable-set.wait`. Note that, since `Task.enter_implicit_thread` does *not*
-acquire the `exclusive` lock for stackful async functions, calls to
+acquire the `exclusive_thread` lock for stackful async functions, calls to
 `waitable-set.wait` made by a stackful async function do not prevent any other
 threads from starting or resuming in the same component instance.
 ```python
@@ -3598,11 +3640,11 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
     [packed] = call_and_trap_on_throw(callee, flat_args)
     code,si = unpack_callback_result(packed)
     while code != CallbackCode.EXIT:
-      assert(inst.exclusive is task)
-      inst.exclusive = None
+      assert(task.needs_exclusive() and inst.exclusive_thread is task.implicit_thread)
+      inst.exclusive_thread = None
       match code:
         case CallbackCode.YIELD:
-          cancelled = thread.yield_until(lambda: not inst.exclusive, cancellable = True)
+          cancelled = thread.yield_until(lambda: not inst.exclusive_thread, cancellable = True)
           if cancelled:
             event = (EventCode.TASK_CANCELLED, 0, 0)
           else:
@@ -3611,11 +3653,11 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
           trap_if(not task.may_block())
           wset = inst.handles.get(si)
           trap_if(not isinstance(wset, WaitableSet))
-          event = wset.wait_for_event_and(lambda: not inst.exclusive, cancellable = True)
+          event = wset.wait_for_event_and(lambda: not inst.exclusive_thread, cancellable = True)
         case _:
           trap()
-      assert(inst.exclusive is None)
-      inst.exclusive = task
+      assert(inst.exclusive_thread is None)
+      inst.exclusive_thread = task.implicit_thread
       event_code, p1, p2 = event
       [packed] = call_and_trap_on_throw(opts.callback, [event_code, p1, p2])
       code,si = unpack_callback_result(packed)
@@ -3635,14 +3677,15 @@ no-op and `WAIT` always traps. Thus, a component may implement a
 non-`async`-typed function with the `async callback` ABI, but the component
 *must* call `task.return` *before* returning `WAIT`.
 
-The event loop also releases `ComponentInstance.exclusive` (which was acquired
-by `Task.enter_implicit_thread`) before potentially suspending the thread to
-allow other synchronous and `async callback` tasks to execute in the interim.
-However, other synchronous and `async callback` tasks *cannot* execute while
-running core wasm called from the event loop as this could break the
-non-reentrancy assumptions of the core wasm code. Thus, `async callback` tasks
-allow less concurrency than non-`callback` `async` tasks, which entirely ignore
-`ComponentInstance.exclusive`.
+The event loop releases `ComponentInstance.exclusive_thread` (which was acquired
+by `Task.enter_implicit_thread`) before potentially blocking the thread to allow
+other `needs_exclusive` tasks to execute in the interim. However, the
+`exclusive_thread` lock is held throughout each core wasm invocation from the
+event loop to maintain [Component Invariant] #3. Thus, `async callback`-lifted
+tasks allow *more* concurrency than synchronously-lifted tasks (which only
+release the `exclusive_thread` lock after they've returned) but *less*
+concurrency than (stackful) non-`callback` `async`-lifted tasks, which entirely
+ignore `exclusive_thread`.
 
 The end of `canon_lift` creates a new task/thread pair for the call and then
 calls `Thread.resume` on the new thread to synchronously transfer control flow
@@ -3751,12 +3794,9 @@ owned handles are not dropped before `Subtask.deliver_resolve` is called (below)
   cx = LiftLowerContext(opts, thread.task.inst, subtask)
 ```
 
-The next chunk makes the call to `callee` (which has type `FuncInst`, as
-defined in the [Embedding](#embedding) interface). The [current task] serves as
-the `Supertask` argument and the `OnStart` and `OnResolve` callback arguments
-are defined in terms of the `$opts` immediates of the `canon lower` definition
-and the Canonical ABI's `lift_flat_values` and `lower_flat_values` (defined
-above).
+The next chunk makes the call to `callee` using the `opts` immediates of the
+`canon lower` definition to configure `lift_flat_values` and `lower_flat_values`
+(both defined above) and the current instance as the `caller`.
 ```python
   flat_ft = flatten_functype(opts, ft, 'lower')
   assert(types_match_values(flat_ft.params, flat_args))
@@ -3793,7 +3833,7 @@ above).
       nonlocal flat_results
       flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
 
-  subtask.on_cancel = callee(on_start, on_resolve, caller = thread.task)
+  subtask.on_cancel = callee(on_start, on_resolve, caller = thread.task.inst)
   assert(ft.async_ or subtask.state == Subtask.State.RETURNED)
 ```
 The `Subtask.state` field is updated by the callbacks to keep track of the
@@ -3917,36 +3957,30 @@ def canon_resource_drop(rt, i):
   trap_if(h.num_lends != 0)
   if h.own:
     assert(h.borrow_scope is None)
-    if inst is rt.impl:
-      if rt.dtor:
-        rt.dtor(h.rep)
-    else:
-      caller_opts = CanonicalOptions(async_ = False)
-      callee_opts = CanonicalOptions(async_ = rt.dtor_async, callback = rt.dtor_callback)
-      ft = FuncType([U32Type()],[], async_ = False)
-      dtor = rt.dtor or (lambda rep: [])
-      callee = inst.store.lift(dtor, ft, callee_opts, rt.impl)
-      caller = inst.store.lower(callee, ft, caller_opts, inst)
-      caller([h.rep])
+    opts = CanonicalOptions(async_ = False)
+    ft = FuncType([U32Type()], [], async_ = False)
+    dtor = rt.dtor or (lambda rep: [])
+    callee = inst.store.lift(dtor, ft, opts, rt.impl)
+    caller = inst.store.lower(callee, ft, opts, inst)
+    caller([h.rep])
   else:
     h.borrow_scope.num_borrows -= 1
   return []
 ```
-The call to a resource's destructor is defined as a non-`async`-lowered,
-non-`async`-typed function call to a possibly-`async`-lifted callee, passing
-the private `i32` representation as a parameter. Thus, destructors *may* block
-on I/O, but only after they `task.return`, ensuring that `resource.drop` never
-blocks.
+The call to a resource's destructor passes the `i32` representation value that
+was previously supplied to `resource.new`. The call works like a normal
+non-`async` cross-component call, using the same `canon_lift` and `canon_lower`
+rules to, for example, catch reentrance. Because the type, lifting and
+lowering are all non-`async`, the destructor may not block. However, the
+destructor may spawn a cooperative thread that does.
 
-Since there are valid reasons to call `resource.drop` in the same component
-instance that defined the resource, which would otherwise trap at the
-reentrance guard of `Store.lift`, an exception is made when the resource type's
-implementation-instance is the same as the current instance (which is
-statically known for any given `canon resource.drop`).
-
-When a destructor isn't present, there is still a trap on recursive reentrance
-since this is the caller's responsibility and the presence or absence of a
-destructor is an encapsulated implementation detail of the resource type.
+In particular, `Store.lift` may trap (if `rt.impl.may_enter_from(inst)` is
+`False`) if the call to the destructor would reenter the destructor's instance
+in a way that violates [Component Invariant] #2. In the special case where the
+`current_instance` is the *same* as the destructor's instance, `may_enter_from`
+will always return `True` (because the set of instances being freshly entered is
+empty) and so, as one might expect, component instances can `resource.drop` the
+owned handles of the resources they implement.
 
 
 ### `canon resource.rep`
@@ -5218,7 +5252,7 @@ def canon_thread_available_parallelism():
 [Type Definitions]: Explainer.md#type-definitions
 [`instance` definition]: Explainer.md#instance-definitions
 [Component Invariant]: Explainer.md#component-invariants
-[Component Invariants]: Explainer.md#component-invariants
+[Donut Wrapping]: Linking.md#higher-order-shared-nothing-linking-aka-donut-wrapping
 [JavaScript Embedding]: Explainer.md#JavaScript-embedding
 [ESM-integration]: Explainer.md#esm-integration
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions

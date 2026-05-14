@@ -3,9 +3,7 @@
 This document contains a high-level summary of the native concurrency support
 added as part of [WASI Preview 3], providing background for understanding the
 definitions in the [WIT], [AST explainer], [binary format] and [Canonical ABI
-explainer] documents that are gated by the 🔀 (async) and 🧵 (threading)
-emojis. For an even higher-level introduction, see [these][wasmio-2024]
-[presentations][wasmio-2025].
+explainer] documents that are gated by the 🔀 (async) and 🧵 (threading) emojis.
 
 * [Goals](#goals)
 * [Summary](#summary)
@@ -24,6 +22,7 @@ emojis. For an even higher-level introduction, see [these][wasmio-2024]
   * [Borrows](#borrows)
   * [Cancellation](#cancellation)
   * [Nondeterminism](#nondeterminism)
+  * [Asynchronous Recursion](#asynchronous-recursion)
 * [Interaction with the start function](#interaction-with-the-start-function)
 * [Async ABI](#async-abi)
   * [Async Import ABI](#async-import-abi)
@@ -56,8 +55,8 @@ concurrency-specific goals and use cases:
 * Allow polyfilling in browsers via JavaScript Promise Integration ([JSPI])
 * Avoid partitioning interfaces and components into separate ecosystems based
   on degree of concurrency; don't give components a "[color]".
-* Maintain meaningful cross-language call stacks (for the benefit of debugging,
-  logging and tracing).
+* Allow runtimes to maintain meaningful cross-language call stacks (for the
+  benefit of debugging, logging, tracing and profiling).
 * Consider backpressure and cancellation as part of the design.
 * Allow non-reentrant synchronous and event-loop-driven core wasm code that
   assumes a single global linear memory stack to not have to worry about
@@ -73,16 +72,6 @@ Core WebAssembly. Language compilers and runtimes can bind to this async ABI in
 the same way that they already bind to various OS's concurrent I/O APIs (such
 as `select`, `epoll`, `io_uring`, `kqueue` and Overlapped I/O) making the
 Component Model "just another OS" from the language toolchain's perspective.
-
-The new async ABI can be used alongside or instead of the existing Preview 2
-"sync ABI" to call or implement *any* WIT function type. When *calling* an
-imported function via the async ABI, if the callee [blocks](#blocking), control
-flow is returned immediately to the caller, and the callee continues executing
-concurrently. When *implementing* an exported function via the async ABI,
-multiple concurrent export calls are allowed to be made by the caller.
-Critically, both sync-ABI-calls-async-ABI and async-ABI-calls-sync-ABI pairings
-have well-defined, composable behavior for both inter-component and
-intra-component calls.
 
 In addition to adding a new async *ABI* for use by the language's compiler and
 runtime, the Component Model also adds a new `async` [effect type] that can be
@@ -103,6 +92,16 @@ invariant is necessary to allow non-`async` component exports to be called in
 synchronous contexts (like event listeners, callbacks, getters, setters and
 constructors).
 
+The new async ABI can be used alongside or instead of the existing Preview 2
+"sync ABI" to call or implement any `async`-typed functions. When *calling* an
+imported function via the async ABI, if the `async` callee [blocks](#blocking),
+control flow is returned immediately to the caller, and the callee continues
+executing concurrently. When *implementing* an `async` function via the async
+ABI, multiple concurrent export calls are allowed to be made by the caller.
+Critically, both sync-ABI-calls-async-ABI and async-ABI-calls-sync-ABI pairings
+have well-defined, composable behavior for both inter-component and
+intra-component calls.
+
 Because `async` function exports may be implemented with the *sync* ABI and
 then call `async` function imports using the *sync* ABI, traditional sync code
 can compile directly to components exporting `async` functions without having
@@ -120,13 +119,14 @@ language's style of concurrency, most `world`s (including `wasi:cli/command`,
 functions so that the contained Core WebAssembly code is free to block.
 Implementing a non-`async` function will primarily only arise when a component
 is *virtualizing* the non-`async` *imports* of a `world` (e.g., the getters and
-setters of `wasi:http/types.headers`). In this virtualization scenario (once
-functions are allowed to be [recursive](#TODO)), the Canonical ABI and/or Core
-WebAssembly [stack-switching] proposal will allow a parent component to
-implement a child's non-`async` imports in terms of the parent's `async`
-imports in the same manner as [JSPI]. Thus, overall, `async` in WIT and the
-Component Model does not behave like a "color" in the sense described by the
-popular [What Color Is Your Function?] essay.
+setters of `wasi:http/types.headers`). In this more exotic virtualization
+scenario, a [future extension](#TODO) could allow a parent component that
+imports `async` functions to implement its child's non-`async` imports in the
+same manner as [JSPI] in the browser.
+
+Thus, overall, `async` in WIT and the Component Model does not behave like a
+"color" in the sense described by the popular [What Color Is Your Function?]
+essay.
 
 Each time a component export is called, the wasm runtime logically spawns a new
 [green thread]  (as opposed to a [kernel thread]) to execute the export call
@@ -190,18 +190,23 @@ immediately block.
 This backpressure mechanism provides the basis for how the sync and async ABIs
 interoperate:
 1. If a component calls an import using the async ABI, and the import is
-   implemented by a component using the sync ABI, and the callee blocks,
-   execution is immediately transferred back to the caller (as required by the
-   async ABI) and the callee's component instance is marked "suspended".
-2. If another async call attempts to start in a "suspended" component instance,
-   the Component Model automatically makes the call block, the same way as when
-   backpressure is active.
+   implemented by a component using the sync ABI, the callee first acquires
+   an "exclusive" lock on the component instance and then starts executing. If
+   the callee blocks, execution is immediately transferred back to the caller
+   (as required by the async ABI).
+2. If another async call attempts to start in this same component instance, the
+   callee immediately blocks when acquiring the "exclusive" lock, waiting for the
+   previous call to return and release the lock.
 
 Note that because functions without `async` in their type are not allowed to
-block, non-`async` functions do not check for backpressure or suspension; they
-always run synchronously. Components exporting a mix of `async` and non-`async`
+block, non-`async` functions do not attempt to acquire the "exclusive" lock;
+they just barge in. Components exporting a mix of `async` and non-`async`
 functions (which again mostly only arises in the more advanced virtualization
-scenarios) must thus take care to handle non-`async` reentrance gracefully.
+scenarios) must therefore take care to handle the "barge-in" case gracefully.
+Because this nested non-`async` call will complete synchronously without
+blocking, this behavior does not break [Component Invariant] #3: a single
+global shadow stack can still be (re)used in a LIFO manner, much like a
+traditional signal handler.
 
 Lastly, WIT is extended with two new type constructors—`future<T>` and
 `stream<T>`—to allow new WIT interfaces to explicitly represent concurrency in
@@ -314,17 +319,11 @@ of the new subtask created for the import call. Thus, one reason for
 associating every thread with a "containing task" is to ensure that there is
 always a well-defined async call stack.
 
-A semantically-observable use of the async call stack is to distinguish between
-hazardous **recursive reentrance**, in which a component instance is reentered
-when one of its tasks is already on the callstack, from business-as-usual
-**sibling reentrance**, in which a component instance is reentered for the
-first time on a particular async call stack. Recursive reentrance currently
-always traps, but will be allowed (and indicated to core wasm) in an opt-in
-manner in the [future](#TODO).
-
-The async call stack is also useful for non-semantic purposes such as providing
-backtraces when debugging, profiling and tracing. While particular languages
-can and do maintain their own async call stacks in core wasm state, without the
+The async call stack is not currently observable to running components, except
+that it may nondeterministically appear as part of the callstack stored in
+`error-context` 📝. Instead, the async call stack is meant to provide better
+backtraces when debugging, profiling and tracing. While particular languages can
+and do maintain their own async call stacks in core wasm state, without the
 Component Model's async call stack, linkage *between* different languages would
 be lost at component boundaries, leading to a loss of overall context in
 multi-component applications.
@@ -489,7 +488,11 @@ all of which are described above or below in more detail:
   [`subtask.cancel`](#cancellation) built-in
 
 At each of these points, the [current thread](#current-thread-and-task) will be
-suspended and execution will transfer to a caller's thread, if there is one.
+suspended. Execution transfers to a caller's thread if there is one, or
+otherwise back to the runtime, which may invoke new component exports or
+nondeterministically resume a cooperative thread that is ready to run. Thus,
+each of these represents **cooperative yield points**.
+
 Additionally, each of these potentially-blocking operations will trap if the
 [current task's function type](#current-thread-and-task) does not declare the
 `async` effect, since only `async`-typed functions are allowed to block. As an
@@ -663,14 +666,15 @@ instead of a boolean flag, unrelated pieces of code can report backpressure for
 distinct limited resources without prior coordination.
 
 In addition to *explicit* backpressure set by wasm code, there is also an
-*implicit* source of backpressure used to protect non-reentrant core wasm code.
-In particular, when an export uses the sync ABI or the stackless async ABI, a
-component-instance-wide lock is implicitly acquired every time core wasm is
-executed. By returning to the event loop after every event (instead of once at
-the end of the task), stackless async exports release the lock between every
-event, allowing a higher degree of concurrency than synchronous exports.
-Stackful async exports ignore the lock entirely and thus achieve the highest
-degree of (cooperative) concurrency.
+*implicit* source of backpressure to ensure [Component Invariant] #3 and protect
+non-reentrant core wasm code. In particular, when an `async`-typed export is
+lifted with the sync ABI or the stackless async ABI, a component-instance-wide
+lock is implicitly acquired every time core wasm is executed. By returning to
+the event loop after every event (instead of once at the end of the task),
+stackless async exports release the lock between every event, allowing a higher
+degree of concurrency than synchronous exports. Stackful async exports ignore
+the lock entirely and thus achieve the highest degree of (cooperative)
+concurrency.
 
 Since non-`async` functions are not allowed to block (including due to
 backpressure) and also don't pile up like `async` functions, non-`async`
@@ -685,30 +689,31 @@ the "started" state.
 
 ### Returning
 
-The way an async export call returns its value is by calling [`task.return`],
-passing the core values that are to be lifted as *parameters*.
+The way an `async` export returns its value using the async ABI is by calling
+[`task.return`], passing the core values that are to be lifted as *parameters*.
+When using the async ABI, *any* of the threads contained by a task can call
+`task.return`; there is no "main thread" of a task. When the last thread of a
+task returns, there is a trap if `task.return` has not been called. Thus, *some*
+thread (either the thread created implicitly for the initial export call or some
+thread transitively created by that thread) must call `task.return`.
 
 Returning values by calling `task.return` allows a task to continue executing
-even after it has passed its initial results to the caller. This can be useful
-for various finalization tasks (freeing memory or performing logging, billing
-or metrics operations) that don't need to be on the critical path of returning
-a value to the caller, but the major use of executing code after `task.return`
-is to continue to read and write from streams and futures. For example, a
-stream transformer function of type `func(in: stream<T>) -> stream<U>` will
-immediately `task.return` a stream created via `stream.new` and then sit in a
-loop interleaving `stream.read`s (of the readable end passed for `in`) and
-`stream.write`s (of the writable end it `stream.new`ed) before exiting the
-task.
-
-*Any* of the threads contained by a task can call `task.return`; there is no
-"main thread" of a task. When the last thread of a task returns, there is a
-trap if `task.return` has not been called. Thus, *some* thread (either the
-thread created implicitly for the initial export call or some thread
-transitively created by that thread) must call `task.return`.
+even after it has passed its initial results to the caller. This is also
+possible even with the sync ABI by using cooperative threads. Continuing
+to execute after returning a value can be useful for various finalization tasks
+(freeing memory or performing logging, billing or metrics operations) that don't
+need to be on the critical path of returning a value to the caller, but the
+major use of executing code after `task.return` is to continue to read and write
+from streams and futures. For example, a stream transformer function of type
+`func(in: stream<T>) -> stream<U>` will immediately `task.return` a stream
+created via `stream.new` and then sit in a loop interleaving `stream.read`s (of
+the readable end passed for `in`) and `stream.write`s (of the writable end it
+`stream.new`ed) before exiting the task.
 
 Once `task.return` is called, the task is in the "returned" state. Calling
-`task.return` when not in the "started" state traps. Once in a "returned"
-state, non-`async` functions are allowed to block.
+`task.return` when not in the "started" state traps. Once in a "returned" state,
+non-`async` functions may block using cooperative threads that were created
+before the synchronous task's implicit thread returned.
 
 ### Borrows
 
@@ -850,6 +855,104 @@ Despite the above, the following scenarios do behave deterministically:
   (modulo any nondeterministic execution that determines the ordering in which
   the operations are performed).
 
+### Asynchronous Recursion
+
+Even without concurrency support, it is possible to reenter a component instance
+by recursively calling the component's export from a function called by the
+component's import. For example, given a component importing `imp` and exporting
+`exp`, using the [JS API], JS code could write:
+```js
+import source component from './component.wasm';
+var instance;
+function imp() {
+  instance.exports.exp();
+}
+instance = WebAssembly.instantiate(component, { imp });
+instance.exports.exp(); // exp ~~> imp ~~> exp
+```
+To relieve generic bindings generators and component authors from having to
+conservatively assume that *every* import call might reenter in this manner,
+the Component Model has [Component Invariant] #2. This is enforced by the
+[Canonical ABI](CanonicalABI.md#embedding) using strategically placed traps and
+boolean flags on component instances.
+
+With Preview 3, a desirable outcome is that if our component imports `imp` and
+exports `exp` as `async` functions, then the following JS code could run the
+two `exp` calls concurrently just like if they were JS `async` functions:
+```js
+import source component from './component.wasm';
+async function imp() {
+  await ... some Web API I/O
+}
+instance = WebAssembly.instantiate(component, { imp });
+await Promise.all([
+  instance.exports.exp(),
+  instance.exports.exp()
+]);
+```
+In particular, if `exp` transitively awaits `imp`, then when `imp` blocks (via
+`await`), control flow returns to the top-level JS script with `instance` in a
+reenterable state, so that `exp` can be concurrently invoked a second time.
+
+However, this also means that if we slightly change our original recursive
+example to use `async` and then `await` before attempting to reenter `instance`,
+there is no trap. The first `await` in `imp` returns to top-level, leaving
+`instance` in a reenterable state, so when `imp` is later resumed from the event
+loop, it is allowed to reenter `exp`.
+```js
+import source component from './component.wasm';
+var instance;
+async function imp() {
+  await Promise.resolve();
+  await instance.exports.exp();
+}
+instance = WebAssembly.instantiate(component, { imp });
+await instance.exports.exp(); // exp ~~> imp ~~> exp
+```
+The hazard with this example is that if the outer call to `exp` internally grabs
+and holds a lock while awaiting the call to `imp`, and if the recursive call to
+`exp` waits to acquire the same lock, there will be a deadlock. In the preceding
+`async` example, since there is no circular dependency between the two calls to
+`exp`, the second call can simply wait for the first to release any lock it
+holds.
+
+A concrete example of this hazard is the implicit per-component-instance lock
+taken and released by [backpressure](#backpressure). E.g., if `component` lifts
+`exp` synchronously (which triggers implicit backpressure while a call to `exp`
+is running), the recursive call to `exp` will immediately deadlock.
+
+Unfortunately, it's not possible to reliably discriminate the two cases so that
+the second example traps (as it did in the synchronous case) while the first
+example succeeds. Given the Component Model's well-defined [async call
+stack](#subtasks-and-supertasks), it might seem possible to tell the cases apart
+by checking whether `instance` is already *on the call stack* when attempting to
+enter `exp`. However, this doesn't work for two reasons:
+
+First, to properly detect asynchronous recursion, the host embedding would have
+to maintain something analogous to the Component Model's async call stack, which
+some hosts (including, currently, browsers) simply do not have a well-defined
+way to do.
+
+Second, the async call stack is neither necessary nor sufficient to catch these
+kinds of asynchronous recursive deadlocks. The async call stack tracks the
+*causality* leading up to a call, which is useful for debugging, tracing,
+profiling, etc., but the async call stack doesn't imply that every call on the
+stack is blocking on the result of the next call in the chain (unlike with a
+synchronous call stack, which does imply this). Moreover, the async call stack
+can arbitrarily reset through indirect forms of asynchronous calls (e.g., host
+APIs with callbacks like, in a browser, `setTimeout`), so the absence of
+recursion on the async call stack does not guarantee the absence of a circular
+asynchronous dependency.
+
+Thus, the Canonical ABI rules don't attempt to distinguish the different kinds
+of asynchronous reentrance. It is thus the responsibility of component clients
+to avoid async recursion. Fortunately, in component-to-component compositions,
+this kind of recursion is only possible when doing advanced higher-order linking
+(aka [donut wrapping]). And unlike [Component Invariant] #2, which directly
+impacts bindings generators, async recursion only arises when there's
+[blocking](#blocking) and so it's already necessary to support (non-recursive)
+reentrance.
+
 
 ## Interaction with the start function
 
@@ -873,19 +976,12 @@ JS [top-level `await`] or I/O in C++ constructors executing during `start`.
 
 ## Async ABI
 
-At an ABI level, native async in the Component Model defines for every WIT
-function an async-oriented core function signature that can be used instead of
-or in addition to the existing (Preview-2-defined) synchronous core function
-signature. This async-oriented core function signature is intended to be called
-or implemented by generated bindings which then map the low-level core async
-protocol to the languages' higher-level native concurrency features.
-
-Note that *every* WIT-level function type can be lifted and lowered using the
-async (or sync) ABI. While calling a non-`async`-typed function import using
-the async ABI will never returned that the call "blocked" (as guaranteed by the
-Component Model trapping if the callee would have blocked), the async ABI is
-still allowed to be used (for the benefit of code generators that only want
-to think about one ABI).
+At an ABI level, native async in the Component Model defines for every
+`async`-typed function a non-blocking core function signature that can be
+used instead of or in addition to the existing (Preview-2-defined) synchronous
+core function signature. This non-blocking core function signature is intended
+to be called or implemented by generated bindings which then map the low-level
+core async protocol to the languages' higher-level native concurrency features.
 
 ### Async Import ABI
 
@@ -1122,7 +1218,7 @@ with `...` to focus on the overall flow of function calls:
   ;; requires 🚟 for the stackful abi
   (canon lower $fetch async (memory $mem) (realloc $realloc) (core func $fetch'))
   (canon waitable-set.new (core func $new))
-  (canon waitable-set.wait async (memory $mem) (core func $wait))
+  (canon waitable-set.wait (memory $mem) (core func $wait))
   (canon waitable.join (core func $join))
   (canon task.return (result string) (memory $mem) (core func $task_return))
   (core instance $main (instantiate $Main (with "" (instance
@@ -1234,7 +1330,7 @@ core wasm code between events, not externally-visible behavior.
   (canon lower $fetch async (memory $mem) (realloc $realloc) (core func $fetch'))
   (canon waitable-set.new (core func $new))
   (canon waitable.join (core func $join))
-  (canon task.return (result string) async (memory $mem) (realloc $realloc) (core func $task_return))
+  (canon task.return (result string) (memory $mem) (core func $task_return))
   (core instance $main (instantiate $Main (with "" (instance
     (export "mem" (memory $mem))
     (export "realloc" (func $realloc))
@@ -1379,20 +1475,19 @@ comes after:
   type to block during instantiation
 * add an `async` effect on `resource` type definitions allowing a resource
   type to block during its destructor
-* `recursive` function type attribute: allow a function to opt in to
-  recursive [reentrance], extending the ABI to link the inner and
-  outer activations
+* allow a parent component to perform [JSPI]-like suspension of the sync calls
+  of its child components, thereby allowing the parent to implement the child's
+  sync import calls in terms of the parent's `async` imports.
 * add a `strict-callback` option that adds extra trapping conditions to
   provide the semantic guarantees needed for engines to statically avoid
   fiber creation at component-to-component `async` call boundaries
+* allow function closures to be passed as first-class values, supporting the
+  "callback" pattern in many pre-existing APIs, including Web APIs
 * allow pipelining multiple `stream.read`/`write` calls
 * allow chaining multiple async calls together ("promise pipelining")
 * integrate with `shared`: define how to lift and lower functions `async` *and*
   `shared`
 
-
-[wasmio-2024]: https://www.youtube.com/watch?v=y3x4-nQeXxc
-[wasmio-2025]: https://www.youtube.com/watch?v=mkkYNw8gTQg
 
 [Color]: https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/
 [What Color Is Your Function?]: https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/
@@ -1426,6 +1521,7 @@ comes after:
 
 [AST Explainer]: Explainer.md
 [Canonical Built-in]: Explainer.md#canonical-built-ins
+[Component Invariant]: Explainer.md#component-invariants
 [`context.get`]: Explainer.md#-contextget
 [`context.set`]: Explainer.md#-contextset
 [`backpressure.inc`]: Explainer.md#-backpressureinc-and-backpressuredec
@@ -1447,6 +1543,7 @@ comes after:
 [`{stream,future}.new`]: Explainer.md#-streamnew-and-futurenew
 [`{stream,future}.{read,write}`]: Explainer.md#-streamread-and-streamwrite
 [`stream.cancel-write`]: Explainer.md#-streamcancel-read-streamcancel-write-futurecancel-read-and-futurecancel-write
+[Donut Wrapping]: Linking.md#higher-order-shared-nothing-linking-aka-donut-wrapping
 
 [Canonical ABI Explainer]: CanonicalABI.md
 [specified in terms of]: CanonicalABI.md#stack-switching
@@ -1463,8 +1560,8 @@ comes after:
 [Binary Format]: Binary.md
 [WIT]: WIT.md
 [Blast Zone]: FutureFeatures.md#blast-zones
-[Reentrance]: Explainer.md#component-invariants
 [`start`]: Explainer.md#start-definitions
+[JS API]: Explainer.md#JS-API
 
 [Store]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-store
 [Deterministic Profile]: https://webassembly.github.io/spec/versions/core/WebAssembly-3.0-draft.pdf#subsubsection*.798
