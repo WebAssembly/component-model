@@ -777,15 +777,22 @@ class Task(Supertask):
     self.threads = []
 ```
 
-The `Task.needs_exclusive` predicate returns whether the Canonical ABI options
-indicate that the core wasm being executed does not expect to be reentered
-(e.g., because the code is using a single global linear memory shadow stack).
-Concretely, this is assumed to be the case when core wasm is lifted
-synchronously or with `async callback`. This predicate is used by the other
-`Task` methods to determine whether to acquire/release the component instance's
-`exclusive` lock.
+The `Task.needs_exclusive` method returns whether an `async`-typed function's
+ABI options indicate that the Core WebAssembly code requires serialized
+execution (with the common reason being that there is a single, global linear
+memory shadow stack). This serialized execution is implemented by
+acquiring/releasing the component-instance-wide `exclusive` lock before/after
+executing Core WebAssembly code executing on the task's *implicit thread*
+(explicit threads created by `thread.new-indirect` ignore the `exclusive` lock).
+Specifically, sync- and stackless-async-lifted (`async callback`) functions
+require the `exclusive` lock and stackful-async-lifted (`async`) functions
+ignore the `exclusive` lock (just like explicit threads). Note that
+non-`async`-typed functions' implicit threads also ignore the `exclusive` lock
+since they must complete synchronously without blocking and thus don't have to
+worry about non-LIFO stack interleaving.
 ```python
   def needs_exclusive(self):
+    assert(self.ft.async_)
     return not self.opts.async_ or self.opts.callback
 ```
 
@@ -1283,14 +1290,10 @@ the `rt` field of `ResourceHandle` (above) and thus resource type equality is
 class ResourceType(Type):
   impl: ComponentInstance
   dtor: Optional[Callable]
-  dtor_async: bool
-  dtor_callback: Optional[Callable]
 
-  def __init__(self, impl, dtor = None, dtor_async = False, dtor_callback = None):
+  def __init__(self, impl, dtor = None):
     self.impl = impl
     self.dtor = dtor
-    self.dtor_async = dtor_async
-    self.dtor_callback = dtor_callback
 ```
 
 
@@ -3470,7 +3473,9 @@ present, is validated as such:
 * if `realloc` is present then `memory` must be present
 * `post-return` - only allowed on [`canon lift`](#canon-lift), which has rules
   for validation
-* 🔀 `async` - cannot be present with `post-return`
+* 🔀 `async` - is only allowed when used with an `async` function type in
+  [`canon lift`](#canon-lift) or [`canon lower`](#canon-lower) and cannot be
+  present with `post-return`
 * 🔀,not(🚟) `async` - `callback` must also be present. Note that with the 🚟
   feature (the "stackful" ABI), this restriction is lifted.
 * 🔀 `callback` - the function has type `(func (param i32 i32 i32) (result i32))`
@@ -3598,7 +3603,7 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
     [packed] = call_and_trap_on_throw(callee, flat_args)
     code,si = unpack_callback_result(packed)
     while code != CallbackCode.EXIT:
-      assert(inst.exclusive is task)
+      assert(task.needs_exclusive() and inst.exclusive is task)
       inst.exclusive = None
       match code:
         case CallbackCode.YIELD:
@@ -3921,22 +3926,22 @@ def canon_resource_drop(rt, i):
       if rt.dtor:
         rt.dtor(h.rep)
     else:
-      caller_opts = CanonicalOptions(async_ = False)
-      callee_opts = CanonicalOptions(async_ = rt.dtor_async, callback = rt.dtor_callback)
-      ft = FuncType([U32Type()],[], async_ = False)
+      ft = FuncType([U32Type()], [], async_ = False)
       dtor = rt.dtor or (lambda rep: [])
-      callee = inst.store.lift(dtor, ft, callee_opts, rt.impl)
-      caller = inst.store.lower(callee, ft, caller_opts, inst)
+      opts = CanonicalOptions(async_ = False)
+      callee = inst.store.lift(dtor, ft, opts, rt.impl)
+      caller = inst.store.lower(callee, ft, opts, inst)
       caller([h.rep])
   else:
     h.borrow_scope.num_borrows -= 1
   return []
 ```
-The call to a resource's destructor is defined as a non-`async`-lowered,
-non-`async`-typed function call to a possibly-`async`-lifted callee, passing
-the private `i32` representation as a parameter. Thus, destructors *may* block
-on I/O, but only after they `task.return`, ensuring that `resource.drop` never
-blocks.
+The call to a resource's destructor passes the `i32` representation value that
+was previously supplied to `resource.new`. The call works like a normal
+non-`async` cross-component call, using the same `canon_lift` and `canon_lower`
+rules to, for example, catch reentrance. Because the type, lifting and
+lowering are all non-`async`, the destructor may not block. However, the
+destructor may spawn a cooperative thread that does.
 
 Since there are valid reasons to call `resource.drop` in the same component
 instance that defined the resource, which would otherwise trap at the

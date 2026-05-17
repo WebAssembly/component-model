@@ -74,16 +74,6 @@ the same way that they already bind to various OS's concurrent I/O APIs (such
 as `select`, `epoll`, `io_uring`, `kqueue` and Overlapped I/O) making the
 Component Model "just another OS" from the language toolchain's perspective.
 
-The new async ABI can be used alongside or instead of the existing Preview 2
-"sync ABI" to call or implement *any* WIT function type. When *calling* an
-imported function via the async ABI, if the callee [blocks](#blocking), control
-flow is returned immediately to the caller, and the callee continues executing
-concurrently. When *implementing* an exported function via the async ABI,
-multiple concurrent export calls are allowed to be made by the caller.
-Critically, both sync-ABI-calls-async-ABI and async-ABI-calls-sync-ABI pairings
-have well-defined, composable behavior for both inter-component and
-intra-component calls.
-
 In addition to adding a new async *ABI* for use by the language's compiler and
 runtime, the Component Model also adds a new `async` [effect type] that can be
 added to function types (in both WIT and raw component function type
@@ -102,6 +92,16 @@ returning a value. For hosts like browsers with event-loop concurrency, this
 invariant is necessary to allow non-`async` component exports to be called in
 synchronous contexts (like event listeners, callbacks, getters, setters and
 constructors).
+
+The new async ABI can be used alongside or instead of the existing Preview 2
+"sync ABI" to call or implement any `async`-typed functions. When *calling* an
+imported function via the async ABI, if the `async` callee [blocks](#blocking),
+control flow is returned immediately to the caller, and the callee continues
+executing concurrently. When *implementing* an `async` function via the async
+ABI, multiple concurrent export calls are allowed to be made by the caller.
+Critically, both sync-ABI-calls-async-ABI and async-ABI-calls-sync-ABI pairings
+have well-defined, composable behavior for both inter-component and
+intra-component calls.
 
 Because `async` function exports may be implemented with the *sync* ABI and
 then call `async` function imports using the *sync* ABI, traditional sync code
@@ -685,30 +685,31 @@ the "started" state.
 
 ### Returning
 
-The way an async export call returns its value is by calling [`task.return`],
-passing the core values that are to be lifted as *parameters*.
+The way an `async` export returns its value using the async ABI is by calling
+[`task.return`], passing the core values that are to be lifted as *parameters*.
+When using the async ABI, *any* of the threads contained by a task can call
+`task.return`; there is no "main thread" of a task. When the last thread of a
+task returns, there is a trap if `task.return` has not been called. Thus, *some*
+thread (either the thread created implicitly for the initial export call or some
+thread transitively created by that thread) must call `task.return`.
 
 Returning values by calling `task.return` allows a task to continue executing
-even after it has passed its initial results to the caller. This can be useful
-for various finalization tasks (freeing memory or performing logging, billing
-or metrics operations) that don't need to be on the critical path of returning
-a value to the caller, but the major use of executing code after `task.return`
-is to continue to read and write from streams and futures. For example, a
-stream transformer function of type `func(in: stream<T>) -> stream<U>` will
-immediately `task.return` a stream created via `stream.new` and then sit in a
-loop interleaving `stream.read`s (of the readable end passed for `in`) and
-`stream.write`s (of the writable end it `stream.new`ed) before exiting the
-task.
-
-*Any* of the threads contained by a task can call `task.return`; there is no
-"main thread" of a task. When the last thread of a task returns, there is a
-trap if `task.return` has not been called. Thus, *some* thread (either the
-thread created implicitly for the initial export call or some thread
-transitively created by that thread) must call `task.return`.
+even after it has passed its initial results to the caller. This is also
+possible even with the sync ABI by using cooperative threads. Continuing
+to execute after returning a value can be useful for various finalization tasks
+(freeing memory or performing logging, billing or metrics operations) that don't
+need to be on the critical path of returning a value to the caller, but the
+major use of executing code after `task.return` is to continue to read and write
+from streams and futures. For example, a stream transformer function of type
+`func(in: stream<T>) -> stream<U>` will immediately `task.return` a stream
+created via `stream.new` and then sit in a loop interleaving `stream.read`s (of
+the readable end passed for `in`) and `stream.write`s (of the writable end it
+`stream.new`ed) before exiting the task.
 
 Once `task.return` is called, the task is in the "returned" state. Calling
-`task.return` when not in the "started" state traps. Once in a "returned"
-state, non-`async` functions are allowed to block.
+`task.return` when not in the "started" state traps. Once in a "returned" state,
+non-`async` functions may block using cooperative threads that were created
+before the synchronous task's implicit thread returned.
 
 ### Borrows
 
@@ -873,19 +874,12 @@ JS [top-level `await`] or I/O in C++ constructors executing during `start`.
 
 ## Async ABI
 
-At an ABI level, native async in the Component Model defines for every WIT
-function an async-oriented core function signature that can be used instead of
-or in addition to the existing (Preview-2-defined) synchronous core function
-signature. This async-oriented core function signature is intended to be called
-or implemented by generated bindings which then map the low-level core async
-protocol to the languages' higher-level native concurrency features.
-
-Note that *every* WIT-level function type can be lifted and lowered using the
-async (or sync) ABI. While calling a non-`async`-typed function import using
-the async ABI will never returned that the call "blocked" (as guaranteed by the
-Component Model trapping if the callee would have blocked), the async ABI is
-still allowed to be used (for the benefit of code generators that only want
-to think about one ABI).
+At an ABI level, native async in the Component Model defines for every
+`async`-typed function a non-blocking core function signature that can be
+used instead of or in addition to the existing (Preview-2-defined) synchronous
+core function signature. This non-blocking core function signature is intended
+to be called or implemented by generated bindings which then map the low-level
+core async protocol to the languages' higher-level native concurrency features.
 
 ### Async Import ABI
 

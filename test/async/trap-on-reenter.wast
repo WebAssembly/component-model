@@ -12,13 +12,13 @@
     )
   )
   (core instance $core_inner (instantiate $CoreInner))
-  (func $a (canon lift
+  (func $a async (canon lift
     (core func $core_inner "a")
     async (callback (func $core_inner "a-cb"))
   ))
 
   (component $Child
-    (import "a" (func $a))
+    (import "a" (func $a async))
 
     (core module $Memory (memory (export "mem") 1))
     (core instance $memory (instantiate $Memory))
@@ -37,7 +37,7 @@
     (core instance $core_child (instantiate $CoreChild (with "" (instance
       (export "a" (func $a'))
     ))))
-    (func (export "b") (canon lift
+    (func (export "b") async (canon lift
       (core func $core_child "b")
       async (callback (func $core_child "b-cb"))
     ))
@@ -57,7 +57,7 @@
   (core instance $core_outer (instantiate $CoreOuter (with "" (instance
     (export "b" (func $b))
   ))))
-  (func $c (export "c") (canon lift
+  (func $c (export "c") async (canon lift
     (core func $core_outer "c")
     async (callback (func $core_outer "c-cb"))
   ))

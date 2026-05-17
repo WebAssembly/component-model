@@ -216,8 +216,6 @@ label'        ::= len:<u32> l:<label>                     => l    (if len = |l|)
 valtype       ::= i:<typeidx>                             => i
                 | pvt:<primvaltype>                       => pvt
 resourcetype  ::= 0x3f v:<valtype> f?:<core:funcidx>?     => (resource (rep v) (dtor f)?)
-                | 0x3e v:<valtype> f:<core:funcidx>
-                                   cb?:<core:funcidx>?    => (resource (rep v) (dtor async f (callback cb)?)) 🚝
 functype      ::= 0x40 ps:<paramlist> rs:<resultlist>     => (func ps rs)
                 | 0x43 ps:<paramlist> rs:<resultlist>     => (func async ps rs)
 paramlist     ::= lt*:vec(<labelvaltype>)                 => (param lt)*
