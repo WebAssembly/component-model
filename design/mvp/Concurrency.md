@@ -321,12 +321,14 @@ always a well-defined async call stack.
 
 The async call stack is not currently observable to running components, except
 that it may nondeterministically appear as part of the callstack stored in
-`error-context` 📝. Instead, the async call stack is meant to provide better
-backtraces when debugging, profiling and tracing. While particular languages can
-and do maintain their own async call stacks in core wasm state, without the
-Component Model's async call stack, linkage *between* different languages would
-be lost at component boundaries, leading to a loss of overall context in
-multi-component applications.
+`error-context` 📝. (In the [future](#TODO), functionality could be added to
+allow a [donut wrapping] parent to follow the async call stack from a child's
+import call to a child's export call.) Instead, the async call stack is
+currently used to provide backtraces when debugging, profiling, tracing and
+logging. While particular languages can and do maintain their own async call
+stacks in core wasm state, without the Component Model's async call stack,
+linkage *between* different languages would be lost at component boundaries,
+leading to a loss of overall context in multi-component applications.
 
 There is an important gap between the Component Model's minimal form of
 Structured Concurrency and the Structured Concurrency support that appears in
@@ -1478,6 +1480,9 @@ comes after:
 * allow a parent component to perform [JSPI]-like suspension of the sync calls
   of its child components, thereby allowing the parent to implement the child's
   sync import calls in terms of the parent's `async` imports.
+* allow a [donut wrapping] parent component to ask which of a child's export
+  calls a particular child import call is associated with (e.g., for logging
+  purposes).
 * add a `strict-callback` option that adds extra trapping conditions to
   provide the semantic guarantees needed for engines to statically avoid
   fiber creation at component-to-component `async` call boundaries
