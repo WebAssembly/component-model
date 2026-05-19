@@ -3656,9 +3656,7 @@ engine optimization).
 
 If a `Task` is not allowed to block (because it was created for a non-`async`-
 typed function call and has not yet returned a value), `YIELD` is always a
-no-op and `WAIT` always traps. Thus, a component may implement a
-non-`async`-typed function with the `async callback` ABI, but the component
-*must* call `task.return` *before* returning `WAIT`.
+no-op and `WAIT` always traps.
 
 The event loop also releases `ComponentInstance.exclusive` (which was acquired
 by `Task.enter_implicit_thread`) before potentially suspending the thread to
