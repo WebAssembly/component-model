@@ -330,8 +330,7 @@ class Thread:
     return not self.running() and self.ready_func is not None
 
   def ready(self):
-    assert(self.waiting())
-    return self.ready_func()
+    return self.waiting() and self.ready_func()
 
   def __init__(self, task, thread_func):
     def cont_func(cancelled):
@@ -346,15 +345,26 @@ class Thread:
     self.storage = [0,0]
     assert(self.suspended())
 
+  def start_waiting_internal(self, ready_func):
+    assert(not self.waiting() and not self.ready_func)
+    self.ready_func = ready_func
+    self.task.inst.store.waiting.append(self)
+
+  def stop_waiting_internal(self, cancelled):
+    assert(self.waiting() and self.ready_func)
+    assert(cancelled or self.ready())
+    self.ready_func = None
+    self.task.inst.store.waiting.remove(self)
+
   def resume_later(self):
     assert(self.suspended())
-    self.ready_func = lambda: True
-    self.task.inst.store.waiting.append(self)
+    self.start_waiting_internal(lambda: True)
     assert(self.ready())
 
   def resume(self, cancelled = Cancelled.FALSE):
     assert(not self.running() and (self.cancellable or not cancelled))
-    self.stop_waiting()
+    if self.waiting():
+      self.stop_waiting_internal(cancelled)
     thread = self
     while thread is not None:
       cont = thread.cont
@@ -363,20 +373,23 @@ class Thread:
       thread = switch_to
       cancelled = Cancelled.FALSE
 
-  def stop_waiting(self):
-    if self.waiting():
-      self.ready_func = None
-      self.task.inst.store.waiting.remove(self)
-
-  def suspend(self, cancellable) -> Cancelled:
-    assert(self.running() and self.task.may_block())
-    if self.task.deliver_pending_cancel(cancellable):
-      self.stop_waiting()
-      return Cancelled.TRUE
+  def block_internal(self, cancellable):
     self.cancellable = cancellable
     cancelled = block(switch_to = None)
     assert(self.running() and (cancellable or not cancelled))
     return cancelled
+
+  def switch_to_internal(self, cancellable, other):
+    self.cancellable = cancellable
+    cancelled = block(switch_to = other)
+    assert(self.running() and (cancellable or not cancelled))
+    return cancelled
+
+  def suspend(self, cancellable) -> Cancelled:
+    assert(self.running() and self.task.may_block())
+    if self.task.deliver_pending_cancel(cancellable):
+      return Cancelled.TRUE
+    return self.block_internal(cancellable)
 
   def wait_until(self, ready_func, cancellable = False) -> Cancelled:
     assert(self.running() and self.task.may_block())
@@ -384,9 +397,8 @@ class Thread:
       return Cancelled.TRUE
     if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):
       return Cancelled.FALSE
-    self.ready_func = ready_func
-    self.task.inst.store.waiting.append(self)
-    return self.suspend(cancellable)
+    self.start_waiting_internal(ready_func)
+    return self.block_internal(cancellable)
 
   def yield_until(self, ready_func, cancellable) -> Cancelled:
     assert(self.running())
@@ -402,18 +414,15 @@ class Thread:
   def switch_to(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running() and other.suspended())
     if self.task.deliver_pending_cancel(cancellable):
-      self.stop_waiting()
       return Cancelled.TRUE
-    self.cancellable = cancellable
-    cancelled = block(switch_to = other)
-    assert(self.running() and (cancellable or not cancelled))
-    return cancelled
+    return self.switch_to_internal(cancellable, other)
 
   def yield_to(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running() and other.suspended())
-    self.ready_func = lambda: True
-    self.task.inst.store.waiting.append(self)
-    return self.switch_to(cancellable, other)
+    if self.task.deliver_pending_cancel(cancellable):
+      return Cancelled.TRUE
+    self.start_waiting_internal(lambda: True)
+    return self.switch_to_internal(cancellable, other)
 
 ### Tasks
 

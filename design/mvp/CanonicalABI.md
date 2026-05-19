@@ -535,8 +535,7 @@ class Thread:
     return not self.running() and self.ready_func is not None
 
   def ready(self):
-    assert(self.waiting())
-    return self.ready_func()
+    return self.waiting() and self.ready_func()
 ```
 
 When a `Thread` is created, a new continuation is created for `thread_func`
@@ -558,21 +557,36 @@ state.
     assert(self.suspended())
 ```
 
+The next two `Thread` methods are only called by `Thread` methods below to add
+and remove a thread to the `Store.waiting` list at the same time as setting and
+clearing, resp., the readiness function that `Store.tick` (defined below) will
+test repeatedly to determine when the thread is ready to be resumed.
+```python
+  def start_waiting_internal(self, ready_func):
+    assert(not self.waiting() and not self.ready_func)
+    self.ready_func = ready_func
+    self.task.inst.store.waiting.append(self)
+
+  def stop_waiting_internal(self, cancelled):
+    assert(self.waiting() and self.ready_func)
+    assert(cancelled or self.ready())
+    self.ready_func = None
+    self.task.inst.store.waiting.remove(self)
+```
+
 One way to allow a newly-created thread to start executing is for core wasm to
 call the `thread.resume-later` built-in. This built-in does not immediately
-switch execution to the thread but instead transitions the thread to the
-`ready` `waiting` state, allowing a future call to `Store.tick` (defined
-below) to nondeterministically call `Thread.resume` (defined next).
+switch execution to the thread but instead transitions the thread to the `ready`
+`waiting` state, so that it can be `Thread.resume`d immediately.
 ```python
   def resume_later(self):
     assert(self.suspended())
-    self.ready_func = lambda: True
-    self.task.inst.store.waiting.append(self)
+    self.start_waiting_internal(lambda: True)
     assert(self.ready())
 ```
 
-Once its time to execute a `suspended` or `waiting` thread, the `Thread.resume`
-method is called on that thread. This method transitions the thread to the
+Once its time to execute a `suspended` or `waiting` thread, `Thread.resume`
+is called on that thread. This method transitions the thread to the
 `running` state by clearing and then `resume`ing the `Thread`'s stored
 continuation. If the `resume`d continuation suspends with a `Thread` to
 `switch_to`, `Thread.resume` will `resume` *that* `Thread`'s continuation, and
@@ -581,7 +595,8 @@ thread to `switch_to`.
 ```python
   def resume(self, cancelled = Cancelled.FALSE):
     assert(not self.running() and (self.cancellable or not cancelled))
-    self.stop_waiting()
+    if self.waiting():
+      self.stop_waiting_internal(cancelled)
     thread = self
     while thread is not None:
       cont = thread.cont
@@ -589,11 +604,6 @@ thread to `switch_to`.
       (thread.cont, switch_to) = resume(cont, cancelled, thread)
       thread = switch_to
       cancelled = Cancelled.FALSE
-
-  def stop_waiting(self):
-    if self.waiting():
-      self.ready_func = None
-      self.task.inst.store.waiting.remove(self)
 ```
 The `Thread.resume` method passes cancellation requests (from
 `Task.request_cancellation` defined below) to the continuation being resumed,
@@ -606,33 +616,46 @@ optimization of `suspend` followed by `resume`. The non-optimized version is
 used here to simplify storing of the new `Continuation` into `Thread.cont`.
 However, an optimized implementation could do the direct switch.
 
-Once a thread is `Thread.resume()`ed and starts executing, it can suspend its
-execution by calling the `thread.suspend` built-in which calls `Thread.suspend`
-here which transfers control flow back to `Thread.resume()` via `block()`. The
-`switch_to` argument `None` tells `Thread.resume()` to return immediately.
+The next two `Thread` methods are only called by `Thread` methods below to
+suspend with the `block` effect (defined in the preceding section).
+`Thread.block_internal` passes no thread to `switch_to` and so causes
+`Thread.resume` to actually [block]. In contrast, `Thread.switch_to_internal`
+passes a thread to `switch_to`, causing the loop in `Thread.resume` to directly
+switch to that thread without blocking.
 ```python
-  def suspend(self, cancellable) -> Cancelled:
-    assert(self.running() and self.task.may_block())
-    if self.task.deliver_pending_cancel(cancellable):
-      self.stop_waiting()
-      return Cancelled.TRUE
+  def block_internal(self, cancellable):
     self.cancellable = cancellable
     cancelled = block(switch_to = None)
     assert(self.running() and (cancellable or not cancelled))
     return cancelled
+
+  def switch_to_internal(self, cancellable, other):
+    self.cancellable = cancellable
+    cancelled = block(switch_to = other)
+    assert(self.running() and (cancellable or not cancelled))
+    return cancelled
 ```
-The `cancellable` parameter of `Thread.suspend` indicates whether the caller is
+The `cancellable` parameters in these methods indicate whether the caller is
 prepared to handle cancellation. If `cancellable` is false for all of a task's
 threads, the cancellation request will be stored in `Task.state` and delivered
 the next time `Task.deliver_pending_cancel()` is called with `cancellable` set
-(including here in `Thread.suspend`). If `cancellable` is true and the caller
-subsequently requests cancellation, `Thread.resume(Cancelled.TRUE)` may be
-called on this `suspended` thread causing `Cancelled.TRUE` to be returned here.
+by one of the `Thread` methods below.
+
+Once a thread is `Thread.resume()`ed and starts executing, it can suspend its
+execution by calling the `thread.suspend` built-in which calls `Thread.suspend`
+here. `Thread.suspend` first attempts to deliver any pending cancellation
+requests and then otherwise simply [blocks].
+```python
+  def suspend(self, cancellable) -> Cancelled:
+    assert(self.running() and self.task.may_block())
+    if self.task.deliver_pending_cancel(cancellable):
+      return Cancelled.TRUE
+    return self.block_internal(cancellable)
+```
 
 The `Thread.wait_until` method is used by all the synchronous blocking
 built-ins, as well as auto-backpressure and the `callback` event loop, to wait
-until a particular condition is met, as specified by the boolean-valued
-`ready_func` parameter:
+until a particular readiness condition is met:
 ```python
   def wait_until(self, ready_func, cancellable = False) -> Cancelled:
     assert(self.running() and self.task.may_block())
@@ -640,18 +663,17 @@ until a particular condition is met, as specified by the boolean-valued
       return Cancelled.TRUE
     if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):
       return Cancelled.FALSE
-    self.ready_func = ready_func
-    self.task.inst.store.waiting.append(self)
-    return self.suspend(cancellable)
+    self.start_waiting_internal(ready_func)
+    return self.block_internal(cancellable)
 ```
-Before anything else, `wait_until` reports any pending cancellation requests if
-the caller is `cancellable`. The `randomint` conjunct on the early return if
-`ready_func()` is already `True` means that, at any potential suspension point,
-the embedder can nondeterministically decide whether to switch to another thread
-or keep running the current one. In particular, when a caller makes an `async`
-call to a callee which `wait_until`s a condition that's already met (e.g. in the
-case of `yield`), the embedder can use scheduling heuristics to decide whether
-or not to block the current thread.
+As with `Thread.suspend`, before anything else, `wait_until` reports any pending
+cancellation requests if the caller is `cancellable`. The `randomint` conjunct
+on the early return if `ready_func()` is already `True` means that, at any
+potential suspension point, the embedder can nondeterministically decide whether
+to switch to another thread or keep running the current one. In particular, when
+a caller makes an `async` call to a callee which `wait_until`s a condition
+that's already met (e.g. in the case of `yield`), the embedder can use
+scheduling heuristics to decide whether or not to block the current thread.
 
 The `Thread.yield_until` method modifies the generic `Thread.wait_until` method
 for the `thread.yield` built-in (and `callback`s returning the `YIELD` code) so
@@ -674,32 +696,30 @@ emulating preemptive multi-threading.
 
 The `Thread.switch_to` method is used by the `thread.switch-to` built-in to
 suspend the current thread and immediately transfer execution to some other
-`suspended` thread in the same component instance. Like the other methods,
-before anything else, `Thread.switch_to` reports any pending cancellation if the
-caller is `cancellable`. Then the current thread transfers control flow back to
-`Thread.resume()`, passing the `other` `Thread` to `switch_to`.
+`suspended` thread in the same component instance. Like other `Thread` methods,
+`Thread.switch_to` first reports any pending cancellation if the caller is
+`cancellable`. Then the current thread transfers control flow to the `other`
+thread using the `Thread.switch_to_internal` helper method defined above.
 ```python
   def switch_to(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running() and other.suspended())
     if self.task.deliver_pending_cancel(cancellable):
-      self.stop_waiting()
       return Cancelled.TRUE
-    self.cancellable = cancellable
-    cancelled = block(switch_to = other)
-    assert(self.running() and (cancellable or not cancelled))
-    return cancelled
+    return self.switch_to_internal(cancellable, other)
 ```
 
 Lastly, the `Thread.yield_to` method is used by the `thread.yield-to` built-in
 to switch execution to some other thread, leaving the current thread in a
 `ready` `waiting` state so that it can nondeterministically `resume` execution
-at the next `Store.tick`.
+at the next `Store.tick`. Like other `Thread` methods, `Thread.yield_to` first
+reports any pending cancellation if the caller is `cancellable`.
 ```python
   def yield_to(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running() and other.suspended())
-    self.ready_func = lambda: True
-    self.task.inst.store.waiting.append(self)
-    return self.switch_to(cancellable, other)
+    if self.task.deliver_pending_cancel(cancellable):
+      return Cancelled.TRUE
+    self.start_waiting_internal(lambda: True)
+    return self.switch_to_internal(cancellable, other)
 ```
 
 
