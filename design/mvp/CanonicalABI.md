@@ -3708,11 +3708,11 @@ ignore `exclusive_thread`.
 The end of `canon_lift` creates a new task/thread pair for the call and then
 calls `Thread.resume` on the new thread to synchronously transfer control flow
 to it (jumping to the top of `thread_func` above). The new thread executes until
-it either `return`s from `thread_func` or [blocks] by transitively calling
-`Thread.suspend`. Thus, in all cases, `canon_lift` never blocks the caller, as
-required by the `FuncInst` calling contract. Lastly, `canon_lift` returns
-`Task.request_cancellation`, bound to the call's new task, as the required
-`OnCancel` value.
+it either returns from `thread_func` or [blocks] by (transitively) calling
+`Thread.block_internal`. Thus, in all cases, `canon_lift` never blocks the
+caller, as required by the `FuncInst` calling contract. Lastly, `canon_lift`
+returns `Task.request_cancellation`, bound to the call's new task, as the
+required `OnCancel` value.
 ```python
   task = Task(ft, opts, inst, on_start, on_resolve, caller)
   thread = Thread(task, thread_func)
