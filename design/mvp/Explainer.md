@@ -2877,14 +2877,17 @@ start being rejected some time after after [WASI Preview 3] is released.
 
 ## Component Invariants
 
-As a consequence of the shared-nothing design described above, all calls into
-or out of a component instance necessarily transit through a component function
-definition. Thus, component functions form a "membrane" around the collection
-of core module instances contained by a component instance, allowing the
-Component Model to establish invariants that increase optimizability and
-composability in ways not otherwise possible in the shared-everything setting
-of Core WebAssembly. The Component Model proposes establishing the following
-two runtime invariants:
+Component validation rules only allow a component to import and export
+component-level functions, not Core WebAssembly functions. Because component-
+level functions can only be produced or consumed by Canonical ABI [`lift` and
+`lower` definitions](#canonical-definitions), which effectively define
+[trampolines] into and out of Core WebAssembly code, the Component Model is able
+to define and enforce invariants that component authors and producer toolchains
+can depend on. This is analogous to the invariants provided by a traditional
+Operating System to user-space code running inside a process.
+
+In particular, the Component Model maintains the following invariants:
+
 1. Components define a "lockdown" state that prevents continued execution
    after a trap. This both prevents continued execution with corrupt state and
    also allows more-aggressive compiler optimizations (e.g., store reordering).
@@ -2894,13 +2897,21 @@ two runtime invariants:
    implicitly checked at every execution step by component functions. Thus,
    after a trap, it's no longer possible to observe the internal state of a
    component instance.
-2. The Component Model disallows reentrance by trapping if a callee's
-   component-instance is already on the stack when the call starts.
-   (For details, see [`call_might_be_recursive`](CanonicalABI.md#component-instances)
-   in the Canonical ABI explainer.) This default prevents obscure
-   composition-time bugs and also enables more-efficient non-reentrant
-   runtime glue code. This rule will be relaxed by an opt-in
-   function type attribute in the [future](Concurrency.md#todo).
+
+2. Components can only be reentered (via component export or thread resumption)
+   when they explicitly [block] or call a [donut wrapped] child component. Calls
+   to non-`async` functions do *not* count as "blocking" nor do non-blocking
+   (`async`-lowered) calls to `async` functions. Thus, bindings generators and
+   component authors do not need to always safely handle reentrance at all
+   import call sites. (In the [future](Concurrency.md#TODO), support for
+   first-class functions (as parameter and result values) would loosen this
+   restriction in an explicit opt-in manner.)
+
+3. To ease adoption, unless a component opts in (via "stackful" lift 🚟 or
+   cooperative threads 🧵), all core wasm execution inside a component instance
+   is locally serialized (via automatic backpressure applied at export calls) so
+   that producer toolchains can continue to use a single global linear memory
+   shadow stack that is pushed and popped in LIFO order.
 
 
 ## JavaScript Embedding
@@ -3219,6 +3230,7 @@ For some use-case-focused, worked examples, see:
 [Universal Types]: https://en.wikipedia.org/wiki/System_F
 [Existential Types]: https://en.wikipedia.org/wiki/System_F
 [Unit]: https://en.wikipedia.org/wiki/Unit_type
+[Trampolines]: https://en.wikipedia.org/wiki/Trampoline_(computing)
 
 [Generative]: https://www.researchgate.net/publication/2426300_A_Syntactic_Theory_of_Type_Generativity_and_Sharing
 [Avoidance Problem]: https://counterexamples.org/avoidance.html
@@ -3241,6 +3253,7 @@ For some use-case-focused, worked examples, see:
 
 [Strongly-unique]: #name-uniqueness
 
+[Donut Wrapped]: Linking.md#higher-order-shared-nothing-linking-aka-donut-wrapping
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Canonical ABI explainer]: CanonicalABI.md
 [`canon_context_get`]: CanonicalABI.md#-canon-contextget
@@ -3303,6 +3316,7 @@ For some use-case-focused, worked examples, see:
 [Resolved]: Concurrency.md#cancellation
 [Cancellation]: Concurrency.md#cancellation
 [Cancelled]: Concurrency.md#cancellation
+[Block]: Concurrency.md#blocking
 
 [Component Model Documentation]: https://component-model.bytecodealliance.org
 [`wizer`]: https://github.com/bytecodealliance/wizer
