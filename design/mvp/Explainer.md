@@ -345,19 +345,38 @@ In the case of `export` aliases, validation ensures `name` is an export in the
 target instance and has a matching sort.
 
 In the case of `outer` aliases, the `u32` pair serves as a [de Bruijn
-index], with first `u32` being the number of enclosing components/modules to
-skip and the second `u32` being an index into the target's sort's index space.
-In particular, the first `u32` can be `0`, in which case the outer alias refers
-to the current component. To maintain the acyclicity of module instantiation,
-outer aliases are only allowed to refer to *preceding* outer definitions.
+index], with first `u32` being the number of enclosing `component`s or `type`s
+to skip and the second `u32` being an index into the target's sort's index
+space. In particular, the first `u32` can be `0`, in which case the outer alias
+refers to the current `component`/`type`. To maintain the acyclicity of module
+instantiation, outer aliases are only allowed to refer to *preceding* outer
+definitions.
 
 Components containing outer aliases effectively produce a [closure] at
 instantiation time, including a copy of the outer-aliased definitions. Because
-of the prevalent assumption that components are immutable values, outer aliases
-are restricted to only refer to immutable definitions: non-resource types,
-modules and components. (In the future, outer aliases to all sorts of
-definitions could be allowed by recording the statefulness of the resulting
-component in its type via some kind of "`stateful`" type attribute.)
+components, like modules, are pure values, outer aliases that reach across
+`component` boundaries are restricted to only refer to pure definitions:
+non-resource types, modules and components. (As described in the next section,
+resource types are *generative* and thus not pure.) For example, in the
+following component, `$alias{1,2,3,4}` are allowed (b/c they only reach across a
+`type` boundary) while `$alias5` is disallowed (b/c it reaches across a
+`component` boundary to reach a `resource` type).
+```wat
+(component $C
+  (component $D)
+  (type $T (record (field "x" u32) (field "y" u32)))
+  (type $R (resource (rep i32)))
+  (type (component
+    (alias outer $C $T (type $alias1))
+    (alias outer $C $R (type $alias2))
+  ))
+  (component
+    (alias outer $C $D (component $alias3))
+    (alias outer $C $T (type $alias4))
+    ;; (alias outer $C $R (type $alias5) ❌
+  )
+)
+```
 
 Both kinds of aliases come with syntactic sugar for implicitly declaring them
 inline:

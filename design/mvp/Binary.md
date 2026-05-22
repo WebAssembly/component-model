@@ -126,12 +126,14 @@ Notes:
 * For `export` aliases, `i` is validated to refer to an instance in the
   instance index space that exports `n` with the specified `sort`.
 * For `outer` aliases, `ct` is validated to be *less or equal than* the number
-  of enclosing components and `i` is validated to be a valid
-  index in the `sort` index space of the `i`th enclosing component (counting
-  outward, starting with `0` referring to the current component).
-* For `outer` aliases, validation restricts the `sort` to one
-  of `type`, `module` or `component` and additionally requires that the
-  outer-aliased type is not a `resource` type (which is generative).
+  of enclosing `component`s and `type`s and `i` is validated to be a valid index
+  in the `sort` index space of the targeted `component`/`type` (counting
+  outward, starting with `0` referring to the current `component`/`type`).
+* For `outer` aliases, validation restricts the `sort` to one of `type`,
+  `module` or `component`.
+* For `outer` aliases that reach across a `component` boundary (as opposed to
+  a `type` boundary), validation additionally requires that any outer-aliased
+  `type` is not a `resource` type.
 
 
 ## Type Definitions
