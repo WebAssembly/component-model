@@ -133,7 +133,7 @@ Notes:
   `module` or `component`.
 * For `outer` aliases that reach across a `component` boundary (as opposed to
   a `type` boundary), validation additionally requires that any outer-aliased
-  `type` is not a `resource` type.
+  `type` does not transitively refer to a `resource` type.
 
 
 ## Type Definitions
