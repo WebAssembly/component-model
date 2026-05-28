@@ -156,10 +156,10 @@ component, the linkage within a single box forms a Directed Acyclic Graph (DAG).
 With simpler "first-order" shared-nothing linking, the definitions of parent
 components like `P` only contain component-level "linking" definitions
 (like `import`, `export`, `alias`, `instance`) and not any Core WebAssembly
-"implementation" definitions (like `canon lift` and `canon lower`). Thus `P`
-disappears at runtime, with the compiler baking all of `P`'s linkage information
-into the generated code and metadata. However, there is nothing to prevent
-parent components from including *both* "linking" and "implementation"
+"implementation" definitions (like `module`, `canon lift` and `canon lower`).
+Thus `P` disappears at runtime, with the compiler baking all of `P`'s linkage
+information into the generated code and metadata. However, there is nothing to
+prevent parent components from including *both* "linking" and "implementation"
 definitions.
 
 For example, a parent component `Q` can link a child component `C` to its own
@@ -323,6 +323,7 @@ post-Preview 2 features of WIT and the Component Model.)
 [`depname`]: Explainer.md#import-and-export-definitions
 [`hashname`]: Explainer.md#import-and-export-definitions
 [Component Invariant]: Explainer.md#component-invariants
+[ESM-integration]: Explainer.md#esm-integration
 
 [WebAssembly/tool-conventions]: https://github.com/WebAssembly/tool-conventions
 [WebAssembly Object File]: https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md
