@@ -25,7 +25,7 @@ document, a pseudo-formal [grammar specification][lexical-structure], and
 additionally a specification of the [package format][package-format] of a WIT
 package suitable for distribution.
 
-See [Gated Features] for an explanation of 🔧.
+See [Gated Features] for an explanation of 🔧 and 🏷️.
 
 [IDL]: https://en.wikipedia.org/wiki/Interface_description_language
 [components]: https://github.com/webassembly/component-model
@@ -363,6 +363,57 @@ world union-my-world-a {
 world union-my-world-b {
     import a: func();
     import b: func();
+}
+```
+
+🏷️ When a world being included contains plain-named imports or exports that
+reference a named interface (using the `id: use-path` syntax), the `with`
+keyword renames the plain-name label while preserving the underlying
+`(implements "I")` annotation in the encoding. For example:
+
+```wit
+package local:demo;
+
+interface store {
+    get: func(key: string) -> option<string>;
+}
+
+world base {
+    import cache: store;
+}
+
+world extended {
+    import cache: func();
+    include base with { cache as my-cache }
+}
+```
+
+In this case, `extended` requires a `with` during its `include` because
+the plain-name `cache` is already taken in the world. The import here is renamed
+to `my-cache` that implements `local:demo/store`, equivalent to writing
+`import my-cache: store;` directly.
+
+Unlike interface names (which are automatically de-duplicated when two
+`include`s import the same interface), plain names cannot be de-duplicated
+and will conflict. For example:
+
+```wit
+world base-a {
+    import cache: store;
+}
+
+world base-b {
+    import cache: store;
+}
+
+world conflict {
+    include base-a;
+    include base-b;  // error: plain name 'cache' conflicts
+}
+
+world resolved {
+    include base-a;
+    include base-b with { cache as other-cache }  // ok: renamed to avoid conflict
 }
 ```
 
@@ -1382,7 +1433,41 @@ export-item ::= 'export' id ':' extern-type
 import-item ::= 'import' id ':' extern-type
               | 'import' use-path ';'
 
-extern-type ::= func-type ';' | 'interface' '{' interface-items* '}'
+extern-type ::= func-type ';'
+              | 'interface' '{' interface-items* '}'
+              | use-path ';' 🏷️
+```
+
+🏷️ The third case of `extern-type` allows a named interface to be imported or
+exported with a custom [plain name]. For example:
+
+```wit
+world my-world {
+    import primary: wasi:keyvalue/store;
+    import secondary: wasi:keyvalue/store;
+    export my-handler: wasi:http/handler;
+}
+```
+
+Here, `primary` and `secondary` are two distinct imports that both have the
+instance type of the `wasi:keyvalue/store` interface. The plain name of the
+import is the `id` before the colon (e.g., `primary`), not the interface name.
+This contrasts with `import wasi:keyvalue/store;` (without the `id :` prefix),
+which would create a single import using the full interface name
+`wasi:keyvalue/store`. Similarly, the export `my-handler` has the instance type
+of `wasi:http/handler` but uses the plain name `my-handler` instead of the full
+interface name, which is useful when a component wants to export the same
+interface multiple times or simply use a more descriptive name.
+
+Note that the `use-path` form can have an ambiguity with the nested packages
+feature (🪺) where `a:b` could mean two things. To resolve this `a:b` is lexed
+as a single token instead of separate tokens, meaning:
+
+```wit
+world w {
+    import a:b;  // error: can't import a package
+    import a: b; // ok, assuming `b` names an interface in scope
+}
 ```
 
 Note that worlds can import types and define their own types to be exported
@@ -2072,6 +2157,129 @@ is encoded as:
 This duplication is useful in the case of cross-package references or split
 packages, allowing a compiled `world` definition to be fully self-contained and
 able to be used to compile a component without additional type information.
+
+🏷️ When a world imports or exports a named interface with a custom plain name
+(using the `id: use-path` syntax), the encoding uses the `(implements "I")`
+annotation defined in [Explainer.md](Explainer.md#import-and-export-definitions) to indicate which
+interface the instance implements. Note though that each copy implements a
+unique version of the interface in question. For example, the following WIT:
+
+```wit
+package local:demo;
+
+interface store {
+    resource bucket {
+        constructor(name: string);
+        get: func(key: string) -> option<string>;
+    }
+}
+
+world w {
+    import one: store;
+    import two: store;
+}
+```
+
+is encoded as:
+
+```wat
+(component
+  (type (export "store") (component
+    (export "local:demo/store" (instance
+      (export "bucket" (type $b (sub resource)))
+      (export "[constructor]bucket" (func (param "name" string) (result (own $b))))
+      (export "[method]bucket.get" (func (param "self" (borrow $b)) (param "key" string) (result (option string))))
+    ))
+  ))
+  (type (export "w") (component
+    (export "local:demo/w" (component
+      (import "one" (implements "local:demo/store") (instance
+        (export "bucket" (type $b (sub resource)))
+        (export "[constructor]bucket" (func (param "name" string) (result (own $b))))
+        (export "[method]bucket.get" (func (param "self" (borrow $b)) (param "key" string) (result (option string))))
+      ))
+      (import "two" (implements "local:demo/store") (instance
+        (export "bucket" (type $b (sub resource)))
+        (export "[constructor]bucket" (func (param "name" string) (result (own $b))))
+        (export "[method]bucket.get" (func (param "self" (borrow $b)) (param "key" string) (result (option string))))
+      ))
+    ))
+  ))
+)
+```
+
+The `(implements "local:demo/store")` prefix tells bindings generators and
+toolchains which interface each plain-named instance import implements, while
+the labels `one` and `two` provide distinct plain names. This is a case of
+the general `(implements ..)` pattern described in
+[Explainer.md](Explainer.md#import-and-export-definitions). Also note here that
+two copies of the `"bucket"` resource are imported for the `local:demo/w` world.
+This is because the interfaces `one` and `two` duplicate the `store` interface.
+Note that this can import just a single `bucket` resource by extracting out the
+resource definition into a separate interface. For example:
+
+```wit
+package local:demo;
+
+interface types {
+    resource bucket {
+        get: func(key: string) -> option<string>;
+    }
+}
+
+interface store {
+    use types.{bucket};
+    open: func(name: string) -> bucket;
+}
+
+world w {
+    import one: store;
+    import two: store;
+}
+```
+
+is encoded as:
+
+```wat
+(component
+  (type (export "types") (component
+    (export "local:demo/types" (instance
+      (export "bucket" (type $b (sub resource)))
+      (export "[method]bucket.get" (func (param "self" (borrow $b)) (param "key" string) (result (option string))))
+    ))
+  ))
+  (type (export "store") (component
+    (import "local:demo/types" (instance $types
+      (export "bucket" (type $b (sub resource)))
+    ))
+    (alias export $types "bucket" (type $b))
+    (export "local:demo/store" (instance
+      (export "bucket" (type $b' (eq $b)))
+      (export "open" (func (param "name" string) (result (own $b'))))
+    ))
+  ))
+  (type (export "w") (component
+    (export "local:demo/w" (component
+      (import "local:demo/types" (instance $types
+        (export "bucket" (type $b (sub resource)))
+      ))
+      (alias export $types "bucket" (type $b))
+      (import "one" (implements "local:demo/store") (instance
+        (export "bucket" (type $b' (eq $b)))
+        (export "open" (func (param "name" string) (result (own $b'))))
+      ))
+      (import "two" (implements "local:demo/store") (instance
+        (export "bucket" (type $b' (eq $b)))
+        (export "open" (func (param "name" string) (result (own $b'))))
+      ))
+    ))
+  ))
+)
+```
+
+Where in this example the `local:demo/w` world imports only a single `bucket`
+resource under the `local:demo/types` interface. This resource is then used
+by the `one` and `two` export.
 
 Putting this all together, the following WIT definitions:
 

@@ -391,13 +391,14 @@ in the explainer.)
 ```ebnf
 import         ::= in:<importname'> ed:<externdesc>                     => (import in ed)
 export         ::= en:<exportname'> si:<sortidx> ed?:<externdesc>?      => (export en si ed?)
-importname'    ::= 0x00 len:<u32> in:<importname>                       => in     (if len = |in|)
-                 | 0x01 len:<u32> in:<importname>                       => in     (if len = |in|)
-                 | 0x02 len:<u32> in:<importname> vs:<versionsuffix>    => in vs  (if len = |in|) 🔗
-exportname'    ::= 0x00 len:<u32> in:<exportname>                       => in     (if len = |in|)
-                 | 0x01 len:<u32> in:<exportname>                       => in     (if len = |in|)
-                 | 0x02 len:<u32> in:<exportname> vs:<versionsuffix>    => in vs  (if len = |in|) 🔗
-versionsuffix  ::= len:<u32> vs:<semversuffix>                          => (versionsuffix vs)  (if len = |vs|) 🔗
+importname'    ::= 0x00 len:<u32> in:<importname>                       => in      (if len = |in|)
+                 | 0x01 len:<u32> in:<importname>                       => in      (if len = |in|)
+                 | 0x02 len:<u32> in:<importname> opts:vec(<nameopt>)   => in opts (if len = |in|) 🏷️/🔗
+exportname'    ::= 0x00 len:<u32> in:<exportname>                       => in      (if len = |in|)
+                 | 0x01 len:<u32> in:<exportname>                       => in      (if len = |in|)
+                 | 0x02 len:<u32> in:<importname> opts:vec(<nameopt>)   => in opts (if len = |in|) 🏷️/🔗
+nameopt        ::= 0x00 len:<u32> n:<interfacename>                     => (implements i) 🏷️
+                 | 0x01 len:<u32> vs:<semversuffix>                     => (versionsuffix vs) 🔗
 ```
 
 Notes:
@@ -415,11 +416,15 @@ Notes:
   release](##binary-format-warts-to-fix-in-a-10-release).
 * The `<importname>`s of a component must all be [strongly-unique]. Separately,
   the `<exportname>`s of a component must also all be [strongly-unique].
-* Validation requires that annotated `plainname`s only occur on `func` imports
-  or exports and that the first label of a `[constructor]`, `[method]` or
-  `[static]` matches the `plainname` of a preceding `resource` import or
-  export, respectively, in the same scope (component, component type or
-  instance type).
+* Validation requires that `[constructor]`, `[method]` and `[static]` annotated
+  `plainname`s only occur on `func` imports or exports and that the first label
+  of a `[constructor]`, `[method]` or `[static]` matches the `plainname` of a
+  preceding `resource` import or export, respectively, in the same scope
+  (component, component type or instance type).
+* 🏷️ Validation requires that `implements`-annotated imports or exports are
+  `instance`-typed.
+* 🏷️ Validation requires that `implements`-annotated imports or exports have a
+  `<plainname>` name.
 * Validation of `[constructor]` names requires a `func` type whose result type
   is either `(own $R)` or `(result (own $R) E?)` where `$R` is a resource type
   labeled `r`.
