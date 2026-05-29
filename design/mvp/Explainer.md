@@ -1491,8 +1491,10 @@ canon ::= ...
         | (canon thread.resume-later (core func <id>?)) 🧵
         | (canon thread.suspend cancellable? (core func <id>?)) 🧵
         | (canon thread.yield cancellable? (core func <id>?)) 🔀
-        | (canon thread.switch-to cancellable? (core func <id>?)) 🧵
-        | (canon thread.yield-to cancellable? (core func <id>?)) 🧵
+        | (canon thread.suspend-then-resume cancellable? (core func <id>?)) 🧵
+        | (canon thread.yield-then-resume cancellable? (core func <id>?)) 🧵
+        | (canon thread.suspend-then-promote cancellable? (core func <id>?)) 🧵
+        | (canon thread.yield-then-promote cancellable? (core func <id>?)) 🧵
         | (canon error-context.new <canonopt>* (core func <id>?)) 📝
         | (canon error-context.debug-message <canonopt>* (core func <id>?)) 📝
         | (canon error-context.drop (core func <id>?)) 📝
@@ -2112,8 +2114,9 @@ extended for [GC].
 
 As explained in the [concurrency explainer], a thread created by
 `thread.new-indirect` is initially in a suspended state and must be resumed
-eagerly or lazily by [`thread.yield-to`](#-threadyield-to) or
-[`thread.resume-later`](#-threadresume-later), resp., to begin execution.
+eagerly by [`thread.suspend-then-resume`](#-threadsuspend-then-resume) or
+[`thread.yield-then-resume`](#-threadyield-then-resume) or lazily by
+[`thread.resume-later`](#-threadresume-later) to begin execution.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_new_indirect`] in the Canonical ABI explainer.
@@ -2145,9 +2148,6 @@ explicitly resumed by some other thread calling a built-in such as
 the current task was [cancelled] by the caller; otherwise, `thread.suspend`
 always returns `false`.
 
-A non-`async`-typed function export that has not yet returned a value traps if
-it transitively attempts to call `thread.suspend`.
-
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_suspend`] in the Canonical ABI explainer.
 
@@ -2161,52 +2161,77 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 The `thread.yield` built-in allows the runtime to potentially switch to any
 other thread in the "ready" state, enabling a long-running computation to
 cooperatively interleave execution without specifically requesting another
-thread to be resumed (as with `thread.yield-to`). If `cancellable` is set,
-`thread.yield` returns whether the current task was [cancelled] by the caller;
-otherwise, `thread.yield` always returns `false`.
-
-If `thread.yield` is called from a synchronous- or `async callback`-lifted
-export, it returns immediately without blocking (instead of trapping, as with
-other possibly-blocking operations like `waitable-set.wait`). This is because,
-unlike other built-ins, `thread.yield` may be scattered liberally throughout
-code that might show up in the transitive call tree of a synchronous function
-call.
+thread to be resumed (as with `thread.yield-then-resume`). If `cancellable` is
+set, `thread.yield` returns whether the current task was [cancelled] by the
+caller; otherwise, `thread.yield` always returns `false`.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield`] in the Canonical ABI explainer.
 
-###### 🧵 `thread.switch-to`
+###### 🧵 `thread.suspend-then-resume`
 
 | Synopsis                   |                                         |
 | -------------------------- | --------------------------------------- |
 | Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
 | Canonical ABI signature    | `[t:i32] -> [i32]`                      |
 
-The `thread.switch-to` built-in suspends the [current thread] and immediately
-resumes execution of the thread `t`, trapping if `t` is not in a "suspended"
-state. If `cancellable` is set, `thread.switch-to` returns whether the current
-task was [cancelled] by the caller; otherwise, `thread.switch-to` always returns
-`false`.
+The `thread.suspend-then-resume` built-in suspends the [current thread] and
+immediately resumes execution of the thread `t`, trapping if `t` is not in a
+"suspended" state. If `cancellable` is set, `thread.suspend-then-resume` returns
+whether the current task was [cancelled] by the caller; otherwise,
+`thread.suspend-then-resume` always returns `false`.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
-[`canon_thread_switch_to`] in the Canonical ABI explainer.
+[`canon_thread_suspend_then_resume`] in the Canonical ABI explainer.
 
-###### 🧵 `thread.yield-to`
+###### 🧵 `thread.yield-then-resume`
 
 | Synopsis                   |                                         |
 | -------------------------- | --------------------------------------- |
 | Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
 | Canonical ABI signature    | `[t:i32] -> [i32]`                      |
 
-The `thread.yield-to` built-in immediately resumes execution of the thread `t`,
-(trapping if `t` is not in a "suspended" state) leaving the [current thread] in
-a "ready" state so that the runtime can nondeterministically resume the current
-thread at some point in the future. If `cancellable` is set, `thread.yield-to`
+The `thread.yield-then-resume` built-in immediately resumes execution of the
+thread `t` (trapping if `t` is not in a "suspended" state), leaving the [current
+thread] in a "ready" state so that the runtime can nondeterministically resume
+the current thread at some point in the future. If `cancellable` is set,
+`thread.yield-then-resume` returns whether the current task was [cancelled] by
+the caller; otherwise, `thread.yield-then-resume` always returns `false`.
+
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_thread_yield_then_resume`] in the Canonical ABI explainer.
+
+###### 🧵 `thread.suspend-then-promote`
+
+| Synopsis                   |                                         |
+| -------------------------- | --------------------------------------- |
+| Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
+| Canonical ABI signature    | `[t:i32] -> [i32]`                      |
+
+The `thread.suspend-then-promote` built-in immediately resumes execution of the
+thread `t` if `t` is in a "ready" state, in any case leaving the current thread
+in a "suspended" state. If `cancellable` is set, `thread.suspend-then-promote`
 returns whether the current task was [cancelled] by the caller; otherwise,
-`thread.yield-to` always returns `false`.
+`thread.suspend-then-promote` always returns `false`.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
-[`canon_thread_yield_to`] in the Canonical ABI explainer.
+[`canon_thread_suspend_then_promote`] in the Canonical ABI explainer.
+
+###### 🧵 `thread.yield-then-promote`
+
+| Synopsis                   |                                         |
+| -------------------------- | --------------------------------------- |
+| Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
+| Canonical ABI signature    | `[t:i32] -> [i32]`                      |
+
+The `thread.yield-then-promote` built-in immediately resumes execution of the
+thread `t` if `t` is in a "ready" state, in any case leaving the current thread
+in a "ready" state. If `cancellable` is set, `thread.yield-then-promote` returns
+whether the current task was [cancelled] by the caller; otherwise,
+`thread.yield-then-promote` always returns `false`.
+
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_thread_yield_then_promote`] in the Canonical ABI explainer.
 
 ###### 🧵② `thread.spawn-ref`
 
@@ -3331,11 +3356,13 @@ For some use-case-focused, worked examples, see:
 [`canon_error_context_drop`]: CanonicalABI.md#-canon-error-contextdrop
 [`canon_thread_index`]: CanonicalABI.md#-canon-threadindex
 [`canon_thread_new_indirect`]: CanonicalABI.md#-canon-threadnew-indirect
-[`canon_thread_suspend`]: CanonicalABI.md#-canon-threadsuspend
-[`canon_thread_switch_to`]: CanonicalABI.md#-canon-threadswitch-to
 [`canon_thread_resume_later`]: CanonicalABI.md#-canon-threadresume-later
-[`canon_thread_yield_to`]: CanonicalABI.md#-canon-threadyield-to
+[`canon_thread_suspend`]: CanonicalABI.md#-canon-threadsuspend
 [`canon_thread_yield`]: CanonicalABI.md#-canon-threadyield
+[`canon_thread_suspend_then_resume`]: CanonicalABI.md#-canon-threadsuspend-then-resume
+[`canon_thread_yield_then_resume`]: CanonicalABI.md#-canon-threadyield-then-resume
+[`canon_thread_suspend_then_promote`]: CanonicalABI.md#-canon-threadsuspend-then-promote
+[`canon_thread_yield_then_promote`]: CanonicalABI.md#-canon-threadyield-then-promote
 [`canon_thread_spawn_ref`]: CanonicalABI.md#-canon-threadspawn-ref
 [`canon_thread_spawn_indirect`]: CanonicalABI.md#-canon-threadspawn-indirect
 [`canon_thread_available_parallelism`]: CanonicalABI.md#-canon-threadavailable_parallelism

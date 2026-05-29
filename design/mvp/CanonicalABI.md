@@ -64,8 +64,10 @@ specified here.
   * [`canon thread.resume-later`](#-canon-threadresume-later) 🧵
   * [`canon thread.suspend`](#-canon-threadsuspend) 🧵
   * [`canon thread.yield`](#-canon-threadyield) 🧵
-  * [`canon thread.switch-to`](#-canon-threadswitch-to) 🧵
-  * [`canon thread.yield-to`](#-canon-threadyield-to) 🧵
+  * [`canon thread.suspend-then-resume`](#-canon-threadsuspend-then-resume) 🧵
+  * [`canon thread.yield-then-resume`](#-canon-threadyield-then-resume) 🧵
+  * [`canon thread.suspend-then-promote`](#-canon-threadsuspend-then-promote) 🧵
+  * [`canon thread.yield-then-promote`](#-canon-threadyield-then-promote) 🧵
   * [`canon error-context.new`](#-canon-error-contextnew) 📝
   * [`canon error-context.debug-message`](#-canon-error-contextdebug-message) 📝
   * [`canon error-context.drop`](#-canon-error-contextdrop) 📝
@@ -640,7 +642,7 @@ here. `Thread.suspend` first attempts to deliver any pending cancellation
 requests and then otherwise simply [blocks].
 ```python
   def suspend(self, cancellable) -> Cancelled:
-    assert(self.running() and self.task.may_block())
+    assert(self.running())
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
     return self.block_internal(cancellable)
@@ -648,16 +650,20 @@ requests and then otherwise simply [blocks].
 
 The `Thread.wait_until` method is used by all the synchronous blocking
 built-ins, as well as auto-backpressure and the `callback` event loop, to wait
-until a particular readiness condition is met:
+until a particular readiness condition is met. Given `wait_until`, "yielding"
+can simply be defined as waiting on a readiness condition that is already met.
 ```python
   def wait_until(self, ready_func, cancellable = False) -> Cancelled:
-    assert(self.running() and self.task.may_block())
+    assert(self.running())
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
     if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):
       return Cancelled.FALSE
     self.start_waiting_internal(ready_func)
     return self.block_internal(cancellable)
+
+  def yield_(self, cancellable) -> Cancelled:
+    return self.wait_until(lambda: True, cancellable)
 ```
 As with `Thread.suspend`, before anything else, `wait_until` reports any pending
 cancellation requests if the caller is `cancellable`. The `randomint` conjunct
@@ -668,51 +674,49 @@ a caller makes an `async` call to a callee which `wait_until`s a condition
 that's already met (e.g. in the case of `yield`), the embedder can use
 scheduling heuristics to decide whether or not to block the current thread.
 
-The `Thread.yield_until` method modifies the generic `Thread.wait_until` method
-for the `thread.yield` built-in (and `callback`s returning the `YIELD` code) so
-that, when executing in a non-blocking context, yielding does not trap and
-simply continues executing. This behavior allows `thread.yield` calls to be
-scattered liberally throughout code, possibly via automatic code generation
-emulating preemptive multi-threading.
+The `Thread.suspend_then_resume` and `Thread.yield_then_resume` methods
+immediately resume execution of some `other` `suspended` thread in the same
+component instance, leaving the original thread in either a `suspended` or
+`ready` `waiting` state, resp. Like other `Thread` methods, these methods first
+report any pending cancellation if the caller is `cancellable`.
 ```python
-  def yield_until(self, ready_func, cancellable) -> Cancelled:
-    assert(self.running())
-    if self.task.may_block():
-      return self.wait_until(ready_func, cancellable)
-    else:
-      assert(ready_func())
-      return Cancelled.FALSE
-
-  def yield_(self, cancellable) -> Cancelled:
-    return self.yield_until(lambda: True, cancellable)
-```
-
-The `Thread.switch_to` method is used by the `thread.switch-to` built-in to
-suspend the current thread and immediately transfer execution to some other
-`suspended` thread in the same component instance. Like other `Thread` methods,
-`Thread.switch_to` first reports any pending cancellation if the caller is
-`cancellable`. Then the current thread transfers control flow to the `other`
-thread using the `Thread.switch_to_internal` helper method defined above.
-```python
-  def switch_to(self, cancellable, other: Thread) -> Cancelled:
+  def suspend_then_resume(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running() and other.suspended())
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
     return self.switch_to_internal(cancellable, other)
-```
 
-Lastly, the `Thread.yield_to` method is used by the `thread.yield-to` built-in
-to switch execution to some other thread, leaving the current thread in a
-`ready` `waiting` state so that it can nondeterministically `resume` execution
-at the next `Store.tick`. Like other `Thread` methods, `Thread.yield_to` first
-reports any pending cancellation if the caller is `cancellable`.
-```python
-  def yield_to(self, cancellable, other: Thread) -> Cancelled:
+  def yield_then_resume(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running() and other.suspended())
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
     self.start_waiting_internal(lambda: True)
     return self.switch_to_internal(cancellable, other)
+```
+
+Lastly, the `Thread.suspend_then_promote` and `Thread.yield_then_promote`
+methods *attempt* to immediately resume execution of some `other` thread in the
+same component instance *if* the `other` thread is in a `ready` `waiting` state.
+If so, control flow is transferred directly and the current thread is left
+`suspended` or in a `ready` `waiting` state, resp. If the `other` thread is
+*not* ready to run, then these operations fall back to plain `suspend` or
+`yield_` behavior, resp.
+```python
+  def suspend_then_promote(self, cancellable, other: Thread) -> Cancelled:
+    assert(self.running())
+    if other.ready():
+      other.stop_waiting_internal(cancelled = False)
+      return self.suspend_then_resume(cancellable, other)
+    else:
+      return self.suspend(cancellable)
+
+  def yield_then_promote(self, cancellable, other: Thread) -> Cancelled:
+    assert(self.running())
+    if other.ready():
+      other.stop_waiting_internal(cancelled = False)
+      return self.yield_then_resume(cancellable, other)
+    else:
+      return self.yield_(cancellable)
 ```
 
 
@@ -804,14 +808,6 @@ holding the lock.
   def needs_exclusive(self):
     assert(self.ft.async_)
     return not self.opts.async_ or self.opts.callback
-```
-
-The `Task.may_block` predicate returns whether the [current task]'s function's
-type is allowed to [block]. Specifically, functions that do not declare the
-`async` effect that have not yet returned a value may not block.
-```python
-  def may_block(self):
-    return self.ft.async_ or self.state == Task.State.RESOLVED
 ```
 
 The `Task.enter_implicit_thread` method implements [backpressure] between when
@@ -1259,6 +1255,11 @@ class Table:
   def __init__(self):
     self.array = [None]
     self.free = []
+
+  def __iter__(self):
+    for e in self.array:
+      if e is not None:
+        yield e
 
   def get(self, i):
     trap_if(i >= len(self.array))
@@ -3664,13 +3665,12 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
       inst.exclusive_thread = None
       match code:
         case CallbackCode.YIELD:
-          cancelled = thread.yield_until(lambda: not inst.exclusive_thread, cancellable = True)
+          cancelled = thread.wait_until(lambda: not inst.exclusive_thread, cancellable = True)
           if cancelled:
             event = (EventCode.TASK_CANCELLED, 0, 0)
           else:
             event = (EventCode.NONE, 0, 0)
         case CallbackCode.WAIT:
-          trap_if(not task.may_block())
           wset = inst.handles.get(si)
           trap_if(not isinstance(wset, WaitableSet))
           event = wset.wait_for_event_and(lambda: not inst.exclusive_thread, cancellable = True)
@@ -3684,16 +3684,12 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
     task.exit_implicit_thread()
     return
 ```
-The `Thread.yield_until` and `WaitableSet.wait_for_event_and` methods called by
+The `Thread.wait_until` and `WaitableSet.wait_for_event_and` methods called by
 the event loop are the same methods called by the `thread.yield` and
 `waitable-set.wait` built-ins. Thus, the main difference between stackful and
 stackless async is whether these suspending operations are performed from an
 empty or non-empty core wasm callstack (with the former allowing additional
 engine optimization).
-
-If a `Task` is not allowed to block (because it was created for a non-`async`-
-typed function call and has not yet returned a value), `YIELD` is always a
-no-op and `WAIT` always traps.
 
 The event loop releases `ComponentInstance.exclusive_thread` (which was acquired
 by `Task.enter_implicit_thread`) before potentially blocking the thread to allow
@@ -3709,16 +3705,34 @@ The end of `canon_lift` creates a new task/thread pair for the call and then
 calls `Thread.resume` on the new thread to synchronously transfer control flow
 to it (jumping to the top of `thread_func` above). The new thread executes until
 it either returns from `thread_func` or [blocks] by (transitively) calling
-`Thread.block_internal`. Thus, in all cases, `canon_lift` never blocks the
-caller, as required by the `FuncInst` calling contract. Lastly, `canon_lift`
-returns `Task.request_cancellation`, bound to the call's new task, as the
-required `OnCancel` value.
+`Thread.block_internal`. If a non-`async`-typed call blocks before the implicit
+thread has returned a value and there are no other `ready` threads in the same
+component instance, `canon_lift` traps, since non-`async`-typed calls may not
+block. Otherwise, `canon_lift` switches to a thread (nondeterministically, if
+multiple are `ready`), as if the guest code had done so itself using a built-in
+like `thread.suspend-then-promote`. This allows fully-synchronous components to
+still use cooperative pthreads that interleave via threading built-ins (e.g.,
+`thread.yield`) and *even perform blocking I/O* as long as the blocking I/O does
+not transitively block returning a value to the caller (as would also be
+expressible with a CPS transform like [Asyncify]). Lastly, `canon_lift` returns
+`Task.request_cancellation`, bound to the call's new task, as the `OnCancel`
+return value of `FuncInst`.
 ```python
   task = Task(ft, opts, inst, on_start, on_resolve, caller)
   thread = Thread(task, thread_func)
   thread.resume()
+  if not ft.async_:
+    while task.state != Task.State.RESOLVED:
+      candidates = { t for t in inst.threads if t.ready() and t is not inst.exclusive_thread }
+      trap_if(not candidates)
+      random.choice(list(candidates)).resume()
   return task.request_cancellation
 ```
+The special case that excludes any thread (created by a previous blocked `async`
+call) holding the instance's `exclusive_thread` lock is necessary to preserve
+[Component Invariant] #3, which might otherwise be violated if the current
+synchronous call is using the single global linear memory shadow stack.
+
 Note that, because non-`async`-typed functions can't block, they do not actually
 require a separate thread/fiber/stack to implement the above specified behavior
 and a normal synchronous native function call can be used instead. Even if the
@@ -3788,26 +3802,16 @@ along with the component instance being instantiated. These are then passed into
 `canon_lower` every time the generated `CoreFuncInst` is called, along with the
 runtime Core WebAssembly arguments.
 
-Based on this, `canon_lower` is defined in chunks as follows:
+Based on this, `canon_lower` is defined in chunks as follows. First, each call
+to `canon_lower` creates a new `Subtask`. However, this `Subtask` is only added
+to the current component instance's `handles` table (below) if `async` is
+specified *and* `callee` blocks. In any case, this `Subtask` is used as the
+`LiftLowerContext.borrow_scope` for `borrow` arguments, ensuring that owned
+handles are not dropped before `Subtask.deliver_resolve` is called (below).
 ```python
 def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValType]:
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block() and ft.async_ and not opts.async_)
-```
-A non-`async`-typed function export that has not yet returned a value
-unconditionally traps if it transitively attempts to make a synchronous call to
-an `async`-typed function import (even if the callee wouldn't have actually
-blocked at runtime). It is however fine to make an `async`-lowered call to an
-`async`-typed function import, since this never blocks (only a subsequent call
-to, e.g., `waitable-set.wait` would block).
-
-Each call to `canon_lower` creates a new `Subtask`. However, this `Subtask` is
-only added to the current component instance's `handles` table (below) if
-`async` is specified *and* `callee` blocks. In any case, this `Subtask` is used
-as the `LiftLowerContext.borrow_scope` for `borrow` arguments, ensuring that
-owned handles are not dropped before `Subtask.deliver_resolve` is called (below).
-```python
   subtask = Subtask()
   cx = LiftLowerContext(opts, thread.task.inst, subtask)
 ```
@@ -4251,7 +4255,6 @@ returning its `EventCode` and writing the payload values into linear memory:
 def canon_waitable_set_wait(cancellable, mem, si, ptr):
   task = current_task()
   trap_if(not task.inst.may_leave)
-  trap_if(not task.may_block())
   wset = task.inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
   event = wset.wait_for_event(cancellable)
@@ -4264,10 +4267,6 @@ def unpack_event(mem, inst, ptr, e: EventTuple):
   store(cx, p2, U32Type(), ptr + 4)
   return [event]
 ```
-A non-`async`-typed function export that has not yet returned a value
-unconditionally traps if it transitively attempts to call `wait` (regardless of
-whether there are any waitables with pending events).
-
 If `cancellable` is set, then `waitable-set.wait` will return whether the
 supertask has already or concurrently requested cancellation.
 `waitable-set.wait` (and other cancellable operations) will only indicate
@@ -4404,7 +4403,6 @@ BLOCKED = 0xffff_ffff
 def canon_subtask_cancel(async_, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block() and not async_)
   subtask = thread.task.inst.handles.get(i)
   trap_if(not isinstance(subtask, Subtask))
   trap_if(subtask.resolve_delivered())
@@ -4425,13 +4423,9 @@ def canon_subtask_cancel(async_, i):
   assert(subtask.resolve_delivered())
   return [subtask.state]
 ```
-A non-`async`-typed function export that has not yet returned a value
-unconditionally traps if it transitively attempts to make a synchronous call to
-`subtask.cancel` (regardless of whether the cancellation would have succeeded
-without blocking). The other traps disallow calling `subtask.cancel` twice for
-the same subtask or after the supertask has already been notified that the
-subtask has returned or if the subtask is already being asynchronously waited
-on via waitable set.
+`subtask.cancel` starts by trapping if called twice for the same subtask or if
+the supertask has already been notified that the subtask has returned or if the
+subtask is already being asynchronously waited on via waitable set.
 
 A race condition handled by the above code is that it's possible for a subtask
 to have already resolved (by calling `task.return` or `task.cancel`) and
@@ -4533,23 +4527,16 @@ def canon_stream_write(stream_t, opts, i, ptr, n):
                      stream_t, opts, i, ptr, n)
 ```
 
-Introducing the `stream_copy` function in chunks, a non-`async`-typed function
-export that has not yet returned a value unconditionally traps if it
-transitively attempts to perform a synchronous `read` or `write` (regardless of
-whether the operation would have succeeded eagerly without blocking).
+Introducing the `stream_copy` function in chunks, first, the element at index
+`i` is checked to be of the right type and allowed to start a new copy. (In the
+future, the "trap if not `IDLE`" condition could be relaxed to allow multiple
+pipelined reads or writes.) There is also a trap if attempting to synchronously
+read or write from a stream that is already being asynchronously waited on via
+waitable set.
 ```python
 def stream_copy(EndT, BufferT, event_code, stream_t, opts, i, ptr, n):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block() and not opts.async_)
-```
-
-Next, `stream_copy` checks that the element at index `i` is of the right type
-and allowed to start a new copy. (In the future, the "trap if not `IDLE`"
-condition could be relaxed to allow multiple pipelined reads or writes.)
-There is also a trap if attempting to synchronously read or write from a
-stream that is already being asynchronously waited on via waitable set.
-```python
   e = thread.task.inst.handles.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_t.t)
@@ -4660,21 +4647,23 @@ def canon_future_write(future_t, opts, i, ptr):
 ```
 
 Introducing the `future_copy` function in chunks, `future_copy` starts with the
-same set of guards as `stream_copy` regarding whether suspension is allowed and
-parameters `i` and `ptr`. The only difference is that, with futures, the
-`Buffer` length is fixed to `1`.
+same set of guards on the element `i` as `stream_copy`, except checking for a
+*future* end instead of a *stream* end:
 ```python
 def future_copy(EndT, BufferT, event_code, future_t, opts, i, ptr):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block() and not opts.async_)
-
   e = thread.task.inst.handles.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != future_t.t)
   trap_if(e.state != CopyState.IDLE)
   trap_if(e.in_waitable_set() and not opts.async_)
+```
 
+Next, a readable or writable buffer is created, as with streams, except that the
+buffer length is fixed to `1` and there is no validation-time prohibition on
+`future<char>`:
+```python
   assert(not contains_borrow(future_t))
   cx = LiftLowerContext(opts, thread.task.inst, borrow_scope = None)
   buffer = BufferT(future_t.t, cx, ptr, 1)
@@ -4754,7 +4743,6 @@ def canon_future_cancel_write(future_t, async_, i):
 def cancel_copy(EndT, event_code, stream_or_future_t, async_, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block() and not async_)
   e = thread.task.inst.handles.get(i)
   trap_if(not isinstance(e, EndT))
   trap_if(e.shared.t != stream_or_future_t.t)
@@ -4772,15 +4760,12 @@ def cancel_copy(EndT, event_code, stream_or_future_t, async_, i):
   assert(not e.copying() and code == event_code and index == i)
   return [payload]
 ```
-A non-`async`-typed function export that has not yet returned a value
-unconditionally traps if it transitively attempts to make a synchronous call to
-`cancel-read` or `cancel-write` (regardless of whether the cancellation would
-have completed without blocking). There is also a trap if there is not
-currently an async copy in progress (sync copies do not expect or check for
-cancellation and thus cannot be cancelled, and repeatedly cancelling the same
-async copy after the first call blocked is not allowed). Lastly, there is a
-trap if attempting to synchronously cancel a stream operation when the stream
-end is already being asynchronously waited on by a waitable set.
+Cancellation traps if there is not currently an async copy in progress (sync
+copies do not expect or check for cancellation and thus cannot be cancelled, and
+repeatedly cancelling the same async copy after the first call blocked is not
+allowed). There is also a trap if attempting to synchronously cancel a stream
+operation when the stream end is already being asynchronously waited on by a
+waitable set.
 
 The *first* check for `e.has_pending_event()` catches the case where the copy has
 already racily finished, in which case we must *not* call `cancel()`. Calling
@@ -4950,13 +4935,9 @@ calling component.
 def canon_thread_suspend(cancellable):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  trap_if(not thread.task.may_block())
   cancelled = thread.suspend(cancellable)
   return [cancelled]
 ```
-A non-`async`-typed function export that has not yet returned a value traps if
-it transitively attempts to call `thread.suspend`.
-
 If `cancellable` is set, then `thread.suspend` will return a `Cancelled`
 value to indicate whether the supertask has already or concurrently requested
 cancellation. `thread.suspend` (and other cancellable operations) will only
@@ -4986,13 +4967,6 @@ def canon_thread_yield(cancellable):
   cancelled = thread.yield_(cancellable)
   return [cancelled]
 ```
-If a non-`async`-typed function export that has not yet returned a value
-transitively calls `thread.yield`, it returns immediately without blocking
-(instead of trapping, as with other possibly-blocking operations like
-`waitable-set.wait`). This is because, unlike other built-ins, `thread.yield`
-may be scattered liberally throughout code that might show up in the transitive
-call tree of a synchronous function call.
-
 If `cancellable` is set, then `thread.yield` will return a `Cancelled`
 value indicating whether the supertask has already or concurrently requested
 cancellation. `thread.yield` (and other cancellable operations) will only
@@ -5001,65 +4975,124 @@ cancellation, they can omit `cancellable` so that cancellation is instead
 delivered at a later `cancellable` call.
 
 
-### 🧵 `canon thread.switch-to`
+### 🧵 `canon thread.suspend-then-resume`
 
 For a canonical definition:
 ```wat
-(canon thread.switch-to $cancellable? (core func $switch-to))
+(canon thread.suspend-then-resume $cancellable? (core func $suspend-then-resume))
 ```
 validation specifies:
-* `$switch-to` is given type `(func (param $i i32) (result i32))`
+* `$suspend-then-resume` is given type `(func (param $i i32) (result i32))`
 
-Calling `$switch-to` invokes the following function which loads a thread at
-index `$i` from the current component instance's `threads` table, traps if it's
-not [suspended], and then switches to that thread, leaving the [current thread]
-suspended.
+Calling `$suspend-then-resume` invokes the following function which loads a
+thread at index `$i` from the current component instance's `threads` table,
+traps if it's not [suspended], and then switches to that thread, leaving the
+[current thread] suspended.
 ```python
-def canon_thread_switch_to(cancellable, i):
+def canon_thread_suspend_then_resume(cancellable, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
-  cancelled = thread.switch_to(cancellable, other_thread)
+  cancelled = thread.suspend_then_resume(cancellable, other_thread)
   return [cancelled]
 ```
-If `cancellable` is set, then `thread.switch-to` will return a `Cancelled`
-value to indicate whether the supertask has already or concurrently requested
-cancellation. `thread.switch-to` (and other cancellable operations) will only
-indicate cancellation once and thus, if a caller is not prepared to propagate
-cancellation, they can omit `cancellable` so that cancellation is instead
-delivered at a later `cancellable` call.
+If `cancellable` is set, then `thread.suspend-then-resume` will return a
+`Cancelled` value to indicate whether the supertask has already or concurrently
+requested cancellation. `thread.suspend-then-resume` (and other cancellable
+operations) will only indicate cancellation once and thus, if a caller is not
+prepared to propagate cancellation, they can omit `cancellable` so that
+cancellation is instead delivered at a later `cancellable` call.
 
 
-### 🧵 `canon thread.yield-to`
+### 🧵 `canon thread.yield-then-resume`
 
 For a canonical definition:
 ```wat
-(canon thread.yield-to $cancellable? (core func $yield-to))
+(canon thread.yield-then-resume $cancellable? (core func $yield-then-resume))
 ```
 validation specifies:
-* `$yield-to` is given type `(func (param $i i32) (result i32))`
+* `$yield-then-resume` is given type `(func (param $i i32) (result i32))`
 
-Calling `$yield-to` invokes the following function which loads a thread at
-index `$i` from the current component instance's `threads` table, traps if it's
-not [suspended], and then switches to that thread, leaving the [current thread]
-ready to run at some nondeterministic point in the future chosen by the
+Calling `$yield-then-resume` invokes the following function which loads a thread
+at index `$i` from the current component instance's `threads` table, traps if
+it's not [suspended], and then switches to that thread, leaving the [current
+thread] ready to run at some nondeterministic point in the future chosen by the
 embedder.
 ```python
-def canon_thread_yield_to(cancellable, i):
+def canon_thread_yield_then_resume(cancellable, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
-  cancelled = thread.yield_to(cancellable, other_thread)
+  cancelled = thread.yield_then_resume(cancellable, other_thread)
   return [cancelled]
 ```
-If `cancellable` is set, then `thread.yield-to` will return a `Cancelled`
-value indicating whether the supertask has already or concurrently requested
-cancellation. `thread.yield-to` (and other cancellable operations) will only
-indicate cancellation once and thus, if a caller is not prepared to propagate
-cancellation, they can omit `cancellable` so that cancellation is instead
-delivered at a later `cancellable` call.
+If `cancellable` is set, then `thread.yield-then-resume` will return a
+`Cancelled` value indicating whether the supertask has already or concurrently
+requested cancellation. `thread.yield-then-resume` (and other cancellable
+operations) will only indicate cancellation once and thus, if a caller is not
+prepared to propagate cancellation, they can omit `cancellable` so that
+cancellation is instead delivered at a later `cancellable` call.
+
+
+### 🧵 `canon thread.suspend-then-promote`
+
+For a canonical definition:
+```wat
+(canon thread.suspend-then-promote $cancellable? (core func $suspend-then-promote))
+```
+validation specifies:
+* `$suspend-then-promote` is given type `(func (param $i i32) (result i32))`
+
+Calling `$suspend-then-promote` invokes the following function which loads a
+thread at index `$i` from the current component instance's `threads` table and
+then calls `Thread.suspend_then_resume` to resume the `other_thread` if it's
+`ready` and, in any case, leave the [current thread] suspended.
+```python
+def canon_thread_suspend_then_promote(cancellable, i):
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  other_thread = thread.task.inst.threads.get(i)
+  cancelled = thread.suspend_then_promote(cancellable, other_thread)
+  return [cancelled]
+```
+If `cancellable` is set, then `thread.suspend-then-promote` will return a
+`Cancelled` value indicating whether the supertask has already or concurrently
+requested cancellation. `thread.suspend-then-promote` (and other cancellable
+operations) will only indicate cancellation once and thus, if a caller is not
+prepared to propagate cancellation, they can omit `cancellable` so that
+cancellation is instead delivered at a later `cancellable` call.
+
+
+### 🧵 `canon thread.yield-then-promote`
+
+For a canonical definition:
+```wat
+(canon thread.yield-then-promote $cancellable? (core func $yield-then-promote))
+```
+validation specifies:
+* `$yield-then-promote` is given type `(func (param $i i32) (result i32))`
+
+Calling `$yield-then-promote` invokes the following function which loads a
+thread at index `$i` from the current component instance's `threads` table and
+then calls `Thread.yield_then_resume` to resume the `other_thread` if it's
+`ready` and, in any case, leave the [current thread] ready to run at some
+nondeterministic point in the future chosen by the embedder.
+```python
+def canon_thread_yield_then_promote(cancellable, i):
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  other_thread = thread.task.inst.threads.get(i)
+  cancelled = thread.yield_then_promote(cancellable, other_thread)
+  return [cancelled]
+```
+If `cancellable` is set, then `thread.yield-then-promote` will return a
+`Cancelled` value indicating whether the supertask has already or concurrently
+requested cancellation. `thread.yield-then-promote` (and other cancellable
+operations) will only indicate cancellation once and thus, if a caller is not
+prepared to propagate cancellation, they can omit `cancellable` so that
+cancellation is instead delivered at a later `cancellable` call.
 
 
 ### 📝 `canon error-context.new`
