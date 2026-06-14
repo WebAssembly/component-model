@@ -148,16 +148,10 @@ test(RecordType([FieldType('x',U8Type()),
      [1,2,3],
      {'x':1,'y':2,'z':3})
 test(TupleType([TupleType([U8Type(),U8Type()]),U8Type()]), [1,2,3], {'0':{'0':1,'1':2},'1':3})
-test(ListType(U8Type(),3), [1,2,3], [1,2,3])
-test(ListType(ListType(U8Type(),2),3), [1,2,3,4,5,6], [[1,2],[3,4],[5,6]])
-# bounded (variable-length up to max) list tests
-test(ListType(U8Type(),3,True), [3, 1,2,3], [1,2,3])
-test(ListType(U8Type(),3,True), [2, 1,2,0], [1,2])
-test(ListType(U8Type(),3,True), [0, 0,0,0], [])
-test(ListType(U32Type(),2,True), [2, 10,20], [10,20])
-test(ListType(U32Type(),2,True), [1, 10,0], [10])
-# actual_len > max_len must trap (flat)
-test(ListType(U8Type(),3,True), [4, 1,2,3], None)
+# Fixed- and bounded-length lists are never lifted/lowered as flat core values
+# (they are always passed via the param area); their in-memory layout is tested
+# by test_heap below and their calling-convention placement by
+# test_param_area_* near the end of this file.
 # Empty flags types are not permitted yet.
 #t = FlagsType([])
 #test(t, [], {})
@@ -2966,6 +2960,114 @@ def test_thread_cancel_callback():
 
   lift_and_run(mk_opts(), consumer_inst, consumer_ft, core_consumer, lambda:[], lambda _:())
 
+
+# Fixed/bounded lists (and aggregates containing them) are passed through the
+# param area instead of flat registers; scalars keep their registers up to the
+# MAX_FLAT budget (plus one slot for the param-area pointer, PAP).  These tests
+# mirror the comparison table in ../ListDiscussion.md with MAX_FLAT_PARAMS = 4.
+def test_param_area_predicate():
+  s32 = S32Type()
+  # a fixed or bounded list (or an aggregate transitively containing one) needs
+  # the param area; unbounded lists/strings already indirect, so they don't.
+  assert(is_forced_to_mem(ListType(s32, 3)))
+  assert(is_forced_to_mem(ListType(s32, 3, True)))
+  assert(is_forced_to_mem(TupleType([s32, ListType(s32, 2)])))
+  assert(is_forced_to_mem(RecordType([FieldType('a', ListType(s32, 2)), FieldType('b', s32)])))
+  assert(is_forced_to_mem(OptionType(ListType(s32, 3))))
+  assert(not is_forced_to_mem(s32))
+  assert(not is_forced_to_mem(ListType(s32))) # unbounded
+  assert(not is_forced_to_mem(StringType()))
+  assert(not is_forced_to_mem(RecordType([FieldType('a', s32), FieldType('b', s32)])))
+  assert(not is_forced_to_mem(ListType(ListType(s32, 3)))) # fixed nested under unbounded
+
+def test_param_area_placement():
+  # override the global MAX_FLAT_PARAMS for simplicity
+  prev_flat_params = definitions.MAX_FLAT_PARAMS
+  definitions.MAX_FLAT_PARAMS = 4
+
+  opts = mk_opts(MemInst(bytearray(), 'i32'))
+  s32 = S32Type()
+
+  def check(param_ts, flat_vis, mem_vis, expect_n_core_params):
+    p = plan_flatten(param_ts, definitions.MAX_FLAT_PARAMS, opts)
+    assert(p.flat_vis == flat_vis)
+    assert(p.mem_vis == mem_vis)
+    # plan_flatten holds the param-area pointer back from flat_ts ...
+    assert(p.flat_ts == flatten_types([param_ts[i] for i in flat_vis], opts))
+    # ... so it is flatten_functype that appends it to the core signature
+    sig = flatten_functype(opts, FuncType(param_ts, []), 'lift')
+    assert(len(sig.params) == expect_n_core_params)
+    if mem_vis:
+      assert(sig.params[-1] == opts.memory.ptr_type()) # param area slot
+
+  PAP = 1 # memory area pointer takes one core value
+  # signature: check(type_array, flat_indices, mem_indices)
+  check([ListType(s32, 3)], [], [0], 0 + PAP)
+  check([ListType(s32, 3), s32], [1], [0], 1 + PAP)
+  check([ListType(s32, 3), s32, s32], [1, 2], [0], 2 + PAP)
+  check([ListType(s32, 4)], [], [0], PAP)
+  check([ListType(s32, 4), s32], [1], [0], 1 + PAP)
+  check([ListType(s32, 5)], [], [0], PAP)
+  check([ListType(s32, 3, True)], [], [0], PAP)
+  check([ListType(s32, 3, True), s32], [1], [0], 1 + PAP)
+  check([ListType(s32, 4, True)], [], [0], PAP)
+  check([ListType(s32, 3, True), s32, s32, s32], [1, 2, 3], [0], 3 + PAP)
+  # overflow spills everything to the param area
+  check([s32]*4, [0, 1, 2, 3], [], 4)
+  check([s32]*5, [], [0, 1, 2, 3, 4], PAP)
+  # the memory are core pointer is included in the flat count
+  # for backward compatibility. Can it be relaxed?
+  # (result area pointer does not count...)
+  check([ListType(s32, 3, True), s32, s32, s32, s32], [], [0, 1, 2, 3, 4], PAP)
+
+  definitions.MAX_FLAT_PARAMS = prev_flat_params
+
+def test_param_area_roundtrip():
+  TEST_MAX_FLAT_PARAMS = 4
+  s32 = S32Type()
+
+  def rt(ts, vs, expect_n_core_params):
+    heap = Heap(4096)
+    cx = mk_cx(MemInst(heap.memory, 'i32'), 'utf8', heap.realloc)
+    flat = lower_flat_values(cx, TEST_MAX_FLAT_PARAMS, vs, ts)
+    assert(len(flat) == expect_n_core_params)
+    got = lift_flat_values(cx, TEST_MAX_FLAT_PARAMS, CoreValueIter(flat), ts)
+    assert(got == vs)
+
+  PAP = 1 # memory area pointer takes one core value
+  rt([ListType(s32, 3), s32, s32], [[1, 2, 3], 7, 8], 2 + PAP)
+  rt([ListType(s32, 3, True), s32], [[10, 20], 99], 1 + PAP)
+  rt([ListType(s32, 3, True), s32], [[], 99], 1 + PAP)
+  rt([ListType(s32, 3, True), s32, s32, s32], [[1, 2], 1, 2, 3], 3 + PAP)
+  rt([ListType(s32, 3, True), s32, s32, s32, s32], [[1, 2], 1, 2, 3, 4], PAP)
+  rec = RecordType([FieldType('a', ListType(s32, 2)), FieldType('b', s32)])
+  rt([rec, s32], [{'a': [5, 6], 'b': 7}, 8], 1 + PAP)
+
+def test_result_in_memory():
+  opts = mk_opts(MemInst(bytearray(), 'i32'))
+  # A length-1 fixed list gets no special treatment (Q2): it is returned via
+  # memory just like any other sized list, even though it flattens to 1 slot.
+  ft = FuncType([], [ListType(S32Type(), 1)])
+  assert(flatten_functype(opts, ft, 'lift').results == ['i32'])           # retptr returned
+  lower = flatten_functype(opts, ft, 'lower')
+  assert(lower.params == ['i32'] and lower.results == [])                 # retptr appended to params
+  # a small (1-slot) result stays flat
+  ft = FuncType([], [U32Type()])
+  assert(flatten_functype(opts, ft, 'lift').results == ['i32'])
+  assert(flatten_functype(opts, ft, 'lower').params == [])
+  # a result that flattens past MAX_FLAT_RESULTS goes via memory (result plan overflow)
+  ft = FuncType([], [TupleType([U32Type(), U32Type()])])
+  assert(flatten_functype(opts, ft, 'lift').results == ['i32'])           # retptr returned
+  lower = flatten_functype(opts, ft, 'lower')
+  assert(lower.params == ['i32'] and lower.results == [])                 # retptr appended to params
+  # async lower: sized list in param area + scalars + PAP, then result outptr
+  aopts = mk_opts(MemInst(bytearray(), 'i32'), async_=True)
+  aft = FuncType([ListType(S32Type(), 3, True), S32Type(), S32Type(), S32Type()],
+                 [U32Type()], async_=True)
+  alower = flatten_functype(aopts, aft, 'lower')
+  assert(alower.params == ['i32']*5)   # 3 scalars + PAP + result-outptr
+  assert(alower.results == ['i32'])    # async status code
+
 test_roundtrips()
 test_handles()
 test_async_to_async()
@@ -2992,5 +3094,9 @@ test_async_flat_params()
 test_threads()
 test_sync_threads()
 test_thread_cancel_callback()
+test_param_area_predicate()
+test_param_area_placement()
+test_param_area_roundtrip()
+test_result_in_memory()
 
 print("All tests passed")
