@@ -8,7 +8,12 @@
 2. Support the definition of portable, virtualizable, statically-analyzable,
    capability-safe, language-agnostic interfaces, especially those being 
    defined by [WASI].
-3. Maintain and enhance WebAssembly's unique value proposition:
+3. Support fine-grained sandboxing, where a single application can be composed
+   of multiple components that each encapsulate their own Core WebAssembly
+   memory and table state, while still allowing multiple Core WebAssembly
+   modules running inside the *same* component to freely share memory and table
+   state.
+4. Maintain and enhance WebAssembly's unique value proposition:
    * *Language neutrality*: avoid biasing the component model toward just one
      language or family of languages.
    * *Embeddability*: design components to be embedded in a diverse set of
@@ -24,7 +29,7 @@
      [JS API], [Web API] and [ESM-integration]. Before native support is
      implemented, ensure components can be polyfilled in browsers via
      Ahead-of-Time compilation to currently-supported browser functionality.
-4. Define the component model *incrementally*: starting from a set of
+5. Define the component model *incrementally*: starting from a set of
    [initial use cases] and expanding the set of use cases over time,
    prioritized by feedback and experience.
 
