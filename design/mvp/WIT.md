@@ -1,4 +1,4 @@
-# The `wit` format
+# The WIT text format
 
 The Wasm Interface Type (WIT) format is an [IDL] to provide tooling for the
 [WebAssembly Component Model][components] in two primary ways:
