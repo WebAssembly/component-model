@@ -580,7 +580,7 @@ switch execution to the thread but instead transitions the thread to the `ready`
     assert(self.ready())
 ```
 
-Once its time to execute a `suspended` or `waiting` thread, `Thread.resume`
+Once it's time to execute a `suspended` or `waiting` thread, `Thread.resume`
 is called on that thread. This method transitions the thread to the
 `running` state by clearing and then `resume`ing the `Thread`'s stored
 continuation. If the `resume`d continuation suspends with a `Thread` to
@@ -5320,6 +5320,7 @@ def canon_thread_available_parallelism():
 [Current Task]: Concurrency.md#current-thread-and-task
 [Block]: Concurrency.md#blocking
 [Blocks]: Concurrency.md#blocking
+[Blocked]: Concurrency.md#blocking
 [Waiting On External I/O And Yielding]: Concurrency.md#blocking
 [Subtasks]: Concurrency.md#subtasks-and-supertasks
 [Readable and Writable Ends]: Concurrency.md#streams-and-futures
