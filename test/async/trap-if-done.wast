@@ -271,6 +271,8 @@
         (if (i32.ne (i32.const 42) (i32.load (i32.const 16)))
           (then unreachable))
 
+        (call $waitable.join (local.get $fr) (i32.const 0))
+
         (if (i32.eqz (local.get $bool)) (then
           ;; calling future.read again should then trap
           (drop (call $future.read (local.get $fr) (i32.const 16)))
