@@ -2605,7 +2605,8 @@ Streams and futures are entirely symmetric, transferring ownership of the
 readable end from the lifting component to the host or lowering component and
 trapping if the readable end is in the middle of copying (which would create
 a dangling-pointer situation) or is in the `DONE` state (in which case the only
-valid operation is `{stream,future}.drop-{readable,writable}`).
+valid operation is `{stream,future}.drop-{readable,writable}`) or in a waitable
+set (in which case it must be removed first via `waitable.join(0)`).
 ```python
 def lift_stream(cx, i, t):
   return lift_async_value(ReadableStreamEnd, cx, i, t)
@@ -2619,6 +2620,7 @@ def lift_async_value(ReadableEndT, cx, i, t):
   trap_if(not isinstance(e, ReadableEndT))
   trap_if(e.shared.t != t)
   trap_if(e.state != CopyState.IDLE)
+  trap_if(e.in_waitable_set())
   return e.shared
 ```
 
