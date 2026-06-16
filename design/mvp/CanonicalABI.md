@@ -4253,12 +4253,12 @@ on a `Waitable` in the given waitable set (indicated by index `$si`) and then
 returning its `EventCode` and writing the payload values into linear memory:
 ```python
 def canon_waitable_set_wait(cancellable, mem, si, ptr):
-  task = current_task()
-  trap_if(not task.inst.may_leave)
-  wset = task.inst.handles.get(si)
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  wset = inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
   event = wset.wait_for_event(cancellable)
-  return unpack_event(mem, task.inst, ptr, event)
+  return unpack_event(mem, inst, ptr, event)
 
 def unpack_event(mem, inst, ptr, e: EventTuple):
   event, p1, p2 = e
