@@ -1507,6 +1507,7 @@ def lift_async_value(ReadableEndT, cx, i, t):
   trap_if(not isinstance(e, ReadableEndT))
   trap_if(e.shared.t != t)
   trap_if(e.state != CopyState.IDLE)
+  trap_if(e.in_waitable_set())
   return e.shared
 
 ## Storing
