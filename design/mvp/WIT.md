@@ -1011,6 +1011,7 @@ token ::= whitespace
         | keyword
         | integer
         | identifier
+        | string-literal
 ```
 
 Whitespace and comments are ignored when parsing structures defined elsewhere
@@ -1106,6 +1107,18 @@ sequence of digits:
 ```ebnf
 integer ::= [0-9]+
 ```
+
+### String Literals
+
+WIT string literals are double-quoted and use the same text format as the Core
+WebAssembly text format's [`name`] literal. For example `"a"`, `"☃︎"`, `"\7f"`
+and `"\u{7fff}"` are all `name` literals.
+
+```ebnf
+string-literal ::= <core:name>
+```
+
+[`name`]: https://webassembly.github.io/spec/core/text/values.html#text-name
 
 ## Top-level items
 
@@ -1428,19 +1441,32 @@ world-definition ::= export-item
                    | typedef-item
                    | include-item
 
-export-item ::= 'export' id ':' extern-type
+export-item ::= external-id? 'export' id ':' extern-type
               | 'export' use-path ';'
-import-item ::= 'import' id ':' extern-type
+import-item ::= external-id? 'import' id ':' extern-type
               | 'import' use-path ';'
+
+external-id ::= '@external-id' '(' string-literal ')' 🏷️
 
 extern-type ::= func-type ';'
               | 'interface' '{' interface-items* '}'
               | use-path ';' 🏷️
 ```
 
-🏷️ The third case of `extern-type` allows a named interface to be imported or
-exported with a custom [plain name]. For example:
+🏷️ While `id`s are restricted to kebab-case (to enable idiomatic bindings for
+source-language identifiers), `external-id`s can be any Unicode string and can
+thus express any textual identifier needed by the "outside world" to satisfy an
+import or know how to call an export. For example, on the Web Platform, a
+component that wants to import `slugify` could target the following world:
+```wit
+world my-component {
+  @external-id("https://esm.unpkg.com/slugify@1.6.6")
+  import slugify: func(text: string) -> string;
+}
+```
 
+🏷️ The `use-path` case of `extern-type` allows a named interface to be imported
+or exported with a custom [plain name]. For example:
 ```wit
 world my-world {
     import primary: wasi:keyvalue/store;
@@ -1448,21 +1474,19 @@ world my-world {
     export my-handler: wasi:http/handler;
 }
 ```
-
-Here, `primary` and `secondary` are two distinct imports that both have the
-instance type of the `wasi:keyvalue/store` interface. The plain name of the
-import is the `id` before the colon (e.g., `primary`), not the interface name.
-This contrasts with `import wasi:keyvalue/store;` (without the `id :` prefix),
-which would create a single import using the full interface name
-`wasi:keyvalue/store`. Similarly, the export `my-handler` has the instance type
-of `wasi:http/handler` but uses the plain name `my-handler` instead of the full
-interface name, which is useful when a component wants to export the same
+Here, `primary` and `secondary` are two distinct imports that both have types
+based on the `wasi:keyvalue/store` interface. The plain name of the import is
+the `id` before the colon (e.g., `primary`), not the interface name. This
+contrasts with `import wasi:keyvalue/store;` (without the `id :` prefix), which
+would create a single import using the full interface name
+`wasi:keyvalue/store`. Similarly, the export `my-handler` has a type derived
+from `wasi:http/handler` but uses the plain name `my-handler` instead of the
+full interface name, which is useful when a component wants to export the same
 interface multiple times or simply use a more descriptive name.
 
 Note that the `use-path` form can have an ambiguity with the nested packages
 feature (🪺) where `a:b` could mean two things. To resolve this `a:b` is lexed
 as a single token instead of separate tokens, meaning:
-
 ```wit
 world w {
     import a:b;  // error: can't import a package
@@ -1470,10 +1494,19 @@ world w {
 }
 ```
 
-Note that worlds can import types and define their own types to be exported
-from the root of a component and used within functions imported and exported.
-The `interface` item here additionally defines the grammar for IDs used to refer
-to `interface` items.
+Using both of these features together, a component can import a
+`wasi:keyvalue/store` interface multiple times, using whatever platform-defined
+naming scheme so that the component can be deployed directly to the platform
+without separate configuration or runtime errors:
+```wit
+world my-world {
+    @external-id("user-db-prod:region-a")
+    import users: wasi:keyvalue/store;
+
+    @external-id("catalog-db-prod:region-a")
+    import catalog: wasi:keyvalue/store;
+}
+```
 
 [`componenttype`]: Explainer.md#type-definitions
 
@@ -1510,9 +1543,9 @@ interface-item ::= gate 'interface' id '{' interface-items* '}'
 
 interface-items ::= gate interface-definition
 
-interface-definition ::= typedef-item
-                       | use-item
-                       | func-item
+interface-definition ::= use-item
+                       | external-id? typedef-item
+                       | external-id? func-item
 
 typedef-item ::= resource-item
                | variant-items
@@ -1541,6 +1574,21 @@ may block and thus the caller should use the async ABI and asynchronous
 source-language bindings (e.g., `async` functions in JS, Python, C# or Rust) if
 concurrency execution is desired. For more details, see the [concurrency
 explainer](Concurrency.md#summary).
+
+🏷️ As with `import`s and `export`s in worlds, and for the same use cases,
+interface items can be annotated with `@external-id`:
+```wit
+interface my-interface {
+  @external-id("foo/0")
+  foo: func() -> string;
+
+  @external-id("DB.Bar")
+  resource bar {
+    @external-id("baz/1")
+    baz: func(s: string) -> string;
+  }
+}
+```
 
 
 ## Item: `use`
@@ -1763,7 +1811,7 @@ desugar to an owned return value.
 Specifically, the syntax for a `resource` definition is:
 ```ebnf
 resource-item ::= 'resource' id ';'
-                | 'resource' id '{' resource-method* '}'
+                | 'resource' id '{' ( external-id? resource-method )* '}'
 resource-method ::= func-item
                   | id ':' 'static' func-type ';'
                   | 'constructor' param-list ';'
@@ -2173,7 +2221,10 @@ interface store {
 }
 
 world w {
+    @external-id("//One")
     import one: store;
+
+    @external-id("//Two")
     import two: store;
 }
 ```
@@ -2191,12 +2242,12 @@ is encoded as:
   ))
   (type (export "w") (component
     (export "local:demo/w" (component
-      (import "one" (implements "local:demo/store") (instance
+      (import "one" (implements "local:demo/store") (external-id "//One") (instance
         (export "bucket" (type $b (sub resource)))
         (export "[constructor]bucket" (func (param "name" string) (result (own $b))))
         (export "[method]bucket.get" (func (param "self" (borrow $b)) (param "key" string) (result (option string))))
       ))
-      (import "two" (implements "local:demo/store") (instance
+      (import "two" (implements "local:demo/store") (external-id "//Two") (instance
         (export "bucket" (type $b (sub resource)))
         (export "[constructor]bucket" (func (param "name" string) (result (own $b))))
         (export "[method]bucket.get" (func (param "self" (borrow $b)) (param "key" string) (result (option string))))

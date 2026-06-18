@@ -48,10 +48,9 @@ children:
 * A parent component can **inline** its children, literally storing the child
   module or component binaries in a contiguous byte range inside the parent
   (via the `core:module` and `component` sections in the [binary format]).
-* A parent component can **import** its children, using the import name to
-  refer to modules or components stored in an external shared registry that is
-  mutually known to later stages in the deployment pipeline (specifically with
-  the [`depname`] case of `importname` in the text and binary format).
+* A parent component can **import** its children, using the import to
+  refer to external modules or components (e.g., via URL in the [`external-id`]
+  attribute of the import).
 
 Given this terminology, the following diagram shows how the different forms of
 linking can be used together in the context of C/C++:
@@ -95,8 +94,7 @@ note, even when modules or components are stored inline by earlier stages of the
 build pipeline, when creating an OCI Wasm Artifact, a toolchain can
 (hypothetically, existing tools don't do this yet) enable deduplication by
 content-hash of common modules or components by placing them in separate OCI
-[`layers`] which are imported via [`hashname`] by the root component stored in
-the first layer of the OCI Wasm Artifact.
+[`layers`] of the OCI Wasm Artifact.
 
 
 ## Higher-order Shared-Nothing Linking (aka "donut wrapping")
@@ -320,8 +318,7 @@ future features of WIT and the Component Model.)
 [Canonical ABI]: CanonicalABI.md
 [Binary Format]: Binary.md
 [WIT]: WIT.md
-[`depname`]: Explainer.md#import-and-export-definitions
-[`hashname`]: Explainer.md#import-and-export-definitions
+[`external-id`]: Explainer.md#import-and-export-definitions
 [Component Invariant]: Explainer.md#component-invariants
 [ESM-integration]: Explainer.md#esm-integration
 
