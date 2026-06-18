@@ -1,7 +1,6 @@
-;; $D exports one function for each place in the spec where may_leave is
-;; guarded to be true and ensures that the call traps before any other guard.
-;; Since each trap tears down the instance, a fresh instance of $Tester is
-;; created for each export call.
+;; Tests behavior of built-ins called from inside a post-return function.
+
+;; built-ins that trap when called from post-return:
 (component definition $Tester
   (component $C
     (core module $CM
@@ -247,3 +246,139 @@
 (assert_trap (invoke "trap-calling-future-drop-readable") "cannot leave component instance")
 (component instance $i27 $Tester)
 (assert_trap (invoke "trap-calling-future-drop-writable") "cannot leave component instance")
+
+
+;; built-ins that don't trap:
+(component
+  (canon context.get i32 0 (core func $context.get))
+  (canon context.set i32 0 (core func $context.set))
+  (core module $CM
+    (import "" "context.get" (func $context.get (result i32)))
+    (import "" "context.set" (func $context.set (param i32)))
+    (global $saved (mut i32) (i32.const 0))
+
+    (func (export "f") (result i32)
+      (call $context.set (i32.const 42))
+      (i32.const 7)
+    )
+    (func (export "f-pr") (param i32)
+      (global.set $saved (call $context.get))
+      (call $context.set (i32.const 99))
+    )
+    (func (export "check") (result i32)
+      (global.get $saved)
+    )
+  )
+  (core instance $cm (instantiate $CM (with "" (instance
+    (export "context.get" (func $context.get))
+    (export "context.set" (func $context.set))
+  ))))
+  (func (export "f") (result u32) (canon lift
+    (core func $cm "f")
+    (post-return (func $cm "f-pr"))
+  ))
+  (func (export "check") (result u32) (canon lift
+    (core func $cm "check")
+  ))
+)
+(assert_return (invoke "f") (u32.const 7))
+(assert_return (invoke "check") (u32.const 42))
+
+
+(component
+  (type $R (resource (rep i32)))
+  (canon resource.new $R (core func $resource.new))
+  (canon resource.rep $R (core func $resource.rep))
+  (core module $CM
+    (import "" "resource.new" (func $resource.new (param i32) (result i32)))
+    (import "" "resource.rep" (func $resource.rep (param i32) (result i32)))
+
+    (global $handle (mut i32) (i32.const 0))
+    (global $saved-rep (mut i32) (i32.const 0))
+
+    (func (export "f") (result i32)
+      (global.set $handle (call $resource.new (i32.const 123)))
+      (i32.const 5)
+    )
+    (func (export "f-pr") (param i32)
+      (global.set $saved-rep (call $resource.rep (global.get $handle)))
+    )
+    (func (export "check") (result i32)
+      (global.get $saved-rep)
+    )
+  )
+  (core instance $cm (instantiate $CM (with "" (instance
+    (export "resource.new" (func $resource.new))
+    (export "resource.rep" (func $resource.rep))
+  ))))
+  (func (export "f") (result u32) (canon lift
+    (core func $cm "f")
+    (post-return (func $cm "f-pr"))
+  ))
+  (func (export "check") (result u32) (canon lift
+    (core func $cm "check")
+  ))
+)
+(assert_return (invoke "f") (u32.const 5))
+(assert_return (invoke "check") (u32.const 123))
+
+
+(component
+  (canon backpressure.inc (core func $bp.inc))
+  (canon backpressure.dec (core func $bp.dec))
+  (core module $CM
+    (import "" "bp.inc" (func $bp.inc))
+    (import "" "bp.dec" (func $bp.dec))
+
+    (func (export "f") (result i32)
+      (i32.const 11)
+    )
+    (func (export "f-pr") (param i32)
+      (call $bp.inc)
+      (call $bp.dec)
+    )
+  )
+  (core instance $cm (instantiate $CM (with "" (instance
+    (export "bp.inc" (func $bp.inc))
+    (export "bp.dec" (func $bp.dec))
+  ))))
+  (func (export "f") (result u32) (canon lift
+    (core func $cm "f")
+    (post-return (func $cm "f-pr"))
+  ))
+)
+(assert_return (invoke "f") (u32.const 11))
+
+
+(component
+  (canon thread.index (core func $thread.index))
+  (core module $CM
+    (import "" "thread.index" (func $thread.index (result i32)))
+
+    (global $body-idx (mut i32) (i32.const -1))
+    (global $pr-idx (mut i32) (i32.const -1))
+
+    (func (export "f") (result i32)
+      (global.set $body-idx (call $thread.index))
+      (i32.const 13)
+    )
+    (func (export "f-pr") (param i32)
+      (global.set $pr-idx (call $thread.index))
+    )
+    (func (export "check") (result i32)
+      (i32.eq (global.get $body-idx) (global.get $pr-idx))
+    )
+  )
+  (core instance $cm (instantiate $CM (with "" (instance
+    (export "thread.index" (func $thread.index))
+  ))))
+  (func (export "f") (result u32) (canon lift
+    (core func $cm "f")
+    (post-return (func $cm "f-pr"))
+  ))
+  (func (export "check") (result u32) (canon lift
+    (core func $cm "check")
+  ))
+)
+(assert_return (invoke "f") (u32.const 13))
+(assert_return (invoke "check") (u32.const 1))
