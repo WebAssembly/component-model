@@ -1,9 +1,9 @@
 # Concurrency Explainer
 
-This document contains a high-level summary of the native concurrency support
-added as part of [WASI Preview 3], providing background for understanding the
-definitions in the [WIT], [AST explainer], [binary format] and [Canonical ABI
-explainer] documents that are gated by the 🔀 (async) and 🧵 (threading) emojis.
+This document contains a high-level summary of the native concurrency support,
+providing background for understanding the definitions in the [WIT], [AST
+explainer], [binary format] and [Canonical ABI explainer] documents that are
+gated by the 🔀 (async) and 🧵 (threading) emojis.
 
 * [Goals](#goals)
 * [Summary](#summary)
@@ -34,9 +34,9 @@ explainer] documents that are gated by the 🔀 (async) and 🧵 (threading) emo
 
 ## Goals
 
-Refining the Component Model's high-level [goals](../high-level/Goals.md) and
-[use cases](../high-level/UseCases.md), [WASI Preview 3] adds the following
-concurrency-specific goals and use cases:
+With the release of [WASI] 0.3, the following concurrency-specific goals and
+use cases are added, refining the Component Model's high-level
+[goals](../high-level/Goals.md) and [use cases](../high-level/UseCases.md):
 
 * Integrate with idiomatic source-language concurrency features including:
   * `async` functions in languages like C#, JS, Python, Rust and Swift
@@ -92,7 +92,7 @@ invariant is necessary to allow non-`async` component exports to be called in
 synchronous contexts (like event listeners, callbacks, getters, setters and
 constructors).
 
-The new async ABI can be used alongside or instead of the existing Preview 2
+The new async ABI can be used alongside or instead of the existing [WASI] 0.2
 "sync ABI" to call or implement any `async`-typed functions. When *calling* an
 imported function via the async ABI, if the `async` callee [blocks](#blocking),
 control flow is returned immediately to the caller, and the callee continues
@@ -108,7 +108,7 @@ can compile directly to components exporting `async` functions without having
 to be rewritten to use source-language concurrency mechanisms (like callbacks,
 `async`/`wait`, coroutines, etc). For example, traditional C programs with a
 `main()` and calls to `read()`, `write()` and `select()` can run without change
-in the Preview 3 `wasi:cli/command` world, which exports `run: async func() ->
+in the [WASI] 0.3 `wasi:cli/command` world, which exports `run: async func() ->
 result`. Thus, `async` in WIT does not require the same kind of transitive
 source-code changes as source-level `async` in languages like C#, Python, JS,
 Rust and Dart.
@@ -911,9 +911,10 @@ the Component Model has [Component Invariant] #2. This is enforced by the
 [Canonical ABI](CanonicalABI.md#embedding) using strategically placed traps and
 boolean flags on component instances.
 
-With Preview 3, a desirable outcome is that if our component imports `imp` and
-exports `exp` as `async` functions, then the following JS code could run the
-two `exp` calls concurrently just like if they were JS `async` functions:
+With native concurrency support, what we'd naturally expect is that if our
+component imports `imp` and exports `exp` as `async` functions, then the
+following JS code could run the two `exp` calls concurrently, as if they were JS
+`async` functions:
 ```js
 import source component from './component.wasm';
 async function imp() {
@@ -1003,7 +1004,7 @@ task" to which work can be dispatched (e.g., via the `setInterval()` or
 concurrency], these background tasks are new task tree roots (siblings to the
 roots created when component exports are called by the host).
 
-As a Preview 3 follow-up [TODO](#TODO), component type definitions should be
+As a post-0.3.0 follow-up [TODO](#TODO), component type definitions should be
 extended to allow an `async` effect that declares that component instantiation
 is allowed to [block](#blocking). This would be necessary to implement, e.g.,
 JS [top-level `await`] or I/O in C++ constructors executing during `start`.
@@ -1013,7 +1014,7 @@ JS [top-level `await`] or I/O in C++ constructors executing during `start`.
 
 At an ABI level, native async in the Component Model defines for every
 `async`-typed function a non-blocking core function signature that can be
-used instead of or in addition to the existing (Preview-2-defined) synchronous
+used instead of or in addition to the existing ([WASI] 0.2) synchronous
 core function signature. This non-blocking core function signature is intended
 to be called or implemented by generated bindings which then map the low-level
 core async protocol to the languages' higher-level native concurrency features.
@@ -1406,7 +1407,7 @@ instance lifetimes are flexible in this manner and don't have an obvious end
 conventionally ends right after `main()` returns), the host still needs to
 understand the expectations of component authors to enable portability.
 
-Before the addition of native concurrency support in Preview 3, a natural
+Before the addition of native concurrency support in [WASI] 0.3, a natural
 expectation is that, in the absence of atypical scenarios like timeouts or quota
 exhaustion, a component author can expect that their component instance will not
 be abruptly terminated during the execution of contained Core WebAssembly code.
@@ -1462,16 +1463,16 @@ waiting on `async` operations to complete.
 
 To resolve this tension, threads are implicitly distinguished by a "keep-alive"
 flag that determines whether the expectation is that the existence of the thread
-is intended to keep the containing component instance alive. In the initial
-release of Preview 3, this "keep-alive" flag is default *set* for the [implicit
-thread](#summary) created for a task and default *cleared* for the explicit
-threads created by `thread.new-indirect`. In particular, this means that an
+is intended to keep the containing component instance alive. In [WASI] 0.3,
+this "keep-alive" flag is default *set* for the [implicit thread](#summary)
+created for a task and default *cleared* for the explicit threads created by
+`thread.new-indirect`. In particular, this means that an
 `async callback`-lifted function will keep its containing component instance
 alive until it returns the `EXIT` code (`0`).
 
 As an example, in JavaScript, the Service Worker API's [`waitUntil`] method
-would delay returning the `EXIT` code. In the initial 0.3.0 release without
-cooperative threads (🧵), [`setInterval`] would also unfortunately delay
+would delay returning the `EXIT` code. In 0.3.0, without cooperative threads
+(🧵), [`setInterval`] would also unfortunately delay
 returning the `EXIT` code and thus, without guest code intervention, would keep
 component instances alive until timeout limits were hit. The release of
 cooperative threads would offer a solution to this problem, but an awkward one.
@@ -1494,10 +1495,9 @@ the whole tree would be kept alive.
 
 ## TODO
 
-Native async support is being proposed incrementally. The following features
-will be added in future chunks roughly in the order listed to complete the full
-"async" story, with a TBD cutoff between what's in [WASI Preview 3] and what
-comes after:
+Native async support is being added incrementally. Beyond what's currently
+specified, the following features are being considered for addition to complete
+the concurrency story:
 * remove the temporary trap mentioned above that occurs when a `read` and
   `write` of a stream/future happen from within the same component instance
 * zero-copy forwarding/splicing
@@ -1613,7 +1613,7 @@ comes after:
 [wasm-gc]: https://github.com/WebAssembly/gc/blob/main/proposals/gc/MVP.md
 [wasi-libc]: https://github.com/WebAssembly/wasi-libc
 
-[WASI Preview 3]: https://github.com/WebAssembly/WASI/tree/main/wasip2#looking-forward-to-preview-3
+[WASI]: https://github.com/WebAssembly/WASI
 [Runtime Instantiation]: https://github.com/WebAssembly/component-model/issues/423
 
 [Top-level `await`]: https://github.com/tc39/proposal-top-level-await

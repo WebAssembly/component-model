@@ -290,7 +290,7 @@ address this use case *above* the Component Model, using an interface defined
 in [WIT] and allowing different platforms and applications to tailor the
 interface to their needs.
 
-For example, using the Preview 2 feature set of Component Model, a simple
+For example, using the current feature set of the Component Model, a simple
 dynamic plugin interface might look like the following:
 ```wit
 interface plugin-loader {
@@ -314,7 +314,7 @@ plugins (e.g., on upload to the store or registry) into a native shared object
 or DLL that can be efficiently loaded at runtime.
 
 (There are a number of ways to improve upon this basic design with additional
-post-Preview 2 features of WIT and the Component Model.)
+future features of WIT and the Component Model.)
 
 
 [Canonical ABI]: CanonicalABI.md

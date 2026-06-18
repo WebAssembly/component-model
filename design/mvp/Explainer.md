@@ -39,19 +39,27 @@ more user-focused explanation, take a look at the
   * [ESM-integration](#ESM-integration)
 * [Examples](#examples)
 
+(Based on the previous [scoping and layering] proposal to the WebAssembly CG,
+this repo merges and supersedes the [module-linking] and [interface-types]
+proposals, pushing some of their original features into the post-MVP [future
+feature](FutureFeatures.md) backlog.)
+
+
 ## Gated Features
 
 By default, the features described in this explainer (as well as the supporting
 [Binary.md](Binary.md), [WIT.md](WIT.md) and [CanonicalABI.md](CanonicalABI.md))
-have been implemented and are included in the [WASI Preview 2] stability
-milestone. Features that are not part of Preview 2 are demarcated by one of the
-emoji symbols listed below; these emojis will be removed once they are
-implemented, considered stable and included in a future milestone:
+have been implemented and are included in the [WASI] 0.2 Developer Preview
+release. The WASI 0.3 Developer Preview release additionally includes the
+features gated by 🔀.
+
+The other features, in various stages of implementation, polish and release,
+are gated by the following emojis and, when ready, may be included in
+subsequent WASI Developer Preview minor releases:
 * 🪙: value imports/exports and component-level start function
 * 🪺: nested namespaces and packages in import/export names
-* 🔀: async
-  * 🚝: enabling more canonical ABI options on more async-related builtins
-  * 🚟: using `async` with `canon lift` without `callback` (stackful lift)
+* 🚝: enabling more canonical ABI options on more async-related builtins
+* 🚟: using `async` with `canon lift` without `callback` (stackful lift)
 * 🧵: threading built-ins
   * 🧵②: [shared-everything-threads]-based threading built-ins
 * 🔧: fixed-length lists
@@ -60,11 +68,6 @@ implemented, considered stable and included in a future milestone:
 * 🐘: [memory64]
 * 🗺️: the `map` type
 * 🏷️: `implements` annotations for plain-named interface imports/exports
-
-(Based on the previous [scoping and layering] proposal to the WebAssembly CG,
-this repo merges and supersedes the [module-linking] and [interface-types]
-proposals, pushing some of their original features into the post-MVP [future
-feature](FutureFeatures.md) backlog.)
 
 
 ## Grammar
@@ -2945,7 +2948,7 @@ have a `canonversion`, and the concatenation of the `canonversion` and
 For compatibility with older versions of this spec, non-canonical
 `interfacename`s (with `interfaceversion`s matching any `valid semver`) are
 temporarily permitted. These non-canonical names may trigger warnings and will
-start being rejected some time after after [WASI Preview 3] is released.
+be rejected at some point in the future.
 
 
 ## Component Invariants
@@ -3319,8 +3322,7 @@ For some use-case-focused, worked examples, see:
 [memory64]: https://github.com/webAssembly/memory64
 [`rectype`]: https://webassembly.github.io/gc/core/text/types.html#text-rectype
 [shared-everything-threads]: https://github.com/WebAssembly/shared-everything-threads
-[WASI Preview 2]: https://github.com/WebAssembly/WASI/tree/main/wasip2#readme
-[WASI Preview 3]: https://github.com/WebAssembly/WASI/tree/main/wasip2#looking-forward-to-preview-3
+[WASI]: https://github.com/WebAssembly/WASI
 [reference types]: https://github.com/WebAssembly/reference-types/blob/master/proposals/reference-types/Overview.md
 [GC ABI Option]: https://github.com/WebAssembly/component-model/issues/525
 
