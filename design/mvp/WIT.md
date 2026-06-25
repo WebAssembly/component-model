@@ -1748,10 +1748,9 @@ resource blob;
 %[method]blob.read: func(self: borrow<blob>, n: u32) -> list<u8>;
 %[static]blob.merge: func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob;
 ```
-These `%`-prefixed [`name`s](Explainer.md) embed the resource type name so that
-bindings generators can generate idiomatic syntax for the target language or
-(for languages like C) fall back to an appropriately-prefixed free function
-name.
+These `%`-prefixed strings embed the resource type name so that bindings
+generators can generate idiomatic syntax for the target language or (for
+languages like C) fall back to an appropriately-prefixed free function name.
 
 When a resource type name is used directly (e.g. when `blob` is used as the
 return value of the constructor above), it stands for an "owning" handle
@@ -1910,8 +1909,7 @@ is expanded into:
 resource file
 %[method]file.read: func(self: borrow<file>, n: u32) -> list<u8>;
 ```
-where `%[method]file.read` is the desugared name of a method according to the
-Component Model's definition of [`name`](Explainer.md).
+where `%[method]file.read` is the desugared name of a method.
 
 
 ## Name resolution
