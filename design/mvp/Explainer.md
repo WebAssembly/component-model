@@ -494,9 +494,8 @@ core:moduledecl  ::= <core:importdecl>
                    | <core:exportdecl>
 core:alias       ::= (alias <core:aliastarget> (<core:sort> <id>?))
 core:aliastarget ::= outer <u32> <u32>
-core:importdecl  ::= (import <core:string> <core:string> <core:importdesc>)
-core:exportdecl  ::= (export <core:string> <core:exportdesc>)
-core:exportdesc  ::= strip-id(<core:importdesc>)
+core:importdecl  ::= (import <core:string> <core:string> <core:externtype>)
+core:exportdecl  ::= (export <core:string> strip-id(<core:externtype>))
 
 where strip-id(X) parses '(' sort Y ')' when X parses '(' sort <id>? Y ')'
 ```
@@ -516,9 +515,9 @@ themselves import or export other core modules.
 The body of a module type contains an ordered list of "module declarators"
 which describe, at a type level, the imports and exports of the module. In a
 module-type context, import and export declarators can both reuse the existing
-[`core:importdesc`] production defined in WebAssembly 1.0, with the only
-difference being that, in the text format, `core:importdesc` can bind an
-identifier for later reuse while `core:exportdesc` cannot.
+[`core:externtype`] production defined by the Core WebAssembly spec, with the
+only difference being that, in the text format, imports can bind an
+identifier for later reuse while exports cannot.
 
 With the Core WebAssembly [type-imports], module types will need the ability to
 define the types of exports based on the types of imports. In preparation for
@@ -610,11 +609,11 @@ instancedecl  ::= core-prefix(<core:type>)
                 | <type>
                 | <alias>
                 | <exportdecl>
-importdecl    ::= (import "<importname>" bind-id(<externdesc>))
-                | (import "<importname>" <versionsuffix> bind-id(<externdesc>)) 🔗
-exportdecl    ::= (export "<exportname>" bind-id(<externdesc>))
-                | (export "<exportname>" <versionsuffix> bind-id(<externdesc>)) 🔗
-externdesc    ::= (<sort> (type <u32>) )
+importdecl    ::= (import "<importname>" bind-id(<externtype>))
+                | (import "<importname>" <versionsuffix> bind-id(<externtype>)) 🔗
+exportdecl    ::= (export "<exportname>" bind-id(<externtype>))
+                | (export "<exportname>" <versionsuffix> bind-id(<externtype>)) 🔗
+externtype    ::= (<sort> (type <u32>) )
                 | core-prefix(<core:moduletype>)
                 | <functype>
                 | <componenttype>
@@ -887,11 +886,11 @@ allows both references to out-of-line type definitions (via `(type <typeidx>)`)
 and inline type expressions that the text format desugars into out-of-line type
 definitions.
 
-🪙 The `value` case of `externdesc` describes a runtime value that is imported or
+🪙 The `value` case of `externtype` describes a runtime value that is imported or
 exported at instantiation time as described in the
 [value definitions](#value-definitions) section below.
 
-The `type` case of `externdesc` describes an imported or exported type along
+The `type` case of `externtype` describes an imported or exported type along
 with its "bound":
 
 The `sub` bound declares that the imported/exported type is an *abstract type*
@@ -1315,7 +1314,7 @@ two directions:
 Canonical definitions specify one of these two wrapping directions, the function
 to wrap and a list of configuration options:
 ```ebnf
-canon    ::= (canon lift core-prefix(<core:funcidx>) <canonopt>* bind-id(<externdesc>))
+canon    ::= (canon lift core-prefix(<core:funcidx>) <canonopt>* bind-id(<externtype>))
            | (canon lower <funcidx> <canonopt>* (core func <id>?))
 canonopt ::= string-encoding=utf8
            | string-encoding=utf16
@@ -1326,7 +1325,7 @@ canonopt ::= string-encoding=utf8
            | async 🔀
            | (callback <core:funcidx>) 🔀
 ```
-While the production `externdesc` accepts any `sort`, the validation rules
+While the production `externtype` accepts any `sort`, the validation rules
 for `canon lift` would only allow the `func` sort. In the future, other sorts
 may be added (viz., types), hence the explicit sort.
 
@@ -2543,17 +2542,17 @@ A third difference is that not only import definitions, but also export
 definitions append a new element to the index space of the imported/exported
 `sort` which can be optionally bound to an identifier in the text format. In the
 case of imports, the identifier is bound just like Core WebAssembly, as part of
-the `externdesc` (e.g., `(import "x" (func $x))` binds the identifier `$x`). In
+the `externtype` (e.g., `(import "x" (func $x))` binds the identifier `$x`). In
 the case of exports, the `<id>?` right after the `export` is bound while the
 `<id>` inside the `<sortidx>` is a reference to the preceding definition being
 exported (e.g., `(export $x "x" (func $f))` binds a new identifier `$x`).
 
 Given this, the syntax of imports and exports are defined as follows:
 ```ebnf
-import        ::= (import "<importname>" bind-id(<externdesc>))
-                | (import "<importname>" <versionsuffix> bind-id(<externdesc>)) 🔗
-export        ::= (export <id>? "<exportname>" <sortidx> <externdesc>?)
-                | (export <id>? "<exportname>" <versionsuffix> <sortidx> <externdesc>?) 🔗
+import        ::= (import "<importname>" bind-id(<externtype>))
+                | (import "<importname>" <versionsuffix> bind-id(<externtype>)) 🔗
+export        ::= (export <id>? "<exportname>" <sortidx> <externtype>?)
+                | (export <id>? "<exportname>" <versionsuffix> <sortidx> <externtype>?) 🔗
 versionsuffix ::= (versionsuffix "<semversuffix>") 🔗
 ```
 
@@ -2823,7 +2822,7 @@ the instance.
 Validation of `export` requires that all transitive uses of resource types in
 the types of exported functions or values refer to resources that were either
 imported or exported (concretely, via the type index introduced by an `import`
-or `export`). The optional `<externdesc>?` in `export` can be used to
+or `export`). The optional `<externtype>?` in `export` can be used to
 explicitly ascribe a type to an export which is validated to be a supertype of
 the definition's type, thereby allowing a private (non-exported) type
 definition to be replaced with a public (exported) type definition.
@@ -3241,7 +3240,6 @@ For some use-case-focused, worked examples, see:
 [`core:string`]: https://webassembly.github.io/spec/core/text/values.html#text-string
 [`core:module`]: https://webassembly.github.io/spec/core/text/modules.html#text-module
 [`core:type`]: https://webassembly.github.io/spec/core/text/modules.html#types
-[`core:importdesc`]: https://webassembly.github.io/spec/core/text/modules.html#text-importdesc
 [`core:externtype`]: https://webassembly.github.io/spec/core/syntax/types.html#external-types
 [`core:valtype`]: https://webassembly.github.io/spec/core/text/types.html#value-types
 [`core:typeuse`]: https://webassembly.github.io/spec/core/text/modules.html#type-uses

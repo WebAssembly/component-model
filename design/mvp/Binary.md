@@ -92,7 +92,7 @@ inlineexport        ::= n:<exportname'> si:<sortidx>                       => (e
 Notes:
 * Reused Core binary rules: [`core:name`], (variable-length encoded) [`core:u32`]
 * The `core:sort` values are chosen to match the discriminant opcodes of
-  [`core:importdesc`].
+  [`core:externtype`].
 * `type` is added to `core:sort` in anticipation of the [type-imports] proposal. Until that
   proposal, core modules won't be able to actually import or export types, however, the
   `type` sort is allowed as part of outer aliases (below).
@@ -152,10 +152,10 @@ core:moduledecl  ::= 0x00 i:<core:import>                                 => i
 core:alias       ::= s:<core:sort> t:<core:aliastarget>                   => (alias t (s))
 core:aliastarget ::= 0x01 ct:<u32> idx:<u32>                              => outer ct idx
 core:importdecl  ::= i:<core:import>                                      => i
-core:exportdecl  ::= n:<core:name> d:<core:importdesc>                    => (export n d)
+core:exportdecl  ::= n:<core:name> t:<core:externtype>                    => (export n t)
 ```
 Notes:
-* Reused Core binary rules: [`core:import`], [`core:importdesc`],
+* Reused Core binary rules: [`core:import`], [`core:externtype`],
   [`core:rectype`]
 * Unfortunately, the `core:deftype` rule results in an encoding ambiguity: the
   `0x50` opcode is used by both `core:moduletype` and a non-final
@@ -556,7 +556,7 @@ named once.
 [`core:version`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-version
 [`core:name`]: https://webassembly.github.io/spec/core/binary/values.html#binary-name
 [`core:import`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-import
-[`core:importdesc`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-importdesc
+[`core:externtype`]: https://webassembly.github.io/spec/core/binary/types.html#binary-externtype
 [`core:functype`]: https://webassembly.github.io/spec/core/binary/types.html#binary-functype
 [`core:rectype]: https://webassembly.github.io/gc/core/binary/types.html#recursive-types
 
