@@ -323,8 +323,8 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x1d opts:<opts>                                    => (canon error-context.debug-message opts (core func)) 📝
            | 0x1e                                                => (canon error-context.drop (core func)) 📝
            | 0x1f                                                => (canon waitable-set.new (core func)) 🔀
-           | 0x20 cancel?:<cancel?> m:<core:memidx>              => (canon waitable-set.wait cancel? (memory m) (core func)) 🔀
-           | 0x21 cancel?:<cancel?> m:<core:memidx>              => (canon waitable-set.poll cancel? (memory m) (core func)) 🔀
+           | 0x20 cancel?:<cancel?> m:<core:memoryidx>           => (canon waitable-set.wait cancel? (memory m) (core func)) 🔀
+           | 0x21 cancel?:<cancel?> m:<core:memoryidx>           => (canon waitable-set.poll cancel? (memory m) (core func)) 🔀
            | 0x22                                                => (canon waitable-set.drop (core func)) 🔀
            | 0x23                                                => (canon waitable.join (core func)) 🔀
            | 0x26                                                => (canon thread.index (core func)) 🧵
@@ -346,7 +346,7 @@ opts     ::= opt*:vec(<canonopt>)                                => opt*
 canonopt ::= 0x00                                                => string-encoding=utf8
            | 0x01                                                => string-encoding=utf16
            | 0x02                                                => string-encoding=latin1+utf16
-           | 0x03 m:<core:memidx>                                => (memory m)
+           | 0x03 m:<core:memoryidx>                             => (memory m)
            | 0x04 f:<core:funcidx>                               => (realloc f)
            | 0x05 f:<core:funcidx>                               => (post-return f)
            | 0x06                                                => async 🔀
