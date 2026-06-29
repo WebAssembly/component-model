@@ -3795,7 +3795,7 @@ validation is performed where `$callee` has type `$ft`:
 * requires options [based on `lower(param)`](#canonopt-validation) for all parameters in `ft`
 * requires options [based on `lift(result)`](#canonopt-validation) if `ft` has a result
 * if `len(flatten_types(ft.param_types())) > max_flat_params`, `memory` is required
-* if `len(flatten_types(ft.result_type())) > max_flat_results`, `realloc` is required
+* if `len(flatten_types(ft.result_type())) > max_flat_results`, `memory` is required
 * 🔀 if `async` is specified, `memory` must be present
 
 When instantiating a component instance, the runtime calls `Store.lower` (defined
