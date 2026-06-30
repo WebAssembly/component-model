@@ -338,10 +338,13 @@ there are three kinds of "targets" for an alias: the `export` of a component
 instance, the `core export` of a core module instance and a definition of an
 `outer` component (containing the current component):
 ```ebnf
-alias            ::= (alias <aliastarget> (<sort> <id>?))
-aliastarget      ::= export <instanceidx> <name>
-                   | core export <core:instanceidx> <core:name>
-                   | outer <u32> <u32>
+alias            ::= (alias export <instanceidx> <name> (<sort> <id>?))
+                   | (alias core export <core:instanceidx> <core:name> (core <core:sort> <id>?))
+                   | (alias outer <u32> <u32> (<outeraliassort> <id>?))
+outeraliassort   ::= core module
+                   | core type
+                   | component
+                   | type
 ```
 If present, the `id` of the alias is bound to the new index added by the alias
 and can be used anywhere a normal `id` can be used.
@@ -351,37 +354,44 @@ target instance and has a matching sort.
 
 In the case of `outer` aliases, the `u32` pair serves as a [de Bruijn index],
 with the first `u32` being the number of enclosing `component`s or `type`s to
-skip and the second `u32` being an index into the target's sort's index space.
-In particular, the first `u32` can be `0`, in which case the outer alias refers
-to the current `component`/`type`. To maintain the acyclicity of module
-instantiation, outer aliases are only allowed to refer to *preceding* outer
-definitions.
+skip and the second `u32` being an index into the target's `outeraliassort`'s
+index space. In particular, the first `u32` can be `0`, in which case the outer
+alias refers to the current `component`/`type`. To maintain the acyclicity of
+module instantiation, outer aliases are only allowed to refer to *preceding*
+outer definitions. `outer` aliases are currently restricted to only refer to
+the 4 `outeraliassort`s, as opposed to the full set of `sort`s, but this
+may be relaxed in the future if needed.
 
-Components containing outer aliases effectively produce a [closure] at
-instantiation time, including a copy of the outer-aliased definitions. Because
-components, like modules, are pure values, outer aliases that reach across
-`component` boundaries are restricted to only refer to pure definitions:
-modules, components, and types that do not transitively refer to a `resource`
-type. (As described in the next section, resource types are *generative* and
-thus not pure.) For example, in the following component, `$alias{1,2,3,4,5}` are
-allowed (b/c they only reach across a `type` boundary) while `$alias{6,7}` are
-disallowed (b/c they reach across a `component` boundary):
+To ensure that nested components can be arbitrarily "unbundled" (transforming
+inline `component` definitions into `import`s of out-of-line `component`
+definitions), `outer` aliases that cross component boundaries must only refer to
+definitions that can be substituted inline, if needed for unbundling. Of the
+available `outeraliassort`s: `core module`, `core type` and `component`
+definitions are *always* substitutable. However, due to the *generativity* of
+`resource` types (discussed in the next section), `type` definitions that
+transitively refer to a `resource` type may *not* be `outer`-aliased and are
+thus rejected by validation.
+
+For example, in the following component, `$T2` and `$T3` cannot be `outer`-
+aliased by `$E`:
 ```wat
 (component $C
   (component $D)
-  (type $T (record (field "x" u32) (field "y" u32)))
-  (type $R (resource (rep i32)))
-  (type $B (borrow $R))
-  (type (component
-    (alias outer $C $T (type $alias1))
-    (alias outer $C $R (type $alias2))
-    (alias outer $C $B (type $alias3))
-  ))
-  (component
-    (alias outer $C $D (component $alias4))
-    (alias outer $C $T (type $alias5))
-    ;; (alias outer $C $R (type $alias6)) ❌
-    ;; (alias outer $C $B (type $alias7)) ❌
+  (type $T1 (record (field "x" u32) (field "y" u32)))
+  (type $T2 (resource (rep i32)))
+  (type $T3 (borrow $T2))
+  (import "f" (func $f))
+  (alias outer $C $D (component $D'))
+  (alias outer $C $T1 (type $T1'))
+  (alias outer $C $T2 (type $T2'))
+  (alias outer $C $T3 (type $T3'))
+  ;; (alias outer $C $f (func $f))     ❌ 'func' not in 'outeraliassort'
+  (component $E
+    (alias outer $C $D (component $D))
+    (alias outer $C $T1 (type $T1))
+    ;; (alias outer $C $T2 (type $T2)) ❌ resource type
+    ;; (alias outer $C $T3 (type $T3)) ❌ refers to resource type
+    ;; (alias outer $C $f (func $f))   ❌ 'func' not in 'outeraliassort'
   )
 )
 ```
@@ -492,8 +502,7 @@ core:moduledecl  ::= <core:importdecl>
                    | <core:type>
                    | <core:alias>
                    | <core:exportdecl>
-core:alias       ::= (alias <core:aliastarget> (<core:sort> <id>?))
-core:aliastarget ::= outer <u32> <u32>
+core:alias       ::= (alias outer <u32> <u32> (type <id>?))
 core:importdecl  ::= (import <core:name> <core:name> <core:externtype>)
 core:exportdecl  ::= (export <core:name> strip-id(<core:externtype>))
 
@@ -539,11 +548,9 @@ In this example, `$M` has a distinct type index space from `$C`, where element
 implicitly-created `func` type referring to both.
 
 Lastly, the `core:alias` module declarator allows a module type definition to
-reuse (rather than redefine) type definitions in the enclosing component's core
-type index space via `outer` `type` alias. In the MVP, validation restricts
-`core:alias` module declarators to *only* allow `outer` `type` aliases (into an
-enclosing component's or component-type's core type index space). In the
-future, more kinds of aliases would be meaningful and allowed.
+reuse (rather than redefine) `type` definitions in the enclosing component's
+`core type` index space via `outer` alias. In the future, more kinds and sorts
+of aliases may be useful and added.
 
 As an example, the following component defines two semantically-equivalent
 module types, where the former defines the function type via `type` declarator
@@ -914,20 +921,62 @@ to some preceding type definition. This allows:
   could generate in C++ a `typedef std::vector<uint64_t> bytes` or in JS an
   exported field named `bytes` that aliases `Uint64Array`.
 
-Relaxing the restrictions of `core:alias` declarators mentioned above, `alias`
-declarators allow both `outer` and `export` aliases of `type` and `instance`
-sorts. This allows the type exports of `instance`-typed import and export
-declarators to be used by subsequent declarators in the type:
+The `alias` declarator reuses the syntax for component-level `alias` definitions
+so that `export` and `outer` aliases can be used inside `component` and
+`instance` *types*. For example, `export` aliases are necessary to define the
+type of a component that uses an imported `resource` type in an exported
+function parameter type:
 ```wat
 (component
-  (import "fancy-fs" (instance $fancy-fs
-    (export "fs" (instance $fs
+  (type $CT (component
+    (import "fs" (instance $fs
       (export "file" (type (sub resource)))
-      ;; ...
+      ;; file methods
     ))
-    (alias export $fs "file" (type $file))
-    (export "fancy-op" (func (param "f" (borrow $file))))
+    (alias export $fs "file" (type $fileT))
+    (export "process" (func (param "file" (borrow $fileT))))
   ))
+  (import "fs-component" (component (type $CT)))
+)
+```
+Similarly, `outer` aliases are necessary to define an `instance` or `component`
+type that uses a `resource` type defined or imported by the containing
+component, since `instance` and `component` types start with empty type index
+spaces:
+```wat
+(component $C
+  (import "r" (type $R (sub resource)))
+  (type $IT (instance
+    (alias outer $C $R (type $R))
+    (export "process" (func (param "input" (borrow $R))))
+  ))
+  (import "uses-r" (instance (type $IT)))
+)
+```
+In terms of validation, `alias` declarators inherit all the previously-mentioned
+validation rules of `alias` definitions and add the following rules:
+* `alias export` declarators may only alias the `instance` and `type` sorts
+* `alias outer` declarators may only alias the `core type` and `type` sorts
+
+```wat
+(component $C
+  (component $D)
+  (type $T1 (record (field "x" u32) (field "y" u32)))
+  (type $T2 (resource (rep i32)))
+  (type $T3 (borrow $T2))
+  (type (component
+    ;; (alias outer $C $D (component $D)) ❌ not allowed inside type
+    (alias outer $C $T1 (type $T1))
+    (alias outer $C $T2 (type $T2))
+    (alias outer $C $T3 (type $T3))
+  ))
+  (component
+    (type (component
+      (alias outer $C $T1 (type $T1))
+      ;; (alias outer $C $T2 (type $T2))  ❌ resource type
+      ;; (alias outer $C $T3 (type $T3))  ❌ refers to resource type
+    ))
+  )
 )
 ```
 
@@ -3290,7 +3339,6 @@ For some use-case-focused, worked examples, see:
 
 [Kebab Case]: https://en.wikipedia.org/wiki/Letter_case#Kebab_case
 [De Bruijn Index]: https://en.wikipedia.org/wiki/De_Bruijn_index
-[Closure]: https://en.wikipedia.org/wiki/Closure_(computer_programming)
 [Empty Type]: https://en.wikipedia.org/w/index.php?title=Empty_type
 [IEEE754]: https://en.wikipedia.org/wiki/IEEE_754
 [Unicode Scalar Values]: https://unicode.org/glossary/#unicode_scalar_value
@@ -3306,6 +3354,7 @@ For some use-case-focused, worked examples, see:
 [Existential Types]: https://en.wikipedia.org/wiki/System_F
 [Unit]: https://en.wikipedia.org/wiki/Unit_type
 [Trampolines]: https://en.wikipedia.org/wiki/Trampoline_(computing)
+[Free Variables]: https://en.wikipedia.org/wiki/Free_variables_and_bound_variables
 
 [Generative]: https://www.researchgate.net/publication/2426300_A_Syntactic_Theory_of_Type_Generativity_and_Sharing
 [Avoidance Problem]: https://counterexamples.org/avoidance.html

@@ -116,24 +116,23 @@ Notes:
 
 (See [Alias Definitions](Explainer.md#alias-definitions) in the explainer.)
 ```ebnf
-alias       ::= s:<sort> t:<aliastarget>                => (alias t (s))
-aliastarget ::= 0x00 i:<instanceidx> n:<name>           => export i n
-              | 0x01 i:<core:instanceidx> n:<core:name> => core export i n
-              | 0x02 ct:<u32> idx:<u32>                 => outer ct idx
+alias ::= s:<sort> 0x00 i:<instanceidx> n:<name>           => (alias export i n (s))
+        | s:<sort> 0x01 i:<core:instanceidx> n:<core:name> => (alias core export i n (s))
+        | s:<sort> 0x02 ct:<u32> idx:<u32>                 => (alias outer ct idx (s))  (if s in outeraliassort)
 ```
 Notes:
 * Reused Core binary rules: (variable-length encoded) [`core:u32`]
-* For `export` aliases, `i` is validated to refer to an instance in the
-  instance index space that exports `n` with the specified `sort`.
-* For `outer` aliases, `ct` is validated to be *less or equal than* the number
-  of enclosing `component`s and `type`s and `i` is validated to be a valid index
-  in the `sort` index space of the targeted `component`/`type` (counting
-  outward, starting with `0` referring to the current `component`/`type`).
-* For `outer` aliases, validation restricts the `sort` to one of `type`,
-  `module` or `component`.
-* For `outer` aliases that reach across a `component` boundary (as opposed to
-  a `type` boundary), validation additionally requires that any outer-aliased
-  `type` does not transitively refer to a `resource` type.
+* For (`core`) `export` aliases, `i` is validated to refer to a (core) instance
+  in the (core) instance index space that exports `n` with the specified `sort`.
+* For `outer` aliases:
+  * `ct` is validated to be *less than or equal to* the number of enclosing
+    "scopes" (where a "scope" is one of: a `component` definition, a `component`
+    type, an `instance` type)
+  * `i` is validated to be a valid index in the `s` index space of the target
+    scope (counting outward, starting with `0` referring to the current scope)
+  * if `ct` is greater than 0 and crosses a component (as opposed to type)
+    boundary and `s` is `type`, the target type may not transitively refer to a
+    resource type.
 
 
 ## Type Definitions
@@ -149,8 +148,7 @@ core:moduledecl  ::= 0x00 i:<core:import>                                 => i
                    | 0x01 t:<core:type>                                   => t
                    | 0x02 a:<core:alias>                                  => a
                    | 0x03 e:<core:exportdecl>                             => e
-core:alias       ::= s:<core:sort> t:<core:aliastarget>                   => (alias t (s))
-core:aliastarget ::= 0x01 ct:<u32> idx:<u32>                              => outer ct idx
+core:alias       ::= 0x10 0x01 ct:<u32> idx:<u32>                         => (alias outer ct idx (type))
 core:importdecl  ::= i:<core:import>                                      => i
 core:exportdecl  ::= n:<core:name> t:<core:externtype>                    => (export n t)
 ```
@@ -171,8 +169,9 @@ Notes:
   core type index space will not contain any core module types.
 * As described in the explainer, each module type is validated with an
   initially-empty type index space.
-* `alias` declarators currently only allow `outer` `type` aliases but
-  would add `export` aliases when core wasm adds type exports.
+* In `core:alias`, the first `0x10` is the opcode for `type` in `core:sort` and
+  `0x01` is an opcode to distinguish `outer` aliases from potential future
+  `export` aliases.
 
 ```ebnf
 type          ::= dt:<deftype>                            => (type dt)
@@ -260,11 +259,13 @@ Notes:
   [TODO](Concurrency.md#TODO).
 * Validation of `resourcetype` requires the destructor (if present) to have
   type `[i32] -> []`.
-* Validation of `instancedecl` (currently) only allows the `type` and
-  `instance` sorts in `alias` declarators.
+* In addition to the validation rules for `alias` *definitions* mentioned above,
+  validation of `alias` *declarators* also requires:
+  * `export` aliases only alias the `instance` and `type` sorts
+  * `outer` aliases only alias the `core type` and `type` sorts
 * As described in the explainer, each component and instance type is validated
-  with an initially-empty type index space. Outer aliases can be used to pull
-  in type definitions from containing components.
+  with an initially-empty type index space. (Outer aliases can be used to pull
+  in type definitions from containing `component` and `type` scopes.)
 * `exportdecl` introduces a new type index that can be used by subsequent type
   definitions. In the `(eq i)` case, the new type index is effectively an alias
   to type `i`. In the `(sub resource)` case, the new type index refers to a
