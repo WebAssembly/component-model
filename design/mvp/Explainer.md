@@ -236,8 +236,8 @@ The syntax for defining a core module instance is:
 core:instance       ::= (instance <id>? <core:instancexpr>)
 core:instanceexpr   ::= (instantiate <core:moduleidx> <core:instantiatearg>*)
                       | <core:inlineexport>*
-core:instantiatearg ::= (with <core:string> (instance <core:instanceidx>))
-                      | (with <core:string> (instance <core:inlineexport>*))
+core:instantiatearg ::= (with <core:name> (instance <core:instanceidx>))
+                      | (with <core:name> (instance <core:inlineexport>*))
 core:sortidx        ::= (<core:sort> <u32>)
 core:sort           ::= func
                       | table
@@ -247,9 +247,9 @@ core:sort           ::= func
                       | type
                       | module
                       | instance
-core:inlineexport   ::= (export <core:string> <core:sortidx>)
+core:inlineexport   ::= (export <core:name> <core:sortidx>)
 ```
-where [`core:string`] is the WebAssembly text format's quoted string literal.
+where [`core:name`] is the WebAssembly text format's quoted string literal.
 
 When instantiating a module via `instantiate`, the two-level imports of the core
 modules are resolved as follows:
@@ -295,9 +295,9 @@ instances, but with an expanded component-level definition of `sort`:
 instance       ::= (instance <id>? <instanceexpr>)
 instanceexpr   ::= (instantiate <componentidx> <instantiatearg>*)
                  | <inlineexport>*
-instantiatearg ::= (with <string> <sortidx>)
-                 | (with <string> (instance <inlineexport>*))
-string         ::= <core:string>
+instantiatearg ::= (with <name> <sortidx>)
+                 | (with <name> (instance <inlineexport>*))
+name           ::= <core:name>
 sortidx        ::= (<sort> <u32>)
 sort           ::= core <core:sort>
                  | func
@@ -317,9 +317,9 @@ future include `data`). Thus, component-level `sort` injects the full set
 of `core:sort`, so that they may be referenced (leaving it up to validation
 rules to throw out the core sorts that aren't allowed in various contexts).
 
-Component-level `string` literals reuse the Core WebAssembly text format's
-quoted-string-literal syntax which includes literals such as `"a"`, `"☃︎"`,
-`"\7f"` and `"\u{7fff}"`.
+Component-level `name` literals reuse the Core WebAssembly text format's
+[`core:name`] quoted-string-literal syntax which includes literals such as
+`"a"`, `"☃︎"`, `"\7f"` and `"\u{7fff}"`.
 
 🪙 The `value` sort refers to a value that is provided and consumed during
 instantiation. How this works is described in the
@@ -339,14 +339,14 @@ instance, the `core export` of a core module instance and a definition of an
 `outer` component (containing the current component):
 ```ebnf
 alias            ::= (alias <aliastarget> (<sort> <id>?))
-aliastarget      ::= export <instanceidx> <string>
-                   | core export <core:instanceidx> <core:string>
+aliastarget      ::= export <instanceidx> <name>
+                   | core export <core:instanceidx> <core:name>
                    | outer <u32> <u32>
 ```
 If present, the `id` of the alias is bound to the new index added by the alias
 and can be used anywhere a normal `id` can be used.
 
-In the case of `export` aliases, validation ensures `string` is an export in the
+In the case of `export` aliases, validation ensures `name` is an export in the
 target instance and has a matching sort.
 
 In the case of `outer` aliases, the `u32` pair serves as a [de Bruijn index],
@@ -396,7 +396,7 @@ sortidx     ::= (<sort> <u32>)          ;; as above
               | <inlinealias>
 Xidx        ::= <u32>                   ;; as above
               | <inlinealias>
-inlinealias ::= (<sort> <u32> <string>+)
+inlinealias ::= (<sort> <u32> <name>+)
 ```
 If `<sort>` refers to a `<core:sort>`, then the `<u32>` of `inlinealias` is a
 `<core:instanceidx>`; otherwise it's an `<instanceidx>`. For example, the
@@ -494,8 +494,8 @@ core:moduledecl  ::= <core:importdecl>
                    | <core:exportdecl>
 core:alias       ::= (alias <core:aliastarget> (<core:sort> <id>?))
 core:aliastarget ::= outer <u32> <u32>
-core:importdecl  ::= (import <core:string> <core:string> <core:externtype>)
-core:exportdecl  ::= (export <core:string> strip-id(<core:externtype>))
+core:importdecl  ::= (import <core:name> <core:name> <core:externtype>)
+core:exportdecl  ::= (export <core:name> strip-id(<core:externtype>))
 
 where strip-id(X) parses '(' sort Y ')' when X parses '(' sort <id>? Y ')'
 ```
@@ -2350,7 +2350,7 @@ val      ::= false | true
            | <f64canon>
            | nan
            | '<core:stringchar>'
-           | <core:string>
+           | <core:name>
            | (record <val>+)
            | (variant "<label>" <val>?)
            | (list <val>*)
@@ -3237,7 +3237,7 @@ For some use-case-focused, worked examples, see:
 [`core:i64`]: https://webassembly.github.io/spec/core/text/values.html#text-int
 [`core:f64`]: https://webassembly.github.io/spec/core/syntax/values.html#floating-point
 [`core:stringchar`]: https://webassembly.github.io/spec/core/text/values.html#text-string
-[`core:string`]: https://webassembly.github.io/spec/core/text/values.html#text-string
+[`core:name`]: https://webassembly.github.io/spec/core/text/values.html#text-name
 [`core:module`]: https://webassembly.github.io/spec/core/text/modules.html#text-module
 [`core:type`]: https://webassembly.github.io/spec/core/text/modules.html#types
 [`core:externtype`]: https://webassembly.github.io/spec/core/syntax/types.html#external-types
