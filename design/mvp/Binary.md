@@ -302,7 +302,6 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x05                                                => (canon task.cancel (core func)) 🔀
            | 0x0a v:<valtype> i:<u32>                            => (canon context.get v i (core func)) 🔀
            | 0x0b v:<valtype> i:<u32>                            => (canon context.set v i (core func)) 🔀
-           | 0x0c cancel?:<cancel?>                              => (canon thread.yield cancel? (core func)) 🔀
            | 0x06 async?:<async?>                                => (canon subtask.cancel async? (core func)) 🔀
            | 0x0d                                                => (canon subtask.drop (core func)) 🔀
            | 0x0e t:<typeidx>                                    => (canon stream.new t (core func)) 🔀
@@ -329,10 +328,13 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x23                                                => (canon waitable.join (core func)) 🔀
            | 0x26                                                => (canon thread.index (core func)) 🧵
            | 0x27 ft:<typeidx> tbl:<core:tableidx>               => (canon thread.new-indirect ft tbl (core func)) 🧵
-           | 0x28 cancel?:<cancel?>                              => (canon thread.switch-to cancel? (core func)) 🧵
+           | 0x28                                                => (canon thread.resume-later (core func)) 🧵
            | 0x29 cancel?:<cancel?>                              => (canon thread.suspend cancel? (core func)) 🧵
-           | 0x2a                                                => (canon thread.resume-later (core func)) 🧵
-           | 0x2b cancel?:<cancel?>                              => (canon thread.yield-to cancel? (core func)) 🧵
+           | 0x0c cancel?:<cancel?>                              => (canon thread.yield cancel? (core func)) 🔀
+           | 0x2a cancel?:<cancel?>                              => (canon thread.suspend-then-resume cancel? (core func)) 🧵
+           | 0x2b cancel?:<cancel?>                              => (canon thread.yield-then-resume cancel? (core func)) 🧵
+           | 0x2c cancel?:<cancel?>                              => (canon thread.suspend-then-promote cancel? (core func)) 🧵
+           | 0x2d cancel?:<cancel?>                              => (canon thread.yield-then-promote cancel? (core func)) 🧵
            | 0x40 shared?:<sh?> ft:<typeidx>                     => (canon thread.spawn-ref shared? ft (core func)) 🧵②
            | 0x41 shared?:<sh?> ft:<typeidx> tbl:<core:tableidx> => (canon thread.spawn-indirect shared? ft tbl (core func)) 🧵②
            | 0x42 shared?:<sh?>                                  => (canon thread.available-parallelism shared? (core func)) 🧵②
