@@ -1011,7 +1011,7 @@ token ::= whitespace
         | keyword
         | integer
         | identifier
-        | string
+        | string-literal
 ```
 
 Whitespace and comments are ignored when parsing structures defined elsewhere
@@ -1108,13 +1108,17 @@ sequence of digits:
 integer ::= [0-9]+
 ```
 
-### Strings
+### Strings Literals
 
 WIT string literals are double-quoted and use the same text format as the Core
-WebAssembly text format's [`string`] literal. For example `"a"`, `"☃︎"`, `"\7f"`
-and `"\u{7fff}"` are all `string` literals.
+WebAssembly text format's [`name`] literal. For example `"a"`, `"☃︎"`, `"\7f"`
+and `"\u{7fff}"` are all `name` literals.
 
-[`string`]: https://webassembly.github.io/spec/core/text/values.html#text-string
+```ebnf
+string-literal ::= <core:name>
+```
+
+[`name`]: https://webassembly.github.io/spec/core/text/values.html#text-name
 
 ## Top-level items
 
@@ -1442,7 +1446,7 @@ export-item ::= external-id? 'export' id ':' extern-type
 import-item ::= external-id? 'import' id ':' extern-type
               | 'import' use-path ';'
 
-external-id ::= '@external-id' '(' string ')' 🏷️
+external-id ::= '@external-id' '(' string-literal ')' 🏷️
 
 extern-type ::= func-type ';'
               | 'interface' '{' interface-items* '}'

@@ -2553,7 +2553,7 @@ attribute     ::= <versionsuffix> 🔗
                 | <externalid> 🏷️
 versionsuffix ::= (versionsuffix <semversuffixstr>) 🔗
 implements    ::= (implements <interfacenamestr>) 🏷️
-externalid    ::= (external-id <string>) 🏷️
+externalid    ::= (external-id <name>) 🏷️
 ```
 Imports and exports both have a *name* (`externnamestr`) and a list of
 *attributes* (`attribute*`). Imports always include a type (`externtype`).
