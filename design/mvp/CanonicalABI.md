@@ -63,7 +63,7 @@ specified here.
   * [`canon thread.new-indirect`](#-canon-threadnew-indirect) 🧵
   * [`canon thread.resume-later`](#-canon-threadresume-later) 🧵
   * [`canon thread.suspend`](#-canon-threadsuspend) 🧵
-  * [`canon thread.yield`](#-canon-threadyield) 🧵
+  * [`canon thread.yield`](#-canon-threadyield) 🔀
   * [`canon thread.suspend-then-resume`](#-canon-threadsuspend-then-resume) 🧵
   * [`canon thread.yield-then-resume`](#-canon-threadyield-then-resume) 🧵
   * [`canon thread.suspend-then-promote`](#-canon-threadsuspend-then-promote) 🧵
@@ -4948,7 +4948,7 @@ cancellation, they can omit `cancellable` so that cancellation is instead
 delivered at a later `cancellable` call.
 
 
-### 🧵 `canon thread.yield`
+### 🔀 `canon thread.yield`
 
 For a canonical definition:
 ```wat
