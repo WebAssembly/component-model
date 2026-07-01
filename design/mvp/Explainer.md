@@ -33,6 +33,7 @@ more user-focused explanation, take a look at the
   * [Import and export definitions](#import-and-export-definitions)
     * [Name uniqueness](#name-uniqueness)
     * [Canonical interface name](#-canonical-interface-name)
+    * [External visibility of types](#external-visibility-of-types)
 * [Component invariants](#component-invariants)
 * [JavaScript embedding](#JavaScript-embedding)
   * [JS API](#JS-API)
@@ -2819,56 +2820,8 @@ import uses an `instance` type, anticipating a subsequent tooling step (likely
 the one that performs dependency resolution) to select, instantiate and provide
 the instance.
 
-Validation of `export` requires that all transitive uses of resource types in
-the types of exported functions or values refer to resources that were either
-imported or exported (concretely, via the type index introduced by an `import`
-or `export`). The optional `<externtype>?` in `export` can be used to
-explicitly ascribe a type to an export which is validated to be a supertype of
-the definition's type, thereby allowing a private (non-exported) type
-definition to be replaced with a public (exported) type definition.
 
-For example, in the following component:
-```wat
-(component
-  (import "R1" (type $R1 (sub resource)))
-  (type $R2 (resource (rep i32)))
-  (export $R2' "R2" (type $R2))
-  (func $f1 (result (own $R1)) (canon lift ...))
-  (func $f2 (result (own $R2)) (canon lift ...))
-  (func $f2' (result (own $R2')) (canon lift ...))
-  (export "f1" (func $f1))
-  ;; (export "f2" (func $f2)) -- invalid
-  (export "f2" (func $f2) (func (result (own $R2'))))
-  (export "f2" (func $f2'))
-)
-```
-the commented-out `export` is invalid because its type transitively refers to
-`$R2`, which is a private type definition. This requirement is meant to address
-the standard [avoidance problem] that appears in module systems with abstract
-types. In particular, it ensures that a client of a component is able to
-externally define a type compatible with the exports of the component.
-
-Similar to type exports, value exports may also ascribe a type to keep the precise
-value from becoming part of the type and public interface.
-
-For example:
-```wat
-(component
-  (value $url string "https://example.com")
-  (export "default-url" (value $url) (value string))
-)
-```
-
-The inferred type of this component is:
-```wat
-(component
-  (export "default-url" (value string))
-)
-```
-
-Note, that the `url` value definition is absent from the component type
-
-### Name Uniqueness
+#### Name Uniqueness
 
 The goal of the `label`, `exportname` and `importname` productions defined and
 used above is to allow automated bindings generators to map these names into
@@ -2904,7 +2857,7 @@ annotations. For example, the validation rules for `[constructor]foo` require
 for details.
 
 
-### 🔗 Canonical Interface Name
+#### 🔗 Canonical Interface Name
 
 An `interfacename` (as defined above) is **canonical** iff it either:
 
@@ -2949,6 +2902,85 @@ For compatibility with older versions of this spec, non-canonical
 `interfacename`s (with `interfaceversion`s matching any `valid semver`) are
 temporarily permitted. These non-canonical names may trigger warnings and will
 be rejected at some point in the future.
+
+
+#### External Visibility of Types
+
+Resource types and certain compound value types (specifically `record`,
+`variant`, `enum`, `flags`) have an additional **external visibility**
+requirement when used in the function types of imports and exports:
+
+Like other module systems with abstract types, components have to deal with the
+[avoidance problem] wherein a resource type that is in-scope when defining a
+function becomes out-of-scope when that function is exported and used outside the
+component. For example, in the following component, the definitions of `$R` and
+`$f` are valid, but when attempting to *export* `$f`, there is a problem because
+client components would have no way to refer to `$R` and thus no way to write
+`f`'s function type in an import:
+```wat
+(component
+  (type $R (resource (rep i32)))
+  (func $f (result (own $R)) (canon lift ...))
+  ;; ⁉️ (export "f" (func $f))
+)
+```
+
+To address this problem, when validating `import` and `export` definitions, the
+Component Model requires that any resource type transitively used in the type of
+an import or export has an *externally-visible name*. Concretely, the `typeidx`
+introduced by the `import` or `export` of a `resource` type is considered an
+"externally-visible name", since the `typeidx` is uniquely associated with an
+`import`/`export`, which has a name. (Note: for `export`s, the `typeidx` that
+gets passed *into* the `export` does *not* get retroactively named by the
+`export`; only the *new* `typeidx` introduced by the `export`.) Lastly,
+according to usual component acyclicity rules, *imported* types cannot
+transitively refer to the external names of *exported* types.
+
+Based on these rules, the above example can be expanded with the following valid
+imports and exports:
+```wat
+(component
+  (type $R (resource (rep i32)))
+  (func $f (result (own $R)) (canon lift ...))
+  ;; ❌ (export "f" (func $f))                      ;; error: f's type uses $R which has no external name
+  (export $R' "R" (type $R))                        ;; $R' is an external name
+  (export "f" (func $f) (func (result (own $R'))))  ;; override $f's default type to use $R'
+
+  (func $f2 (result (own $R')) (canon lift ...))    ;; alternatively: define $f2 to use $R' directly
+  (export "f2" (func $f2))                          ;; no ascription necessary
+
+  ;; ❌ (import "f3" (func (result (own $R'))))     ;; imports cannot depend on exports
+  (import "R2" (type $R2 (sub resource)))           ;; $R2 is an external name
+  (import "f3" (func $f3 (result (own $R2))))       ;; imports can depend on imports
+
+  (func $f4 (result (own $R2)) (canon lift ...))
+  (export "f4" (func $f4))                          ;; exports can depend on imports
+)
+```
+
+The Component Model also imposes the same external-visibility requirement on
+`record`, `variant`, `enum` and `flags` value types, even though these types are
+purely structural types. The reason for this theoretically-unnecessary
+requirement is that, in many source languages, the source-level types that
+correspond to these component-level types are not structural and thus require
+some fixed type name to use in generated function signatures. For example, in C,
+`struct`s, `union`s and `enum`s all require a name, and in the absence of a
+component- or WIT-supplied name, a bindings generator would be forced to
+mechanically generate a name that will inevitably be less meaningful than what a
+component or WIT author would choose.
+
+Thus, the preceding example also applies when `resource` is swapped with
+`record`, `variant`, `enum` and `flags`:
+```wat
+(component
+  (type $R (record (field "x" u32) (field "y" u32)))
+  (func $f (result $R) (canon lift ...))
+  ;; ❌ (export "f" (func $f))
+  (export $R' "R" (type $R))
+  (export "f" (func $f) (func (result $R')))
+  ... etc
+)
+```
 
 
 ## Component Invariants
