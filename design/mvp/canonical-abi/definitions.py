@@ -123,6 +123,7 @@ class ErrorContextType(ValType): pass
 class ListType(ValType):
   t: ValType
   l: Optional[int] = None
+  var: Optional[bool] = False
 
 @dataclass
 class FieldType:
@@ -1210,15 +1211,17 @@ def alignment(t, ptr_type):
     case CharType()                  : return 4
     case StringType()                : return ptr_size(ptr_type)
     case ErrorContextType()          : return 4
-    case ListType(t, l)              : return alignment_list(t, l, ptr_type)
+    case ListType(t, l, var)         : return alignment_list(t, l, var, ptr_type)
     case RecordType(fields)          : return alignment_record(fields, ptr_type)
     case VariantType(cases)          : return alignment_variant(cases, ptr_type)
     case FlagsType(labels)           : return alignment_flags(labels)
     case OwnType() | BorrowType()    : return 4
     case StreamType() | FutureType() : return 4
 
-def alignment_list(elem_type, maybe_length, ptr_type):
+def alignment_list(elem_type, maybe_length, maybe_variable, ptr_type):
   if maybe_length is not None:
+    if maybe_variable:
+      return max(alignment(varint_type(maybe_length), ptr_type), alignment(elem_type, ptr_type))
     return alignment(elem_type, ptr_type)
   return ptr_size(ptr_type)
 
@@ -1232,9 +1235,11 @@ def alignment_variant(cases, ptr_type):
   return max(alignment(discriminant_type(cases), ptr_type), max_case_alignment(cases, ptr_type))
 
 def discriminant_type(cases):
-  n = len(cases)
-  assert(0 < n < (1 << 32))
-  match math.ceil(math.log2(n)/8):
+  return varint_type(len(cases))
+
+def varint_type(maxval):
+  assert(0 < maxval < (1 << 32))
+  match math.ceil(math.log2(maxval)/8):
     case 0: return U8Type()
     case 1: return U8Type()
     case 2: return U16Type()
@@ -1268,15 +1273,19 @@ def elem_size(t, ptr_type):
     case CharType()                  : return 4
     case StringType()                : return 2 * ptr_size(ptr_type)
     case ErrorContextType()          : return 4
-    case ListType(t, l)              : return elem_size_list(t, l, ptr_type)
+    case ListType(t, l, var)         : return elem_size_list(t, l, var, ptr_type)
     case RecordType(fields)          : return elem_size_record(fields, ptr_type)
     case VariantType(cases)          : return elem_size_variant(cases, ptr_type)
     case FlagsType(labels)           : return elem_size_flags(labels)
     case OwnType() | BorrowType()    : return 4
     case StreamType() | FutureType() : return 4
 
-def elem_size_list(elem_type, maybe_length, ptr_type):
+def elem_size_list(elem_type, maybe_length, maybe_variable, ptr_type):
   if maybe_length is not None:
+    if maybe_variable:
+      s = elem_size(varint_type(maybe_length), ptr_type)
+      s = align_to(s, alignment(elem_type, ptr_type))
+      return s + maybe_length * elem_size(elem_type, ptr_type)
     return maybe_length * elem_size(elem_type, ptr_type)
   return 2 * ptr_size(ptr_type)
 
@@ -1328,7 +1337,7 @@ def load(cx, ptr, t):
     case CharType()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
     case StringType()       : return load_string(cx, ptr)
     case ErrorContextType() : return lift_error_context(cx, load_int(cx, ptr, 4))
-    case ListType(t, l)     : return load_list(cx, ptr, t, l)
+    case ListType(t, l, var): return load_list(cx, ptr, t, l, var)
     case RecordType(fields) : return load_record(cx, ptr, fields)
     case VariantType(cases) : return load_variant(cx, ptr, cases)
     case FlagsType(labels)  : return load_flags(cx, ptr, labels)
@@ -1430,9 +1439,17 @@ def lift_error_context(cx, i):
 MAX_LIST_BYTE_LENGTH = (1 << 28) - 1
 assert(REALLOC_I32_MAX > 2 * MAX_LIST_BYTE_LENGTH)
 
-def load_list(cx, ptr, elem_type, maybe_length):
+def load_list(cx, ptr, elem_type, maybe_length, maybe_variable):
   if maybe_length is not None:
-    return load_list_from_valid_range(cx, ptr, maybe_length, elem_type)
+    if maybe_variable:
+      lentype = varint_type(maybe_length)
+      actual_length = load_int(cx, ptr, elem_size(lentype, cx.opts.memory.ptr_type()))
+      trap_if(actual_length > maybe_length)
+      ptr += elem_size(lentype, cx.opts.memory.ptr_type())
+      ptr = align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type()))
+    else:
+      actual_length = maybe_length
+    return load_list_from_range(cx, ptr, actual_length, elem_type)
   begin = load_int(cx, ptr, cx.opts.memory.ptr_size())
   length = load_int(cx, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
   return load_list_from_range(cx, begin, length, elem_type)
@@ -1530,7 +1547,7 @@ def store(cx, v, t, ptr):
     case CharType()         : store_int(cx, char_to_i32(v), ptr, 4)
     case StringType()       : store_string(cx, v, ptr)
     case ErrorContextType() : store_int(cx, lower_error_context(cx, v), ptr, 4)
-    case ListType(t, l)     : store_list(cx, v, ptr, t, l)
+    case ListType(t, l, var): store_list(cx, v, ptr, t, l, var)
     case RecordType(fields) : store_record(cx, v, ptr, fields)
     case VariantType(cases) : store_variant(cx, v, ptr, cases)
     case FlagsType(labels)  : store_flags(cx, v, ptr, labels)
@@ -1731,19 +1748,29 @@ def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
 def lower_error_context(cx, v):
   return cx.inst.handles.add(v)
 
-def store_list(cx, v, ptr, elem_type, maybe_length):
+def store_list(cx, v, ptr, elem_type, maybe_length, maybe_variable):
   if maybe_length is not None:
-    assert(maybe_length == len(v))
-    store_list_into_valid_range(cx, v, ptr, elem_type)
-    return
-  begin, length = store_list_into_range(cx, v, elem_type)
-  store_int(cx, begin, ptr, cx.opts.memory.ptr_size())
-  store_int(cx, length, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
+    if maybe_variable:
+      assert(len(v) <= maybe_length)
+      lentype = varint_type(maybe_length)
+      store_int(cx, len(v), ptr, elem_size(lentype, cx.opts.memory.ptr_type()))
+      ptr += elem_size(lentype, cx.opts.memory.ptr_type())
+      ptr = align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type()))
+    else:
+      assert(len(v) == maybe_length)
+    store_ptr = ptr
+  else:
+    store_ptr = None
+  begin, length = store_list_into_range(cx, v, elem_type, store_ptr)
+  if maybe_length is None:
+    store_int(cx, begin, ptr, cx.opts.memory.ptr_size())
+    store_int(cx, length, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
 
-def store_list_into_range(cx, v, elem_type):
+def store_list_into_range(cx, v, elem_type, ptr):
   byte_length = len(v) * elem_size(elem_type, cx.opts.memory.ptr_type())
-  assert(byte_length <= REALLOC_I32_MAX)
-  ptr = cx.opts.realloc(0, 0, alignment(elem_type, cx.opts.memory.ptr_type()), byte_length)
+  if ptr is None:
+    assert(byte_length <= REALLOC_I32_MAX)
+    ptr = cx.opts.realloc(0, 0, alignment(elem_type, cx.opts.memory.ptr_type()), byte_length)
   trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type())))
   trap_if(ptr + byte_length > len(cx.opts.memory))
   store_list_into_valid_range(cx, v, ptr, elem_type)
@@ -1815,33 +1842,57 @@ MAX_FLAT_PARAMS = 16
 MAX_FLAT_ASYNC_PARAMS = 4
 MAX_FLAT_RESULTS = 1
 
+def is_forced_to_mem(t):
+  match despecialize(t):
+    case ListType(_, l, _) : return l is not None
+    case RecordType(fields): return any(is_forced_to_mem(f.t) for f in fields)
+    case VariantType(cases): return any(c.t is not None and is_forced_to_mem(c.t) for c in cases)
+    case _                 : return False
+
+@dataclass
+class FlattenPlan:
+  flat_vis: list[int]
+  mem_vis: list[int]
+  flat_ts: list[str]
+
+def plan_flatten(ts, max_flat, opts):
+  flat_vis = [i for i in range(len(ts)) if not is_forced_to_mem(ts[i])]
+  mem_vis  = [i for i in range(len(ts)) if is_forced_to_mem(ts[i])]
+  flat_ts = flatten_types([ts[i] for i in flat_vis], opts)
+  if len(flat_ts) + (1 if mem_vis else 0) > max_flat:
+    flat_vis = []
+    mem_vis = list(range(len(ts)))
+    flat_ts = []
+  return FlattenPlan(flat_vis, mem_vis, flat_ts)
+
 def flatten_functype(opts, ft, context):
-  flat_params = flatten_types(ft.param_types(), opts)
-  flat_results = flatten_types(ft.result_type(), opts)
+  if not opts.async_ or context == 'lift':
+    max_flat_params = MAX_FLAT_PARAMS
+  else:
+    max_flat_params = MAX_FLAT_ASYNC_PARAMS
+  param_plan = plan_flatten(ft.param_types(), max_flat_params, opts)
+  flat_params = param_plan.flat_ts
+  if param_plan.mem_vis:
+    flat_params += [opts.memory.ptr_type()]
   if not opts.async_:
-    if len(flat_params) > MAX_FLAT_PARAMS:
-      flat_params = [opts.memory.ptr_type()]
-    if len(flat_results) > MAX_FLAT_RESULTS:
+    result_plan = plan_flatten(ft.result_type(), MAX_FLAT_RESULTS, opts)
+    flat_results = result_plan.flat_ts
+    if result_plan.mem_vis:
       match context:
         case 'lift':
-          flat_results = [opts.memory.ptr_type()]
+          flat_results += [opts.memory.ptr_type()]
         case 'lower':
           flat_params += [opts.memory.ptr_type()]
-          flat_results = []
     return CoreFuncType(flat_params, flat_results)
   else:
     match context:
       case 'lift':
-        if len(flat_params) > MAX_FLAT_PARAMS:
-          flat_params = [opts.memory.ptr_type()]
         if opts.callback:
           flat_results = ['i32']
         else:
           flat_results = []
       case 'lower':
-        if len(flat_params) > MAX_FLAT_ASYNC_PARAMS:
-          flat_params = [opts.memory.ptr_type()]
-        if len(flat_results) > 0:
+        if len(ft.result_type()) > 0:
           flat_params += [opts.memory.ptr_type()]
         flat_results = ['i32']
     return CoreFuncType(flat_params, flat_results)
@@ -1860,16 +1911,14 @@ def flatten_type(t, opts):
     case CharType()                       : return ['i32']
     case StringType()                     : return [opts.memory.ptr_type(), opts.memory.ptr_type()]
     case ErrorContextType()               : return ['i32']
-    case ListType(t, l)                   : return flatten_list(t, l, opts)
+    case ListType(t, _, _)                : return flatten_list(t, opts)
     case RecordType(fields)               : return flatten_record(fields, opts)
     case VariantType(cases)               : return flatten_variant(cases, opts)
     case FlagsType(labels)                : return ['i32']
     case OwnType() | BorrowType()         : return ['i32']
     case StreamType() | FutureType()      : return ['i32']
 
-def flatten_list(elem_type, maybe_length, opts):
-  if maybe_length is not None:
-    return flatten_type(elem_type, opts) * maybe_length
+def flatten_list(elem_type, opts):
   return [opts.memory.ptr_type(), opts.memory.ptr_type()]
 
 def flatten_record(fields, opts):
@@ -1934,7 +1983,7 @@ def lift_flat(cx, vi, t):
     case CharType()         : return convert_i32_to_char(cx, vi.next('i32'))
     case StringType()       : return lift_flat_string(cx, vi)
     case ErrorContextType() : return lift_error_context(cx, vi.next('i32'))
-    case ListType(t, l)     : return lift_flat_list(cx, vi, t, l)
+    case ListType(t, _, _)  : return lift_flat_list(cx, vi, t)
     case RecordType(fields) : return lift_flat_record(cx, vi, fields)
     case VariantType(cases) : return lift_flat_variant(cx, vi, cases)
     case FlagsType(labels)  : return lift_flat_flags(vi, labels)
@@ -1961,12 +2010,7 @@ def lift_flat_string(cx, vi):
   packed_length = vi.next(cx.opts.memory.ptr_type())
   return load_string_from_range(cx, ptr, packed_length)
 
-def lift_flat_list(cx, vi, elem_type, maybe_length):
-  if maybe_length is not None:
-    a = []
-    for i in range(maybe_length):
-      a.append(lift_flat(cx, vi, elem_type))
-    return a
+def lift_flat_list(cx, vi, elem_type):
   ptr = vi.next(cx.opts.memory.ptr_type())
   length = vi.next(cx.opts.memory.ptr_type())
   return load_list_from_range(cx, ptr, length, elem_type)
@@ -1978,13 +2022,13 @@ def lift_flat_record(cx, vi, fields):
   return record
 
 def lift_flat_variant(cx, vi, cases):
-  flat_types = flatten_variant(cases, cx.opts)
-  assert(flat_types.pop(0) == 'i32')
+  flat_ts = flatten_variant(cases, cx.opts)
+  assert(flat_ts.pop(0) == 'i32')
   case_index = vi.next('i32')
   trap_if(case_index >= len(cases))
   class CoerceValueIter:
     def next(self, want):
-      have = flat_types.pop(0)
+      have = flat_ts.pop(0)
       x = vi.next(have)
       match (have, want):
         case ('i32', 'f32') : return decode_i32_as_float(x)
@@ -1997,7 +2041,7 @@ def lift_flat_variant(cx, vi, cases):
     v = None
   else:
     v = lift_flat(cx, CoerceValueIter(), c.t)
-  for have in flat_types:
+  for have in flat_ts:
     _ = vi.next(have)
   return { c.label: v }
 
@@ -2028,7 +2072,7 @@ def lower_flat(cx, v, t):
     case CharType()         : return [char_to_i32(v)]
     case StringType()       : return lower_flat_string(cx, v)
     case ErrorContextType() : return [lower_error_context(cx, v)]
-    case ListType(t, l)     : return lower_flat_list(cx, v, t, l)
+    case ListType(t, _, _)  : return lower_flat_list(cx, v, t)
     case RecordType(fields) : return lower_flat_record(cx, v, fields)
     case VariantType(cases) : return lower_flat_variant(cx, v, cases)
     case FlagsType(labels)  : return lower_flat_flags(v, labels)
@@ -2046,14 +2090,8 @@ def lower_flat_string(cx, v):
   ptr, packed_length = store_string_into_range(cx, v)
   return [ptr, packed_length]
 
-def lower_flat_list(cx, v, elem_type, maybe_length):
-  if maybe_length is not None:
-    assert(maybe_length == len(v))
-    flat = []
-    for e in v:
-      flat += lower_flat(cx, e, elem_type)
-    return flat
-  (ptr, length) = store_list_into_range(cx, v, elem_type)
+def lower_flat_list(cx, v, elem_type):
+  (ptr, length) = store_list_into_range(cx, v, elem_type, None)
   return [ptr, length]
 
 def lower_flat_record(cx, v, fields):
@@ -2064,22 +2102,22 @@ def lower_flat_record(cx, v, fields):
 
 def lower_flat_variant(cx, v, cases):
   case_index, case_value = match_case(v, cases)
-  flat_types = flatten_variant(cases, cx.opts)
-  assert(flat_types.pop(0) == 'i32')
+  flat_ts = flatten_variant(cases, cx.opts)
+  assert(flat_ts.pop(0) == 'i32')
   c = cases[case_index]
   if c.t is None:
     payload = []
   else:
     payload = lower_flat(cx, case_value, c.t)
     for i,(fv,have) in enumerate(zip(payload, flatten_type(c.t, cx.opts))):
-      want = flat_types.pop(0)
+      want = flat_ts.pop(0)
       match (have, want):
         case ('f32', 'i32') : payload[i] = encode_float_as_i32(fv)
         case ('i32', 'i64') : payload[i] = fv
         case ('f32', 'i64') : payload[i] = encode_float_as_i32(fv)
         case ('f64', 'i64') : payload[i] = encode_float_as_i64(fv)
         case _              : assert(have == want)
-  for _ in flat_types:
+  for _ in flat_ts:
     payload.append(0)
   return [case_index] + payload
 
@@ -2089,36 +2127,48 @@ def lower_flat_flags(v, labels):
 
 ## Lifting and Lowering Values
 
-def lift_flat_values(cx, max_flat, vi, ts):
-  flat_types = flatten_types(ts, cx.opts)
-  if len(flat_types) > max_flat:
-    ptr = vi.next(cx.opts.memory.ptr_type())
-    tuple_type = TupleType(ts)
-    trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts.memory.ptr_type())))
-    trap_if(ptr + elem_size(tuple_type, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
-    return list(load(cx, ptr, tuple_type).values())
+def load_mem_area(cx, ptr, ts):
+  tuple_type = TupleType(ts)
+  trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts.memory.ptr_type())))
+  trap_if(ptr + elem_size(tuple_type, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
+  return list(load(cx, ptr, tuple_type).values())
+
+def store_mem_area(cx, vs, ts, out_param):
+  tuple_type = TupleType(ts)
+  tuple_value = {str(i): v for i,v in enumerate(vs)}
+  if out_param is None:
+    ptr = cx.opts.realloc(0, 0, alignment(tuple_type, cx.opts.memory.ptr_type()), elem_size(tuple_type, cx.opts.memory.ptr_type()))
+    flat_vals = [ptr]
   else:
-    return [ lift_flat(cx, vi, t) for t in ts ]
+    ptr = out_param.next(cx.opts.memory.ptr_type())
+    flat_vals = []
+  trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts.memory.ptr_type())))
+  trap_if(ptr + elem_size(tuple_type, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
+  store(cx, tuple_value, tuple_type, ptr)
+  return flat_vals
+
+def lift_flat_values(cx, max_flat, vi, ts):
+  plan = plan_flatten(ts, max_flat, cx.opts)
+  vs = [None] * len(ts)
+  for i in plan.flat_vis:
+    vs[i] = lift_flat(cx, vi, ts[i])
+  if plan.mem_vis:
+    ptr = vi.next(cx.opts.memory.ptr_type())
+    mem_vals = load_mem_area(cx, ptr, [ts[i] for i in plan.mem_vis])
+    for k,i in enumerate(plan.mem_vis):
+      vs[i] = mem_vals[k]
+  return vs
 
 def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
   cx.inst.may_leave = False
-  flat_types = flatten_types(ts, cx.opts)
-  if len(flat_types) > max_flat:
-    tuple_type = TupleType(ts)
-    tuple_value = {str(i): v for i,v in enumerate(vs)}
-    if out_param is None:
-      ptr = cx.opts.realloc(0, 0, alignment(tuple_type, cx.opts.memory.ptr_type()), elem_size(tuple_type, cx.opts.memory.ptr_type()))
-      flat_vals = [ptr]
-    else:
-      ptr = out_param.next(cx.opts.memory.ptr_type())
-      flat_vals = []
-    trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts.memory.ptr_type())))
-    trap_if(ptr + elem_size(tuple_type, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
-    store(cx, tuple_value, tuple_type, ptr)
-  else:
-    flat_vals = []
-    for i in range(len(vs)):
-      flat_vals += lower_flat(cx, vs[i], ts[i])
+  plan = plan_flatten(ts, max_flat, cx.opts)
+  flat_vals = []
+  for i in plan.flat_vis:
+    flat_vals += lower_flat(cx, vs[i], ts[i])
+  if plan.mem_vis:
+    mem_vs = [vs[i] for i in plan.mem_vis]
+    mem_ts = [ts[i] for i in plan.mem_vis]
+    flat_vals += store_mem_area(cx, mem_vs, mem_ts, out_param)
   cx.inst.may_leave = True
   return flat_vals
 
@@ -2133,12 +2183,12 @@ def canon_lift(callee, ft, opts, inst, on_start, on_resolve, caller) -> OnCancel
 
     cx = LiftLowerContext(opts, inst, task)
     args = task.start()
-    flat_args = lower_flat_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
+    flat_vis = lower_flat_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
     flat_ft = flatten_functype(opts, ft, 'lift')
-    assert(types_match_values(flat_ft.params, flat_args))
+    assert(types_match_values(flat_ft.params, flat_vis))
 
     if not opts.async_:
-      flat_results = call_and_trap_on_throw(callee, flat_args)
+      flat_results = call_and_trap_on_throw(callee, flat_vis)
       assert(types_match_values(flat_ft.results, flat_results))
       result = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_type())
       task.return_(result)
@@ -2150,12 +2200,12 @@ def canon_lift(callee, ft, opts, inst, on_start, on_resolve, caller) -> OnCancel
       return
 
     if not opts.callback:
-      [] = call_and_trap_on_throw(callee, flat_args)
+      [] = call_and_trap_on_throw(callee, flat_vis)
       assert(types_match_values(flat_ft.results, []))
       task.exit_implicit_thread()
       return
 
-    [packed] = call_and_trap_on_throw(callee, flat_args)
+    [packed] = call_and_trap_on_throw(callee, flat_vis)
     code,si = unpack_callback_result(packed)
     while code != CallbackCode.EXIT:
       assert(task.needs_exclusive() and inst.exclusive_thread is task.implicit_thread)
@@ -2213,15 +2263,15 @@ def call_and_trap_on_throw(callee, args):
 
 ### `canon lower`
 
-def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValType]:
+def canon_lower(callee, ft, opts, flat_vis: list[CoreValType]) -> list[CoreValType]:
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   subtask = Subtask()
   cx = LiftLowerContext(opts, thread.task.inst, subtask)
 
   flat_ft = flatten_functype(opts, ft, 'lower')
-  assert(types_match_values(flat_ft.params, flat_args))
-  flat_args = CoreValueIter(flat_args)
+  assert(types_match_values(flat_ft.params, flat_vis))
+  flat_vis = CoreValueIter(flat_vis)
 
   if not opts.async_:
     max_flat_params = MAX_FLAT_PARAMS
@@ -2237,7 +2287,7 @@ def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValT
     on_progress()
     assert(subtask.state == Subtask.State.STARTING)
     subtask.state = Subtask.State.STARTED
-    return lift_flat_values(cx, max_flat_params, flat_args, ft.param_types())
+    return lift_flat_values(cx, max_flat_params, flat_vis, ft.param_types())
 
   def on_resolve(result):
     on_progress()
@@ -2252,7 +2302,7 @@ def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValT
       assert(subtask.state == Subtask.State.STARTED)
       subtask.state = Subtask.State.RETURNED
       nonlocal flat_results
-      flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
+      flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_vis)
 
   subtask.on_cancel = callee(on_start, on_resolve, caller = thread.task.inst)
   assert(ft.async_ or subtask.state == Subtask.State.RETURNED)
@@ -2340,9 +2390,9 @@ def canon_context_set(t, i, v):
 
 ### 🔀 `canon backpressure.set`
 
-def canon_backpressure_set(flat_args):
-  assert(len(flat_args) == 1)
-  current_instance().backpressure = int(bool(flat_args[0]))
+def canon_backpressure_set(flat_vis):
+  assert(len(flat_vis) == 1)
+  current_instance().backpressure = int(bool(flat_vis[0]))
   return []
 
 ### 🔀 `canon backpressure.{inc,dec}`
@@ -2363,14 +2413,14 @@ def canon_backpressure_dec():
 
 ### 🔀 `canon task.return`
 
-def canon_task_return(result_type, opts: LiftOptions, flat_args):
+def canon_task_return(result_type, opts: LiftOptions, flat_vis):
   task = current_task()
   trap_if(not task.inst.may_leave)
   trap_if(not task.opts.async_)
   trap_if(result_type != task.ft.result)
   trap_if(not LiftOptions.equal(opts, task.opts))
   cx = LiftLowerContext(opts, task.inst, task)
-  result = lift_flat_values(cx, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_type())
+  result = lift_flat_values(cx, MAX_FLAT_PARAMS, CoreValueIter(flat_vis), task.ft.result_type())
   task.return_(result)
   return []
 

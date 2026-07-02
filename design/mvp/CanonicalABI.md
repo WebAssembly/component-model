@@ -2185,7 +2185,7 @@ def alignment(t, ptr_type):
     case CharType()                  : return 4
     case StringType()                : return ptr_size(ptr_type)
     case ErrorContextType()          : return 4
-    case ListType(t, l)              : return alignment_list(t, l, ptr_type)
+    case ListType(t, l, var)         : return alignment_list(t, l, var, ptr_type)
     case RecordType(fields)          : return alignment_record(fields, ptr_type)
     case VariantType(cases)          : return alignment_variant(cases, ptr_type)
     case FlagsType(labels)           : return alignment_flags(labels)
@@ -2194,10 +2194,14 @@ def alignment(t, ptr_type):
 ```
 
 List alignment is the same as tuple alignment when the length is fixed and
-otherwise uses the alignment of pointers.
+otherwise uses the alignment of pointers. A bounded list additionally reserves
+space for a length prefix, so its alignment is the maximum of the prefix's and
+the element's alignment.
 ```python
-def alignment_list(elem_type, maybe_length, ptr_type):
+def alignment_list(elem_type, maybe_length, maybe_variable, ptr_type):
   if maybe_length is not None:
+    if maybe_variable:
+      return max(alignment(varint_type(maybe_length), ptr_type), alignment(elem_type, ptr_type))
     return alignment(elem_type, ptr_type)
   return ptr_size(ptr_type)
 ```
@@ -2215,15 +2219,18 @@ As an optimization, `variant` discriminants are represented by the smallest inte
 covering the number of cases in the variant (with cases numbered in order from
 `0` to `len(cases)-1`). Depending on the payload type, this can allow more
 compact representations of variants in memory. This smallest integer type is
-selected by the following function, used above and below:
+selected by the `varint_type` function below (which is also reused to select the
+length-prefix type of a bounded list):
 ```python
 def alignment_variant(cases, ptr_type):
   return max(alignment(discriminant_type(cases), ptr_type), max_case_alignment(cases, ptr_type))
 
 def discriminant_type(cases):
-  n = len(cases)
-  assert(0 < n < (1 << 32))
-  match math.ceil(math.log2(n)/8):
+  return varint_type(len(cases))
+
+def varint_type(maxval):
+  assert(0 < maxval < (1 << 32))
+  match math.ceil(math.log2(maxval)/8):
     case 0: return U8Type()
     case 1: return U8Type()
     case 2: return U16Type()
@@ -2271,15 +2278,19 @@ def elem_size(t, ptr_type):
     case CharType()                  : return 4
     case StringType()                : return 2 * ptr_size(ptr_type)
     case ErrorContextType()          : return 4
-    case ListType(t, l)              : return elem_size_list(t, l, ptr_type)
+    case ListType(t, l, var)         : return elem_size_list(t, l, var, ptr_type)
     case RecordType(fields)          : return elem_size_record(fields, ptr_type)
     case VariantType(cases)          : return elem_size_variant(cases, ptr_type)
     case FlagsType(labels)           : return elem_size_flags(labels)
     case OwnType() | BorrowType()    : return 4
     case StreamType() | FutureType() : return 4
 
-def elem_size_list(elem_type, maybe_length, ptr_type):
+def elem_size_list(elem_type, maybe_length, maybe_variable, ptr_type):
   if maybe_length is not None:
+    if maybe_variable:
+      s = elem_size(varint_type(maybe_length), ptr_type)
+      s = align_to(s, alignment(elem_type, ptr_type))
+      return s + maybe_length * elem_size(elem_type, ptr_type)
     return maybe_length * elem_size(elem_type, ptr_type)
   return 2 * ptr_size(ptr_type)
 
@@ -2337,7 +2348,7 @@ def load(cx, ptr, t):
     case CharType()         : return convert_i32_to_char(cx, load_int(cx, ptr, 4))
     case StringType()       : return load_string(cx, ptr)
     case ErrorContextType() : return lift_error_context(cx, load_int(cx, ptr, 4))
-    case ListType(t, l)     : return load_list(cx, ptr, t, l)
+    case ListType(t, l, var): return load_list(cx, ptr, t, l, var)
     case RecordType(fields) : return load_record(cx, ptr, fields)
     case VariantType(cases) : return load_variant(cx, ptr, cases)
     case FlagsType(labels)  : return load_flags(cx, ptr, labels)
@@ -2495,9 +2506,17 @@ stays below `REALLOC_I32_MAX` even when doubled.
 MAX_LIST_BYTE_LENGTH = (1 << 28) - 1
 assert(REALLOC_I32_MAX > 2 * MAX_LIST_BYTE_LENGTH)
 
-def load_list(cx, ptr, elem_type, maybe_length):
+def load_list(cx, ptr, elem_type, maybe_length, maybe_variable):
   if maybe_length is not None:
-    return load_list_from_valid_range(cx, ptr, maybe_length, elem_type)
+    if maybe_variable:
+      lentype = varint_type(maybe_length)
+      actual_length = load_int(cx, ptr, elem_size(lentype, cx.opts.memory.ptr_type()))
+      trap_if(actual_length > maybe_length)
+      ptr += elem_size(lentype, cx.opts.memory.ptr_type())
+      ptr = align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type()))
+    else:
+      actual_length = maybe_length
+    return load_list_from_range(cx, ptr, actual_length, elem_type)
   begin = load_int(cx, ptr, cx.opts.memory.ptr_size())
   length = load_int(cx, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
   return load_list_from_range(cx, begin, length, elem_type)
@@ -2649,7 +2668,7 @@ def store(cx, v, t, ptr):
     case CharType()         : store_int(cx, char_to_i32(v), ptr, 4)
     case StringType()       : store_string(cx, v, ptr)
     case ErrorContextType() : store_int(cx, lower_error_context(cx, v), ptr, 4)
-    case ListType(t, l)     : store_list(cx, v, ptr, t, l)
+    case ListType(t, l, var): store_list(cx, v, ptr, t, l, var)
     case RecordType(fields) : store_record(cx, v, ptr, fields)
     case VariantType(cases) : store_variant(cx, v, ptr, cases)
     case FlagsType(labels)  : store_flags(cx, v, ptr, labels)
@@ -2945,19 +2964,29 @@ element size. Storing a list that exceeds the size of a 32-bit memory traps even
 when storing on 64-bit platform to avoid having interfaces that 32-bit
 components can't use.
 ```python
-def store_list(cx, v, ptr, elem_type, maybe_length):
+def store_list(cx, v, ptr, elem_type, maybe_length, maybe_variable):
   if maybe_length is not None:
-    assert(maybe_length == len(v))
-    store_list_into_valid_range(cx, v, ptr, elem_type)
-    return
-  begin, length = store_list_into_range(cx, v, elem_type)
-  store_int(cx, begin, ptr, cx.opts.memory.ptr_size())
-  store_int(cx, length, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
+    if maybe_variable:
+      assert(len(v) <= maybe_length)
+      lentype = varint_type(maybe_length)
+      store_int(cx, len(v), ptr, elem_size(lentype, cx.opts.memory.ptr_type()))
+      ptr += elem_size(lentype, cx.opts.memory.ptr_type())
+      ptr = align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type()))
+    else:
+      assert(len(v) == maybe_length)
+    store_ptr = ptr
+  else:
+    store_ptr = None
+  begin, length = store_list_into_range(cx, v, elem_type, store_ptr)
+  if maybe_length is None:
+    store_int(cx, begin, ptr, cx.opts.memory.ptr_size())
+    store_int(cx, length, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
 
-def store_list_into_range(cx, v, elem_type):
+def store_list_into_range(cx, v, elem_type, ptr):
   byte_length = len(v) * elem_size(elem_type, cx.opts.memory.ptr_type())
-  assert(byte_length <= REALLOC_I32_MAX)
-  ptr = cx.opts.realloc(0, 0, alignment(elem_type, cx.opts.memory.ptr_type()), byte_length)
+  if ptr is None:
+    assert(byte_length <= REALLOC_I32_MAX)
+    ptr = cx.opts.realloc(0, 0, alignment(elem_type, cx.opts.memory.ptr_type()), byte_length)
   trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type())))
   trap_if(ptr + byte_length > len(cx.opts.memory))
   store_list_into_valid_range(cx, v, ptr, elem_type)
@@ -3075,7 +3104,7 @@ limited to 1 due to various parts of the toolchain (notably the C ABI) not yet
 being able to express [multi-value] returns. Hopefully this limitation is
 temporary and can be lifted before the Component Model is fully standardized.
 
-When there are too many flat values, in general, a single `i32` pointer can be
+When there are too many flat values, in general, a single `i32` pointer must be
 passed instead (pointing to a tuple in linear memory). When lowering *into*
 linear memory, this requires the Canonical ABI to call `realloc` (in `lower`
 below) to allocate space to put the tuple. As an optimization, when lowering
@@ -3084,39 +3113,108 @@ have already allocated space for the return value (e.g., efficiently on the
 stack), passing in an `i32` pointer as an parameter instead of returning an
 `i32` as a return value.
 
-Given all this, the top-level definition of `flatten_functype` is:
+The Canonical ABI also mandates a mix of register-passing and
+memory-passing for fixed- and bounded-length lists
+and any aggregate `record`/`variant`/`tuple` that transitively contains one
+are involved. These are always passed in memory
+(the `is_forced_to_mem` predicate is true) while values that qualify for
+register-passing continue to be - until the total number of parameters or
+results exceeds the limit. Fixed- and bounded-length lists profit from
+indirect addressing (runtime indexing) and other types continue to efficiently
+propagate in registers without the lists exhausting the register limit.
 ```python
 MAX_FLAT_PARAMS = 16
 MAX_FLAT_ASYNC_PARAMS = 4
 MAX_FLAT_RESULTS = 1
 
+def is_forced_to_mem(t):
+  match despecialize(t):
+    case ListType(_, l, _) : return l is not None
+    case RecordType(fields): return any(is_forced_to_mem(f.t) for f in fields)
+    case VariantType(cases): return any(c.t is not None and is_forced_to_mem(c.t) for c in cases)
+    case _                 : return False
+```
+
+`plan_flatten` returns a partition of the **value indices** into `flat_vis`
+(to be passed as core values) and `mem_vis` (to be passed via linear memory),
+together with `flat_ts`, the core types obtained by *flattening just the
+`flat_vis`*.
+```python
+@dataclass
+class FlattenPlan:
+  flat_vis: list[int]
+  mem_vis: list[int]
+  flat_ts: list[str]
+
+def plan_flatten(ts, max_flat, opts):
+  flat_vis = [i for i in range(len(ts)) if not is_forced_to_mem(ts[i])]
+  mem_vis  = [i for i in range(len(ts)) if is_forced_to_mem(ts[i])]
+  flat_ts = flatten_types([ts[i] for i in flat_vis], opts)
+  if len(flat_ts) + (1 if mem_vis else 0) > max_flat:
+    flat_vis = []
+    mem_vis = list(range(len(ts)))
+    flat_ts = []
+  return FlattenPlan(flat_vis, mem_vis, flat_ts)
+```
+
+Given all this, the top-level definition of `flatten_functype` uses
+`plan_flatten` for *both* the parameters and (in the synchronous case) the
+results.
+
+The outcome of `plan_flatten` can be one of three cases:
+
+1. all values flatten to core values (`mem_vis` is empty).
+2. some values flatten to core values while others passed through linear memory
+   (`flat_vis` and `mem_vis` are both non-empty).
+3. all values are passed through linear memory (`flat_vis` is empty).
+
+For parameter transfer according to the plan, cases 2 and 3 require the caller
+to define a param area for handover of the memory-passed parameter values -
+the area is allocated and the memory-passed values are lowered there.
+The callee is passed *one additional* core pointer parameter *appended after*
+the register-passed core values - the param area's starting address so that
+it can lift the memory-passed values from there.
+
+For result transfer according to the plan, cases 2 and 3 require the caller
+to define a result area for handover of the memory-passed result values -
+the area is allocated (possibly on stack). The callee is passed the result
+area's starting address as *one additional* core pointer parameter
+*appended after* the `flat_vis` core values *and* the param area pointer
+(if any) and it must lower the memory-passed result values to there.
+
+In case arguments are transported in registers *and* memory, the param area
+pointer *does* count towards `MAX_FLAT_PARAMS` but the return area pointer
+does not. If param and result areas are both used, the param area pointer is
+passed before the result area pointer.
+```python
 def flatten_functype(opts, ft, context):
-  flat_params = flatten_types(ft.param_types(), opts)
-  flat_results = flatten_types(ft.result_type(), opts)
+  if not opts.async_ or context == 'lift':
+    max_flat_params = MAX_FLAT_PARAMS
+  else:
+    max_flat_params = MAX_FLAT_ASYNC_PARAMS
+  param_plan = plan_flatten(ft.param_types(), max_flat_params, opts)
+  flat_params = param_plan.flat_ts
+  if param_plan.mem_vis:
+    flat_params += [opts.memory.ptr_type()]
   if not opts.async_:
-    if len(flat_params) > MAX_FLAT_PARAMS:
-      flat_params = [opts.memory.ptr_type()]
-    if len(flat_results) > MAX_FLAT_RESULTS:
+    result_plan = plan_flatten(ft.result_type(), MAX_FLAT_RESULTS, opts)
+    flat_results = result_plan.flat_ts
+    if result_plan.mem_vis:
       match context:
         case 'lift':
-          flat_results = [opts.memory.ptr_type()]
+          flat_results += [opts.memory.ptr_type()]
         case 'lower':
           flat_params += [opts.memory.ptr_type()]
-          flat_results = []
     return CoreFuncType(flat_params, flat_results)
   else:
     match context:
       case 'lift':
-        if len(flat_params) > MAX_FLAT_PARAMS:
-          flat_params = [opts.memory.ptr_type()]
         if opts.callback:
           flat_results = ['i32']
         else:
           flat_results = []
       case 'lower':
-        if len(flat_params) > MAX_FLAT_ASYNC_PARAMS:
-          flat_params = [opts.memory.ptr_type()]
-        if len(flat_results) > 0:
+        if len(ft.result_type()) > 0:
           flat_params += [opts.memory.ptr_type()]
         flat_results = ['i32']
     return CoreFuncType(flat_params, flat_results)
@@ -3126,7 +3224,12 @@ def flatten_types(ts, opts):
 ```
 As shown here, the core signatures of `async`-lowered functions use a lower
 limit on the maximum number of parameters (4) and results (0) passed as scalars
-before falling back to passing through memory.
+before falling back to passing through memory; async results are always returned
+via memory (`task.return` or a result-area pointer), so they do not go through
+the result plan. In the synchronous case, `plan_flatten` is also used for the
+result, however with the current choice of `MAX_FLAT_RESULTS == 1`
+either a single core result slot is occupied, or all results are passed via
+a memory area and its address occupies an additional core parameter slot.
 
 Presenting the definition of `flatten_type` piecewise, we start with the
 top-level case analysis:
@@ -3142,7 +3245,7 @@ def flatten_type(t, opts):
     case CharType()                       : return ['i32']
     case StringType()                     : return [opts.memory.ptr_type(), opts.memory.ptr_type()]
     case ErrorContextType()               : return ['i32']
-    case ListType(t, l)                   : return flatten_list(t, l, opts)
+    case ListType(t, _, _)                : return flatten_list(t, opts)
     case RecordType(fields)               : return flatten_record(fields, opts)
     case VariantType(cases)               : return flatten_variant(cases, opts)
     case FlagsType(labels)                : return ['i32']
@@ -3150,12 +3253,11 @@ def flatten_type(t, opts):
     case StreamType() | FutureType()      : return ['i32']
 ```
 
-List flattening of a fixed-length list uses the same flattening as a tuple
-(via `flatten_record` below).
+Fixed- and bounded-length lists are always passed via the
+param area - never flattened, hence this only flattens
+only dynamic lists to a (pointer, length) pair:
 ```python
-def flatten_list(elem_type, maybe_length, opts):
-  if maybe_length is not None:
-    return flatten_type(elem_type, opts) * maybe_length
+def flatten_list(elem_type, opts):
   return [opts.memory.ptr_type(), opts.memory.ptr_type()]
 ```
 
@@ -3244,7 +3346,7 @@ def lift_flat(cx, vi, t):
     case CharType()         : return convert_i32_to_char(cx, vi.next('i32'))
     case StringType()       : return lift_flat_string(cx, vi)
     case ErrorContextType() : return lift_error_context(cx, vi.next('i32'))
-    case ListType(t, l)     : return lift_flat_list(cx, vi, t, l)
+    case ListType(t, _, _)  : return lift_flat_list(cx, vi, t)
     case RecordType(fields) : return lift_flat_record(cx, vi, fields)
     case VariantType(cases) : return lift_flat_variant(cx, vi, cases)
     case FlagsType(labels)  : return lift_flat_flags(vi, labels)
@@ -3278,20 +3380,14 @@ def lift_flat_signed(vi, core_width, t_width):
 The contents of strings and variable-length lists are stored in memory so
 lifting these types is essentially the same as loading them from memory; the
 only difference is that the pointer and length come from ptr-sized values
-instead of from linear memory. Fixed-length lists are lifted the same way as a
-tuple.
+instead of from linear memory.
 ```python
 def lift_flat_string(cx, vi):
   ptr = vi.next(cx.opts.memory.ptr_type())
   packed_length = vi.next(cx.opts.memory.ptr_type())
   return load_string_from_range(cx, ptr, packed_length)
 
-def lift_flat_list(cx, vi, elem_type, maybe_length):
-  if maybe_length is not None:
-    a = []
-    for i in range(maybe_length):
-      a.append(lift_flat(cx, vi, elem_type))
-    return a
+def lift_flat_list(cx, vi, elem_type):
   ptr = vi.next(cx.opts.memory.ptr_type())
   length = vi.next(cx.opts.memory.ptr_type())
   return load_list_from_range(cx, ptr, length, elem_type)
@@ -3314,13 +3410,13 @@ reinterprets between the different types appropriately and also wraps
 `i64` values to 32-bit when needed:
 ```python
 def lift_flat_variant(cx, vi, cases):
-  flat_types = flatten_variant(cases, cx.opts)
-  assert(flat_types.pop(0) == 'i32')
+  flat_ts = flatten_variant(cases, cx.opts)
+  assert(flat_ts.pop(0) == 'i32')
   case_index = vi.next('i32')
   trap_if(case_index >= len(cases))
   class CoerceValueIter:
     def next(self, want):
-      have = flat_types.pop(0)
+      have = flat_ts.pop(0)
       x = vi.next(have)
       match (have, want):
         case ('i32', 'f32') : return decode_i32_as_float(x)
@@ -3333,7 +3429,7 @@ def lift_flat_variant(cx, vi, cases):
     v = None
   else:
     v = lift_flat(cx, CoerceValueIter(), c.t)
-  for have in flat_types:
+  for have in flat_ts:
     _ = vi.next(have)
   return { c.label: v }
 
@@ -3373,7 +3469,7 @@ def lower_flat(cx, v, t):
     case CharType()         : return [char_to_i32(v)]
     case StringType()       : return lower_flat_string(cx, v)
     case ErrorContextType() : return [lower_error_context(cx, v)]
-    case ListType(t, l)     : return lower_flat_list(cx, v, t, l)
+    case ListType(t, _, _)  : return lower_flat_list(cx, v, t)
     case RecordType(fields) : return lower_flat_record(cx, v, fields)
     case VariantType(cases) : return lower_flat_variant(cx, v, cases)
     case FlagsType(labels)  : return lower_flat_flags(v, labels)
@@ -3398,20 +3494,13 @@ def lower_flat_signed(i, core_bits):
 Since strings and variable-length lists are stored in linear memory, lowering
 can reuse the previous definitions; only the resulting pointers are returned
 differently (as flat values instead of as a pair in linear memory).
-Fixed-length lists are lowered the same way as tuples.
 ```python
 def lower_flat_string(cx, v):
   ptr, packed_length = store_string_into_range(cx, v)
   return [ptr, packed_length]
 
-def lower_flat_list(cx, v, elem_type, maybe_length):
-  if maybe_length is not None:
-    assert(maybe_length == len(v))
-    flat = []
-    for e in v:
-      flat += lower_flat(cx, e, elem_type)
-    return flat
-  (ptr, length) = store_list_into_range(cx, v, elem_type)
+def lower_flat_list(cx, v, elem_type):
+  (ptr, length) = store_list_into_range(cx, v, elem_type, None)
   return [ptr, length]
 ```
 
@@ -3430,22 +3519,22 @@ manually coercing the otherwise-incompatible type pairings allowed by `join`:
 ```python
 def lower_flat_variant(cx, v, cases):
   case_index, case_value = match_case(v, cases)
-  flat_types = flatten_variant(cases, cx.opts)
-  assert(flat_types.pop(0) == 'i32')
+  flat_ts = flatten_variant(cases, cx.opts)
+  assert(flat_ts.pop(0) == 'i32')
   c = cases[case_index]
   if c.t is None:
     payload = []
   else:
     payload = lower_flat(cx, case_value, c.t)
     for i,(fv,have) in enumerate(zip(payload, flatten_type(c.t, cx.opts))):
-      want = flat_types.pop(0)
+      want = flat_ts.pop(0)
       match (have, want):
         case ('f32', 'i32') : payload[i] = encode_float_as_i32(fv)
         case ('i32', 'i64') : payload[i] = fv
         case ('f32', 'i64') : payload[i] = encode_float_as_i32(fv)
         case ('f64', 'i64') : payload[i] = encode_float_as_i64(fv)
         case _              : assert(have == want)
-  for _ in flat_types:
+  for _ in flat_ts:
     payload.append(0)
   return [case_index] + payload
 ```
@@ -3459,48 +3548,68 @@ def lower_flat_flags(v, labels):
 
 ## Lifting and Lowering Values
 
-The `lift_flat_values` function defines how to lift a list of core
-parameters or results (given by the `CoreValueIter` `vi`) into a tuple
-of component-level values with types `ts`.
+A param/result memory area is modeled as a `tuple` of the argument types it
+transports, so the same `load`/`store` machinery. In order to support the
+result-passing optimization of caller-allocated result area, `store_mem_area`
+can take an optional `out_param` argument which, when present, provides the
+pointer to the memory area.
 ```python
-def lift_flat_values(cx, max_flat, vi, ts):
-  flat_types = flatten_types(ts, cx.opts)
-  if len(flat_types) > max_flat:
-    ptr = vi.next(cx.opts.memory.ptr_type())
-    tuple_type = TupleType(ts)
-    trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts.memory.ptr_type())))
-    trap_if(ptr + elem_size(tuple_type, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
-    return list(load(cx, ptr, tuple_type).values())
+def load_mem_area(cx, ptr, ts):
+  tuple_type = TupleType(ts)
+  trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts.memory.ptr_type())))
+  trap_if(ptr + elem_size(tuple_type, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
+  return list(load(cx, ptr, tuple_type).values())
+
+def store_mem_area(cx, vs, ts, out_param):
+  tuple_type = TupleType(ts)
+  tuple_value = {str(i): v for i,v in enumerate(vs)}
+  if out_param is None:
+    ptr = cx.opts.realloc(0, 0, alignment(tuple_type, cx.opts.memory.ptr_type()), elem_size(tuple_type, cx.opts.memory.ptr_type()))
+    flat_vals = [ptr]
   else:
-    return [ lift_flat(cx, vi, t) for t in ts ]
+    ptr = out_param.next(cx.opts.memory.ptr_type())
+    flat_vals = []
+  trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts.memory.ptr_type())))
+  trap_if(ptr + elem_size(tuple_type, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
+  store(cx, tuple_value, tuple_type, ptr)
+  return flat_vals
 ```
 
-Symmetrically, the `lower_flat_values` function defines how to lower a
-list of component-level values `vs` of types `ts` into a list of core
-values. As already described for [`flatten_functype`](#flattening) above,
-lowering handles the greater-than-`max_flat` case by either allocating
-storage with `realloc` or accepting a caller-allocated buffer as an
-out-param:
+The `lift_flat_values` function defines how to lift a list of core
+parameters or results (given by the `CoreValueIter` `vi`) into a tuple
+of component-level values with types `ts`. It consults `plan_flatten`: it lifts
+the `flat_vis` from flat core values (in order) and loads the `mem_vis` from
+the memory area pointed to by the additional trailing core parameter.
+```python
+def lift_flat_values(cx, max_flat, vi, ts):
+  plan = plan_flatten(ts, max_flat, cx.opts)
+  vs = [None] * len(ts)
+  for i in plan.flat_vis:
+    vs[i] = lift_flat(cx, vi, ts[i])
+  if plan.mem_vis:
+    ptr = vi.next(cx.opts.memory.ptr_type())
+    mem_vals = load_mem_area(cx, ptr, [ts[i] for i in plan.mem_vis])
+    for k,i in enumerate(plan.mem_vis):
+      vs[i] = mem_vals[k]
+  return vs
+```
+
+Symmetrically, the `lower_flat_values` function lowers a list of
+component-level values `vs` of types `ts` into a list of core values, mirroring
+the same plan: the `flat_vis` are lowered to flat core values and the
+`mem_vis` are written into the memory area whose pointer is passed as the
+additional trailing core parameter:
 ```python
 def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
   cx.inst.may_leave = False
-  flat_types = flatten_types(ts, cx.opts)
-  if len(flat_types) > max_flat:
-    tuple_type = TupleType(ts)
-    tuple_value = {str(i): v for i,v in enumerate(vs)}
-    if out_param is None:
-      ptr = cx.opts.realloc(0, 0, alignment(tuple_type, cx.opts.memory.ptr_type()), elem_size(tuple_type, cx.opts.memory.ptr_type()))
-      flat_vals = [ptr]
-    else:
-      ptr = out_param.next(cx.opts.memory.ptr_type())
-      flat_vals = []
-    trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts.memory.ptr_type())))
-    trap_if(ptr + elem_size(tuple_type, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
-    store(cx, tuple_value, tuple_type, ptr)
-  else:
-    flat_vals = []
-    for i in range(len(vs)):
-      flat_vals += lower_flat(cx, vs[i], ts[i])
+  plan = plan_flatten(ts, max_flat, cx.opts)
+  flat_vals = []
+  for i in plan.flat_vis:
+    flat_vals += lower_flat(cx, vs[i], ts[i])
+  if plan.mem_vis:
+    mem_vs = [vs[i] for i in plan.mem_vis]
+    mem_ts = [ts[i] for i in plan.mem_vis]
+    flat_vals += store_mem_area(cx, mem_vs, mem_ts, out_param)
   cx.inst.may_leave = True
   return flat_vals
 ```
@@ -3603,9 +3712,9 @@ their arguments were lowered or not.
 ```python
     cx = LiftLowerContext(opts, inst, task)
     args = task.start()
-    flat_args = lower_flat_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
+    flat_vis = lower_flat_values(cx, MAX_FLAT_PARAMS, args, ft.param_types())
     flat_ft = flatten_functype(opts, ft, 'lift')
-    assert(types_match_values(flat_ft.params, flat_args))
+    assert(types_match_values(flat_ft.params, flat_vis))
 ```
 
 If the `async` `canonopt` is *not* specified, a `lift`ed function then calls
@@ -3617,7 +3726,7 @@ passing the same core wasm results as parameters so that the `post-return`
 function can free any associated allocations.
 ```python
     if not opts.async_:
-      flat_results = call_and_trap_on_throw(callee, flat_args)
+      flat_results = call_and_trap_on_throw(callee, flat_vis)
       assert(types_match_values(flat_ft.results, flat_results))
       result = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_type())
       task.return_(result)
@@ -3649,7 +3758,7 @@ acquire the `exclusive_thread` lock for stackful async functions, calls to
 threads from starting or resuming in the same component instance.
 ```python
     if not opts.callback:
-      [] = call_and_trap_on_throw(callee, flat_args)
+      [] = call_and_trap_on_throw(callee, flat_vis)
       assert(types_match_values(flat_ft.results, []))
       task.exit_implicit_thread()
       return
@@ -3660,7 +3769,7 @@ first calling the core wasm callee and then repeatedly calling the `callback`
 function (specified as a `funcidx` immediate in `canon lift`) until the
 `EXIT` code (`0`) is returned:
 ```python
-    [packed] = call_and_trap_on_throw(callee, flat_args)
+    [packed] = call_and_trap_on_throw(callee, flat_vis)
     code,si = unpack_callback_result(packed)
     while code != CallbackCode.EXIT:
       assert(task.needs_exclusive() and inst.exclusive_thread is task.implicit_thread)
@@ -3811,7 +3920,7 @@ specified *and* `callee` blocks. In any case, this `Subtask` is used as the
 `LiftLowerContext.borrow_scope` for `borrow` arguments, ensuring that owned
 handles are not dropped before `Subtask.deliver_resolve` is called (below).
 ```python
-def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValType]:
+def canon_lower(callee, ft, opts, flat_vis: list[CoreValType]) -> list[CoreValType]:
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   subtask = Subtask()
@@ -3823,8 +3932,8 @@ The next chunk makes the call to `callee` using the `opts` immediates of the
 (both defined above) and the current instance as the `caller`.
 ```python
   flat_ft = flatten_functype(opts, ft, 'lower')
-  assert(types_match_values(flat_ft.params, flat_args))
-  flat_args = CoreValueIter(flat_args)
+  assert(types_match_values(flat_ft.params, flat_vis))
+  flat_vis = CoreValueIter(flat_vis)
 
   if not opts.async_:
     max_flat_params = MAX_FLAT_PARAMS
@@ -3840,7 +3949,7 @@ The next chunk makes the call to `callee` using the `opts` immediates of the
     on_progress()
     assert(subtask.state == Subtask.State.STARTING)
     subtask.state = Subtask.State.STARTED
-    return lift_flat_values(cx, max_flat_params, flat_args, ft.param_types())
+    return lift_flat_values(cx, max_flat_params, flat_vis, ft.param_types())
 
   def on_resolve(result):
     on_progress()
@@ -3855,7 +3964,7 @@ The next chunk makes the call to `callee` using the `opts` immediates of the
       assert(subtask.state == Subtask.State.STARTED)
       subtask.state = Subtask.State.RETURNED
       nonlocal flat_results
-      flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
+      flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_vis)
 
   subtask.on_cancel = callee(on_start, on_resolve, caller = thread.task.inst)
   assert(ft.async_ or subtask.state == Subtask.State.RETURNED)
@@ -4103,9 +4212,9 @@ Calling `$f` invokes the following function, which sets the `backpressure`
 counter to `1` or `0`. `Task.enter_implicit_thread` waits for `backpressure` to
 be `0` before allowing new `async`-typed tasks to start.
 ```python
-def canon_backpressure_set(flat_args):
-  assert(len(flat_args) == 1)
-  current_instance().backpressure = int(bool(flat_args[0]))
+def canon_backpressure_set(flat_vis):
+  assert(len(flat_vis) == 1)
+  current_instance().backpressure = int(bool(flat_vis[0]))
   return []
 ```
 
@@ -4156,14 +4265,14 @@ specifies:
 Calling `$f` invokes the following function which lifts the results from core
 wasm state and passes them to the [current task]'s caller via `Task.return_`:
 ```python
-def canon_task_return(result_type, opts: LiftOptions, flat_args):
+def canon_task_return(result_type, opts: LiftOptions, flat_vis):
   task = current_task()
   trap_if(not task.inst.may_leave)
   trap_if(not task.opts.async_)
   trap_if(result_type != task.ft.result)
   trap_if(not LiftOptions.equal(opts, task.opts))
   cx = LiftLowerContext(opts, task.inst, task)
-  result = lift_flat_values(cx, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_type())
+  result = lift_flat_values(cx, MAX_FLAT_PARAMS, CoreValueIter(flat_vis), task.ft.result_type())
   task.return_(result)
   return []
 ```
