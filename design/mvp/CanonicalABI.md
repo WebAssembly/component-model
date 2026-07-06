@@ -40,6 +40,7 @@ specified here.
   * [`canon resource.new`](#canon-resourcenew)
   * [`canon resource.drop`](#canon-resourcedrop)
   * [`canon resource.rep`](#canon-resourcerep)
+  * [`canon optional.present`](#-canon-optionalpresent) ❓
   * [`canon context.get`](#-canon-contextget) 🔀
   * [`canon context.set`](#-canon-contextset) 🔀
   * [`canon backpressure.{inc,dec}`](#-canon-backpressureincdec) 🔀
@@ -3929,6 +3930,21 @@ def canon_resource_rep(rt, i):
 ```
 Note that the "locally-defined" requirement above ensures that only the
 component instance defining a resource can access its representation.
+
+
+### ❓ `canon optional.present`
+
+For a canonical definition:
+```wat
+(canon optional.present $sortidx (core global $present))
+```
+validation specifies:
+* the target of `$sortidx` is declared with `optional`
+* `$present` is given type `(global i32)`
+
+The new immutable global `$present` is appended to the core global index space
+and is either `1` or `0` depending on whether the target of `$sortidx` is
+present or not, resp.
 
 
 ### 🔀 `canon context.get`

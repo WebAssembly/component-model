@@ -237,7 +237,9 @@ instancedecl  ::= 0x00 t:<core:type>                       => t
                 | 0x04 ed:<exportdecl>                     => ed
 importdecl    ::= na:<nameattributes> et:<externtype>      => (import na et)
 exportdecl    ::= na:<nameattributes> et:<externtype>      => (export na et)
-externtype    ::= 0x00 0x11 i:<core:typeidx>               => (core module (type i))
+externtype    ::= et:<externtype'>                         => et
+                | 0x10 et:<externtype'>                    => optional et ❓
+externtype'   ::= 0x00 0x11 i:<core:typeidx>               => (core module (type i))
                 | 0x01 i:<typeidx>                         => (func (type i))
                 | 0x02 b:<valuebound>                      => (value b) 🪙
                 | 0x03 b:<typebound>                       => (type b)
@@ -308,6 +310,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x02 rt:<typeidx>                                   => (canon resource.new rt (core func))
            | 0x03 rt:<typeidx>                                   => (canon resource.drop rt (core func))
            | 0x04 rt:<typeidx>                                   => (canon resource.rep rt (core func))
+           | 0x07 si:<sortidx>                                   => (canon optional.present si (core global)) ❓
            | 0x24                                                => (canon backpressure.inc (core func)) 🔀
            | 0x25                                                => (canon backpressure.dec (core func)) 🔀
            | 0x09 rs:<resultlist> opts:<opts>                    => (canon task.return rs opts (core func)) 🔀
@@ -573,6 +576,7 @@ named once.
 * The two `list` type codes should be merged into one with an optional immediate
   and similarly for `func`.
 * The redundant `0x00` and `0x01` opcodes of `nameattributes` will be merged.
+* The `0x10` for `optional` in `externtype` overlapping with `externtype'`
 * The vestigial `0x00` in `thread.*` and `waitable-set.*` built-ins may be
   removed.
 * Most built-ins should have a `<canonopt>*` immediate instead of an ad hoc

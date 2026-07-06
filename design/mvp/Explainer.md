@@ -22,10 +22,12 @@ more user-focused explanation, take a look at the
     * [Definition types](#definition-types)
     * [Declarators](#declarators)
     * [Type checking](#type-checking)
+    * [Optionality](#-optionality)
   * [Canonical definitions](#canonical-definitions)
     * [Canonical ABI](#canonical-abi)
     * [Canonical built-ins](#canonical-built-ins)
       * [Resource built-ins](#resource-built-ins)
+      * [Optionality built-ins](#-optionality-built-ins)
       * [Concurrency built-ins](#-concurrency-built-ins)
       * [Error Context built-ins](#-error-context-built-ins)
   * [Value definitions](#-value-definitions)
@@ -75,6 +77,7 @@ shipped as part of a future WASI Developer Preview release:
 * 🐘: [memory64]
 * 📡: getters and setters
 * ➡️: `stream.forward` and `future.forward` built-ins
+* ❓: `optional` imports and exports
 
 
 ## Grammar
@@ -643,9 +646,11 @@ instancedecl  ::= core-prefix(<core:type>)
                 | <type>
                 | <alias>
                 | <exportdecl>
-importdecl    ::= (import <externnamelit> <attributes> bind-id(<externtype>))
-exportdecl    ::= (export <externnamelit> <attributes> bind-id(<externtype>))
-externtype    ::= (<sort> (type <idx>) )
+importdecl    ::= (import <externnamelit> <attributes> <externtype>)
+exportdecl    ::= (export <externnamelit> <attributes> <externtype>)
+externtype    ::= bind-id(<externtype'>)
+                | optional bind-id(<externtype'>) ❓
+externtype'   ::= (<sort> (type <idx>) )
                 | core-prefix(<core:moduletype>)
                 | <functype>
                 | <componenttype>
@@ -923,9 +928,10 @@ and `export` definitions, respectively, allowing an identifier to be bound for
 use by subsequent declarators. The definitions of `labellit`, `externnamelit`
 and `attribute` are given in the [imports and exports](#import-and-export-definitions)
 section below. Following the precedent of [`core:typeuse`], the text format
-allows both references to out-of-line type definitions (via `(type <typeidx>)`)
-and inline type expressions that the text format desugars into out-of-line type
-definitions.
+for `externtype` allows both references to out-of-line type definitions (via
+`(type <typeidx>)`) and inline type expressions that the text format desugars
+into out-of-line type definitions. The meaning of the `optional` immediate of
+`externtype` is given [below](#optionality).
 
 🪙 The `value` case of `externtype` describes a runtime value that is imported or
 exported at instantiation time as described in the
@@ -1359,6 +1365,118 @@ distinct. Thus, in a sense, the generativity of resource types *generalizes*
 traditional name-based nominal typing, providing a finer granularity of
 isolation than otherwise achievable with a shared global namespace.
 
+#### ❓ Optionality
+
+If an import's or export's declared `externtype` includes `optional`, this
+indicates that the import or export may not be "present" at instantiation time
+(on an instance-by-instance basis). However at validation time, `optional`
+imports and exports unconditionally append an index to the appropriate sort's
+index space and include `optional` in the type of this index.
+
+The meaning of "not present" at runtime, and thus `optional` at validation time,
+depends on the `sort`:
+* For `func`, "not present" means "traps if called".
+* 🪙 For `value`, "not present" means "a `none` value will be passed into any
+  `start` function that takes this value as a parameter". Consequently, an
+  import with `externtype` `optional (value $T)` is given the argument type
+  `(option $T)` as part of `start` validation.
+* For `instance`, "not present" means "the contained exports are either
+  all-present or all-not-present". Based on this, `alias export $i "e"`
+  produces an `optional`-typed alias for `"e"` if `$i` is `optional` and,
+  conversely, `alias outer $C $d` introduces a *non*-`optional` alias for
+  `$d` even when `$d` is `optional`.
+* For `type`, "not present" means that any dependent `func`, `value` or
+  `instance` also becomes "not present". Consequently, any `externtype`
+  containing a `func`, `value`, `instance` that transitively refers to an
+  `optional` type must itself be `optional`.
+  * TODO: maybe change to *implicitly optional*
+    * Why? `canon lift` specifies a `funcidx`, not an `externtype`...
+    * More expressivity
+* For `component` and `core module`: these are temporarily rejected by
+  validation, but could be supported in the future by refining the rules for
+  `instantiate` to account for "not present" and produce a "not present"
+  instance.
+
+For example, the following component exercises these rules and is valid:
+```wat
+(component $C
+  (import "t" optional (type $t (sub resource)))
+  (import "foo" optional (func (result (own $t))))
+  (import "i" optional (instance $i
+    (alias outer $C $t (type $t')) ;; non-optional
+    (export "bar" (func (result (own $t'))))
+    (export "u" (type $u (sub resource)))
+    (export "baz" (func (result (own $u))))
+  ))
+  (alias export $i "u" (type $u')) ;; optional
+  (alias export $i "baz" (func $baz'))
+  (import "quux" optional (func (result (own $u'))))
+)
+```
+Validation of the `alias outer` requires `$i`'s type to be `optional` and then
+introduces introduces `$t'` as non-`optional` (since if `$t` is not present,
+neither will be `$i`). Because `$t'` is not `optional`, `bar` is not required to
+be `optional`. The nested export of `u` is also non-`optional` and thus `baz` is
+also not required to be `optional`. However, outside the scope of `$i`, both `u`
+and `baz` become `optional` via `alias export` and thus `quux` must be declared
+`optional`.
+
+Subtyping is extended in two ways to account for `optional`:
+
+First, a non-`optional` type `X` is a subtype of `optional X`. For example, the
+following component validates despite `bar` being `optional`:
+```wat
+(component
+  (import "foo" (func $foo))
+  (import "D" (component $D
+    (import "bar" optional (func))
+  ))
+  (instance (instantiate $D (with "bar" (func $foo))))
+)
+```
+
+TODO: nope, this isn't transitive: optional -> non-optional -> optional
+TODO: can this be achieved via simple utility `(component ...)` wrapper?
+  * via the "dependency" rule...
+Second, an `instance` type which contains `optional` exports is a subtype of an
+`optional` `instance` type with the same exports except without `optional`. At
+runtime, if *any* of the source `optional` exports are not present for a
+destination non-`optional` export, the entire destination instance is marked not
+present. This subtyping rule preserves the ability for components to arbitrarily
+assemble and disassemble `instance`s as needed such as in the following example:
+```wat
+(component $C
+  (import "i" (instance $i
+    (export "t" (type $t (sub resource)))
+    (export "foo" (func (result (own $t))))
+  ))
+  (alias export $i "t" (type $t')) ;; optional
+  (alias export $i "foo" (func $foo')) ;; optional
+  (import "D" (component $D
+    (import "j" optional (instance
+      (export "u" (type $u (sub resource)))
+      (export "bar" (func (result (own $u))))
+    ))
+  ))
+  (instance (instantiate $D (with "j" (instance
+    (export "u" (type $t))     ;; (export "u" optional (type $u (sub resource)))
+    (export "bar" (type $bar)) ;; (export "bar" optional (func (result (own $u))))
+  ))))
+)
+```
+Note that the instance `i` passed to `$D` is only present if *both* `t` and
+`foo` are present in `$C`.
+
+TODO: regarding substitution
+* for `optional` import:
+  * if provide nothing: substitute bottom type (can't name: no valid functions)
+    * e.g., but can still lower (to trap) and call `optional.present`
+  * else: substitute
+    * `optional` is part of what's substituted, so it goes away if provide
+      non-optional def to `with`
+      * e.g., can export with non-optional type
+
+TODO: show `optional.present`
 
 ### Canonical Definitions
 
@@ -1398,7 +1516,7 @@ two directions:
 Canonical definitions specify one of these two wrapping directions, the function
 to wrap and a list of configuration options:
 ```ebnf
-canon    ::= (canon lift core-prefix(<core:funcsortidx>) <canonopt>* bind-id(<externtype>))
+canon    ::= (canon lift core-prefix(<core:funcsortidx>) <canonopt>* bind-id(<functype>))
            | (canon lower <funcsortidx> <canonopt>* (core func <id>?))
 canonopt ::= string-encoding=utf8
            | string-encoding=utf16
@@ -1409,9 +1527,6 @@ canonopt ::= string-encoding=utf8
            | async 🔀
            | (callback core-prefix(<core:funcidx>)) 🔀
 ```
-While the production `externtype` accepts any `sort`, the validation rules
-for `canon lift` would only allow the `func` sort. In the future, other sorts
-may be added (viz., types), hence the explicit sort.
 
 The `string-encoding` option specifies the encoding the Canonical ABI will use
 for the `string` type. The `latin1+utf16` encoding captures a common string
@@ -1558,6 +1673,7 @@ canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
         | (canon resource.drop <typeidx> (core func <id>?))
         | (canon resource.rep <typeidx> (core func <id>?))
+        | (canon optional.present <sortidx> (core global <id>?)) ❓
         | (canon context.get <core:valtype> <u32> (core func <id>?)) 🔀
         | (canon context.set <core:valtype> <u32> (core func <id>?)) 🔀
         | (canon backpressure.inc (core func <id>?)) 🔀
@@ -1683,6 +1799,12 @@ component instance's table, is immediately returned by `make_R`, thereby
 transferring ownership of the newly-created resource to the export's caller.
 
 For details, see [`canon_resource_rep`] in the Canonical ABI explainer.
+
+##### ❓ Optionality built-ins
+
+###### ❓ `optional.present`
+
+TODO
 
 ##### 🔀🧵 Concurrency built-ins
 
@@ -2665,7 +2787,7 @@ exported (e.g., `(export $x "x" (func $f))` binds a new identifier `$x`).
 
 Given this, the syntax of imports and exports are defined as follows:
 ```ebnf
-import        ::= (import <externnamelit> <attributes> bind-id(<externtype>))
+import        ::= (import <externnamelit> <attributes> <externtype>)
 export        ::= (export <id>? <externnamelit> <attributes> <externidx> <externtype>?)
 attributes    ::= <implements>? <versionsuffix>? <externid>?
 implements    ::= (implements <interfacenamelit>) 🏷️
