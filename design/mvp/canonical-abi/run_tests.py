@@ -81,6 +81,13 @@ def mk_tup(*a):
     return x
   return { str(i):mk_tup_rec(v) for i,v in enumerate(a) }
 
+def mk_rt(inst, rep, dtor = None):
+  rt = LocallyDefinedResourceType()
+  rt.rep = rep
+  rt_inst = ResourceTypeInstance(inst, dtor)
+  inst.resource_type_instances[rt] = rt_inst
+  return (rt, rt_inst)
+
 class RacyBool:
   b: bool
   def __init__(self, b):
@@ -586,16 +593,20 @@ def test_handles():
 
   store = Store()
   producer_inst = ComponentInstance(store)
-  rt = ResourceType(producer_inst, 'i32', dtor) # usable in imports and exports
+  rt_import_rtinst = ResourceTypeInstance(producer_inst, dtor)
+  rt_import = ResourceType()
+
   inst = ComponentInstance(store)
-  rt2 = ResourceType(inst, 'i32', dtor) # only usable in exports
+  inst.resource_type_instances[rt_import] = rt_import_rtinst
+  rt_local,_ = mk_rt(inst, 'i32', dtor)
+  rt_local2,_ = mk_rt(inst, 'i32')
   opts = mk_opts()
 
   host_ft = FuncType([
-    BorrowType(rt),
-    BorrowType(rt)
+    BorrowType(rt_import),
+    BorrowType(rt_import)
   ],[
-    OwnType(rt)
+    OwnType(rt_import)
   ])
   def host_func(on_start, on_return, wait_until):
     args = on_start()
@@ -618,31 +629,34 @@ def test_handles():
     h1 = args[0]
     h2 = args[1]
     h3 = args[2]
-    assert((canon_resource_rep(rt, h1))[0] == 42)
-    assert((canon_resource_rep(rt, h2))[0] == 43)
-    assert((canon_resource_rep(rt, h3))[0] == 44)
+    assert(inst.handles.get(h1).rep_val == 42)
+    assert(inst.handles.get(h2).rep_val == 43)
+    assert(inst.handles.get(h3).rep_val == 44)
 
     results = store.lower(host_func_inst, host_ft, opts, inst)([h1, h3])
     assert(len(results) == 1)
     assert(results[0] == 4)
     h4 = results[0]
-    assert((canon_resource_rep(rt, h4))[0] == 45)
+    assert(inst.handles.get(h4).rep_val == 45)
 
     dtor_value = None
-    [] = canon_resource_drop(rt, h1)
+    [] = canon_resource_drop(rt_import, h1)
     assert(dtor_value == 42)
     assert(len(inst.handles.array) == 5)
     assert(inst.handles.array[h1] is None)
     assert(len(inst.handles.free) == 1)
 
-    h = (canon_resource_new(rt, 46))[0]
+    h = (canon_resource_new(rt_local, 46))[0]
     assert(h == h1)
     assert(len(inst.handles.array) == 5)
     assert(inst.handles.array[h] is not None)
     assert(len(inst.handles.free) == 0)
+    assert((canon_resource_rep(rt_local, h))[0] == 46)
+    expect_fail(lambda: canon_resource_rep(rt_local2, h))
+    expect_fail(lambda: canon_resource_rep(rt_local, h2))
 
     dtor_value = None
-    [] = canon_resource_drop(rt, h3)
+    [] = canon_resource_drop(rt_import, h3)
     assert(dtor_value is None)
     assert(len(inst.handles.array) == 5)
     assert(inst.handles.array[h3] is None)
@@ -651,14 +665,14 @@ def test_handles():
     return [h, h2, h4]
 
   ft = FuncType([
-    OwnType(rt),
-    OwnType(rt),
-    BorrowType(rt),
-    BorrowType(rt2)
+    OwnType(rt_import),
+    OwnType(rt_import),
+    BorrowType(rt_import),
+    BorrowType(rt_local)
   ],[
-    OwnType(rt),
-    OwnType(rt),
-    OwnType(rt)
+    OwnType(rt_local),
+    OwnType(rt_import),
+    OwnType(rt_import)
   ])
 
   def on_start():
@@ -684,21 +698,29 @@ def test_handles():
 def test_i64_borrows():
   store = Store()
   impl_inst = ComponentInstance(store)
-  rt = ResourceType(impl_inst, 'i64')
   other_inst = ComponentInstance(store)
+  rt_local,rt_inst = mk_rt(impl_inst, 'i64')
+  rt_import = ResourceType()
+  other_inst.resource_type_instances[rt_import] = rt_inst
 
-  ft = FuncType([
-    BorrowType(rt),
-    ListType(TupleType([BorrowType(rt), U8Type()]))
-  ],[])
+  def mk_ft(rt):
+    return FuncType([
+      BorrowType(rt),
+      ListType(TupleType([BorrowType(rt), U8Type()]))
+    ],[])
+  impl_ft = mk_ft(rt_local)
+  other_ft = mk_ft(rt_import)
 
-  def flat_params(direction, inst):
+  def flat_params(direction, inst, ft):
     return flatten_functype(LiftLowerContext(direction, mk_opts(), inst), ft).params
-  assert(flat_params('lift', impl_inst) == ['i64', 'i32', 'i32'])
-  assert(flat_params('lower', impl_inst) == ['i32', 'i32', 'i32'])
-  assert(flat_params('lift', other_inst) == ['i32', 'i32', 'i32'])
+  assert(flat_params('lift', impl_inst, impl_ft) == ['i64', 'i32', 'i32'])
+  assert(flat_params('lower', impl_inst, impl_ft) == ['i32', 'i32', 'i32'])
+  assert(flat_params('lift', other_inst, other_ft) == ['i32', 'i32', 'i32'])
+  assert(flat_params('lower', other_inst, other_ft) == ['i32', 'i32', 'i32'])
   cx = LiftLowerContext('lift', mk_opts(), impl_inst)
-  assert(elem_size(cx, BorrowType(rt)) == alignment(cx, BorrowType(rt)) == 4)
+  assert(elem_size(cx, BorrowType(rt_local)) == alignment(cx, BorrowType(rt_local)) == 4)
+  cx = LiftLowerContext('lower', mk_opts(), impl_inst)
+  assert(elem_size(cx, BorrowType(rt_local)) == alignment(cx, BorrowType(rt_local)) == 8)
 
   reps = [2**32 + 1, 2**32 + 2, 2**32 + 3]
   def on_start():
@@ -715,7 +737,7 @@ def test_i64_borrows():
     assert(int.from_bytes(impl_heap.memory[ptr+16 : ptr+24], 'little') == reps[2])
     assert(impl_heap.memory[ptr+24] == 8)
     return []
-  lift_and_run(impl_opts, impl_inst, ft, core_impl, on_start, lambda _: ())
+  lift_and_run(impl_opts, impl_inst, impl_ft, core_impl, on_start, lambda _: ())
 
   other_heap = Heap(100)
   other_opts = mk_opts(MemInst(other_heap.memory, 'i32'), realloc = other_heap.realloc)
@@ -728,9 +750,32 @@ def test_i64_borrows():
     assert(other_heap.memory[ptr+12] == 8)
     for h,rep in zip([h0, h1, h2], reps):
       assert(other_inst.handles.get(h).rep_val == rep)
-      [] = canon_resource_drop(rt, h)
+      [] = canon_resource_drop(rt_import, h)
     return []
-  lift_and_run(other_opts, other_inst, ft, core_other, on_start, lambda _: ())
+  lift_and_run(other_opts, other_inst, other_ft, core_other, on_start, lambda _: ())
+
+
+def test_optional_funcs():
+  store = Store()
+  inst = ComponentInstance(store)
+  present_rt,_ = mk_rt(inst, 'i32')
+  missing_rt = ResourceType()
+
+  def core_never_called(args):
+    fail("should not be called")
+
+  present_ft = FuncType([ListType(OwnType(present_rt))], [])
+  assert(store.lift(core_never_called, present_ft, mk_opts(), inst) is not None)
+  missing_ft = FuncType([ListType(OwnType(missing_rt))], [], optional = True)
+  assert(store.lift(core_never_called, missing_ft, mk_opts(), inst) is None)
+  missing_ft = FuncType([], [OptionType(OwnType(missing_rt))], optional = True)
+  assert(store.lift(core_never_called, missing_ft, mk_opts(), inst) is None)
+
+  missing_core_func = store.lower(None, missing_ft, mk_opts(), inst)
+  def core_func(args):
+    expect_fail(lambda: missing_core_func([]))
+    return []
+  lift_and_run(mk_opts(), inst, FuncType([], []), core_func, lambda:[], lambda _:())
 
 
 def test_async_to_async():
@@ -3180,6 +3225,7 @@ test_trap_propagation()
 test_cross_component_realloc()
 test_handles()
 test_i64_borrows()
+test_optional_funcs()
 test_async_to_async()
 test_async_callback()
 test_callback_interleaving()

@@ -262,7 +262,27 @@ declared. In the case of worlds, all imported names are in the same scope,
 but separate from all the export names, and thus the same name can *not* be
 imported twice, but *can* be both imported and exported.
 
+❓ Each import or export can also be declared `optional`:
+```wit
+world w {
+  import wasi:cli/stdout;
+  import optional wasi:filesystem/types;
+  export main: func(args: list<string>);
+  export healthy: optional func() -> bool;
+}
+```
+An optional *import* may or may not be supplied to the component, and so, in
+this example, a `w` component must test at runtime (using
+[built-ins][optionality] defined by the Component Model ABI) whether it
+actually received `wasi:filesystem/types` before calling any of its functions.
+Conversely, an optional *export* is always exported by the component but may or
+may not be present at runtime, and so, in this example, after instantiating a
+`w` component, the host must test whether the `healthy` function is present
+before calling it.
+
+
 [Plain Name]: Text.md#import-and-export-definitions
+[Optionality]: Text.md#-optionality
 
 ### Union of Worlds with `include`
 
@@ -293,7 +313,8 @@ world union-my-world {
 }
 ```
 
-The `include` statement is used to include the imports and exports of another World to the current World. It says that the new World should be able to run all components that target the included worlds and more.
+The `include` statement is used to include the imports and exports of another
+World to the current World.
 
 The `union-my-world` World defined above is equivalent to the following World:
 
@@ -311,33 +332,79 @@ world union-my-world {
 ### De-duplication of interfaces
 
 If two worlds share an imported or exported [interface name], then the union of
-the two worlds will only contain one copy of that imported or exported name.
-For example, the following two worlds `union-my-world-a` and `union-my-world-b`
-are equivalent:
-
+the two worlds will only contain one copy of that imported or exported name. For
+example, the following two worlds `union-wx` and `equivalent-to-union-wx` are
+equivalent and interchangeable:
 ```wit
 package local:demo;
 
-world my-world-a {
-    import a1;
-    import b1;
+world my-world-w {
+    import a;
+    import b;
+    export c;
+    export d;
 }
 
-world my-world-b {
-    import a1;
-    import b1;
+world my-world-x {
+    import a;
+    export c;
 }
 
-world union-my-world-a {
-    include my-world-a;
-    include my-world-b;
+world union-wx {
+    include my-world-w;
+    include my-world-x;
 }
 
-world union-my-world-b {
-    import a1;
-    import b1;
+world equivalent-to-union-wx {
+    import a;
+    import b;
+    export c;
+    export d;
 }
 ```
+
+If a de-duplicated interface is `optional` in both worlds being unioned, the
+interface is still `optional` in the union. But if a de-duplicated interface is
+non-`optional` in either of the unioned worlds, the result is non-`optional`.
+For example, in the following worlds, the `optional` import of `a` and export
+of `d` in `my-world-y` are made non-`optional` in `union-yz`.
+```wit
+world my-world-y {
+    import optional a;
+    import optional b;
+    export optional c;
+    export optional d;
+}
+
+world my-world-z {
+    import a;
+    import optional b;
+    export optional c;
+    export d;
+}
+
+world union-yz {
+    include my-world-y;
+    include my-world-z;
+}
+
+world equivalent-to-union-yz {
+    import a;
+    import optional b;
+    export optional c;
+    export d;
+}
+```
+
+As these examples demonstrate, the unioning performed by `include` is not a
+traditional "join" on the subtype lattice such that the unioned world is a
+supertype of the input worlds. In particular, a component targeting `my-world-y`
+whose export of `d` is not present (as allowed by `my-world-y`) will not run on
+a host that *strictly* supports the `union-yz` world, which requires `d` to be
+present. Thus, `my-world-y` is not a "subtype" of `union-yz`. This mostly
+matches what WIT authors (e.g., in WASI) need `include` to do today, but new
+world operators may be added to support more advanced use cases that do provide
+a subtype lattice meet and/or join.
 
 ### Name Conflicts and `with`
 
@@ -435,12 +502,6 @@ world invalid-union-world {
 }
 
 ```
-
-### A Note on Subtyping
-
-In the future, when `optional` export is supported, the world author may explicitly mark exports as optional to make a component targeting an included World a subtype of the union World.
-
-For now, we are not following the subtyping rules for the `include` statement. That is, the `include` statement does not imply any subtyping relationship between the included worlds and the union world.
 
 ## WIT Packages and `use`
 [use]: #wit-packages-and-use
@@ -560,6 +621,36 @@ package local:demo;
 
 interface my-interface {
     use wasi:http/types.{request, response};
+}
+```
+
+When validating a `world`, WIT validation requires that any `use` that
+transitively refers to a `resource` type in an `interface` that is imported or
+exported with `optional` must be in another `optional` interface *or* only
+used by `optional` functions. For example, in the following WIT document, `w` is
+valid but would be invalid if the `optional` was removed from the `import` of
+`j` or from `k`'s function `f`:
+```wit
+package local:demo;
+
+interface i {
+  resource r;
+}
+
+interface j {
+  use i.{r};
+  f: func(b: borrow<r>);
+}
+
+interface k {
+  use i.{r};
+  f: optional func(b: borrow<r>);
+}
+
+world w {
+  import optional i;
+  import optional j;
+  import k;
 }
 ```
 
@@ -714,6 +805,10 @@ world w2 {
 > this on a more fine-grained basis for exports, for example being able to
 > configure that a `use`'d interface is a particular import or a particular
 > export.
+
+❓ Any interface that is transitively imported via `use` from only `optional`
+imported and/or exported interfaces will itself be imported as `optional`.
+Otherwise, it will be imported as non-`optional`.
 
 ## WIT Functions
 [functions]: #wit-functions
@@ -1075,6 +1170,7 @@ keyword ::= 'as'
           | 'list'
           | 'map'
           | 'option'
+          | 'optional'
           | 'own'
           | 'package'
           | 'record'
@@ -1441,16 +1537,18 @@ world-definition ::= export-item
                    | typedef-item
                    | include-item
 
-export-item ::= external-id? 'export' id ':' extern-type
-              | 'export' use-path ';'
-import-item ::= external-id? 'import' id ':' extern-type
-              | 'import' use-path ';'
+export-item ::= external-id? 'export' id ':' optional? extern-type
+              | 'export' optional? use-path ';'
+import-item ::= external-id? 'import' id ':' optional? extern-type
+              | 'import' optional? use-path ';'
 
 external-id ::= '@external-id' '(' string-literal ')' 🏷️
 
 extern-type ::= func-type ';'
               | 'interface' '{' interface-items* '}'
               | use-path ';' 🏷️
+
+optional ::= 'optional' ❓
 ```
 
 🏷️ While `id`s are restricted to kebab-case (to enable idiomatic bindings for
@@ -1508,6 +1606,8 @@ world my-world {
 }
 ```
 
+❓ The use of `optional` on imports and exports is described [above](#wit-worlds).
+
 [`componenttype`]: Text.md#type-definitions
 
 ## Item: `include`
@@ -1554,7 +1654,7 @@ typedef-item ::= resource-item
                | enum-items
                | type-item
 
-func-item ::= id ':' func-type ';'
+func-item ::= id ':' optional? func-type ';'
 
 func-type ::= 'async'? 'func' param-list result-list
             | 'get' param-list result-list 📡
@@ -1614,6 +1714,43 @@ interface my-interface {
 }
 ```
 
+❓ `optional` on a function or resource in an `interface` allows it to not be
+present when importing or exporting the interface. This can be used to describe
+a permanently optional feature *or* to describe a newer non-optional feature
+that a client component is optionally requesting for backwards compatibility
+reasons. For example, given two versions of an interface:
+```wit
+package my:pkg@1.1.0 {
+  interface i {
+    foo: func();
+  }
+}
+
+package my:pkg@1.2.0 {
+  interface i {
+    foo: func();
+    bar: func();
+  }
+}
+```
+WIT tooling could synthesize the following `world` to generate a component that
+works on hosts only implementing `i@1.1.0` while still allowing the component
+to take advantage of the `1.2.0` functionality when available:
+```wit
+package local:demo;
+
+package my:pkg@1.1.0 {
+  interface i {
+    foo: func();
+    bar: optional func();
+  }
+}
+
+world my-component {
+  import my:pkg/i@1.1.0;
+  ...
+}
+```
 
 ## Item: `use`
 
@@ -1852,11 +1989,11 @@ desugar to an owned return value.
 
 Specifically, the syntax for a `resource` definition is:
 ```ebnf
-resource-item ::= 'resource' id ';'
-                | 'resource' id '{' ( gate external-id? resource-method )* '}'
+resource-item ::= optional? 'resource' id ';'
+                | optional? 'resource' id '{' ( gate external-id? resource-method )* '}'
 resource-method ::= func-item
-                  | id ':' 'static' func-type ';'
-                  | 'constructor' param-list ';'
+                  | id ':' optional? 'static' func-type ';'
+                  | optional? 'constructor' param-list ';'
 ```
 
 As with the items of a `world` or an `interface`, the methods of a `resource`
@@ -1864,6 +2001,27 @@ can be individually gated, as described [above](#feature-gates).
 
 The optional `async` on `static` functions has the same meaning as in a
 non-`static` `func-item`.
+
+❓ The `optional` on methods, static functions and constructors also has the
+same meaning as for free functions. An `optional` before `resource` means
+the `resource` type itself is optional, which then requires all member
+functions of the `resource` to be `optional`. Any other function that
+transitively uses the `resource` type must also be `optional` *or* be in a
+different `interface` that is imported or exported with `optional`:
+```wit
+interface i {
+    optional resource r {
+        optional constructor(s: string);
+        new: optional static func(s: string) -> r;
+        m: optional func() -> string;
+    }
+}
+```
+In this example, if `r` is not present, then none of its 3 contained functions
+may be present. However, even if `r` is present, any subset of the 3 functions
+might be absent. To make the entire quartet atomically present or not, `r` and
+its contents should not be declared `optional` and instead the whole interface
+`i` can be imported/exported with `optional`.
 
 The syntax for handle types is presented [below](#handles).
 

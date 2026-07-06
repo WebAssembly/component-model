@@ -338,9 +338,9 @@
     "\00asm" "\0d\00\01\00"                   ;; preamble
     "\05\04"                                  ;; instance section (4 bytes)
     "\01"                                     ;; 1 instance
-    "\02\00\00"                               ;; 0x02 is not an instanceexpr
+    "\03\00\00"                               ;; 0x03 is not an instanceexpr
   )
-  "invalid leading byte (0x2) for instance"
+  "invalid leading byte (0x3) for instance"
 )
 
 ;; alias section (id 6)
@@ -607,9 +607,9 @@
     "\00asm" "\0d\00\01\00"                   ;; preamble
     "\07\02"                                  ;; type section (2 bytes)
     "\01"                                     ;; 1 type
-    "\44"                                     ;; 0x44 is unallocated
+    "\46"                                     ;; 0x46 is unallocated
   )
-  "invalid leading byte (0x44) for component defined type"
+  "invalid leading byte (0x46) for component defined type"
 )
 (assert_malformed
   (component binary
@@ -756,11 +756,11 @@
   "\00asm" "\0d\00\01\00"                     ;; preamble
   "\07\10"                                    ;; type section (16 bytes)
   "\03"                                       ;; 3 types
-  "\40\00\01\00"                              ;; 0x40 (func): 0 params, resultlist 0x01 0x00
+  "\40\00\01\00"                              ;; 0x40 (func): 0 params, results 0x01 0x00
   "\40\01"                                    ;; (func): 1 param:
   "\01p"                                      ;; name "p"
   "\7f"                                       ;; bool
-  "\00\79"                                    ;; resultlist: 0x00 u32
+  "\00\79"                                    ;; results: 0x00 u32
   "\43\00\01\00"                              ;; 0x43 (func async)
 )
 (assert_malformed
@@ -769,7 +769,7 @@
     "\07\05"                                  ;; type section (5 bytes)
     "\01"                                     ;; 1 type
     "\40\00"                                  ;; (func): 0 params
-    "\01\01"                                  ;; resultlist 0x01 must be followed by 0x00
+    "\01\01"                                  ;; results 0x01 must be followed by 0x00
   )
   "invalid leading byte (0x1) for number of results"
 )
@@ -779,7 +779,7 @@
     "\07\05"                                  ;; type section (5 bytes)
     "\01"                                     ;; 1 type
     "\40\00"                                  ;; (func): 0 params
-    "\02\00"                                  ;; 0x02 is not a resultlist
+    "\02\00"                                  ;; 0x02 is not a result
   )
   "invalid leading byte (0x2) for component function results"
 )
@@ -1123,9 +1123,9 @@
     "\00asm" "\0d\00\01\00"                   ;; preamble
     "\08\02"                                  ;; canon section (2 bytes)
     "\01"                                     ;; 1 canon
-    "\07"                                     ;; 0x07 is unallocated
+    "\08"                                     ;; 0x08 is unallocated
   )
-  "invalid leading byte (0x7) for canonical function"
+  "invalid leading byte (0x8) for canonical function"
 )
 (assert_malformed
   (component binary
@@ -1416,9 +1416,9 @@
     "\01"                                     ;; 1 import
     "\00"                                     ;; plain externname
     "\01t"                                    ;; name "t"
-    "\03\02"                                  ;; 0x02 is not a typebound
+    "\03\03"                                  ;; 0x03 is not a typebound
   )
-  "invalid leading byte (0x2) for type bound"
+  "invalid leading byte (0x3) for type bound"
 )
 (assert_malformed
   (component binary

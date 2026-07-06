@@ -4,3 +4,7 @@
 ./async/big-interleaving-test.wast
 ./async/forward.wast
 ./async/exit-without-resolving.wast
+./optional/binary.wast
+./optional/validation.wast
+./optional/runtime.wast
+./optional/async.wast

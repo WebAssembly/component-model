@@ -77,6 +77,7 @@ core:inlineexport   ::= n:<core:name> si:<core:sortidx>                    => (e
 instance            ::= ie:<instanceexpr>                                  => (instance ie)
 instanceexpr        ::= 0x00 c:<componentidx> arg*:vec(<instantiatearg>)   => (instantiate c arg*)
                       | 0x01 e*:vec(<inlineexport>)                        => e*
+                      | 0x02 i:<typeidx> e*:vec(<inlineexport>)            => (type i) e*
 instantiatearg      ::= n:<name>  si:<sortidx>                             => (with n si)
 name                ::= n:<core:name>                                      => n
 sortidx             ::= sort:<sort> idx:<u32>                              => (sort idx)
@@ -102,13 +103,24 @@ Notes:
   sort, but would be extended to accept other sorts as core wasm is extended.
 * Validation of `instantiate` requires each `<externname>` in `c` to match a
   `name` in a `with` argument (using plain string equality) and for the types to
-  match.
+  match unless the `<externname>`'s type is `optional`, in which case no `with`
+  argument need be given.
 * When validating `instantiate`, after each individual type-import is supplied
   via `with`, the actual type supplied is immediately substituted for all uses
   of the import, so that subsequent imports and all exports are now specialized
   to the actual type.
 * The indices in `sortidx` are validated according to their `sort`'s index
   spaces, which are built incrementally as each definition is validated.
+* Validation of an `instanceexpr` with an ascribed `typeidx` requires that the
+  `typeidx` refer to an `instance` type and the given `inlineexport*` match the
+  `export`s of that `instance` type with the additional allowances that:
+  `optional` definitions can be supplied for non-`optional` `export`s of an
+  `optional` instance; and the `optional` `export`s in an `instance` type can be
+  omitted (see [optionality]). The resulting `instanceidx`'s type is then
+  exactly the ascribed type, with superfluous `inlineexport`s ignored like
+  superfluous `with` arguments.
+* If a `typeidx` is not given to the `instanceexpr`, the resulting
+  `instanceidx`'s type is inferred from the `componentidx` or `inlineexport*`.
 
 
 ## Alias Definitions
@@ -221,13 +233,21 @@ labellit      ::= len:<u32> l:<label>                      => "l"  (if len = |l|
 valtype       ::= i:<typeidx>                              => i
                 | pvt:<primvaltype>                        => pvt
 resourcetype  ::= 0x3f t:<core:valtype> f?:<core:funcidx>? => (resource (rep t) (dtor f)?)
-functype      ::= 0x40 ps:<paramlist> rs:<resultlist>      => (func ps rs)
-                | 0x43 ps:<paramlist> rs:<resultlist>      => (func async ps rs)
-paramlist     ::= lt*:vec(<labelvaltype>)                  => (param lt)*
-resultlist    ::= 0x00 t:<valtype>                         => (result t)
+functype      ::= 0x40 pr:<paramsresult>                   => (func pr)
+                | 0x43 pr:<paramsresult>                   => (func async pr) 🔀
+                | 0x44 i*:<funcimms> pr:<paramsresult>     => (func i* pr) ❓
+paramsresult  ::= p*:vec(<labelvaltype>) r:<result>        => (param p)* r
+result        ::= 0x00 t:<valtype>                         => (result t)
                 | 0x01 0x00                                =>
+funcimms      ::= 0x00                                     =>
+                | 0x01                                     => optional ❓
+                | 0x02                                     => async 🔀
+                | 0x03                                     => optional async ❓🔀
 componenttype ::= 0x41 cd*:vec(<componentdecl>)            => (component cd*)
 instancetype  ::= 0x42 id*:vec(<instancedecl>)             => (instance id*)
+                | 0x45 o?:<opt?> id*:vec(<instancedecl>)   => (instance o? id*) ❓
+opt?          ::= 0x00                                     =>
+                | 0x01                                     => optional ❓
 componentdecl ::= 0x03 id:<importdecl>                     => id
                 | id:<instancedecl>                        => id
 instancedecl  ::= 0x00 t:<core:type>                       => t
@@ -244,8 +264,9 @@ externtype    ::= 0x00 0x11 i:<core:typeidx>               => (core module (type
                 | 0x05 i:<typeidx>                         => (instance (type i))
 typebound     ::= 0x00 i:<typeidx>                         => (eq i)
                 | 0x01                                     => (sub resource)
+                | 0x02 o?:<opt?>                           => (sub o? resource) ❓
 valuebound    ::= 0x00 i:<valueidx>                        => (eq i) 🪙
-                | 0x01 t:<valtype>                         => t 🪙
+                | 0x01 o?:<opt?> t:<valtype>               => o? t 🪙❓
 ```
 Notes:
 * The type opcodes follow the same negative-SLEB128 scheme as Core WebAssembly,
@@ -307,9 +328,10 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x02 rt:<typeidx>                                   => (canon resource.new rt (core func))
            | 0x03 rt:<typeidx>                                   => (canon resource.drop rt (core func))
            | 0x04 rt:<typeidx>                                   => (canon resource.rep rt (core func))
+           | 0x07 si:<sortidx>                                   => (canon optional.present si (core global)) ❓
            | 0x24                                                => (canon backpressure.inc (core func)) 🔀
            | 0x25                                                => (canon backpressure.dec (core func)) 🔀
-           | 0x09 rs:<resultlist> opts:<opts>                    => (canon task.return rs opts (core func)) 🔀
+           | 0x09 r:<result> opts:<opts>                         => (canon task.return r opts (core func)) 🔀
            | 0x05                                                => (canon task.cancel (core func)) 🔀
            | 0x0a t:<core:valtype> i:<u32>                       => (canon context.get t i (core func)) 🔀
            | 0x0b t:<core:valtype> i:<u32>                       => (canon context.set t i (core func)) 🔀
@@ -372,7 +394,8 @@ Notes:
 * When there is no `string-encoding` present, the default value is `utf8`.
   For all other values, the default value is "none".
 * Validation of the individual canonical definitions is described in
-  [`CanonicalABI.md`](CanonicalABI.md#canonical-definitions).
+  [`CanonicalABI.md`](CanonicalABI.md#canonical-definitions) or,
+  for `optional.present`, in [`Text.md`](Text.md#-optionality).
 
 
 ## 🪙 Start Definitions
@@ -435,7 +458,8 @@ Notes:
 * Validation requires that, for `plainname`s annotated with `[constructor]`,
   `[method]`, or `[static]`, the first `label` matches the `plainname` of a
   preceding `resource` import or export, respectively, in the same scope
-  (component, component type or instance type).
+  (component, component type or instance type) and that, if the `resource`
+  type is `optional`, so is the `func` type.
 * 🏷️ Validation requires that `implements`-annotated imports or exports are
   `instance`-typed and have a `plainname` name.
 * 🏷️/🔗 Validation requires that a `vec(<attribute>)` contains each kind of
@@ -571,6 +595,7 @@ named once.
 * The opcodes (for types, canon built-ins, etc) should be re-sorted
 * The two `list` type codes should be merged into one with an optional immediate
   and similarly for `func`.
+* The redundant opcodes introduced for `optional` should be merged.
 * The redundant `0x00` and `0x01` opcodes of `nameattributes` will be merged.
 * The vestigial `0x00` in `thread.*` and `waitable-set.*` built-ins may be
   removed.
@@ -602,6 +627,7 @@ named once.
 
 [Strongly-unique]: Text.md#name-uniqueness
 [Canonical Interface Name]: Text.md#-canonical-interface-name
+[Optionality]: Text.md#-optionality
 
 [type-imports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
 [module-linking]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md
