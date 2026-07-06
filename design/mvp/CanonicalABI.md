@@ -67,6 +67,7 @@ into the `handles` or `threads` fields of `ComponentInstance`.
 class ComponentInstance:
   store: Store
   handles: Table[ResourceHandle | Waitable | WaitableSet | ErrorContext]
+  resource_type_instances: dict[ResourceType, ResourceTypeInstance]
   threads: Table[Thread]
   may_leave: bool
   backpressure: int
@@ -76,6 +77,7 @@ class ComponentInstance:
   def __init__(self, store):
     self.store = store
     self.handles = Table()
+    self.resource_type_instances = dict()
     self.threads = Table()
     self.may_leave = True
     self.backpressure = 0
@@ -515,9 +517,10 @@ spec-level function type, where the host can be the caller, the callee or even
 OnStart = Callable[[], list[any]]
 OnResolve = Callable[[Optional[list[any]]], None]
 OnCancel = Callable[[], None]
-FuncInst = Callable[[OnStart, OnResolve], OnCancel]
+FuncInst = Optional[Callable[[OnStart, OnResolve], OnCancel]]
 ```
-The parameters of `FuncInst` are:
+`FuncInst` may be `None` to represent the "not present" case of an `optional`
+function type. When present, the parameters of `FuncInst` are:
 * an `OnStart` callback that is called by the callee when it is ready to
   receive its arguments after waiting for any [backpressure] to subside;
 * an `OnResolve` callback that is called by the callee when it is ready to
@@ -789,6 +792,7 @@ the store has been locked down.
 ```python
   def invoke(self, f: FuncInst, on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
     assert(not self.lockdown)
+    assert(f is not None)
     self.nesting_depth += 1
     request_cancellation = f(on_start, on_resolve)
     self.nesting_depth -= 1
@@ -809,33 +813,46 @@ component to wrap a core wasm `CoreFuncInst` into a component-level `FuncInst`,
 passing `canon lift`'s immediate arguments as well as the containing component
 instance. Similarly, `Store.lower` is called for each `canon lower` definition
 in a component to wrap a component-level `FuncInst` into a core wasm
-`CoreFuncInst`. (In a complete Embedding API, `Store.lift` and `Store.lower`
-would be replaced by a single, higher-level `Store.instantiate` method of type
-`Component -> ComponentInstance`, analogous to the Core WebAssembly's
-[`module_instantiate`]. But for the Canonical ABI, just `lift` and `lower` are
-sufficient to define relevant ABI behavior.) `canon_lift` and `canon_lower` are
+`CoreFuncInst`. The `contains_missing_resource_type` predicate, defined below,
+returns whether any of the `optional` resource types on which the lifted/lowered
+function type depends is not present in the containing component instance and
+so the lifted function must be `None`. `canon_lift` and `canon_lower` are also
 defined below, combining all the intervening supporting definitions to specify
 the full runtime behavior of calls into and out of Core WebAssembly code.
 ```python
   CoreFuncInst = Callable[[list[CoreValType]], list[CoreValType]]
 
   def lift(self, f: CoreFuncInst, ft: FuncType, opts: CanonicalOptions, inst: ComponentInstance) -> FuncInst:
-    def func_inst(on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
-      assert(self.nesting_depth > 0)
-      on_cancel = canon_lift(f, ft, opts, inst, on_start, on_resolve)
-      assert(self.nesting_depth > 0)
-      return on_cancel
-    return func_inst
+    if contains_missing_resource_type(inst, ft):
+      assert(ft.optional)
+      return None
+    else:
+      def func_inst(on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
+        assert(self.nesting_depth > 0)
+        on_cancel = canon_lift(f, ft, opts, inst, on_start, on_resolve)
+        assert(self.nesting_depth > 0)
+        return on_cancel
+      return func_inst
 
   def lower(self, f: FuncInst, ft: FuncType, opts: CanonicalOptions, inst: ComponentInstance) -> CoreFuncInst:
-    def core_func_inst(args: list[CoreValType]) -> list[CoreValType]:
-      assert(inst is current_instance())
-      assert(self.nesting_depth > 0)
-      flat_results = canon_lower(f, ft, opts, args)
-      assert(self.nesting_depth > 0)
-      return flat_results
-    return core_func_inst
+    if f is None:
+      assert(ft.optional)
+      return lambda _: trap()
+    else:
+      assert(not contains_missing_resource_type(inst, ft))
+      def core_func_inst(args: list[CoreValType]) -> list[CoreValType]:
+        assert(inst is current_instance())
+        assert(self.nesting_depth > 0)
+        flat_results = canon_lower(f, ft, opts, args)
+        assert(self.nesting_depth > 0)
+        return flat_results
+      return core_func_inst
 ```
+(In a complete Embedding API, `Store.lift` and `Store.lower` would be replaced
+by a single, higher-level `Store.instantiate` method of type `Component ->
+ComponentInstance`, analogous to the Core WebAssembly's [`module_instantiate`].
+But for the Canonical ABI, just `lift` and `lower` are sufficient to define
+relevant ABI behavior.)
 
 Lastly, the `Store.tick` method does not have an analogue in Core WebAssembly
 but is necessary to enable native concurrency support in the Component Model.
@@ -1100,22 +1117,22 @@ The `ResourceHandle` class defines the elements of the component instance's
 `handles` table used to represent handles to resources:
 ```python
 class ResourceHandle:
-  rt: ResourceType
+  rt_inst: ResourceTypeInstance
   rep_val: int
   own: bool
   borrow_scope: Optional[Task]
   num_lends: int
 
-  def __init__(self, rt, rep_val, own, borrow_scope = None):
-    self.rt = rt
+  def __init__(self, rt_inst, rep_val, own, borrow_scope = None):
+    self.rt_inst = rt_inst
     self.rep_val = rep_val
     self.own = own
     self.borrow_scope = borrow_scope
     self.num_lends = 0
 ```
-The `rt` and `rep_val` fields of `ResourceHandle` store the resource type and
-representation value of the resource (originally passed to the `resource.new`
-call that created the resource).
+The `rt_inst` and `rep_val` fields of `ResourceHandle` store the resource type
+instance and representation value of the resource (originally passed to the
+`resource.new` call that created the resource).
 
 The `own` field indicates whether this element was created from an `own` type
 (or, if false, a `borrow` type).
@@ -1129,26 +1146,54 @@ live handles that were lent from this handle (by calls to `borrow`-taking
 functions). This count is maintained by the `Subtask` bookkeeping functions
 (below) and is ensured to be zero when an `own` handle is dropped.
 
-The `ResourceType` class represents a runtime instance of a resource type that
-has been created either by the host or a component instance (where multiple
-component instances of the same static component create multiple `ResourceType`
-instances). `ResourceType` Python object identity is used by trapping guards on
-the `rt` field of `ResourceHandle` (above) and thus resource type equality is
-*not* defined structurally (on the contents of `ResourceType`).
+The `ResourceTypeInstance` class represents a unique type identify that is
+generated each time a component containing a `resource` type is instantiated (so
+that multiple component instances of the same static component generate multiple
+`ResourceTypeInstance`s). A `ResourceTypeInstance` points to the component
+instance it was generated on behalf of via `impl_inst` and contains the runtime
+[`funcinst`] closure of the `dtor` immediate. The Canonical ABI definitions
+below use Python object identity (`is`) to test for equality of these unique
+type identities and thus assumes that some instantiation logic (not defined
+here) has created `ResourceTypeInstance` objects appropriately.
 ```python
-class ResourceType(Type):
+class ResourceTypeInstance:
   impl_inst: ComponentInstance
-  rep: Literal['i32', 'i64']
-  dtor: Optional[Callable]
+  dtor_inst: Optional[Callable]
 
-  def __init__(self, impl_inst, rep, dtor = None):
+  def __init__(self, impl_inst, dtor_inst = None):
     self.impl_inst = impl_inst
+    self.dtor_inst = dtor_inst
+```
+
+Whereas resource handles are concerned with resource type *instances*, the
+structural types `(own $r)` and `(borrow $r)` need `$r` to refer to a static
+(per-component, not pre-component-instance) notion of resource type whose Python
+object identity represents static validation type-equality and whose fields
+store the static contents of the `(type (resource (rep $t) (dtor $d)))`
+definition.
+```python
+@dataclass
+class OwnType(ValType):
+  rt: ResourceType
+
+@dataclass
+class BorrowType(ValType):
+  rt: ResourceType
+
+class ResourceType(Type):
+  rep: Literal['i32', 'i64']
+  dtor: Optional[int]
+
+  def __init__(self, rep, dtor = None):
     self.rep = rep
     self.dtor = dtor
 ```
-The `rep` field stores the core value type given by the `(rep ...)` immediate
-of the `resource` type definition. The `impl_inst` field stores the component
-instance that generated this resource type.
+
+Bridging between these static and dynamic representations of resource types is
+the `ComponentInstance.resource_type_instances` Python dictionary which maps
+`ResourceType`s to `ResourceTypeInstance`s, allowing the Canonical ABI
+definitions below to ask for "the resource type instance generated in a
+particular component instance for a particular static resource type".
 
 
 ### Waitable State
@@ -1914,6 +1959,15 @@ def contains(t, p):
       assert(False)
 ```
 
+The `contains_missing_resource_type` predicate returns whether there is any
+`optional` resource type transitively used by `t` that is not present in the
+component instance `inst`:
+```python
+def contains_missing_resource_type(inst, t):
+  return contains(t, lambda u: (isinstance(u, OwnType | BorrowType)
+                                and u.rt not in inst.resource_type_instances))
+```
+
 The `none_or_number_type` predicate is used above for the temporary
 same-instance stream/future copy restriction:
 ```python
@@ -2018,7 +2072,8 @@ def alignment_borrow(cx, borrowt):
     return 4
 
 def pass_rep_not_handle(cx, borrowt):
-  return cx.inst is borrowt.rt.impl_inst and cx.direction == 'lower'
+  rt_inst = cx.inst.resource_type_instances[borrowt.rt]
+  return cx.inst is rt_inst.impl_inst and cx.direction == 'lower'
 ```
 
 
@@ -2348,14 +2403,14 @@ def unpack_flags_from_int(i, labels):
 
 `own` handles are lifted by removing the handle from the current component
 instance's `handles` table so that ownership is *transferred* to the lowering
-component.  The lifting operation fails if unique ownership of the handle isn't
-possible, for example if the index was actually a `borrow` or if the `own`
-handle is currently being lent out as borrows.
+component. The lifting operation fails if the handle has the wrong type or if
+unique ownership of the handle isn't possible because the handle is a `borrow`
+or is an `own` handle that is currently being lent out to `borrow` handles.
 ```python
 def lift_own(cx, i, ownt):
   h = cx.inst.handles.remove(i)
   trap_if(not isinstance(h, ResourceHandle))
-  trap_if(h.rt is not ownt.rt)
+  trap_if(h.rt_inst is not cx.inst.resource_type_instances[ownt.rt])
   trap_if(h.num_lends != 0)
   trap_if(not h.own)
   return h.rep_val
@@ -2375,7 +2430,7 @@ def lift_borrow(cx, i, borrowt):
   assert(isinstance(cx.borrow_scope, Subtask))
   h = cx.inst.handles.get(i)
   trap_if(not isinstance(h, ResourceHandle))
-  trap_if(h.rt is not borrowt.rt)
+  trap_if(h.rt_inst is not cx.inst.resource_type_instances[borrowt.rt])
   cx.borrow_scope.add_lender(h)
   return h.rep_val
 ```
@@ -2799,7 +2854,8 @@ def store_own(cx, rep_val, ptr, ownt):
   store_int(cx, add_own(cx, rep_val, ownt), ptr, 4)
 
 def add_own(cx, rep_val, ownt):
-  h = ResourceHandle(ownt.rt, rep_val, own = True)
+  rt_inst = cx.inst.resource_type_instances[ownt.rt]
+  h = ResourceHandle(rt_inst, rep_val, own = True)
   return cx.inst.handles.add(h)
 ```
 
@@ -2821,7 +2877,8 @@ def store_borrow(cx, rep_val, ptr, borrowt):
 
 def add_borrow(cx, rep_val, borrowt):
   assert(isinstance(cx.borrow_scope, Task))
-  h = ResourceHandle(borrowt.rt, rep_val, own = False, borrow_scope = cx.borrow_scope)
+  rt_inst = cx.inst.resource_type_instances[borrowt.rt]
+  h = ResourceHandle(rt_inst, rep_val, own = False, borrow_scope = cx.borrow_scope)
   h.borrow_scope.num_borrows += 1
   return cx.inst.handles.add(h)
 ```
@@ -3775,7 +3832,9 @@ instance's `handles` table:
 def canon_resource_new(rt, rep_val):
   inst = current_instance()
   trap_if(not inst.may_leave)
-  h = ResourceHandle(rt, rep_val, own = True)
+  rt_inst = inst.resource_type_instances[rt]
+  assert(inst is rt_inst.impl_inst)
+  h = ResourceHandle(rt_inst, rep_val, own = True)
   i = inst.handles.add(h)
   return [i]
 ```
@@ -3793,24 +3852,29 @@ validation specifies:
 
 Calling `$f` invokes the following function, which removes the handle from the
 current component instance's `handles` table and, if the handle was owning,
-calls the resource's destructor.
+calls the resource's destructor. There is a trap if the handle has the wrong
+type, which includes the case where `rt` is an `optional` resource type that is
+not present (since no handles of that type can have been created). There is
+also a trap if the handle is an `own` handle that is currently being lent out to
+`borrow` handles.
 ```python
 def canon_resource_drop(rt, i):
   inst = current_instance()
   trap_if(not inst.may_leave)
   h = inst.handles.remove(i)
   trap_if(not isinstance(h, ResourceHandle))
-  trap_if(h.rt is not rt)
+  trap_if(rt not in inst.resource_type_instances)
+  trap_if(h.rt_inst is not inst.resource_type_instances[rt])
   trap_if(h.num_lends != 0)
   if h.own:
     assert(h.borrow_scope is None)
     opts = CanonicalOptions(async_ = False)
     ft = FuncType([], [], async_ = False)
-    if rt.dtor is not None:
-      dtor = lambda _: rt.dtor([h.rep_val])
+    if h.rt_inst.dtor_inst is not None:
+      dtor = lambda _: h.rt_inst.dtor_inst([h.rep_val])
     else:
       dtor = lambda _: []
-    callee = inst.store.lift(dtor, ft, opts, rt.impl_inst)
+    callee = inst.store.lift(dtor, ft, opts, h.rt_inst.impl_inst)
     caller = inst.store.lower(callee, ft, opts, inst)
     caller([])
   else:
@@ -3845,7 +3909,7 @@ def canon_resource_rep(rt, i):
   inst = current_instance()
   h = inst.handles.get(i)
   trap_if(not isinstance(h, ResourceHandle))
-  trap_if(h.rt is not rt)
+  trap_if(h.rt_inst is not inst.resource_type_instances[rt])
   return [h.rep_val]
 ```
 Note that the "locally-defined" requirement above ensures that only the
@@ -4282,6 +4346,7 @@ above).
 def canon_stream_new(stream_t):
   inst = current_instance()
   trap_if(not inst.may_leave)
+  trap_if(contains_missing_resource_type(inst, stream_t.t))
   (readable_end, writable_end) = new_stream(stream_t.t, owner = inst)
   readable_end.index = inst.handles.add(readable_end)
   writable_end.index = inst.handles.add(writable_end)
@@ -4290,11 +4355,15 @@ def canon_stream_new(stream_t):
 def canon_future_new(future_t):
   inst = current_instance()
   trap_if(not inst.may_leave)
+  trap_if(contains_missing_resource_type(inst, future_t.t))
   (readable_end, writable_end) = new_future(future_t.t, owner = inst)
   readable_end.index = inst.handles.add(readable_end)
   writable_end.index = inst.handles.add(writable_end)
   return [ readable_end.index | (writable_end.index << 32) ]
 ```
+The `contains_missing_resource_type` guards trap if attempting to create a
+stream or future whose element type transitively refers to an `optional`
+resource type that is not present in the current instance.
 
 
 ### 🔀 `canon {stream,future}.{read,write}`
@@ -5050,6 +5119,7 @@ def canon_thread_available_parallelism():
 [`memidx`]: https://webassembly.github.io/spec/core/syntax/modules.html#syntax-memidx
 [`memory` instance]: https://webassembly.github.io/spec/core/exec/runtime.html#memory-instances
 [`memtype`]: https://webassembly.github.io/spec/core/syntax/types.html#memory-types
+[`funcinst`]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-funcinst
 
 [Alignment]: https://en.wikipedia.org/wiki/Data_structure_alignment
 [UTF-8]: https://en.wikipedia.org/wiki/UTF-8

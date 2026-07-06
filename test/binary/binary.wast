@@ -756,11 +756,11 @@
   "\00asm" "\0d\00\01\00"                     ;; preamble
   "\07\10"                                    ;; type section (16 bytes)
   "\03"                                       ;; 3 types
-  "\40\00\01\00"                              ;; 0x40 (func): 0 params, resultlist 0x01 0x00
+  "\40\00\01\00"                              ;; 0x40 (func): 0 params, results 0x01 0x00
   "\40\01"                                    ;; (func): 1 param:
   "\01p"                                      ;; name "p"
   "\7f"                                       ;; bool
-  "\00\79"                                    ;; resultlist: 0x00 u32
+  "\00\79"                                    ;; results: 0x00 u32
   "\43\00\01\00"                              ;; 0x43 (func async)
 )
 (assert_malformed
@@ -769,7 +769,7 @@
     "\07\05"                                  ;; type section (5 bytes)
     "\01"                                     ;; 1 type
     "\40\00"                                  ;; (func): 0 params
-    "\01\01"                                  ;; resultlist 0x01 must be followed by 0x00
+    "\01\01"                                  ;; results 0x01 must be followed by 0x00
   )
   "invalid leading byte (0x1) for number of results"
 )
@@ -779,7 +779,7 @@
     "\07\05"                                  ;; type section (5 bytes)
     "\01"                                     ;; 1 type
     "\40\00"                                  ;; (func): 0 params
-    "\02\00"                                  ;; 0x02 is not a resultlist
+    "\02\00"                                  ;; 0x02 is not a result
   )
   "invalid leading byte (0x2) for component function results"
 )

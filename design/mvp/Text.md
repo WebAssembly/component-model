@@ -35,6 +35,7 @@ shipped as part of a future WASI Developer Preview release:
 * 🐘: [memory64]
 * 📡: getters and setters
 * ➡️: `stream.forward` and `future.forward` built-ins
+* ❓: `optional` imports and exports
 
 
 ## Grammar
@@ -278,7 +279,7 @@ instances above:
 ```ebnf
 instance       ::= (instance <id>? <instanceexpr>)
 instanceexpr   ::= (instantiate <componentidx> <instantiatearg>*)
-                 | <inlineexport>*
+                 | (type <typeidx>)? <inlineexport>*
 instantiatearg ::= (with <name> <externidx>)
                  | (with <name> (instance <inlineexport>*))
 name           ::= <core:name>
@@ -289,6 +290,12 @@ Components may import and export various core definitions when they are
 compatible with the [shared-nothing] model, which currently means only `module`
 (since modules are pure immutable code) but may in the future include, e.g.,
 `data` (since data segments are pure immutable data).
+
+The optional `<typeidx>` immediate in an `instance` constructed from
+`<inlineexport>`s is ascribed to the resulting `instance` definition and
+validation requires that the `<inlineexport>`s match this ascribed type.
+Validation of resource types in the ascribed type works the same way as
+ascription in exports, as described below.
 
 Component-level `name` literals reuse the Core WebAssembly text format's
 [`core:name`] quoted-string-literal syntax which includes literals such as
@@ -594,9 +601,13 @@ valtype       ::= <typeidx>
 keytype       ::= bool | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64 | char | string 🗺️
 resourcetype  ::= (resource (rep i32) (dtor core-prefix(<core:funcidx>))?)
                 | (resource (rep i64) (dtor core-prefix(<core:funcidx>))?) 🐘
-functype      ::= (func async? (param <labellit> <valtype>)* (result <valtype>)?)
+functype      ::= (func <optional?> <async?> (param <labellit> <valtype>)* (result <valtype>)?)
+optional?     ::= ε
+                | optional ❓
+async?        ::= ε
+                | async 🔀
 componenttype ::= (component <componentdecl>*)
-instancetype  ::= (instance <instancedecl>*)
+instancetype  ::= (instance <optional?> <instancedecl>*)
 componentdecl ::= <importdecl>
                 | <instancedecl>
 instancedecl  ::= core-prefix(<core:type>)
@@ -613,9 +624,9 @@ externtype    ::= (<sort> (type <idx>) )
                 | (value <valuebound>) 🪙
                 | (type <typebound>)
 typebound     ::= (eq <typeidx>)
-                | (sub resource)
+                | (sub <optional?> resource)
 valuebound    ::= (eq <valueidx>) 🪙
-                | <valtype> 🪙
+                | <optional?> <valtype> 🪙
 
 where bind-id(X) parses '(' sort <id>? Y ')' when X parses '(' sort Y ')'
 ```
@@ -836,12 +847,13 @@ unreachability.
 The remaining 4 type constructors in `deftype` use `valtype` to describe
 shared-nothing functions, resources, components, and component instances:
 
-The `func` type constructor describes a component-level function definition
-that takes a list of `valtype` parameters with [strongly-unique] names and
-optionally returns a `valtype`. The optional `async` effect type indicates that
-calling the function may block (because the function transitively calls a
-blocking built-in like `waitable-set.wait` or blocks on an imported `async`
-function).
+The `func` type constructor describes a component-level function definition that
+takes a list of `valtype` parameters with [strongly-unique] names and optionally
+returns a `valtype`. The `optional` immediate indicates that the function might
+not be present, in which case the function will trap if called at runtime and
+thus must be guarded by testing `optional.present` (as described in the
+[optionality] section). The `async` effect type indicates that calling the
+function may block (as described in the [concurrency explainer]).
 
 The `resource` type constructor creates a fresh type for each instance of the
 containing component (with "freshness" and its interaction with general
@@ -856,13 +868,11 @@ present), allowing the implementing component to perform clean-up like freeing
 linear memory allocations. A destructor for a `resource (rep $T)` must have type
 `($T) -> ()`.
 
-The `instance` type constructor describes a list of named, typed definitions
-that can be imported or exported by a component. Informally, instance types
-correspond to the usual concept of an "interface" and instance types thus serve
-as static interface descriptions. In addition to the S-Expression text format
-defined here, which is meant to go inside component definitions, interfaces can
-also be defined as standalone, human-friendly text files in the [`wit`](WIT.md)
-[Interface Definition Language].
+The `instance` type constructor describes an "instance", which is a bundle of
+named, typed definitions. Like other types of definitions, instances can be
+imported, defined locally, and exported. The `optional` immediate indicates that
+the instance may or may not be present as a single atomic unit (as described in
+the [optionality] section).
 
 The `component` type constructor is symmetric to the core `module` type
 constructor and contains *two* lists of named definitions for the imports
@@ -891,18 +901,20 @@ definitions.
 exported at instantiation time as described in the
 [value definitions](#value-definitions) section below.
 
-The `type` case of `externtype` describes an imported or exported type along
-with its "bound":
+The `type` case of `externtype` describes an imported or exported type and
+introduces a `typeidx` that can be used by subsequent `type` declarators to
+build up compound types using this imported or exported type. Types also have a
+`typebound` which has two cases:
 
 The `sub` bound declares that the imported/exported type is an *abstract type*
 which is a *subtype* of some other type. Currently, the only supported bound is
 `resource` which (following the naming conventions of the [GC] proposal) means
 "any resource type". Thus, only resource types can be imported/exported
-abstractly, not arbitrary value types. This allows type imports to always be
-compiled independently of their arguments using a "universal representation" for
-handle values (viz., `i32`, as defined by the [Canonical ABI](CanonicalABI.md)).
-In the future, `sub` may be extended to allow referencing other resource types,
-thereby allowing abstract resource subtyping.
+abstractly, not arbitrary value types. In the future, `sub` may be extended to
+allow referencing other resource types, thereby allowing abstract resource
+subtyping. The `optional` immediate indicates that the type may not be
+"present", which then forces any function or value that transitively uses the
+type to also be declared as `optional`.
 
 The `eq` bound says that the imported/exported type must be structurally equal
 to some preceding type definition. This allows:
@@ -1328,9 +1340,9 @@ Core WebAssembly imports passed to [`module_instantiate`] and how Core
 WebAssembly exports are called via [`func_invoke`]. This allows the Component
 Model to specify how core modules are linked together (as shown above) but it
 also allows the Component Model to arbitrarily synthesize Core WebAssembly
-functions (via [`func_alloc`]) that are imported by Core WebAssembly. These
-synthetic core functions are created via one of several *canonical definitions*
-defined below.
+functions and globals that are imported by Core WebAssembly. These synthetic
+core definitions are created via one of several *canonical definitions* defined
+below.
 
 #### Canonical ABI
 
@@ -1505,6 +1517,233 @@ exports are available for reference by `canon lower`. Without this separation
 (if `$Main` contained the `memory` and allocation functions), there would be a
 cyclic dependency between `canon lower` and `$Main` that would have to be
 broken using an auxiliary module performing `call_indirect`.
+
+#### ❓ Optionality
+
+If the type of an import is declared `optional`, a host or parent component may
+choose not to provide that import to instantiation. Symmetrically, if the type
+of an export is declared `optional`, a host or parent component must be prepared
+to handle the case where no export is produced by instantiation. To detect
+whether or not a given import or export is present, core wasm code can import a
+boolean `(global i32)` generated by the following `canon` definition whose
+`<externidx>` must refer to an `optional` definition:
+```ebnf
+canon ::= ...
+        | (canon optional.present <externidx> (core global <id>?)) ❓
+```
+
+For example, the following component imports an `optional` component-level
+function `now`, which is then imported by core wasm code as a core wasm function
+using `lower` as usual along with the boolean produced by `optional.present`:
+```wat
+(component
+  (import "now" (func $now optional (result f64)))
+  (canon lower (func $now) (core func $core-now))
+  (canon optional.present (func $now) (core global $has-now))
+  (core module $Main
+    (import "" "now" (func $now (result f64)))
+    (import "" "has-now" (global $has-now i32))
+    ...
+  )
+  (core instance (instantiate $Main (with "" (instance
+    (export "now" (func $core-now))
+    (export "has-now" (global $has-now))
+  ))))
+)
+```
+If the `...` code in this example for whatever reason calls `now` when `has-now`
+is `0`, there is a trap. Thus, `optional` functions are always "real" functions
+(with an associated `funcidx` and `func` type); they just have a sentinel
+"always traps" value.
+
+🪙 For `(value optional T)` imports and exports, the meaning of a value that is
+not present is a `none` value of type `(option T)` when passed to a `start`
+function (as described in the `start` section below).
+
+For `(type (sub optional resource))` imports and exports, the meaning of a type
+that is not present is that any function or value that transitively uses that
+type is not present. Reflecting this implication, validation requires that any
+`func` or `value` that transitively refers to an `optional` type must also be
+`optional`. Thus, in the following component, if `has-t` is `0`, then `has-f`
+must also be `0`. However, if `has-t` is `1`, then `has-f` may be `0`.
+```wat
+(component
+  (import "t" (type $t (sub optional resource)))
+  (import "f" (func $f optional (result (own $t))))
+  (core module $M
+    (import "" "has-t" (global i32))
+    (import "" "has-f" (global i32))
+    ...
+  )
+  (canon optional.present (type $t) (core global $has-t))
+  (canon optional.present (func $f) (core global $has-f))
+  (core instance (instantiate $M (with "" (instance
+    (export "has-t" (global $has-t))
+    (export "has-f" (global $has-f))
+  ))))
+)
+```
+Similarly, if an `optional` type is used in the function type passed to `canon
+lift`, and the type is not present, then the function generated by `canon lift`
+at instantiation-time is also not present (i.e., traps if called) and thus the
+lifted core wasm function (that would otherwise expect to use the resource type)
+is not called.
+
+For `(instance optional ...)` imports and exports, the meaning of an instance
+that is not present is that *none* of the instance's declared exports are
+present. Conversely, if an instance *is* present, then *all* of the instance's
+declared non-`optional` exports are present. Thus, `optional` instances allow
+components to describe atomic sets of definitions, allowing the client code to
+not have to worry about handling arbitrary subsets. For example, in contrast to
+the previous example, in the following component, `has-i`, `has-t` and `has-f`
+are either all `0` or all `1`. Thus, importing and testing only `has-i` would
+cover the other two. However, because `g` is independently declared `optional`,
+`has-g` may be `0` even when `has-i` is `1`.
+```wat
+(component
+  (import "i" (instance $i optional
+    (export "t" (type $t (sub resource)))
+    (export "f" (func (result (own $t))))
+    (export "g" (func optional (param "p" (list (borrow $t)))))
+  ))
+  (core module $M
+    (import "" "has-i" (global i32))
+    (import "" "has-t" (global i32))
+    (import "" "has-f" (global i32))
+    (import "" "has-g" (global i32))
+  )
+  (alias export $i "t" (type $t)) ;; $t : (type (sub optional resource))
+  (alias export $i "f" (func $f)) ;; $f : (func optional (result (own $t)))
+  (alias export $i "g" (func $g)) ;; $g : (func optional (param "p" (list (borrow $t))))
+  (canon optional.present (instance $i) (core global $has-i))
+  (canon optional.present (type $t) (core global $has-t))
+  (canon optional.present (func $f) (core global $has-f))
+  (canon optional.present (func $g) (core global $has-g))
+  (core instance (instantiate $M (with "" (instance
+    (export "has-i" (global $has-i))
+    (export "has-t" (global $has-t))
+    (export "has-f" (global $has-f))
+    (export "has-g" (global $has-g))
+  ))))
+)
+```
+As suggested by the types in comments above, projecting the exports of an
+`optional` instance via `alias export` adds `optional` to the types of the
+individual fields (after transitively following `eq`-bound types to their
+source) if it's not already set. Because `component` and `core module` types do
+not currently have an `optional` immediate, `alias export` fails validation if
+they are projected from an `optional` instance. `alias export` of `eq`-bound
+non-`resource` types and `resource` types whose source is outside the `optional`
+instance is allowed and ignores `optional`.
+
+Symmetrically, when *constructing* an `optional` instance from individual
+definitions, `optional` definitions may be provided for *non*-`optional` exports
+in the declared type. At instantiation-time, if *any* of the given definitions
+is not present when the corresponding export in the declared type is
+non-`optional`, the entire `optional` instance becomes not present. This allows
+instances to be flexibly broken apart and merged in the presence of `optional`.
+For example, the following component appends `h` to the 2 functions in the
+atomic set `i`, creating a bigger atomic set `$j` that can then be passed to a
+child component that imports `f`, `g` and `h` atomically:
+```wat
+(component
+  (import "i" (instance $i optional
+    (export "f" (func))
+    (export "g" (func))
+  ))
+  (import "h" (func $h optional))
+  (type $J (instance optional
+    (export "f" (func))
+    (export "g" (func))
+    (export "h" (func))
+  ))
+  (instance $j (type $J)
+    (export "f" (func $i "f")) ;; inline sugar for alias export
+    (export "g" (func $i "g")) ;; inline sugar for alias export
+    (export "h" (func $h))
+  )
+  ...
+)
+```
+
+Correspondingly, at the type-level, `alias outer` declarators that reach out of
+an `optional` instance type strip `optional` from the target's type, reflecting
+the fact that, if the target definition is not present, the entire instance will
+not be present. For example, the following example describes two atomic units of
+`optional` functionality, with the latter dependent on the former (due to the
+shared type `t`):
+```wat
+(component $C
+  (import "i" (instance $i optional
+    (export "t" (type $t (sub resource)))
+    (export "f" (func (result (own $t))))
+  ))
+  (alias export $i "t" (type $t)) ;; $t : (type (sub optional resource))
+  (import "j" (instance $j optional
+    (alias outer $C $t (type $t')) ;; $t' : (type (sub resource))
+    (export "u" (type $u (sub resource)))
+    (export "g" (func (result (tuple (own $t') (own $u))))) ;; not optional!
+  ))
+  ...
+)
+```
+
+When validating `instantiate`, `optional` imports are allowed to be omitted, in
+which case the sentinel "not present" value described above is automatically
+provided for the import argument. For example, the following component is valid:
+```wat
+(component
+  (import "child" (component $Child
+    (import "t" (type $t (sub optional resource)))
+    (import "f" (func optional (result (own $t))))
+  ))
+  (instance $child (instantiate $Child))
+)
+```
+
+As described in the [type checking] section, during validation, the type
+argument of a type import is substituted for all uses of the type import. Thus,
+when a "not present" type argument is supplied, it is substituted into all
+imported/exported function types. For example, the following component is valid:
+```wat
+(component
+  (import "t" (type $t (sub optional resource)))
+  (import "foo" (func $foo optional (result (own $t))))
+  (component $Child
+    (import "u" (type $u (sub optional resource)))
+    (import "bar" (func optional (result (own $u))))
+    (export $v "v" (type $u))
+    (func (export "baz") optional (result (own $v)) ...)
+  )
+  ;; (instance (instantiate $Child (with "bar" (func $foo)))) ❌
+  ;; (instance (instantiate $Child (with "u" (type $t)) (with "bar" (func $foo)))) ✅
+  (instance $child (instantiate $Child)) ;; ✅
+  (alias export $child "v" (type $v)) ;; $v : <not present>
+  (alias export $child "baz" (func $baz)) ;; $baz : (func optional (result (own <not present>)))
+  (export $V "v" (type $v) (type (sub optional resource)))
+  (export "baz" (func $baz) (func optional (result (own $V))))
+)
+```
+A few notes on this example:
+
+Validation requires `baz` in `$Child` to be declared `optional` since `$v`
+*transitively* refers to an `optional` resource type.
+
+The `instance` definition marked ❌ would make the component invalid because,
+after substitution, `bar`'s function type does not match `foo`'s function type.
+
+When `v` is projected via `alias export`, `v` has a "not present" type which
+can be used like any other `optional` resource type to: define function types,
+`canon lift` functions (which will always produce "not present" functions), and
+export. The [external visibility] rules require `v` (which must be inferred or
+ascribed a `sub optional resource` bound) to be exported before `baz` and thus
+the client of this component sees a plain `optional` type and function export,
+not knowing that they are unconditionally "not present".
+
+Lastly, as one might expect, subtyping is extended so that a non-`optional` type
+`(X ...)` is a subtype of `(X optional ...)` and thus non-`optional` definitions
+can always be supplied as `with` arguments to `instantiate` a child component
+with `optional` imports.
 
 #### Canonical Built-ins
 
@@ -2552,6 +2791,7 @@ Components can also keep the exact value being exported abstract (so that the
 precise value is not part of the type and public interface) using the "type ascription"
 feature mentioned in the [imports and exports](#import-and-export-definitions) section below.
 
+
 ### 🪙 Start Definitions
 
 Like modules, components can have start functions that are called during
@@ -2593,6 +2833,13 @@ exported string at instantiation time:
 As this example shows, start functions reuse the same Canonical ABI machinery
 as normal imports and exports for getting component-level values into and out
 of core linear memory.
+
+❓ If the `valueidx` argument passed to a start function refers to a
+`(value optional T)`, then the type used to validate the call to `start` is
+`(option T)`. If the `funcidx` called by `start` is `optional` and the function
+is not present, then the function is not called (i.e., there is not a call and
+trap) and the `start` definition produces "not present" result values.
+Consequently, the types of the values produced in this case are also `optional`.
 
 
 ### Import and Export Definitions
@@ -3137,7 +3384,6 @@ For some use-case-focused, worked examples, see:
 [Embedder]: https://webassembly.github.io/spec/core/appendix/embedding.html
 [`module_instantiate`]: https://webassembly.github.io/spec/core/appendix/embedding.html#mathrm-module-instantiate-xref-exec-runtime-syntax-store-mathit-store-xref-syntax-modules-syntax-module-mathit-module-xref-exec-runtime-syntax-externval-mathit-externval-ast-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-moduleinst-mathit-moduleinst-xref-appendix-embedding-embed-error-mathit-error
 [`func_invoke`]: https://webassembly.github.io/spec/core/appendix/embedding.html#mathrm-func-invoke-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-funcaddr-mathit-funcaddr-xref-exec-runtime-syntax-val-mathit-val-ast-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-val-mathit-val-ast-xref-appendix-embedding-embed-error-mathit-error
-[`func_alloc`]: https://webassembly.github.io/spec/core/appendix/embedding.html#mathrm-func-alloc-xref-exec-runtime-syntax-store-mathit-store-xref-syntax-types-syntax-functype-mathit-functype-xref-exec-runtime-syntax-hostfunc-mathit-hostfunc-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-funcaddr-mathit-funcaddr
 
 [Semantic Versioning 2.0]: https://semver.org/spec/v2.0.0.html
 
@@ -3154,7 +3400,6 @@ For some use-case-focused, worked examples, see:
 [ABI]: https://en.wikipedia.org/wiki/Application_binary_interface
 [Environment Variables]: https://en.wikipedia.org/wiki/Environment_variable
 [Linear]: https://en.wikipedia.org/wiki/Substructural_type_system#Linear_type_systems
-[Interface Definition Language]: https://en.wikipedia.org/wiki/Interface_description_language
 [Subtyping]: https://en.wikipedia.org/wiki/Subtyping
 [Universal Types]: https://en.wikipedia.org/wiki/System_F
 [Existential Types]: https://en.wikipedia.org/wiki/System_F
@@ -3178,6 +3423,9 @@ For some use-case-focused, worked examples, see:
 [reference types]: https://github.com/WebAssembly/reference-types/blob/master/proposals/reference-types/Overview.md
 [GC ABI Option]: https://github.com/WebAssembly/component-model/issues/525
 
+[Type Checking]: #type-checking
+[External Visibility]: #external-visibility-of-types
+[Optionality]: #-optionality
 [Strongly-unique]: #name-uniqueness
 
 [Donut Wrapped]: Explainer.md#virtualization-and-donut-wrapping
