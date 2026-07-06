@@ -79,6 +79,7 @@ class InstanceType(ExternType):
 class FuncType(ExternType):
   params: list[tuple[str,ValType]]
   result: list[ValType|tuple[str,ValType]]
+  optional: bool = False
   async_: bool = False
   def param_types(self):
     return self.extract_types(self.params)
@@ -160,14 +161,6 @@ class FlagsType(ValType):
   labels: list[str]
 
 @dataclass
-class OwnType(ValType):
-  rt: ResourceType
-
-@dataclass
-class BorrowType(ValType):
-  rt: ResourceType
-
-@dataclass
 class StreamType(ValType):
   t: Optional[ValType]
 
@@ -191,6 +184,7 @@ class ComponentInstance:
   store: Store
   handles: Table[ResourceHandle | Waitable | WaitableSet | ErrorContext]
   threads: Table[Thread]
+  resource_type_instances: dict[ResourceType, ResourceTypeInstance]
   may_leave: bool
   backpressure: int
   num_waiting_to_enter: int
@@ -200,6 +194,7 @@ class ComponentInstance:
     self.store = store
     self.handles = Table()
     self.threads = Table()
+    self.resource_type_instances = dict()
     self.may_leave = True
     self.backpressure = 0
     self.num_waiting_to_enter = 0
@@ -387,7 +382,7 @@ class Thread:
 OnStart = Callable[[], list[any]]
 OnResolve = Callable[[Optional[list[any]]], None]
 OnCancel = Callable[[], None]
-FuncInst = Callable[[OnStart, OnResolve], OnCancel]
+FuncInst = Optional[Callable[[OnStart, OnResolve], OnCancel]]
 
 class Task:
   class State(Enum):
@@ -523,6 +518,7 @@ class Store:
 
   def invoke(self, f: FuncInst, on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
     assert(not self.lockdown)
+    assert(f is not None)
     self.nesting_depth += 1
     request_cancellation = f(on_start, on_resolve)
     self.nesting_depth -= 1
@@ -536,21 +532,30 @@ class Store:
   CoreFuncInst = Callable[[list[CoreValType]], list[CoreValType]]
 
   def lift(self, f: CoreFuncInst, ft: FuncType, opts: CanonicalOptions, inst: ComponentInstance) -> FuncInst:
-    def func_inst(on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
-      assert(self.nesting_depth > 0)
-      on_cancel = canon_lift(f, ft, opts, inst, on_start, on_resolve)
-      assert(self.nesting_depth > 0)
-      return on_cancel
-    return func_inst
+    if contains_missing_resource_type(inst, ft):
+      assert(ft.optional)
+      return None
+    else:
+      def func_inst(on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
+        assert(self.nesting_depth > 0)
+        on_cancel = canon_lift(f, ft, opts, inst, on_start, on_resolve)
+        assert(self.nesting_depth > 0)
+        return on_cancel
+      return func_inst
 
   def lower(self, f: FuncInst, ft: FuncType, opts: CanonicalOptions, inst: ComponentInstance) -> CoreFuncInst:
-    def core_func_inst(args: list[CoreValType]) -> list[CoreValType]:
-      assert(inst is current_instance())
-      assert(self.nesting_depth > 0)
-      flat_results = canon_lower(f, ft, opts, args)
-      assert(self.nesting_depth > 0)
-      return flat_results
-    return core_func_inst
+    if f is None:
+      assert(ft.optional)
+      return lambda _: trap()
+    else:
+      assert(not contains_missing_resource_type(inst, ft))
+      def core_func_inst(args: list[CoreValType]) -> list[CoreValType]:
+        assert(inst is current_instance())
+        assert(self.nesting_depth > 0)
+        flat_results = canon_lower(f, ft, opts, args)
+        assert(self.nesting_depth > 0)
+        return flat_results
+      return core_func_inst
 
   def tick(self):
     assert(not self.lockdown)
@@ -695,26 +700,40 @@ class Table:
 ### Resource State
 
 class ResourceHandle:
-  rt: ResourceType
+  rt_inst: ResourceTypeInstance
   rep_val: int
   own: bool
   borrow_scope: Optional[Task]
   num_lends: int
 
-  def __init__(self, rt, rep_val, own, borrow_scope = None):
-    self.rt = rt
+  def __init__(self, rt_inst, rep_val, own, borrow_scope = None):
+    self.rt_inst = rt_inst
     self.rep_val = rep_val
     self.own = own
     self.borrow_scope = borrow_scope
     self.num_lends = 0
 
-class ResourceType(Type):
+class ResourceTypeInstance:
   impl_inst: ComponentInstance
-  rep: Literal['i32', 'i64']
-  dtor: Optional[Callable]
+  dtor_inst: Optional[Callable]
 
-  def __init__(self, impl_inst, rep, dtor = None):
+  def __init__(self, impl_inst, dtor_inst = None):
     self.impl_inst = impl_inst
+    self.dtor_inst = dtor_inst
+
+@dataclass
+class OwnType(ValType):
+  rt: ResourceType
+
+@dataclass
+class BorrowType(ValType):
+  rt: ResourceType
+
+class ResourceType(Type):
+  rep: Literal['i32', 'i64']
+  dtor: Optional[int]
+
+  def __init__(self, rep, dtor = None):
     self.rep = rep
     self.dtor = dtor
 
@@ -1126,6 +1145,10 @@ def contains_borrow(t):
 def contains_async_value(t):
   return contains(t, lambda u: isinstance(u, StreamType | FutureType))
 
+def contains_missing_resource_type(inst, t):
+  return contains(t, lambda u: (isinstance(u, OwnType | BorrowType)
+                                and u.rt not in inst.resource_type_instances))
+
 def contains(t, p):
   t = despecialize(t)
   match t:
@@ -1217,7 +1240,8 @@ def alignment_borrow(cx, borrowt):
     return 4
 
 def pass_rep_not_handle(cx, borrowt):
-  return cx.inst is borrowt.rt.impl_inst and cx.direction == 'lower'
+  rt_inst = cx.inst.resource_type_instances[borrowt.rt]
+  return cx.inst is rt_inst.impl_inst and cx.direction == 'lower'
 
 ## Element Size
 
@@ -1457,7 +1481,7 @@ def unpack_flags_from_int(i, labels):
 def lift_own(cx, i, ownt):
   h = cx.inst.handles.remove(i)
   trap_if(not isinstance(h, ResourceHandle))
-  trap_if(h.rt is not ownt.rt)
+  trap_if(h.rt_inst is not cx.inst.resource_type_instances[ownt.rt])
   trap_if(h.num_lends != 0)
   trap_if(not h.own)
   return h.rep_val
@@ -1466,7 +1490,7 @@ def lift_borrow(cx, i, borrowt):
   assert(isinstance(cx.borrow_scope, Subtask))
   h = cx.inst.handles.get(i)
   trap_if(not isinstance(h, ResourceHandle))
-  trap_if(h.rt is not borrowt.rt)
+  trap_if(h.rt_inst is not cx.inst.resource_type_instances[borrowt.rt])
   cx.borrow_scope.add_lender(h)
   return h.rep_val
 
@@ -1749,7 +1773,8 @@ def store_own(cx, rep_val, ptr, ownt):
   store_int(cx, add_own(cx, rep_val, ownt), ptr, 4)
 
 def add_own(cx, rep_val, ownt):
-  h = ResourceHandle(ownt.rt, rep_val, own = True)
+  rt_inst = cx.inst.resource_type_instances[ownt.rt]
+  h = ResourceHandle(rt_inst, rep_val, own = True)
   return cx.inst.handles.add(h)
 
 def store_borrow(cx, rep_val, ptr, borrowt):
@@ -1760,7 +1785,8 @@ def store_borrow(cx, rep_val, ptr, borrowt):
 
 def add_borrow(cx, rep_val, borrowt):
   assert(isinstance(cx.borrow_scope, Task))
-  h = ResourceHandle(borrowt.rt, rep_val, own = False, borrow_scope = cx.borrow_scope)
+  rt_inst = cx.inst.resource_type_instances[borrowt.rt]
+  h = ResourceHandle(rt_inst, rep_val, own = False, borrow_scope = cx.borrow_scope)
   h.borrow_scope.num_borrows += 1
   return cx.inst.handles.add(h)
 
@@ -2271,7 +2297,9 @@ def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValT
 def canon_resource_new(rt, rep_val):
   inst = current_instance()
   trap_if(not inst.may_leave)
-  h = ResourceHandle(rt, rep_val, own = True)
+  rt_inst = inst.resource_type_instances[rt]
+  assert(inst is rt_inst.impl_inst)
+  h = ResourceHandle(rt_inst, rep_val, own = True)
   i = inst.handles.add(h)
   return [i]
 
@@ -2282,17 +2310,18 @@ def canon_resource_drop(rt, i):
   trap_if(not inst.may_leave)
   h = inst.handles.remove(i)
   trap_if(not isinstance(h, ResourceHandle))
-  trap_if(h.rt is not rt)
+  trap_if(rt not in inst.resource_type_instances)
+  trap_if(h.rt_inst is not inst.resource_type_instances[rt])
   trap_if(h.num_lends != 0)
   if h.own:
     assert(h.borrow_scope is None)
     opts = CanonicalOptions(async_ = False)
     ft = FuncType([], [], async_ = False)
-    if rt.dtor is not None:
-      dtor = lambda _: rt.dtor([h.rep_val])
+    if h.rt_inst.dtor_inst is not None:
+      dtor = lambda _: h.rt_inst.dtor_inst([h.rep_val])
     else:
       dtor = lambda _: []
-    callee = inst.store.lift(dtor, ft, opts, rt.impl_inst)
+    callee = inst.store.lift(dtor, ft, opts, h.rt_inst.impl_inst)
     caller = inst.store.lower(callee, ft, opts, inst)
     caller([])
   else:
@@ -2305,7 +2334,8 @@ def canon_resource_rep(rt, i):
   inst = current_instance()
   h = inst.handles.get(i)
   trap_if(not isinstance(h, ResourceHandle))
-  trap_if(h.rt is not rt)
+  trap_if(rt not in inst.resource_type_instances)
+  trap_if(h.rt_inst is not inst.resource_type_instances[rt])
   return [h.rep_val]
 
 ### 🔀 `canon context.get`

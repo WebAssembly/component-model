@@ -586,9 +586,13 @@ def test_handles():
 
   store = Store()
   producer_inst = ComponentInstance(store)
-  rt = ResourceType(producer_inst, 'i32', dtor) # usable in imports and exports
   inst = ComponentInstance(store)
-  rt2 = ResourceType(inst, 'i32', dtor) # only usable in exports
+  rt = ResourceType('i32') # imported by inst
+  rtinst = ResourceTypeInstance(producer_inst, dtor)
+  producer_inst.resource_type_instances[rt] = rtinst
+  inst.resource_type_instances[rt] = rtinst
+  rt2 = ResourceType('i32') # defined by inst
+  inst.resource_type_instances[rt2] = ResourceTypeInstance(inst, dtor)
   opts = mk_opts()
 
   host_ft = FuncType([
@@ -635,7 +639,7 @@ def test_handles():
     assert(inst.handles.array[h1] is None)
     assert(len(inst.handles.free) == 1)
 
-    h = (canon_resource_new(rt, 46))[0]
+    h = (canon_resource_new(rt2, 46))[0]
     assert(h == h1)
     assert(len(inst.handles.array) == 5)
     assert(inst.handles.array[h] is not None)
@@ -656,7 +660,7 @@ def test_handles():
     BorrowType(rt),
     BorrowType(rt2)
   ],[
-    OwnType(rt),
+    OwnType(rt2),
     OwnType(rt),
     OwnType(rt)
   ])
@@ -684,8 +688,11 @@ def test_handles():
 def test_i64_borrows():
   store = Store()
   impl_inst = ComponentInstance(store)
-  rt = ResourceType(impl_inst, 'i64')
   other_inst = ComponentInstance(store)
+  rt = ResourceType('i64')
+  rtinst = ResourceTypeInstance(impl_inst)
+  impl_inst.resource_type_instances[rt] = rtinst
+  other_inst.resource_type_instances[rt] = rtinst
 
   ft = FuncType([
     BorrowType(rt),
@@ -731,6 +738,30 @@ def test_i64_borrows():
       [] = canon_resource_drop(rt, h)
     return []
   lift_and_run(other_opts, other_inst, ft, core_other, on_start, lambda _: ())
+
+
+def test_optional_funcs():
+  store = Store()
+  inst = ComponentInstance(store)
+  present_rt = ResourceType('i32')
+  inst.resource_type_instances[present_rt] = ResourceTypeInstance(inst)
+  missing_rt = ResourceType('i32')
+
+  def core_never_called(args):
+    fail("should not be called")
+
+  present_ft = FuncType([ListType(OwnType(present_rt))], [])
+  assert(store.lift(core_never_called, present_ft, mk_opts(), inst) is not None)
+  missing_ft = FuncType([ListType(OwnType(missing_rt))], [], optional = True)
+  assert(store.lift(core_never_called, missing_ft, mk_opts(), inst) is None)
+  missing_ft = FuncType([], [OptionType(BorrowType(missing_rt))], optional = True)
+  assert(store.lift(core_never_called, missing_ft, mk_opts(), inst) is None)
+
+  missing_core_func = store.lower(None, missing_ft, mk_opts(), inst)
+  def core_func(args):
+    expect_fail(lambda: missing_core_func([]))
+    return []
+  lift_and_run(mk_opts(), inst, FuncType([], []), core_func, lambda:[], lambda _:())
 
 
 def test_async_to_async():
@@ -3180,6 +3211,7 @@ test_trap_propagation()
 test_cross_component_realloc()
 test_handles()
 test_i64_borrows()
+test_optional_funcs()
 test_async_to_async()
 test_async_callback()
 test_callback_interleaving()
