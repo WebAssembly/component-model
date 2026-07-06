@@ -27,6 +27,7 @@ more user-focused explanation, take a look at the
     * [Canonical built-ins](#canonical-built-ins)
       * [Resource built-ins](#resource-built-ins)
       * [Concurrency built-ins](#-concurrency-built-ins)
+      * [Optionality built-ins](#-optionality-built-ins)
       * [Error Context built-ins](#-error-context-built-ins)
   * [Value definitions](#-value-definitions)
   * [Start definitions](#-start-definitions)
@@ -69,6 +70,7 @@ subsequent WASI Developer Preview minor releases:
 * 🐘: [memory64]
 * 🗺️: the `map` type
 * 🏷️: `implements` annotations for plain-named interface imports/exports
+* ❓: `optional` imports and exports
 
 
 ## Grammar
@@ -315,6 +317,7 @@ instanceexpr   ::= (instantiate <componentidx> <instantiatearg>*)
                  | <inlineexport>*
 instantiatearg ::= (with <name> <externidx>)
                  | (with <name> (instance <inlineexport>*))
+                 | (with <name>) ❓
 name           ::= <core:name>
 inlineexport   ::= (export <externnamelit> <externidx>)
                  | (export <externnamelit> <versionsuffix> <externidx>) 🔗
@@ -368,6 +371,8 @@ the `foo` function of its child component `$C` and re-export it directly from
   (export "foo" (func $foo-alias))
 )
 ```
+
+TODO: mention `alias export` of `optional` `instance` ~~> optional X (disallow X=component for now)
 
 Additional syntactic sugar is added for allowing export aliases to be defined
 *inline* as a syntactic generalization of the `{X}sortidx` grammar rules
@@ -440,6 +445,8 @@ aliased by `$E`:
   )
 )
 ```
+
+TODO: anything interesting here when reaching out of optional scope?
 
 For `outer` aliases, there is also inline syntactic sugar, which is simply to
 use the identifier of the outer definition, resolved using normal lexical
@@ -624,9 +631,13 @@ valtype       ::= <typeidx>
 keytype       ::= bool | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64 | char | string 🗺️
 resourcetype  ::= (resource (rep i32) (dtor core-prefix(<core:funcidx>))?)
                 | (resource (rep i64) (dtor core-prefix(<core:funcidx>))?) 🐘
-functype      ::= (func async? (param <labellit> <valtype>)* (result <valtype>)?)
+functype      ::= (func <optional?> <async?> (param <labellit> <valtype>)* (result <valtype>)?)
+optional?     ::= ϵ
+                | optional ❓
+async?        ::= ϵ
+                | async 🔀
 componenttype ::= (component <componentdecl>*)
-instancetype  ::= (instance <instancedecl>*)
+instancetype  ::= (instance <optional?> <instancedecl>*)
 componentdecl ::= <importdecl>
                 | <instancedecl>
 instancedecl  ::= core-prefix(<core:type>)
@@ -643,9 +654,9 @@ externtype    ::= (<sort> (type <idx>) )
                 | (value <valuebound>) 🪙
                 | (type <typebound>)
 typebound     ::= (eq <typeidx>)
-                | (sub resource)
+                | (sub <optional?> resource)
 valuebound    ::= (eq <valueidx>) 🪙
-                | <valtype> 🪙
+                | <optional?> <valtype> 🪙
 
 where bind-id(X) parses '(' sort <id>? Y ')' when X parses '(' sort Y ')'
 ```
@@ -1315,6 +1326,12 @@ replaced by `$R` when validating the instantiations of `$c1` and `$c2`. These
 type-checking rules for instantiating type imports mirror the *elimination*
 rule of [universal types]  (∀T).
 
+TODO: if don't provide type, substitute incompatible type; prevent functions
+from being supplied...
+
+TODO: also, maybe have subtyping rule: if all fields of `instance` are
+`optional`, is a subtype of `optional` `instance` with non-optional fields
+
 Importantly, this type substitution performed by the parent is not visible to
 the child at validation- or run-time. In particular, there are no runtime
 casts that can "see through" to the original type parameter, avoiding
@@ -1575,6 +1592,7 @@ canon ::= ...
         | (canon thread.yield-then-resume cancellable? (core func <id>?)) 🧵
         | (canon thread.suspend-then-promote cancellable? (core func <id>?)) 🧵
         | (canon thread.yield-then-promote cancellable? (core func <id>?)) 🧵
+        | (canon optional.present <sortidx> (core global <id>?)) ❓
         | (canon error-context.new <canonopt>* (core func <id>?)) 📝
         | (canon error-context.debug-message <canonopt>* (core func <id>?)) 📝
         | (canon error-context.drop (core func <id>?)) 📝
@@ -2359,6 +2377,13 @@ JavaScript.
 
 For details, see [`canon_thread_available_parallelism`] in the Canonical ABI
 explainer.
+
+
+##### ❓ Optionality built-ins
+
+###### ❓ `optional.present`
+
+TODO
 
 
 ##### 📝 Error Context built-ins

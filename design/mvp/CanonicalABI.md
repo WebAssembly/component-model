@@ -68,6 +68,7 @@ specified here.
   * [`canon thread.yield-then-resume`](#-canon-threadyield-then-resume) 🧵
   * [`canon thread.suspend-then-promote`](#-canon-threadsuspend-then-promote) 🧵
   * [`canon thread.yield-then-promote`](#-canon-threadyield-then-promote) 🧵
+  * [`canon optional.present`](#-canon-optionalpresent) ❓
   * [`canon error-context.new`](#-canon-error-contextnew) 📝
   * [`canon error-context.debug-message`](#-canon-error-contextdebug-message) 📝
   * [`canon error-context.drop`](#-canon-error-contextdrop) 📝
@@ -3579,6 +3580,10 @@ validation is performed:
 * if `len(flatten_types(ft.param_types())) > MAX_FLAT_PARAMS`, `realloc` is required
 * if `len(flatten_types(ft.result_type())) > max` (where `max = MAX_FLAT_RESULTS` for sync lifts, and `max = MAX_FLAT_PARAMS` for async lifts), `memory` is required
 
+TODO: if `$ft` is optional and one of its referenced resource types is imported and
+"none", the `canon lift`ed function becomes "none"
+TODO: define some `refers_to_non_existent_resource`, `assert(not refers_to_non_existent_resource(ft))`
+
 Note that an `async`-lifted function whose result type requires a memory to lift
 (either because it contains lists or strings or because the number of flattened
 types exceeds `MAX_FLAT_PARAMS`) must include a `memory` option, and that option
@@ -3816,10 +3821,13 @@ runtime Core WebAssembly arguments.
 Based on this, `canon_lower` is defined in chunks as follows. First, like most
 Canonical ABI functions callable from Core WebAssembly, lowered imports may not
 be called during `post-return` or `realloc`:
+TODO: mention optional
 ```python
 def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValType]:
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
+  assert(ft.optional or callee is not None)
+  trap_if(callee is None)
 ```
 
 The component-level function type maps to a Core WebAssembly function type using
@@ -5108,6 +5116,19 @@ requested cancellation. `thread.yield-then-promote` (and other cancellable
 operations) will only indicate cancellation once and thus, if a caller is not
 prepared to propagate cancellation, they can omit `cancellable` so that
 cancellation is instead delivered at a later `cancellable` call.
+
+
+### ❓ `canon optional.present`
+
+For a canonical definition:
+```wat
+(canon optional.present $sortidx (core global $present))
+```
+validation specifies:
+* `$sortidx` must ... and be `optional`
+* `$present` is given type `(global i32)`
+
+TODO: describe
 
 
 ### 📝 `canon error-context.new`
