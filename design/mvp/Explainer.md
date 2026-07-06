@@ -1517,7 +1517,6 @@ canon ::= ...
         | (canon backpressure.dec (core func <id>?)) 🔀
         | (canon task.return (result <valtype>)? <canonopt>* (core func <id>?)) 🔀
         | (canon task.cancel (core func <id>?)) 🔀
-        | (canon yield cancellable? (core func <id>?)) 🔀❌ (renamed to 'thread.yield')
         | (canon waitable-set.new (core func <id>?)) 🔀
         | (canon waitable-set.wait cancellable? (memory <core:memidx>) (core func <id>?)) 🔀
         | (canon waitable-set.poll cancellable? (memory <core:memidx>) (core func <id>?)) 🔀
