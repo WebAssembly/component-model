@@ -230,9 +230,9 @@ instancedecl  ::= 0x00 t:<core:type>                      => t
                 | 0x01 t:<type>                           => t
                 | 0x02 a:<alias>                          => a
                 | 0x04 ed:<exportdecl>                    => ed
-importdecl    ::= na:<nameattributes> ed:<externdesc>     => (import na ed)
-exportdecl    ::= na:<nameattributes> ed:<externdesc>     => (export na ed)
-externdesc    ::= 0x00 0x11 i:<core:typeidx>              => (core module (type i))
+importdecl    ::= na:<nameattributes> et:<externtype>     => (import na et)
+exportdecl    ::= na:<nameattributes> et:<externtype>     => (export na et)
+externtype    ::= 0x00 0x11 i:<core:typeidx>              => (core module (type i))
                 | 0x01 i:<typeidx>                        => (func (type i))
                 | 0x02 b:<valuebound>                     => (value b) 🪙
                 | 0x03 b:<typebound>                      => (type b)
@@ -281,7 +281,7 @@ Notes:
   labels, flag labels, enum case labels, component import names, component
   export names, instance import names and instance export names must be
   [strongly-unique] in their containing scope.
-* Validation of `externdesc` requires the various `typeidx` type constructors
+* Validation of `externtype` requires the various `typeidx` type constructors
   to match the preceding `sort`.
 * (The `0x00` immediate of `case` may be reinterpreted in the future as the
   `none` case of an optional immediate.)
@@ -394,8 +394,8 @@ flags are set.
 (See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
 in the explainer.)
 ```ebnf
-import         ::= na:<nameattributes> ed:<externdesc>                  => (import na ed)
-export         ::= na:<nameattributes> si:<sortidx> ed?:<externdesc>?   => (export na si ed?)
+import         ::= na:<nameattributes> et:<externtype>                  => (import na et)
+export         ::= na:<nameattributes> si:<sortidx> et?:<externtype>?   => (export na si et?)
 nameattributes ::= 0x00 len:<u32> en:<externname>                       => "en"                 (if len = |en|)
                  | 0x01 len:<u32> en:<externname>                       => "en"                 (if len = |en|)
                  | 0x02 len:<u32> en:<externname> a*:vec(<attribute>)   => "en" a*              (if len = |en|) 🏷️/🔗
@@ -409,10 +409,10 @@ Notes:
   definition and can be used by all subsequent definitions just like an alias.
 * Validation requires that all resource types transitively used in the type of an
   export are introduced by a preceding `importdecl` or `exportdecl`.
-* Validation requires any exported `sortidx` to have a valid `externdesc`
+* Validation requires any exported `sortidx` to have a valid `externtype`
   (which disallows core sorts other than `core module`). When the optional
-  `externdesc` immediate is present, validation requires it to be a supertype
-  of the inferred `externdesc` of the `sortidx`.
+  `externtype` immediate is present, validation requires it to be a supertype
+  of the inferred `externtype` of the `sortidx`.
 * `<externname>`, `<interfacename>` and `<semversuffix>` are defined as part of
   the [text format](Explainer.md#import-and-export-definitions).
 * The redundant `0x00`/`0x01` cases of `nameattributes` will
