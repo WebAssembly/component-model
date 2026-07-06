@@ -217,13 +217,22 @@ labellit      ::= len:<u32> l:<label>                      => "l"  (if len = |l|
 valtype       ::= i:<typeidx>                              => i
                 | pvt:<primvaltype>                        => pvt
 resourcetype  ::= 0x3f t:<core:valtype> f?:<core:funcidx>? => (resource (rep t) (dtor f)?)
-functype      ::= 0x40 ps:<paramlist> rs:<resultlist>      => (func ps rs)
-                | 0x43 ps:<paramlist> rs:<resultlist>      => (func async ps rs)
+functype      ::= 0x40 pr:<paramsresult>                   => (func pr)
+                | 0x43 pr:<paramsresult>                   => (func async pr)
+                | 0x44 i*:<funcimms> pr:<paramsresult>     => (func i* pr)
+funcimms      ::= 0x00                                     =>
+                | 0x01                                     => optional
+                | 0x02                                     => async
+                | 0x03                                     => optional async
+paramsresult  ::= p*:<paramlist> r?:<result?>              => p* r?
 paramlist     ::= lt*:vec(<labelvaltype>)                  => (param lt)*
-resultlist    ::= 0x00 t:<valtype>                         => (result t)
+result?       ::= 0x00 t:<valtype>                         => (result t)
                 | 0x01 0x00                                =>
 componenttype ::= 0x41 cd*:vec(<componentdecl>)            => (component cd*)
 instancetype  ::= 0x42 id*:vec(<instancedecl>)             => (instance id*)
+                | 0x45 opt?:<opt?> id*:vec(<instancedecl>) => (instance opt? id*)
+opt?          ::= 0x00                                     =>
+                | 0x01                                     => optional
 componentdecl ::= 0x03 id:<importdecl>                     => id
                 | id:<instancedecl>                        => id
 instancedecl  ::= 0x00 t:<core:type>                       => t
@@ -240,8 +249,10 @@ externtype    ::= 0x00 0x11 i:<core:typeidx>               => (core module (type
                 | 0x05 i:<typeidx>                         => (instance (type i))
 typebound     ::= 0x00 i:<typeidx>                         => (eq i)
                 | 0x01                                     => (sub resource)
+                | 0x02 opt?:<opt?>                         => (sub opt? resource)
 valuebound    ::= 0x00 i:<valueidx>                        => (eq i) 🪙
                 | 0x01 t:<valtype>                         => t 🪙
+                | 0x02 opt?:<opt?>                         => opt? t 🪙
 ```
 Notes:
 * The type opcodes follow the same negative-SLEB128 scheme as Core WebAssembly,
@@ -301,6 +312,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x02 rt:<typeidx>                                   => (canon resource.new rt (core func))
            | 0x03 rt:<typeidx>                                   => (canon resource.drop rt (core func))
            | 0x04 rt:<typeidx>                                   => (canon resource.rep rt (core func))
+           | 0x07 si:<sortidx>                                   => (canon optional.present si (core global)) ❓
            | 0x24                                                => (canon backpressure.inc (core func)) 🔀
            | 0x25                                                => (canon backpressure.dec (core func)) 🔀
            | 0x09 rs:<resultlist> opts:<opts>                    => (canon task.return rs opts (core func)) 🔀
@@ -564,7 +576,7 @@ named once.
 
 * The opcodes (for types, canon built-ins, etc) should be re-sorted
 * The two `list` type codes should be merged into one with an optional immediate
-  and similarly for `func`.
+  and similarly for `func`, `instance` and `typebound`.
 * The redundant `0x00` and `0x01` opcodes of `nameattributes` will be merged.
 * The vestigial `0x00` in `thread.*` and `waitable-set.*` built-ins may be
   removed.

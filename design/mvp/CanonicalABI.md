@@ -40,6 +40,7 @@ specified here.
   * [`canon resource.new`](#canon-resourcenew)
   * [`canon resource.drop`](#canon-resourcedrop)
   * [`canon resource.rep`](#canon-resourcerep)
+  * [`canon optional.present`](#-canon-optionalpresent) ❓
   * [`canon context.get`](#-canon-contextget) 🔀
   * [`canon context.set`](#-canon-contextset) 🔀
   * [`canon backpressure.{inc,dec}`](#-canon-backpressureincdec) 🔀
@@ -3609,6 +3610,8 @@ along with the component instance being instantiated. These are then passed into
 `canon_lower` every time the generated `CoreFuncInst` is called, along with the
 runtime Core WebAssembly arguments.
 
+TODO: mention `ft.optional`
+
 Based on this, `canon_lower` is defined in chunks as follows. First, like most
 Canonical ABI functions callable from Core WebAssembly, lowered imports may not
 be called during `post-return` or `realloc`:
@@ -3828,6 +3831,24 @@ def canon_resource_rep(rt, i):
 ```
 Note that the "locally-defined" requirement above ensures that only the
 component instance defining a resource can access its representation.
+
+
+### ❓ `canon optional.present`
+
+For a canonical definition:
+```wat
+(canon optional.present $sortidx (core global $present))
+```
+validation specifies:
+* `$sortidx` must refer to a `(func optional ...)`, `(instance optional ...)` or
+  `(type (sub optional ...))`
+* `$present` is given type `(global i32)`
+
+The new immutable global `$present` is appended to the core global index space
+and is either `1` or `0` depending on whether the [`optional`] `$sortidx` is
+present or not, resp. Core wasm code can then import this synthesized global and
+use it to conditionalize calls to any `optional` function (which would otherwise
+trap if called).
 
 
 ### 🔀 `canon context.get`
@@ -4963,6 +4984,7 @@ def canon_thread_available_parallelism():
 [`canonopt`]: Explainer.md#canonical-definitions
 [`canon`]: Explainer.md#canonical-definitions
 [Type Definitions]: Explainer.md#type-definitions
+[`optional`]: Explainer.md#optionality
 [Component Invariant]: Explainer.md#component-invariants
 [JavaScript Embedding]: Explainer.md#JavaScript-embedding
 [ESM-integration]: Explainer.md#esm-integration

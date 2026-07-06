@@ -20,12 +20,14 @@ more user-focused explanation, take a look at the
       * [Asynchronous value types](#asynchronous-value-types)
     * [Specialized value types](#specialized-value-types)
     * [Definition types](#definition-types)
+    * [Optionality](#optionality)
     * [Declarators](#declarators)
     * [Type checking](#type-checking)
   * [Canonical definitions](#canonical-definitions)
     * [Canonical ABI](#canonical-abi)
     * [Canonical built-ins](#canonical-built-ins)
       * [Resource built-ins](#resource-built-ins)
+      * [Optionality built-ins](#-optionality-built-ins)
       * [Concurrency built-ins](#-concurrency-built-ins)
       * [Error Context built-ins](#-error-context-built-ins)
   * [Value definitions](#-value-definitions)
@@ -77,6 +79,7 @@ shipped as part of a future WASI Developer Preview release:
 * 🐘: [memory64]
 * 📡: getters and setters
 * ➡️: `stream.forward` and `future.forward` built-ins
+* ❓: `optional` imports and exports
 
 
 ## Grammar
@@ -377,6 +380,8 @@ the `foo` function of its child component `$C` and re-export it directly from
 )
 ```
 
+TODO: mention `alias export` of `optional` `instance` ~~> optional X (disallow X=component for now)
+
 Additional syntactic sugar is added for allowing export aliases to be defined
 *inline* as a syntactic generalization of the `{X}sortidx` grammar rules
 defined [above](#index-spaces) for each core- and component-level sort `X`:
@@ -452,6 +457,8 @@ aliased by `$E`:
   )
 )
 ```
+
+TODO: anything interesting here when reaching out of optional scope?
 
 For `outer` aliases, there is also inline syntactic sugar, which is simply to
 use the identifier of the outer definition, resolved using normal lexical
@@ -636,9 +643,13 @@ valtype       ::= <typeidx>
 keytype       ::= bool | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64 | char | string 🗺️
 resourcetype  ::= (resource (rep i32) (dtor core-prefix(<core:funcidx>))?)
                 | (resource (rep i64) (dtor core-prefix(<core:funcidx>))?) 🐘
-functype      ::= (func async? (param <labellit> <valtype>)* (result <valtype>)?)
+functype      ::= (func <optional?> <async?> (param <labellit> <valtype>)* (result <valtype>)?)
+optional?     ::= ϵ
+                | optional ❓
+async?        ::= ϵ
+                | async 🔀
 componenttype ::= (component <componentdecl>*)
-instancetype  ::= (instance <instancedecl>*)
+instancetype  ::= (instance <optional?> <instancedecl>*)
 componentdecl ::= <importdecl>
                 | <instancedecl>
 instancedecl  ::= core-prefix(<core:type>)
@@ -655,9 +666,9 @@ externtype    ::= (<sort> (type <idx>) )
                 | (value <valuebound>) 🪙
                 | (type <typebound>)
 typebound     ::= (eq <typeidx>)
-                | (sub resource)
+                | (sub <optional?> resource)
 valuebound    ::= (eq <valueidx>) 🪙
-                | <valtype> 🪙
+                | <optional?> <valtype> 🪙
 
 where bind-id(X) parses '(' sort <id>? Y ')' when X parses '(' sort Y ')'
 ```
@@ -913,6 +924,26 @@ Both `instance` and `component` type constructors are built from a sequence of
 declarators. The meanings of these declarators is basically the same as the
 core module declarators introduced above, but expanded to cover the additional
 capabilities of the component model.
+
+#### Optionality
+
+TODO: describe
+* `(X ...) <: (X optional ...)`
+* [`optional.test`](#-optionality-built-ins)
+* `instantiate`: you can just leave of anything that's `optional` (no `with` or `export` for it)
+* `(sub optional resource)`:
+  * any `func`, `instance` or `value` type that refers to an `optional` must itself be `optional`
+  * in `instantiate`, if a resource type is `none`, make any dependent import
+    (which must also be `optional`) disappear: you can not pass it or pass it, but it's ignored)
+* `(instance optional ...)`:
+  * destruct: `alias export` produces `optional`
+    * temporarily reject `component` inside `optional` instance
+  * construct: TODO:
+    * add new bag-o-exports `instance` deftype with target instance type...
+    * somehow express policy of which field types disable the whole instance type...
+* `(func optional ...)`:
+  * lifting+lowering produce trap-if-call if any dependent type is `none`
+
 
 #### Declarators
 
@@ -1332,6 +1363,9 @@ replaced by `$R` when validating the instantiations of `$c1` and `$c2`. These
 type-checking rules for instantiating type imports mirror the *elimination*
 rule of [universal types]  (∀T).
 
+TODO: if don't provide type, substitute incompatible type; prevent functions
+from being supplied...
+
 Importantly, this type substitution performed by the parent is not visible to
 the child at validation- or run-time. In particular, there are no runtime
 casts that can "see through" to the original type parameter, avoiding
@@ -1555,6 +1589,7 @@ canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
         | (canon resource.drop <typeidx> (core func <id>?))
         | (canon resource.rep <typeidx> (core func <id>?))
+        | (canon optional.present <sortidx> (core global <id>?)) ❓
         | (canon context.get <core:valtype> <u32> (core func <id>?)) 🔀
         | (canon context.set <core:valtype> <u32> (core func <id>?)) 🔀
         | (canon backpressure.inc (core func <id>?)) 🔀
@@ -1680,6 +1715,12 @@ component instance's table, is immediately returned by `make_R`, thereby
 transferring ownership of the newly-created resource to the export's caller.
 
 For details, see [`canon_resource_rep`] in the Canonical ABI explainer.
+
+##### ❓ Optionality built-ins
+
+###### ❓ `optional.present`
+
+TODO
 
 ##### 🔀🧵 Concurrency built-ins
 

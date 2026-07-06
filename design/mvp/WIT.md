@@ -308,6 +308,9 @@ world union-my-world {
 }
 ```
 
+TODO: add `optional` to some of the `include` examples above (unions *both* imports and exports)
+TODO: add a note that `include` does not produce subtype or supertype, but other ways to combine worlds (`meet` and `join`) could be added in the future
+
 ### De-duplication of interfaces
 
 If two worlds share an imported or exported [interface name], then the union of
@@ -338,6 +341,8 @@ world union-my-world-b {
     import b1;
 }
 ```
+
+TODO: mention merging of `optional` and non-`optional` ~~> non-`optional`
 
 ### Name Conflicts and `with`
 
@@ -435,12 +440,6 @@ world invalid-union-world {
 }
 
 ```
-
-### A Note on Subtyping
-
-In the future, when `optional` export is supported, the world author may explicitly mark exports as optional to make a component targeting an included World a subtype of the union World.
-
-For now, we are not following the subtyping rules for the `include` statement. That is, the `include` statement does not imply any subtyping relationship between the included worlds and the union world.
 
 ## WIT Packages and `use`
 [use]: #wit-packages-and-use
@@ -562,6 +561,8 @@ interface my-interface {
     use wasi:http/types.{request, response};
 }
 ```
+
+TODO: `use` resolution when only used from `optional`y-imported interfaces --> `optional`
 
 #### Top-level `use`
 
@@ -1075,6 +1076,7 @@ keyword ::= 'as'
           | 'list'
           | 'map'
           | 'option'
+          | 'optional'
           | 'own'
           | 'package'
           | 'record'
@@ -1441,10 +1443,10 @@ world-definition ::= export-item
                    | typedef-item
                    | include-item
 
-export-item ::= external-id? 'export' id ':' extern-type
-              | 'export' use-path ';'
-import-item ::= external-id? 'import' id ':' extern-type
-              | 'import' use-path ';'
+export-item ::= external-id? 'export' id ':' 'optional'? extern-type
+              | 'export' 'optional'? use-path ';'
+import-item ::= external-id? 'import' id ':' 'optional'? extern-type
+              | 'import' 'optional'? use-path ';'
 
 external-id ::= '@external-id' '(' string-literal ')' 🏷️
 
@@ -1507,6 +1509,8 @@ world my-world {
     import catalog: wasi:keyvalue/store;
 }
 ```
+
+TODO: note `optional` and what it means
 
 [`componenttype`]: Explainer.md#type-definitions
 
