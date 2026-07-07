@@ -79,7 +79,7 @@
   (component
     (import "a" (implements "a:b/c") (func))
   )
-  "only instance names can have an `implements`")
+  "only instances can have an `implements`")
 
 ;; invalid, `implements` can only be used by imports/exports named with a
 ;; plainname.
@@ -99,7 +99,7 @@
   "not a valid name")
 (assert_invalid
   (component (type (instance (export "a" (implements "a:b/c") (func)))))
-  "only instance names")
+  "only instances")
 (assert_invalid
   (component
     (instance)
