@@ -30,7 +30,7 @@
 
   (core module $m
     (import "" "thread.new-indirect" (func $thread.new-indirect (param i32 i32) (result i32)))
-    (import "" "thread.yield-to-suspended" (func $thread.yield-to-suspended (param i32) (result i32)))
+    (import "" "thread.yield-then-resume" (func $thread.yield-then-resume (param i32) (result i32)))
     (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
     (import "" "waitable.join" (func $waitable.join (param i32 i32)))
     (import "" "subtask.cancel-sync" (func $subtask.cancel-sync (param i32) (result i32)))
@@ -64,7 +64,7 @@
       (i32.wrap_i64 (i64.shr_u (call $stream.new) (i64.const 32)))
     )
     (func $spawn-and-yield (param $idx i32) (param $arg i32)
-      (drop (call $thread.yield-to-suspended
+      (drop (call $thread.yield-then-resume
               (call $thread.new-indirect (local.get $idx) (local.get $arg))))
     )
     (func $assert-blocked (param $ret i32)
@@ -197,7 +197,7 @@
   (alias core export $memTable "ftbl" (core table $ftbl))
 
   (core func $thread.new-indirect (canon thread.new-indirect $start-func-ty (table $ftbl)))
-  (core func $thread.yield-to-suspended (canon thread.yield-to-suspended))
+  (core func $thread.yield-then-resume (canon thread.yield-then-resume))
   (core func $waitable-set.new (canon waitable-set.new))
   (core func $waitable.join (canon waitable.join))
   (core func $subtask.cancel-sync (canon subtask.cancel))
@@ -222,7 +222,7 @@
   (core instance $m (instantiate $m
     (with "" (instance
       (export "thread.new-indirect" (func $thread.new-indirect))
-      (export "thread.yield-to-suspended" (func $thread.yield-to-suspended))
+      (export "thread.yield-then-resume" (func $thread.yield-then-resume))
       (export "waitable-set.new" (func $waitable-set.new))
       (export "waitable.join" (func $waitable.join))
       (export "subtask.cancel-sync" (func $subtask.cancel-sync))

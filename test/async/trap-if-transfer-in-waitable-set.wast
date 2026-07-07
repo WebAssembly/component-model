@@ -46,6 +46,6 @@
 )
 
 (component instance $i1 $Tester)
-(assert_trap (invoke "return-future-in-set") "cannot lift future in a waitable set")
+(assert_trap (invoke "return-future-in-set") "cannot lift future while it's in a waitable set")
 (component instance $i2 $Tester)
-(assert_trap (invoke "return-stream-in-set") "cannot lift stream in a waitable set")
+(assert_trap (invoke "return-stream-in-set") "cannot lift stream while it's in a waitable set")

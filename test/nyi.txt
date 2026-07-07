@@ -2,4 +2,4 @@
 ./wasm-tools/memory64.wast
 ./wasm-tools/resources.wast
 ./async/trap-if-sync-and-waitable-set.wast
-./async/trap-if-transfer-in-waitable-set.wast
+./validation/implements.wast
