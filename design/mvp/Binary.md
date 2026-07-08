@@ -87,7 +87,7 @@ sort                ::= 0x00 cs:<core:sort>                                => co
                       | 0x03                                               => type
                       | 0x04                                               => component
                       | 0x05                                               => instance
-inlineexport        ::= n:<exportname'> si:<sortidx>                       => (export n si)
+inlineexport        ::= na:<nameattributes> si:<sortidx>                   => (export na si)
 ```
 Notes:
 * Reused Core binary rules: [`core:name`], (variable-length encoded) [`core:u32`]
@@ -101,8 +101,8 @@ Notes:
   for aliases (below).
 * Validation of `core:instantiatearg` initially only allows the `instance`
   sort, but would be extended to accept other sorts as core wasm is extended.
-* Validation of `instantiate` requires each `<importname>` in `c` to match a
-  `name` in a `with` argument (compared as strings) and for the types to
+* Validation of `instantiate` requires each `<externname>` in `c` to match a
+  `name` in a `with` argument (using plain string equality) and for the types to
   match.
 * When validating `instantiate`, after each individual type-import is supplied
   via `with`, the actual type supplied is immediately substituted for all uses
@@ -200,8 +200,8 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x70 t:<valtype>                        => (list t)
                 | 0x67 t:<valtype> len:<u32>              => (list t len)  (if len > 0) 🔧
                 | 0x6f t*:vec(<valtype>)                  => (tuple t+)    (if |t*| > 0)
-                | 0x6e l*:vec(<label'>)                   => (flags l+)    (if 0 < |l*| <= 32)
-                | 0x6d l*:vec(<label'>)                   => (enum l+)     (if |l*| > 0)
+                | 0x6e l*:vec(<labellit>)                 => (flags l+)    (if 0 < |l*| <= 32)
+                | 0x6d l*:vec(<labellit>)                 => (enum l+)     (if |l*| > 0)
                 | 0x6b t:<valtype>                        => (option t)
                 | 0x6a t?:<valtype>? u?:<valtype>?        => (result t? (error u)?)
                 | 0x69 i:<typeidx>                        => (own i)
@@ -209,9 +209,9 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x66 t?:<valtype>?                      => (stream t?) 🔀
                 | 0x65 t?:<valtype>?                      => (future t?) 🔀
                 | 0x63 k:<valtype> v:<valtype>            => (map k v) (if k is in <keytype>) 🗺️
-labelvaltype  ::= l:<label'> t:<valtype>                  => l t
-case          ::= l:<label'> t?:<valtype>? 0x00           => (case l t?)
-label'        ::= len:<u32> l:<label>                     => l    (if len = |l|)
+labelvaltype  ::= l:<labellit> t:<valtype>                => l t
+case          ::= l:<labellit> t?:<valtype>? 0x00         => (case l t?)
+labellit      ::= len:<u32> l:<label>                     => "l"  (if len = |l|)
 <T>?          ::= 0x00                                    =>
                 | 0x01 t:<T>                              => t
 valtype       ::= i:<typeidx>                             => i
@@ -230,8 +230,8 @@ instancedecl  ::= 0x00 t:<core:type>                      => t
                 | 0x01 t:<type>                           => t
                 | 0x02 a:<alias>                          => a
                 | 0x04 ed:<exportdecl>                    => ed
-importdecl    ::= in:<importname'> ed:<externdesc>        => (import in ed)
-exportdecl    ::= en:<exportname'> ed:<externdesc>        => (export en ed)
+importdecl    ::= na:<nameattributes> ed:<externdesc>     => (import na ed)
+exportdecl    ::= na:<nameattributes> ed:<externdesc>     => (export na ed)
 externdesc    ::= 0x00 0x11 i:<core:typeidx>              => (core module (type i))
                 | 0x01 i:<typeidx>                        => (func (type i))
                 | 0x02 b:<valuebound>                     => (value b) 🪙
@@ -273,8 +273,10 @@ Notes:
   index spaces. (Note: *subsequent* aliases can introduce new type indices
   equivalent to this fresh type.)
 * Validation rejects `resourcetype` type definitions inside `componenttype` and
-  `instancettype`. Thus, handle types inside a `componenttype` can only refer
+  `instancetype`. Thus, handle types inside a `componenttype` can only refer
   to resource types that are imported or exported.
+* `<label>` is defined as part of the
+   [text format](Explainer.md#import-and-export-definitions).
 * All parameter labels, result labels, record field labels, variant case
   labels, flag labels, enum case labels, component import names, component
   export names, instance import names and instance export names must be
@@ -392,16 +394,14 @@ flags are set.
 (See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
 in the explainer.)
 ```ebnf
-import         ::= in:<importname'> ed:<externdesc>                     => (import in ed)
-export         ::= en:<exportname'> si:<sortidx> ed?:<externdesc>?      => (export en si ed?)
-importname'    ::= 0x00 len:<u32> in:<importname>                       => in      (if len = |in|)
-                 | 0x01 len:<u32> in:<importname>                       => in      (if len = |in|)
-                 | 0x02 len:<u32> in:<importname> opts:vec(<nameopt>)   => in opts (if len = |in|) 🏷️/🔗
-exportname'    ::= 0x00 len:<u32> in:<exportname>                       => in      (if len = |in|)
-                 | 0x01 len:<u32> in:<exportname>                       => in      (if len = |in|)
-                 | 0x02 len:<u32> in:<importname> opts:vec(<nameopt>)   => in opts (if len = |in|) 🏷️/🔗
-nameopt        ::= 0x00 len:<u32> n:<interfacename>                     => (implements i) 🏷️
-                 | 0x01 len:<u32> vs:<semversuffix>                     => (versionsuffix vs) 🔗
+import         ::= na:<nameattributes> ed:<externdesc>                  => (import na ed)
+export         ::= na:<nameattributes> si:<sortidx> ed?:<externdesc>?   => (export na si ed?)
+nameattributes ::= 0x00 len:<u32> en:<externname>                       => "en"                 (if len = |en|)
+                 | 0x01 len:<u32> en:<externname>                       => "en"                 (if len = |en|)
+                 | 0x02 len:<u32> en:<externname> a*:vec(<attribute>)   => "en" a*              (if len = |en|) 🏷️/🔗
+attribute      ::= 0x00 len:<u32> in:<interfacename>                    => (implements "in")    (if len = |in|) 🏷️
+                 | 0x01 len:<u32> vs:<semversuffix>                     => (versionsuffix "vs") (if len = |vs|) 🔗
+                 | 0x02 n:<name>                                        => (external-id n) 🏷️
 ```
 
 Notes:
@@ -413,21 +413,26 @@ Notes:
   (which disallows core sorts other than `core module`). When the optional
   `externdesc` immediate is present, validation requires it to be a supertype
   of the inferred `externdesc` of the `sortidx`.
-* `<importname>` and `<exportname>` refer to the productions defined in the
-  [text format](Explainer.md#import-and-export-definitions).
-* `<importname'>` and `<exportname'>` will [be cleaned up for a 1.0
-  release](##binary-format-warts-to-fix-in-a-10-release).
-* The `<importname>`s of a component must all be [strongly-unique]. Separately,
-  the `<exportname>`s of a component must also all be [strongly-unique].
+* `<externname>`, `<interfacename>` and `<semversuffix>` are defined as part of
+  the [text format](Explainer.md#import-and-export-definitions).
+* The redundant `0x00`/`0x01` cases of `nameattributes` will
+  [be cleaned up for a 1.0 release](#binary-format-warts-to-fix-in-a-10-release).
+* The `externname`s of all imports in a given component or component-type must
+  be [strongly-unique]; attributes are ignored.
+* The `externname`s of all exports in a given component, instance, component-
+  type or instance-type must be [strongly-unique]; attributes are ignored.
 * Validation requires that `[constructor]`, `[method]` and `[static]` annotated
   `plainname`s only occur on `func` imports or exports and that the first label
   of a `[constructor]`, `[method]` or `[static]` matches the `plainname` of a
   preceding `resource` import or export, respectively, in the same scope
   (component, component type or instance type).
 * 🏷️ Validation requires that `implements`-annotated imports or exports are
-  `instance`-typed.
-* 🏷️ Validation requires that `implements`-annotated imports or exports have a
-  `<plainname>` name.
+  `instance`-typed and have a `plainname` name.
+* 🏷️/🔗 Validation requires that a `vec(<attribute>)` contains each kind of
+  `attribute` at most once.
+* 🏷️/🔗 Even though `componenttype` and `instancetype` structurally contain a
+  `vec(<attribute>)`, this list is entirely ignored when validating the types
+  of components and instances.
 * Validation of `[constructor]` names requires a `func` type whose result type
   is either `(own $R)` or `(result (own $R) E?)` where `$R` is a resource type
   labeled `r`.
@@ -438,8 +443,6 @@ Notes:
   the `versionsuffix` results in a `valid semver` as defined by
   [https://semver.org](https://semver.org/). A `versionsuffix` is otherwise
   ignored for validation except to improve diagnostic messages.
-* `<integrity-metadata>` is as defined by the
-  [SRI](https://www.w3.org/TR/SRI/#dfn-integrity-metadata) spec.
 
 ## 🪙 Value Definitions
 
@@ -531,12 +534,9 @@ named once.
 ## Binary Format Warts to Fix in a 1.0 Release
 
 * The opcodes (for types, canon built-ins, etc) should be re-sorted
-* The two `depname` cases should be merged into one (`dep=<...>`)
 * The two `list` type codes should be merged into one with an optional immediate
   and similarly for `func`.
-* The `0x00` and `0x01` variant of `importname'` and `exportname'` will be
-  removed. Any remaining variant(s) will be renumbered or the prefix byte will
-  be removed or repurposed.
+* The redundant `0x00` and `0x01` opcodes of `nameattributes` will be merged.
 * Most built-ins should have a `<canonopt>*` immediate instead of an ad hoc
   subset of `canonopt`s.
 * Add optional `shared` immediate to all canonical definitions (explicitly or
