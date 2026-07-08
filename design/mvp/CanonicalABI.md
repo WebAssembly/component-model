@@ -1542,6 +1542,7 @@ class Subtask(Waitable):
   on_cancel: Optional[OnCancel]
   lenders: Optional[list[ResourceHandle]]
   cancellation_requested: bool
+  flat_results: list[CoreValType]
 
   def __init__(self):
     Waitable.__init__(self)
@@ -1549,6 +1550,7 @@ class Subtask(Waitable):
     self.on_cancel = None
     self.lenders = []
     self.cancellation_requested = False
+    self.flat_results = []
 ```
 
 The `state` field of `Subtask` tracks the callee's progression from the initial
@@ -1581,6 +1583,13 @@ that were initially incremented.
     assert(not self.resolve_delivered() and not self.resolved())
     lending_handle.num_lends += 1
     self.lenders.append(lending_handle)
+
+  def resolve(self, state, flat_results):
+    assert(state == Subtask.State.RETURNED or flat_results == [])
+    assert(not self.resolved())
+    self.state = state
+    self.flat_results = flat_results
+    assert(self.resolved())
 
   def deliver_resolve(self):
     assert(not self.resolve_delivered() and self.resolved())
@@ -3804,23 +3813,19 @@ along with the component instance being instantiated. These are then passed into
 `canon_lower` every time the generated `CoreFuncInst` is called, along with the
 runtime Core WebAssembly arguments.
 
-Based on this, `canon_lower` is defined in chunks as follows. First, each call
-to `canon_lower` creates a new `Subtask`. However, this `Subtask` is only added
-to the current component instance's `handles` table (below) if `async` is
-specified *and* `callee` blocks. In any case, this `Subtask` is used as the
-`LiftLowerContext.borrow_scope` for `borrow` arguments, ensuring that owned
-handles are not dropped before `Subtask.deliver_resolve` is called (below).
+Based on this, `canon_lower` is defined in chunks as follows. First, like most
+Canonical ABI functions callable from Core WebAssembly, lowered imports may not
+be called during `post-return` or `realloc`:
 ```python
 def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValType]:
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  subtask = Subtask()
-  cx = LiftLowerContext(opts, thread.task.inst, subtask)
 ```
 
-The next chunk makes the call to `callee` using the `opts` immediates of the
-`canon lower` definition to configure `lift_flat_values` and `lower_flat_values`
-(both defined above) and the current instance as the `caller`.
+The component-level function type maps to a Core WebAssembly function type using
+different flattening constants based on whether the sync or async ABI is used.
+The values of `max_flat_{params,results}` mirror the flattening logic in
+`flatten_functype` above:
 ```python
   flat_ft = flatten_functype(opts, ft, 'lower')
   assert(types_match_values(flat_ft.params, flat_args))
@@ -3832,44 +3837,51 @@ The next chunk makes the call to `callee` using the `opts` immediates of the
   else:
     max_flat_params = MAX_FLAT_ASYNC_PARAMS
     max_flat_results = 0
+```
 
-  on_progress = lambda:()
-  flat_results = None
+Next, the call is officially started by calling `callee` with the required
+`OnStart` and `OnResolve` callbacks (described above) that lift arguments and
+lower results if not cancelled. The `maybe_on_progress` callback starts as a
+no-op but is switched to `on_progress` (defined below) in the `async` case if
+`callee` [blocks], so that progress updates are asynchronously delivered to the
+caller.
+```python
+  subtask = Subtask()
+  cx = LiftLowerContext(opts, thread.task.inst, subtask)
+  maybe_on_progress = lambda:()
 
   def on_start():
-    on_progress()
+    maybe_on_progress()
     assert(subtask.state == Subtask.State.STARTING)
     subtask.state = Subtask.State.STARTED
     return lift_flat_values(cx, max_flat_params, flat_args, ft.param_types())
 
   def on_resolve(result):
-    on_progress()
+    maybe_on_progress()
     if result is None:
       assert(subtask.cancellation_requested)
       if subtask.state == Subtask.State.STARTING:
-        subtask.state = Subtask.State.CANCELLED_BEFORE_STARTED
+        subtask.resolve(Subtask.State.CANCELLED_BEFORE_STARTED, [])
       else:
         assert(subtask.state == Subtask.State.STARTED)
-        subtask.state = Subtask.State.CANCELLED_BEFORE_RETURNED
+        subtask.resolve(Subtask.State.CANCELLED_BEFORE_RETURNED, [])
     else:
       assert(subtask.state == Subtask.State.STARTED)
-      subtask.state = Subtask.State.RETURNED
-      nonlocal flat_results
       flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
+      subtask.resolve(Subtask.State.RETURNED, flat_results)
 
   subtask.on_cancel = callee(on_start, on_resolve, caller = thread.task.inst)
   assert(ft.async_ or subtask.state == Subtask.State.RETURNED)
 ```
-The `Subtask.state` field is updated by the callbacks to keep track of the
-call progress. The `on_progress` variable starts as a no-op, but is used by the
-`async` case below to trigger event delivery.
+According to the `FuncInst` calling contract, if `callee` [blocks], it must
+immediately return an `OnCancel` callback which the code above stores in the
+`Subtask` to enable subsequent requests for cancellation. As asserted above, if
+the `callee`'s function type does not declare the `async` effect, `callee` must
+not block before returning a value.
 
-According to the `FuncInst` calling contract, the call to `callee` should never
-"block" (i.e., wait on I/O). If the `callee` *would* block, it will instead
-return an `OnCancel` callback which is stored in the `Subtask` (so that it can
-be used to request cancellation in the future). Furthermore, if the function
-type does not have the `async` effect, the function *must* have returned a
-value.
+Note that, for component-to-component calls, the `caller` of the `FuncInst` is
+the current component instance. This information is used by `may_enter_from` to
+determine when to trap because `callee` is being synchronously reentered.
 
 In the synchronous case (when the `async` `canonopt` is not set), if the
 `callee` blocked before calling `on_resolve`, the synchronous caller's thread
@@ -3885,9 +3897,9 @@ use a plain synchronous function call instead, as expected.
   if not opts.async_:
     if not subtask.resolved():
       thread.wait_until(subtask.resolved)
-    assert(types_match_values(flat_ft.results, flat_results))
     subtask.deliver_resolve()
-    return flat_results
+    assert(types_match_values(flat_ft.results, subtask.flat_results))
+    return subtask.flat_results
 ```
 The call to `Subtask.deliver_resolve` decrements the counters on handles that
 were lent for `borrow`ed parameters during the call. These counters are
@@ -3906,8 +3918,8 @@ reserved.
 ```python
   else:
     if subtask.resolved():
-      assert(flat_results == [])
       subtask.deliver_resolve()
+      assert(subtask.flat_results == [])
       return [Subtask.State.RETURNED]
     else:
       subtaski = thread.task.inst.handles.add(subtask)
@@ -3917,20 +3929,21 @@ reserved.
             subtask.deliver_resolve()
           return (EventCode.SUBTASK, subtaski, subtask.state)
         subtask.set_pending_event(subtask_event)
+      maybe_on_progress = on_progress
       assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
       assert(0 <= subtask.state < 2**4)
       return [subtask.state | (subtaski << 4)]
 ```
 When `on_start` and `on_resolve` are called after this initial `async`-lowered
-call returns, the `on_progress` callback (called by `on_start` and `on_resolve`)
-will set a pending event on the `Subtask` (which derives `Waitable`) so that it
-can be waited on via `waitable-set.{wait,poll}` or, if a `callback` is used, by
-returning to the event loop. If `on_start` is called followed by `on_resolve`
-before core wasm receives the first event, core wasm will only receive the
-second event, not two events. Note `Subtask.drop` prevents (via trap) a
-`Subtask` from being dropped before `on_resolve` is called and the event is
-delivered to core wasm to ensure that `Subtask.deliver_resolve` always performs
-its lend-count accounting.
+call returns, the `on_progress` callback (called by `on_start` and `on_resolve`
+above) will set a pending event on the `Subtask` (which derives `Waitable`) so
+that it can be waited on via `waitable-set.{wait,poll}` or, if a `callback` is
+used, by returning to the event loop. If `on_start` is called followed by
+`on_resolve` before core wasm receives the first event, core wasm will only
+receive the second event, not two events. Note `Subtask.drop` prevents (via
+trap) a `Subtask` from being dropped before `on_resolve` is called and the event
+is delivered to core wasm to ensure that `Subtask.deliver_resolve` always
+performs its lend-count accounting.
 
 
 ### `canon resource.new`

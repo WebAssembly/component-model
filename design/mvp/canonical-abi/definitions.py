@@ -850,6 +850,7 @@ class Subtask(Waitable):
   on_cancel: Optional[OnCancel]
   lenders: Optional[list[ResourceHandle]]
   cancellation_requested: bool
+  flat_results: list[CoreValType]
 
   def __init__(self):
     Waitable.__init__(self)
@@ -857,6 +858,7 @@ class Subtask(Waitable):
     self.on_cancel = None
     self.lenders = []
     self.cancellation_requested = False
+    self.flat_results = []
 
   def resolved(self):
     match self.state:
@@ -872,6 +874,13 @@ class Subtask(Waitable):
     assert(not self.resolve_delivered() and not self.resolved())
     lending_handle.num_lends += 1
     self.lenders.append(lending_handle)
+
+  def resolve(self, state, flat_results):
+    assert(state == Subtask.State.RETURNED or flat_results == [])
+    assert(not self.resolved())
+    self.state = state
+    self.flat_results = flat_results
+    assert(self.resolved())
 
   def deliver_resolve(self):
     assert(not self.resolve_delivered() and self.resolved())
@@ -2216,8 +2225,6 @@ def call_and_trap_on_throw(callee, args):
 def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValType]:
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  subtask = Subtask()
-  cx = LiftLowerContext(opts, thread.task.inst, subtask)
 
   flat_ft = flatten_functype(opts, ft, 'lower')
   assert(types_match_values(flat_ft.params, flat_args))
@@ -2230,29 +2237,29 @@ def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValT
     max_flat_params = MAX_FLAT_ASYNC_PARAMS
     max_flat_results = 0
 
-  on_progress = lambda:()
-  flat_results = None
+  subtask = Subtask()
+  cx = LiftLowerContext(opts, thread.task.inst, subtask)
+  maybe_on_progress = lambda:()
 
   def on_start():
-    on_progress()
+    maybe_on_progress()
     assert(subtask.state == Subtask.State.STARTING)
     subtask.state = Subtask.State.STARTED
     return lift_flat_values(cx, max_flat_params, flat_args, ft.param_types())
 
   def on_resolve(result):
-    on_progress()
+    maybe_on_progress()
     if result is None:
       assert(subtask.cancellation_requested)
       if subtask.state == Subtask.State.STARTING:
-        subtask.state = Subtask.State.CANCELLED_BEFORE_STARTED
+        subtask.resolve(Subtask.State.CANCELLED_BEFORE_STARTED, [])
       else:
         assert(subtask.state == Subtask.State.STARTED)
-        subtask.state = Subtask.State.CANCELLED_BEFORE_RETURNED
+        subtask.resolve(Subtask.State.CANCELLED_BEFORE_RETURNED, [])
     else:
       assert(subtask.state == Subtask.State.STARTED)
-      subtask.state = Subtask.State.RETURNED
-      nonlocal flat_results
       flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
+      subtask.resolve(Subtask.State.RETURNED, flat_results)
 
   subtask.on_cancel = callee(on_start, on_resolve, caller = thread.task.inst)
   assert(ft.async_ or subtask.state == Subtask.State.RETURNED)
@@ -2260,13 +2267,13 @@ def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValT
   if not opts.async_:
     if not subtask.resolved():
       thread.wait_until(subtask.resolved)
-    assert(types_match_values(flat_ft.results, flat_results))
     subtask.deliver_resolve()
-    return flat_results
+    assert(types_match_values(flat_ft.results, subtask.flat_results))
+    return subtask.flat_results
   else:
     if subtask.resolved():
-      assert(flat_results == [])
       subtask.deliver_resolve()
+      assert(subtask.flat_results == [])
       return [Subtask.State.RETURNED]
     else:
       subtaski = thread.task.inst.handles.add(subtask)
@@ -2276,6 +2283,7 @@ def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValT
             subtask.deliver_resolve()
           return (EventCode.SUBTASK, subtaski, subtask.state)
         subtask.set_pending_event(subtask_event)
+      maybe_on_progress = on_progress
       assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
       assert(0 <= subtask.state < 2**4)
       return [subtask.state | (subtaski << 4)]
