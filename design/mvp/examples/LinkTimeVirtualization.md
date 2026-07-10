@@ -1,5 +1,8 @@
 # Link-time Virtualization
 
+(Note: see `test/linking/link-time-virtualization.wast` for a fleshed-out
+working WAST test based on the example snippets in this file.)
+
 The idea with **link-time virtualization** use cases is to take the static
 dependency graph on the left (where all 3 components import the
 `wasi:filesystem/types` interface) and produce the runtime instance graph on

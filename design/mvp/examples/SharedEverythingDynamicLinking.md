@@ -1,5 +1,8 @@
 # Shared-Everything Dynamic Linking
 
+(Note: see `test/linking/shared-everything-dynamic-linking.wast` for a
+fleshed-out working WAST test based on the example snippets in this file.)
+
 *Shared-everything dynamic linking* refers to the ability to create a component
 out of multiple Core WebAssembly modules so that common modules can be shared
 with other components. This provides an alternative to *static linking* which
