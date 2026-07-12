@@ -155,6 +155,7 @@ explicitly mark where a `core` token might be required. The exception in
 `core-prefix` for `<idx>` means that, for example, `core-prefix(<core:funcidx>)`
 accepts both `(core func $foo)` and plain `$foo`.
 
+
 ### Component Definitions
 
 At the top-level, a `component` is a sequence of definitions of various kinds:
@@ -173,10 +174,38 @@ definition ::= core-prefix(<core:module>)
              | <export>
              | <value> 🪙
 ```
-Components are like Core WebAssembly modules in that their contained
-definitions are acyclic: definitions can only refer to preceding definitions
-(in the AST, text format and binary format). However, unlike modules,
-components can arbitrarily interleave different kinds of definitions.
+
+As suggested by this grammar, unlike in Core WebAssembly modules, component
+`definition`s can be in any order and a single kind of `definition` can appear
+multiple times, interleaved with other kinds of `definition`s. Moreover, the
+order of `definition`s in the text format is significant and, unlike Core
+WebAssembly, `definition`s are not reordered and grouped by the text format.
+Furthermore, component `definition`s are strictly *acyclic*, such that a given
+`definition` (in the text or binary format) can only refer to identifiers or
+indices introduced by preceding definitions. Based on this, while the following
+two core modules are both valid and equivalent (with the first being "desugared"
+into the second):
+```wat
+(module
+  (import "" "f" (func (type $FT)))
+  (type $FT (func))
+)
+(module
+  (type (func))
+  (import "" "f" (func (type 0)))
+)
+```
+only the latter component is valid:
+```wat
+;;(component
+;;  (import "f" (func (type $FT))) ❌ $FT not defined
+;;  (type $FT (func))
+;;)
+(component
+  (type $FT (func))
+  (import "f" (func (type $FT)))
+)
+```
 
 As defined in the previous section, `core-prefix(<X>)` adds a `core` token after
 the leftmost parenthesis of `<X>` and so, e.g., `core-prefix(<core:module>)`
