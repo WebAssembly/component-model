@@ -42,7 +42,7 @@
   (core instance (instantiate $B (with "" (instance (export "" (table $m))))))
 )
 
-(component
+(component definition
   (import "x" (func $x (param "x" string)))
   (core module $A
     (memory (export "m") i64 1)
