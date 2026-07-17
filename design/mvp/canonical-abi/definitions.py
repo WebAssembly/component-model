@@ -1205,6 +1205,19 @@ def contains(t, p):
     case _:
       assert(False)
 
+def contains_direct_list(t):
+  dt = despecialize(t)
+  if isinstance(dt, ListType) and dt.l is not None:
+    return True
+  if isinstance(dt, RecordType):
+    return any(contains_direct_list(f.t) for f in dt.fields)
+  if isinstance(dt, VariantType):
+    return any(contains_direct_list(c.t) for c in dt.cases if c.t is not None)
+  return False
+
+def type_has_direct_list_result(ts):
+  return any(contains_direct_list(t) for t in ts)
+
 
 ## Alignment
 
@@ -1228,11 +1241,11 @@ def alignment(t, ptr_type):
     case StreamType() | FutureType() : return 4
 
 def alignment_list(elem_type, maybe_length, maybe_variable, ptr_type):
-  if maybe_length is not None:
-    if maybe_variable:
-      return max(alignment(varint_type(maybe_length), ptr_type), alignment(elem_type, ptr_type))
-    return alignment(elem_type, ptr_type)
-  return ptr_size(ptr_type)
+  if maybe_length is None:
+    return ptr_size(ptr_type)
+  if maybe_variable:
+    return max(alignment(varint_type(maybe_length), ptr_type), alignment(elem_type, ptr_type))
+  return alignment(elem_type, ptr_type)
 
 def alignment_record(fields, ptr_type):
   a = 1
@@ -1244,8 +1257,7 @@ def alignment_variant(cases, ptr_type):
   return max(alignment(discriminant_type(cases), ptr_type), max_case_alignment(cases, ptr_type))
 
 def discriminant_type(cases):
-  n = len(cases)
-  return varint_type(n)
+  return varint_type(len(cases))
 
 def varint_type(maxval):
   assert(0 < maxval < (1 << 32))
@@ -1291,13 +1303,13 @@ def elem_size(t, ptr_type):
     case StreamType() | FutureType() : return 4
 
 def elem_size_list(elem_type, maybe_length, maybe_variable, ptr_type):
-  if maybe_length is not None:
-    if maybe_variable:
-      s = elem_size(varint_type(maybe_length), ptr_type)
-      s = align_to(s, alignment(elem_type, ptr_type))
-      return s + maybe_length * elem_size(elem_type, ptr_type)
-    return maybe_length * elem_size(elem_type, ptr_type)
-  return 2 * ptr_size(ptr_type)
+  if maybe_length is None:
+    return 2 * ptr_size(ptr_type)
+  if maybe_variable:
+    s = elem_size(varint_type(maybe_length), ptr_type)
+    s = align_to(s, alignment(elem_type, ptr_type))
+    return s + maybe_length * elem_size(elem_type, ptr_type)
+  return maybe_length * elem_size(elem_type, ptr_type)
 
 def elem_size_record(fields, ptr_type):
   s = 0
@@ -1450,18 +1462,19 @@ MAX_LIST_BYTE_LENGTH = (1 << 28) - 1
 assert(REALLOC_I32_MAX > 2 * MAX_LIST_BYTE_LENGTH)
 
 def load_list(cx, ptr, elem_type, maybe_length, maybe_variable):
-  if maybe_length is not None:
+  if maybe_length is None:
+    begin = load_int(cx, ptr, cx.opts.memory.ptr_size())
+    length = load_int(cx, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
+  else:
     if maybe_variable:
       lentype = varint_type(maybe_length)
-      actual_length = load_int(cx, ptr, elem_size(lentype, cx.opts.memory.ptr_type()))
-      trap_if(actual_length > maybe_length)
-      ptr += elem_size(lentype, cx.opts.memory.ptr_type())
-      ptr = align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type()))
+      length = load_int(cx, ptr, elem_size(lentype, cx.opts.memory.ptr_type()))
+      trap_if(length > maybe_length)
+      begin = ptr + elem_size(lentype, cx.opts.memory.ptr_type())
+      begin = align_to(begin, alignment(elem_type, cx.opts.memory.ptr_type()))
     else:
-      actual_length = maybe_length
-    return load_list_from_range(cx, ptr, actual_length, elem_type)
-  begin = load_int(cx, ptr, cx.opts.memory.ptr_size())
-  length = load_int(cx, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
+      begin = ptr
+      length = maybe_length
   return load_list_from_range(cx, begin, length, elem_type)
 
 def load_list_from_range(cx, ptr, length, elem_type):
@@ -1759,28 +1772,25 @@ def lower_error_context(cx, v):
   return cx.inst.handles.add(v)
 
 def store_list(cx, v, ptr, elem_type, maybe_length, maybe_variable):
-  if maybe_length is not None:
-    if maybe_variable:
-      assert(len(v) <= maybe_length)
-      lentype = varint_type(maybe_length)
-      store_int(cx, len(v), ptr, elem_size(lentype, cx.opts.memory.ptr_type()))
-      ptr += elem_size(lentype, cx.opts.memory.ptr_type())
-      ptr = align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type()))
-    else:
-      assert(len(v) == maybe_length)
-    store_ptr = ptr
-  else:
-    store_ptr = None
-  begin, length = store_list_into_range(cx, v, elem_type, store_ptr)
   if maybe_length is None:
+    begin, length = store_list_into_range(cx, v, elem_type)
     store_int(cx, begin, ptr, cx.opts.memory.ptr_size())
     store_int(cx, length, ptr + cx.opts.memory.ptr_size(), cx.opts.memory.ptr_size())
+    return
+  assert(len(v) <= maybe_length if maybe_variable else len(v) == maybe_length)
+  if maybe_variable:
+    lentype = varint_type(maybe_length)
+    store_int(cx, len(v), ptr, elem_size(lentype, cx.opts.memory.ptr_type()))
+    begin = ptr + elem_size(lentype, cx.opts.memory.ptr_type())
+    begin = align_to(begin, alignment(elem_type, cx.opts.memory.ptr_type()))
+  else:
+    begin = ptr
+  store_list_into_valid_range(cx, v, begin, elem_type)
 
-def store_list_into_range(cx, v, elem_type, ptr):
+def store_list_into_range(cx, v, elem_type):
   byte_length = len(v) * elem_size(elem_type, cx.opts.memory.ptr_type())
-  if ptr is None:
-    assert(byte_length <= REALLOC_I32_MAX)
-    ptr = cx.opts.realloc(0, 0, alignment(elem_type, cx.opts.memory.ptr_type()), byte_length)
+  assert(byte_length <= REALLOC_I32_MAX)
+  ptr = cx.opts.realloc(0, 0, alignment(elem_type, cx.opts.memory.ptr_type()), byte_length)
   trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type())))
   trap_if(ptr + byte_length > len(cx.opts.memory))
   store_list_into_valid_range(cx, v, ptr, elem_type)
@@ -1855,33 +1865,31 @@ MAX_FLAT_RESULTS = 1
 def flatten_functype(opts, ft, context):
   flat_params = flatten_types(ft.param_types(), opts)
   flat_results = flatten_types(ft.result_type(), opts)
-  if not opts.async_:
-    if len(flat_params) > MAX_FLAT_PARAMS:
-      flat_params = [opts.memory.ptr_type()]
-    if len(flat_results) > MAX_FLAT_RESULTS:
-      match context:
-        case 'lift':
-          flat_results = [opts.memory.ptr_type()]
-        case 'lower':
-          flat_params += [opts.memory.ptr_type()]
-          flat_results = []
-    return CoreFuncType(flat_params, flat_results)
-  else:
+  if opts.async_:
     match context:
       case 'lift':
         if len(flat_params) > MAX_FLAT_PARAMS:
           flat_params = [opts.memory.ptr_type()]
-        if opts.callback:
-          flat_results = ['i32']
-        else:
-          flat_results = []
+        flat_results = ['i32'] if opts.callback else []
       case 'lower':
         if len(flat_params) > MAX_FLAT_ASYNC_PARAMS:
           flat_params = [opts.memory.ptr_type()]
         if len(flat_results) > 0:
           flat_params += [opts.memory.ptr_type()]
         flat_results = ['i32']
-    return CoreFuncType(flat_params, flat_results)
+  else:
+    use_memory_param = len(flat_params) > MAX_FLAT_PARAMS
+    use_memory_result = len(flat_results) > MAX_FLAT_RESULTS or type_has_direct_list_result(ft.result_type())
+    if use_memory_param:
+      flat_params = [opts.memory.ptr_type()]
+    if use_memory_result:
+      match context:
+        case 'lift':
+          flat_results = [opts.memory.ptr_type()]
+        case 'lower':
+          flat_params += [opts.memory.ptr_type()]
+          flat_results = []
+  return CoreFuncType(flat_params, flat_results)
 
 def flatten_types(ts, opts):
   return [ft for t in ts for ft in flatten_type(t, opts)]
@@ -1905,11 +1913,9 @@ def flatten_type(t, opts):
     case StreamType() | FutureType()      : return ['i32']
 
 def flatten_list(elem_type, maybe_length, maybe_variable, opts):
-  if maybe_length is not None:
-    if maybe_variable:
-      return flatten_type(varint_type(maybe_length), opts) + flatten_type(elem_type, opts) * maybe_length
-    return flatten_type(elem_type, opts) * maybe_length
-  return [opts.memory.ptr_type(), opts.memory.ptr_type()]
+  if maybe_length is None or maybe_variable:
+    return [opts.memory.ptr_type(), opts.memory.ptr_type()]
+  return [opts.memory.ptr_type()]
 
 def flatten_record(fields, opts):
   flat = []
@@ -2001,24 +2007,14 @@ def lift_flat_string(cx, vi):
   return load_string_from_range(cx, ptr, packed_length)
 
 def lift_flat_list(cx, vi, elem_type, maybe_length, maybe_variable):
-  if maybe_length is not None:
-    if maybe_variable:
-      lentype = varint_type(maybe_length)
-      actual_len = lift_flat(cx, vi, lentype)
-      trap_if(actual_len > maybe_length)
-    else:
-      actual_len = maybe_length
-    a = []
-    for i in range(actual_len):
-      a.append(lift_flat(cx, vi, elem_type))
-    if maybe_variable:
-      for i in range(maybe_length - actual_len):
-        for ft in flatten_type(elem_type, cx.opts):
-          vi.next(ft)
-    return a
-  ptr = vi.next(cx.opts.memory.ptr_type())
-  length = vi.next(cx.opts.memory.ptr_type())
-  return load_list_from_range(cx, ptr, length, elem_type)
+  if maybe_length is None:
+    ptr = vi.next(cx.opts.memory.ptr_type())
+    n = vi.next(cx.opts.memory.ptr_type())
+  else:
+    ptr = vi.next(cx.opts.memory.ptr_type())
+    n = vi.next(cx.opts.memory.ptr_type()) if maybe_variable else maybe_length
+    trap_if(maybe_variable and n > maybe_length)
+  return load_list_from_range(cx, ptr, n, elem_type)
 
 def lift_flat_record(cx, vi, fields):
   record = {}
@@ -2096,23 +2092,16 @@ def lower_flat_string(cx, v):
   return [ptr, packed_length]
 
 def lower_flat_list(cx, v, elem_type, maybe_length, maybe_variable):
-  if maybe_length is not None:
-    flat = []
-    if maybe_variable:
-      assert(len(v) <= maybe_length)
-      flat += lower_flat(cx, len(v), varint_type(maybe_length))
-    else:
-      assert(maybe_length == len(v))
-    for e in v:
-      flat += lower_flat(cx, e, elem_type)
-    if maybe_variable:
-      for _ in range(maybe_length - len(v)):
-        for _ in flatten_type(elem_type, cx.opts):
-          flat.append(0)
-    return flat
-  else:
-    (ptr, length) = store_list_into_range(cx, v, elem_type, None)
+  if maybe_length is None:
+    (ptr, length) = store_list_into_range(cx, v, elem_type)
     return [ptr, length]
+  assert(len(v) <= maybe_length if maybe_variable else len(v) == maybe_length)
+  byte_length = len(v) * elem_size(elem_type, cx.opts.memory.ptr_type())
+  ptr = cx.opts.realloc(0, 0, alignment(elem_type, cx.opts.memory.ptr_type()), byte_length)
+  trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type())))
+  trap_if(ptr + byte_length > len(cx.opts.memory))
+  store_list_into_valid_range(cx, v, ptr, elem_type)
+  return [ptr, len(v)] if maybe_variable else [ptr]
 
 def lower_flat_record(cx, v, fields):
   flat = []
@@ -2149,7 +2138,7 @@ def lower_flat_flags(v, labels):
 
 def lift_flat_values(cx, max_flat, vi, ts):
   flat_types = flatten_types(ts, cx.opts)
-  if len(flat_types) > max_flat:
+  if len(flat_types) > max_flat or type_has_direct_list_result(ts):
     ptr = vi.next(cx.opts.memory.ptr_type())
     tuple_type = TupleType(ts)
     trap_if(ptr != align_to(ptr, alignment(tuple_type, cx.opts.memory.ptr_type())))
@@ -2161,7 +2150,9 @@ def lift_flat_values(cx, max_flat, vi, ts):
 def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
   cx.inst.may_leave = False
   flat_types = flatten_types(ts, cx.opts)
-  if len(flat_types) > max_flat:
+  direct_list_retarea = out_param is not None and type_has_direct_list_result(ts)
+  use_memory = len(flat_types) > max_flat or direct_list_retarea
+  if use_memory:
     tuple_type = TupleType(ts)
     tuple_value = {str(i): v for i,v in enumerate(vs)}
     if out_param is None:

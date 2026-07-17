@@ -148,16 +148,10 @@ test(RecordType([FieldType('x',U8Type()),
      [1,2,3],
      {'x':1,'y':2,'z':3})
 test(TupleType([TupleType([U8Type(),U8Type()]),U8Type()]), [1,2,3], {'0':{'0':1,'1':2},'1':3})
-test(ListType(U8Type(),3), [1,2,3], [1,2,3])
-test(ListType(ListType(U8Type(),2),3), [1,2,3,4,5,6], [[1,2],[3,4],[5,6]])
-# bounded (variable-length up to max) list tests
-test(ListType(U8Type(),3,True), [3, 1,2,3], [1,2,3])
-test(ListType(U8Type(),3,True), [2, 1,2,0], [1,2])
-test(ListType(U8Type(),3,True), [0, 0,0,0], [])
-test(ListType(U32Type(),2,True), [2, 10,20], [10,20])
-test(ListType(U32Type(),2,True), [1, 10,0], [10])
-# actual_len > max_len must trap (flat)
-test(ListType(U8Type(),3,True), [4, 1,2,3], None)
+h = Heap([1,2,3])
+test(ListType(U8Type(),3), [0], [1,2,3], cx=mk_cx(MemInst(h.memory, 'i32')))
+h = Heap([1,2,3,4,5,6])
+test(ListType(ListType(U8Type(),2),3), [0], [[1,2],[3,4],[5,6]], cx=mk_cx(MemInst(h.memory, 'i32')))
 # Empty flags types are not permitted yet.
 #t = FlagsType([])
 #test(t, [], {})
@@ -295,6 +289,26 @@ def test_heap(t, expect, args, byte_array, addr_type='i32'):
   cx = mk_cx(MemInst(heap.memory, addr_type))
   test(t, args, expect, cx)
 
+test_heap(ListType(U8Type(),3,True), [1,2,3], [0,3], [1,2,3])
+test_heap(ListType(U8Type(),3,True), [1,2], [0,2], [1,2])
+test_heap(ListType(U8Type(),3,True), [], [0,0], [])
+test_heap(ListType(U8Type(),3,True), None, [0,4], [1,2,3])
+test_heap(ListType(U32Type(),2,True), [10,20], [0,2], [10,0,0,0, 20,0,0,0])
+test_heap(ListType(U32Type(),2,True), [10], [0,1], [10,0,0,0])
+test_heap(ListType(ListType(U8Type(),3,True)), [[1,2],[3]], [0,2],
+          [2, 1,2,0,  1, 3,0,0])
+test_heap(ListType(ListType(U8Type(),3,True)), None, [0,1],
+          [4, 1,2,3])
+test_heap(ListType(ListType(U32Type(),3,True)), [[10,20]], [0,1],
+          [2, 0xff,0xff,0xff,  10,0,0,0, 20,0,0,0, 0,0,0,0])
+test_heap(ListType(ListType(U16Type(),3,True)), [[10,20],[30]], [0,2],
+          [0x02,0xff,10,0,20,0,0,0, 0x01,0xff,30,0,0,0,0,0])
+test_heap(ListType(ListType(U64Type(),2,True)), [[10]], [0,1],
+          [0x01,0,0,0,0,0,0,0, 10,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0])
+test_heap(ListType(ListType(U8Type(),3,True),2,True), [[1,2,3],[1,2]], [0,2],
+          [0x03,1,2,3, 0x02,1,2,0])
+test_heap(ListType(ListType(U16Type(),3,True),2,True), [[10,20],[30]], [0,2],
+          [0x02,0xff,10,0,20,0,0,0, 0x01,0xff,30,0,0,0,0,0])
 # Empty record types are not permitted yet.
 #test_heap(ListType(RecordType([])), [{},{},{}], [0,3], [])
 test_heap(ListType(BoolType()), [True,False,True], [0,3], [1,0,1])
@@ -350,17 +364,6 @@ test_heap(ListType(ListType(U8Type(),2)), [[1,2],[3,4]], [0,2],
           [1,2, 3,4])
 test_heap(ListType(ListType(U32Type(),2)), [[1,2],[3,4]], [0,2],
           [1,0,0,0,2,0,0,0, 3,0,0,0,4,0,0,0])
-# bounded list heap tests
-# layout: [length_u8, elem0, ..., elemN-1, unused_slots...]
-test_heap(ListType(ListType(U8Type(),3,True)), [[1,2],[3]], [0,2],
-          [2, 1,2,0,  1, 3,0,0])
-# actual_len > max_len must trap (heap)
-test_heap(ListType(ListType(U8Type(),3,True)), None, [0,1],
-          [4, 1,2,3])
-# alignment: U32 elements require 3 padding bytes after the U8 length prefix
-# layout per element: [length_u8, pad, pad, pad, elem0_u32, elem1_u32, unused_u32] = 16 bytes
-test_heap(ListType(ListType(U32Type(),3,True)), [[10,20]], [0,1],
-          [2, 0xff,0xff,0xff,  10,0,0,0, 20,0,0,0, 0,0,0,0])
 test_heap(ListType(ListType(U32Type(),2)), None, [1,2],
           [0, 1,0,0,0,2,0,0,0, 3,0,0,0,4,0,0,0])
 test_heap(ListType(TupleType([U8Type(),U8Type(),U16Type(),U32Type()])),
@@ -418,12 +421,14 @@ def test_flatten(t, params, results, addr_type='i32'):
   if len(params) > definitions.MAX_FLAT_PARAMS:
     expect.params = [addr_type]
 
-  if len(results) > definitions.MAX_FLAT_RESULTS:
+  use_memory_result = (len(results) > definitions.MAX_FLAT_RESULTS or
+                       type_has_direct_list_result(t.result_type()))
+  if use_memory_result:
     expect.results = [addr_type]
   got = flatten_functype(opts, t, 'lift')
   assert(got == expect)
 
-  if len(results) > definitions.MAX_FLAT_RESULTS:
+  if use_memory_result:
     expect.params += [addr_type]
     expect.results = []
   got = flatten_functype(opts, t, 'lower')
@@ -439,6 +444,16 @@ test_flatten(FuncType([U8Type() for _ in range(17)],[]), ['i32' for _ in range(1
 test_flatten(FuncType([U8Type() for _ in range(17)],[]), ['i32' for _ in range(17)], [], addr_type='i64')
 test_flatten(FuncType([U8Type() for _ in range(17)],[TupleType([U8Type(),U8Type()])]), ['i32' for _ in range(17)], ['i32','i32'])
 test_flatten(FuncType([U8Type() for _ in range(17)],[TupleType([U8Type(),U8Type()])]), ['i32' for _ in range(17)], ['i32','i32'], addr_type='i64')
+test_flatten(FuncType([], [ListType(U8Type(), 5)]), [], ['i32'])
+test_flatten(FuncType([U8Type()], [ListType(U32Type(), 3)]), ['i32'], ['i32'])
+test_flatten(FuncType([], [RecordType([FieldType('x', ListType(U8Type(), 4))])]), [], ['i32'])
+test_flatten(FuncType([], [VariantType([CaseType('a', ListType(U8Type(), 3))])]), [], ['i32'])
+test_flatten(FuncType([], [ListType(U8Type(), 5, True)]), [], ['i32', 'i32'])
+test_flatten(FuncType([ListType(U8Type(), 5)], []), ['i32'], [])
+test_flatten(FuncType([ListType(U8Type(), 5, True)], []), ['i32', 'i32'], [])
+test_flatten(FuncType([ListType(U8Type(), 5), ListType(U32Type(), 3)], []), ['i32', 'i32'], [])
+test_flatten(FuncType([], [U8Type(), ListType(U8Type(), 5)]), [], ['i32'])
+test_flatten(FuncType([], [U8Type(), ListType(U8Type(), 5, True)]), [], ['i32'])
 
 
 def test_roundtrips():
@@ -449,12 +464,24 @@ def test_roundtrips():
     store = Store()
 
     ft = FuncType([t],[t])
-    def callee(x):
-      return x
 
     callee_heap = Heap(1000)
     callee_opts = mk_opts(MemInst(callee_heap.memory, addr_type), 'utf8', callee_heap.realloc)
     callee_inst = ComponentInstance(store)
+
+    if type_has_direct_list_result(ft.result_type()):
+      def callee(flat_args):
+        cx = LiftLowerContext(callee_opts, callee_inst)
+        vi = CoreValueIter(flat_args)
+        vals = [lift_flat(cx, vi, t) for t in ft.param_types()]
+        tuple_type = TupleType(ft.result_type())
+        tuple_value = {str(i): vals[i] for i in range(len(vals))}
+        ptr = callee_heap.realloc(0, 0, alignment(tuple_type, addr_type), elem_size(tuple_type, addr_type))
+        definitions.store(cx, tuple_value, tuple_type, ptr)
+        return [ptr]
+    else:
+      def callee(flat_args):
+        return flat_args
 
     got = None
     def on_start():
@@ -481,6 +508,16 @@ def test_roundtrips():
                                            U32Type(),U32Type(),U32Type(),U32Type(),
                                            StringType()]))]),
                   {'x': mk_tup(1,2,3,4, 5,6,7,8, 9,10,11,12, 13,14,15,16, mk_str("wat"))}),
+    (ListType(U8Type(),5), [1,2,3,4,5]),
+    (ListType(U32Type(),4), [10,20,30,40]),
+    (ListType(ListType(U8Type(),2),3), [[1,2],[3,4],[5,6]]),
+    (ListType(StringType(),2), [mk_str("hello"), mk_str("world")]),
+    (ListType(U8Type(),3,True), [1,2,3]),
+    (ListType(U8Type(),3,True), [1,2]),
+    (ListType(U8Type(),3,True), []),
+    (ListType(U32Type(),2,True), [10,20]),
+    (ListType(ListType(U8Type(),3,True),2), [[1,2],[3]]),
+    (ListType(StringType(),3,True), [mk_str("hello"), mk_str("world")]),
   ]
   for addr_type in ['i32', 'i64']:
     for t, v in cases:
