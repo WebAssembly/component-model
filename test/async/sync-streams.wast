@@ -139,6 +139,7 @@
 
         ;; (stream.write $tx $bufp 4) will succeed without blocking
         (local.set $bufp (i32.const 16))
+        (i32.store (local.get $bufp) (i32.const 0x89abcdef))
         (local.set $ret (call $stream.write (local.get $tx) (local.get $bufp) (i32.const 4)))
         (if (i32.ne (i32.const 0x40 (; COMPLETED=0 | (4<<4) ;)) (local.get $ret))
           (then unreachable))
