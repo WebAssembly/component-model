@@ -5,7 +5,8 @@ user-focused explanation, take a look at the **[Component Model Documentation]**
 
 This repository contains:
 * high-level [goals], [use cases], [design choices] and [FAQ] docs
-* low-level [WIT], [text format], [binary format], [concurrency] and [ABI] docs
+* low-level [WIT], [text format], [binary format], [linking], [concurrency] and
+  [ABI] docs
 * a growing [WAST test suite]
 
 In the future, this repository will additionally contain a [formal spec] and a
@@ -46,11 +47,11 @@ To contribute to any of these repositories, see the Community Group's
 [WIT]: design/mvp/WIT.md
 [Text Format]: design/mvp/Explainer.md
 [Binary Format]: design/mvp/Binary.md
+[Linking]: design/mvp/Linking.md
 [Concurrency]: design/mvp/Concurrency.md
 [ABI]: design/mvp/CanonicalABI.md
 [WAST test suite]: test/
 [formal spec]: spec/
-[Linking]: design/mvp/Linking.md
 [Gated Features]: design/mvp/Explainer.md#gated-features
 [W3C WebAssembly Community Group]: https://www.w3.org/community/webassembly/
 [Contributing Guidelines]: https://webassembly.org/community/contributing/
