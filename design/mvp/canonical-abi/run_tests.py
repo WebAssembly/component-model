@@ -63,10 +63,12 @@ def mk_host_func(store, host_func, ft):
       wait_until = lambda rf: host_thread.wait_until(rf, cancellable = True)
       host_func(caller, on_start, on_resume, wait_until)
     inst = ComponentInstance(store)
-    task = Task(ft, CanonicalOptions(), inst, on_start, on_resume, caller)
+    task = Task(ft, CanonicalOptions(), inst, on_start, on_resume)
     host_thread = Thread(task, thread_func)
     host_thread.resume()
-    return partial(host_thread.resume, Cancelled.TRUE)
+    def on_cancel(caller_inst):
+      host_thread.resume(Cancelled.TRUE)
+    return on_cancel
   return func_inst
 
 def mk_str(s):

@@ -736,7 +736,7 @@ spec-level function type, where the host can be the caller, the callee or even
 ```python
 OnStart = Callable[[], list[any]]
 OnResolve = Callable[[Optional[list[any]]], None]
-OnCancel = Callable[[], None]
+OnCancel = Callable[[Optional[ComponentInstance]], None]
 FuncInst = Callable[[OnStart, OnResolve, Optional[ComponentInstance]], OnCancel]
 ```
 The three parameters of `FuncInst` are:
@@ -753,7 +753,8 @@ time before or after the callee returns. If the callee returns and the
 `OnResolve` callback has *not* yet been called, the caller may invoke the
 returned `OnCancel` callback *at most once* to cooperatively request that the
 callee "hurry up" and call `OnResolve` (possibly, but not necessarily, passing
-`None` and/or skipping the call to `OnStart`).
+`None` and/or skipping the call to `OnStart`). The optional parameter is, like
+`FuncInst`, the caller's component instance, or, if called from the host, `None`.
 
 When `FuncInst` is implemented by wasm guest code (as opposed to the host), each
 call creates a `Task` object to track the state of the call and ensure that the
@@ -773,19 +774,17 @@ class Task:
   inst: ComponentInstance
   on_start: OnStart
   on_resolve: OnResolve
-  caller: Optional[ComponentInstance]
   state: State
   num_borrows: int
   implicit_thread: Optional[Thread]
   threads: list[Thread]
 
-  def __init__(self, ft, opts, inst, on_start, on_resolve, caller):
+  def __init__(self, ft, opts, inst, on_start, on_resolve):
     self.ft = ft
     self.opts = opts
     self.inst = inst
     self.on_start = on_start
     self.on_resolve = on_resolve
-    self.caller = caller
     self.state = Task.State.INITIAL
     self.num_borrows = 0
     self.implicit_thread = None
@@ -912,8 +911,7 @@ considers resuming that thread (picking one nondeterministically if there are
 multiple), giving the thread the chance to handle cancellation promptly so that
 `subtask.cancel` completes without blocking.
 ```python
-  def request_cancellation(self):
-    assert(not self.caller or self.caller is current_instance())
+  def request_cancellation(self, caller: Optional[ComponentInstance]):
     if self.state == Task.State.INITIAL:
       self.state = Task.State.CANCEL_DELIVERED
       self.implicit_thread.resume(Cancelled.TRUE)
@@ -922,11 +920,11 @@ multiple), giving the thread the chance to handle cancellation promptly so that
       candidates = { t for t in self.threads if t.cancellable }
       if self.needs_exclusive() and self.inst.exclusive_thread not in { None, self.implicit_thread }:
         candidates.discard(self.implicit_thread)
-      if candidates and self.inst.may_enter_from(self.caller):
+      if candidates and self.inst.may_enter_from(caller):
         self.state = Task.State.CANCEL_DELIVERED
-        self.inst.enter_from(self.caller)
+        self.inst.enter_from(caller)
         random.choice(list(candidates)).resume(Cancelled.TRUE)
-        self.inst.leave_to(self.caller)
+        self.inst.leave_to(caller)
       else:
         self.state = Task.State.PENDING_CANCEL
 ```
@@ -1056,7 +1054,7 @@ sufficient to define relevant ABI behavior.)
       assert(not caller or caller is current_instance())
       trap_if(not inst.may_enter_from(caller))
       inst.enter_from(caller)
-      on_cancel = canon_lift(f, ft, opts, inst, on_start, on_resolve, caller)
+      on_cancel = canon_lift(f, ft, opts, inst, on_start, on_resolve)
       inst.leave_to(caller)
       return on_cancel
     return func_inst
@@ -3588,14 +3586,14 @@ When instantiating a component instance, the runtime calls `Store.lift` (defined
 above) to capture the `$callee`, `$ft` and `$opts` immediates of `canon lift`
 along with the component instance being instantiated. These are then passed into
 `canon_lift` every time the generated `FuncInst` is called, along with the
-runtime `on_start`, `on_resolve` and `caller` arguments.
+runtime `on_start` and `on_resolve` arguments.
 
 Based on this, `canon_lift` is defined in chunks as follows. The whole call
 executes in a new *implicit thread* defined here by `thread_func`. The first
 thing this implicit thread does is to wait for any backpressure, as defined by
 `Task.enter_implicit_thread` above:
 ```python
-def canon_lift(callee, ft, opts, inst, on_start, on_resolve, caller) -> OnCancel:
+def canon_lift(callee, ft, opts, inst, on_start, on_resolve) -> OnCancel:
   def thread_func():
     if not task.enter_implicit_thread():
       return
@@ -3729,7 +3727,7 @@ expressible with a CPS transform like [Asyncify]). Lastly, `canon_lift` returns
 `Task.request_cancellation`, bound to the call's new task, as the `OnCancel`
 return value of `FuncInst`.
 ```python
-  task = Task(ft, opts, inst, on_start, on_resolve, caller)
+  task = Task(ft, opts, inst, on_start, on_resolve)
   thread = Thread(task, thread_func)
   thread.resume()
   if not ft.async_:
@@ -4427,7 +4425,7 @@ def canon_subtask_cancel(async_, i):
     assert(subtask.has_pending_event())
   else:
     subtask.cancellation_requested = True
-    subtask.on_cancel()
+    subtask.on_cancel(thread.task.inst)
     if not subtask.resolved():
       if not async_:
         subtask.wait_for_pending_event()

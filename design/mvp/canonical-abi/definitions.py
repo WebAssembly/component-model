@@ -438,7 +438,7 @@ class Thread:
 
 OnStart = Callable[[], list[any]]
 OnResolve = Callable[[Optional[list[any]]], None]
-OnCancel = Callable[[], None]
+OnCancel = Callable[[Optional[ComponentInstance]], None]
 FuncInst = Callable[[OnStart, OnResolve, Optional[ComponentInstance]], OnCancel]
 
 class Task:
@@ -454,19 +454,17 @@ class Task:
   inst: ComponentInstance
   on_start: OnStart
   on_resolve: OnResolve
-  caller: Optional[ComponentInstance]
   state: State
   num_borrows: int
   implicit_thread: Optional[Thread]
   threads: list[Thread]
 
-  def __init__(self, ft, opts, inst, on_start, on_resolve, caller):
+  def __init__(self, ft, opts, inst, on_start, on_resolve):
     self.ft = ft
     self.opts = opts
     self.inst = inst
     self.on_start = on_start
     self.on_resolve = on_resolve
-    self.caller = caller
     self.state = Task.State.INITIAL
     self.num_borrows = 0
     self.implicit_thread = None
@@ -518,8 +516,7 @@ class Task:
     assert(thread.index is not None)
     self.inst.threads.remove(thread.index)
 
-  def request_cancellation(self):
-    assert(not self.caller or self.caller is current_instance())
+  def request_cancellation(self, caller: Optional[ComponentInstance]):
     if self.state == Task.State.INITIAL:
       self.state = Task.State.CANCEL_DELIVERED
       self.implicit_thread.resume(Cancelled.TRUE)
@@ -528,11 +525,11 @@ class Task:
       candidates = { t for t in self.threads if t.cancellable }
       if self.needs_exclusive() and self.inst.exclusive_thread not in { None, self.implicit_thread }:
         candidates.discard(self.implicit_thread)
-      if candidates and self.inst.may_enter_from(self.caller):
+      if candidates and self.inst.may_enter_from(caller):
         self.state = Task.State.CANCEL_DELIVERED
-        self.inst.enter_from(self.caller)
+        self.inst.enter_from(caller)
         random.choice(list(candidates)).resume(Cancelled.TRUE)
-        self.inst.leave_to(self.caller)
+        self.inst.leave_to(caller)
       else:
         self.state = Task.State.PENDING_CANCEL
 
@@ -583,7 +580,7 @@ class Store:
       assert(not caller or caller is current_instance())
       trap_if(not inst.may_enter_from(caller))
       inst.enter_from(caller)
-      on_cancel = canon_lift(f, ft, opts, inst, on_start, on_resolve, caller)
+      on_cancel = canon_lift(f, ft, opts, inst, on_start, on_resolve)
       inst.leave_to(caller)
       return on_cancel
     return func_inst
@@ -2135,7 +2132,7 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
 
 ### `canon lift`
 
-def canon_lift(callee, ft, opts, inst, on_start, on_resolve, caller) -> OnCancel:
+def canon_lift(callee, ft, opts, inst, on_start, on_resolve) -> OnCancel:
   def thread_func():
     if not task.enter_implicit_thread():
       return
@@ -2190,7 +2187,7 @@ def canon_lift(callee, ft, opts, inst, on_start, on_resolve, caller) -> OnCancel
     task.exit_implicit_thread()
     return
 
-  task = Task(ft, opts, inst, on_start, on_resolve, caller)
+  task = Task(ft, opts, inst, on_start, on_resolve)
   thread = Thread(task, thread_func)
   thread.resume()
   if not ft.async_:
@@ -2468,7 +2465,7 @@ def canon_subtask_cancel(async_, i):
     assert(subtask.has_pending_event())
   else:
     subtask.cancellation_requested = True
-    subtask.on_cancel()
+    subtask.on_cancel(thread.task.inst)
     if not subtask.resolved():
       if not async_:
         subtask.wait_for_pending_event()
