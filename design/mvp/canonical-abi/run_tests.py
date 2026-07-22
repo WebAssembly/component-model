@@ -25,15 +25,16 @@ class Heap:
     self.memory = bytearray(arg)
     self.last_alloc = 0
 
-  def realloc(self, original_ptr, original_size, alignment, new_size):
+  def realloc(self, args):
+    original_ptr, original_size, alignment, new_size = args
     if original_ptr != 0 and new_size < original_size:
-      return align_to(original_ptr, alignment)
+      return [align_to(original_ptr, alignment)]
     ret = align_to(self.last_alloc, alignment)
     self.last_alloc = ret + new_size
     if self.last_alloc > len(self.memory):
       trap()
     self.memory[ret : ret + original_size] = self.memory[original_ptr : original_ptr + original_size]
-    return ret
+    return [ret]
 
 def mk_opts(memory = MemInst(bytearray(), 'i32'), encoding = 'utf8', realloc = None, post_return = None, sync_task_return = False, async_ = False):
   opts = CanonicalOptions()
@@ -470,6 +471,76 @@ def test_roundtrips():
       test_roundtrip(t, v, addr_type=addr_type)
 
 
+def test_cross_component_realloc():
+  store = Store()
+  root_inst = ComponentInstance(store)
+
+  producer_heap = Heap(16)
+  producer_opts = mk_opts(MemInst(producer_heap.memory, 'i32'))
+  producer_inst = ComponentInstance(store, root_inst)
+
+  ft = FuncType([], [ListType(U8Type())])
+  def core_producer(args):
+    assert(len(args) == 0)
+    [] = canon_context_set('i32', 0, 0xdead)
+    [buf] = producer_heap.realloc([0, 0, 1, 3])
+    producer_heap.memory[buf : buf+3] = b'\x0a\x0b\x0c'
+    [retp] = producer_heap.realloc([0, 0, 4, 8])
+    producer_heap.memory[retp] = buf
+    producer_heap.memory[retp+4] = 3
+    return [retp]
+  producer = store.lift(core_producer, ft, producer_opts, producer_inst)
+
+  consumer_heap = Heap(24)
+  consumer_inst = ComponentInstance(store, root_inst)
+  consumer_thread = None
+  num_realloc_calls = 0
+
+  def core_consumer_realloc(args):
+    nonlocal num_realloc_calls
+    num_realloc_calls += 1
+    thread = current_thread()
+    assert(thread is not consumer_thread)
+    assert(thread.task is not consumer_thread.task)
+    assert(thread.task.inst is consumer_inst)
+    assert(current_instance() is consumer_inst)
+    assert(not consumer_inst.may_enter)
+    assert(not consumer_inst.may_leave)
+    assert(canon_context_get('i32', 0) == [0])
+    assert(canon_context_get('i32', 1) == [0])
+    [] = canon_context_set('i32', 0, 0xfeed)
+    assert(canon_context_get('i32', 0) == [0xfeed])
+    try:
+      canon_thread_index()
+      fail("thread.index must trap during realloc")
+    except Trap:
+      pass
+    return consumer_heap.realloc(args)
+
+  consumer_opts = mk_opts(MemInst(consumer_heap.memory, 'i32'), realloc = core_consumer_realloc)
+
+  def core_consumer(args):
+    nonlocal consumer_thread
+    assert(len(args) == 0)
+    consumer_thread = current_thread()
+    [] = canon_context_set('i32', 0, 42)
+    [] = canon_context_set('i32', 1, 43)
+    [retp] = consumer_heap.realloc([0, 0, 4, 8])
+    assert(num_realloc_calls == 0)
+    [] = store.lower(producer, ft, consumer_opts, consumer_inst)([retp])
+    assert(num_realloc_calls == 1)
+    assert(canon_context_get('i32', 0) == [42])
+    assert(canon_context_get('i32', 1) == [43])
+    ptr = consumer_heap.memory[retp]
+    length = consumer_heap.memory[retp+4]
+    assert(length == 3)
+    assert(consumer_heap.memory[ptr : ptr+3] == b'\x0a\x0b\x0c')
+    return []
+
+  lift_and_run(mk_opts(), consumer_inst, FuncType([], []), core_consumer, lambda: [], lambda _: ())
+  assert(num_realloc_calls == 1)
+
+
 def test_handles():
   before = definitions.MAX_FLAT_RESULTS
   definitions.MAX_FLAT_RESULTS = 16
@@ -629,7 +700,7 @@ def test_async_to_async():
   def consumer(args):
     [b] = args
     [seti] = canon_waitable_set_new()
-    ptr = consumer_heap.realloc(0, 0, 1, 1)
+    [ptr] = consumer_heap.realloc([0, 0, 1, 1])
     [ret] = store.lower(eager_callee, eager_ft, consumer_opts, consumer_inst)([ptr])
     assert(ret == Subtask.State.RETURNED)
     u8 = consumer_heap.memory[ptr]
@@ -649,7 +720,7 @@ def test_async_to_async():
     [] = canon_waitable_join(subi2, seti)
     fut1_1.set()
 
-    waitretp = consumer_heap.realloc(0, 0, 8, 4)
+    [waitretp] = consumer_heap.realloc([0, 0, 8, 4])
     [event] = canon_waitable_set_wait(True, MemInst(consumer_heap.memory, 'i32'), seti, waitretp)
     assert(event == EventCode.SUBTASK)
     assert(consumer_heap.memory[waitretp] == subi1)
@@ -1223,7 +1294,7 @@ def test_sync_using_wait():
 
     fut1.set()
 
-    retp = consumer_heap.realloc(0,0,8,4)
+    [retp] = consumer_heap.realloc([0,0,8,4])
     [event] = canon_waitable_set_wait(True, MemInst(consumer_heap.memory, 'i32'), seti, retp)
     assert(event == EventCode.SUBTASK)
     assert(consumer_heap.memory[retp] == subi1)
@@ -2950,6 +3021,7 @@ def test_thread_cancel_callback():
   lift_and_run(mk_opts(), consumer_inst, consumer_ft, core_consumer, lambda:[], lambda _:())
 
 test_roundtrips()
+test_cross_component_realloc()
 test_handles()
 test_async_to_async()
 test_async_callback()

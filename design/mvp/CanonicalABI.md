@@ -1222,6 +1222,49 @@ class LiftLowerContext:
 The `borrow_scope` field may be `None` if the types being lifted/lowered are
 known to not contain `borrow`.
 
+The `LiftLowerContext.reallocate` and `LiftLowerContext.allocate` methods define
+how to call a Core WebAssembly `LiftLowerOptions.realloc` function when lowering
+a value that requires dynamic allocation. When one component imports and calls
+another component which synchronously returns a value that requires dynamic
+allocation, the callstack at the point where the `realloc` `canonopt` needs to
+be called has the form:
+```
+... -> |component A| --calls-import--> |component B| --returns-value--> |component A realloc|
+```
+Thus, in general, `realloc` must be called reentrantly and so the call to
+`realloc` is specified as if `realloc` were an exported function called without
+the usual `ComponentInstance.may_enter_from` reentrance checks enforced by
+`Store.lift`:
+```python
+  def reallocate(self, old, old_byte_length, alignment, new_byte_length):
+    assert(self.inst.may_leave)
+    self.inst.may_leave = False
+    ptrt = U32Type() if self.opts.memory.ptr_type() == 'i32' else U64Type()
+    ft = FuncType([ptrt, ptrt, ptrt, ptrt], [ptrt], async_ = False)
+    opts = CanonicalOptions(async_ = False)
+    def on_start():
+      return [old, old_byte_length, alignment, new_byte_length]
+    ptr = None
+    def on_resolve(result):
+      nonlocal ptr
+      [ptr] = result
+    canon_lift(self.opts.realloc, ft, opts, self.inst, on_start, on_resolve)
+    assert(ptr is not None)
+    self.inst.may_leave = True
+    return ptr
+
+  def allocate(self, alignment, byte_length):
+    return self.reallocate(0, 0, alignment, byte_length)
+```
+As a consequence of the above definitions, calls to `realloc` semantically
+execute in a new `Thread` with zero-initialized `Thread.storage` (so that
+`context.get` returns `0` on entry to `realloc`). However, because the call is
+fully synchronous and because all "interesting" threading built-ins that might
+observably require a proper thread are guarded by `may_leave` traps, an
+optimizing implementation may compile `realloc` calls to synchronous calls on
+whatever internal thread structure is handy (being careful to set and restore
+thread-local storage and the current component instance if necessary).
+
 
 ## Runtime State
 
@@ -2803,7 +2846,7 @@ byte after every Latin-1 byte).
 def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment, dst_encoding):
   dst_byte_length = dst_code_unit_size * src_code_units
   assert(dst_byte_length <= REALLOC_I32_MAX)
-  ptr = cx.opts.realloc(0, 0, dst_alignment, dst_byte_length)
+  ptr = cx.allocate(dst_alignment, dst_byte_length)
   trap_if(ptr != align_to(ptr, dst_alignment))
   trap_if(ptr + dst_byte_length > len(cx.opts.memory))
   encoded = src.encode(dst_encoding)
@@ -2826,19 +2869,19 @@ def store_latin1_to_utf8(cx, src, src_code_units):
 
 def store_string_to_utf8(cx, src, src_code_units, worst_case_size):
   assert(src_code_units <= REALLOC_I32_MAX)
-  ptr = cx.opts.realloc(0, 0, 1, src_code_units)
+  ptr = cx.allocate(1, src_code_units)
   trap_if(ptr + src_code_units > len(cx.opts.memory))
   for i,code_point in enumerate(src):
     if ord(code_point) < 2**7:
       cx.opts.memory[ptr + i] = ord(code_point)
     else:
       assert(worst_case_size <= REALLOC_I32_MAX)
-      ptr = cx.opts.realloc(ptr, src_code_units, 1, worst_case_size)
+      ptr = cx.reallocate(ptr, src_code_units, 1, worst_case_size)
       trap_if(ptr + worst_case_size > len(cx.opts.memory))
       encoded = src.encode('utf-8')
       cx.opts.memory[ptr+i : ptr+len(encoded)] = encoded[i : ]
       if worst_case_size > len(encoded):
-        ptr = cx.opts.realloc(ptr, worst_case_size, 1, len(encoded))
+        ptr = cx.reallocate(ptr, worst_case_size, 1, len(encoded))
         trap_if(ptr + len(encoded) > len(cx.opts.memory))
       return (ptr, len(encoded))
   return (ptr, src_code_units)
@@ -2852,13 +2895,13 @@ if multiple UTF-8 bytes were collapsed into a single 2-byte UTF-16 code unit:
 def store_utf8_to_utf16(cx, src, src_code_units):
   worst_case_size = 2 * src_code_units
   assert(worst_case_size <= REALLOC_I32_MAX)
-  ptr = cx.opts.realloc(0, 0, 2, worst_case_size)
+  ptr = cx.allocate(2, worst_case_size)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + worst_case_size > len(cx.opts.memory))
   encoded = src.encode('utf-16-le')
   cx.opts.memory[ptr : ptr+len(encoded)] = encoded
   if len(encoded) < worst_case_size:
-    ptr = cx.opts.realloc(ptr, worst_case_size, 2, len(encoded))
+    ptr = cx.reallocate(ptr, worst_case_size, 2, len(encoded))
     trap_if(ptr != align_to(ptr, 2))
     trap_if(ptr + len(encoded) > len(cx.opts.memory))
   code_units = int(len(encoded) / 2)
@@ -2876,7 +2919,7 @@ bytes):
 ```python
 def store_string_to_latin1_or_utf16(cx, src, src_code_units):
   assert(src_code_units <= REALLOC_I32_MAX)
-  ptr = cx.opts.realloc(0, 0, 2, src_code_units)
+  ptr = cx.allocate(2, src_code_units)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + src_code_units > len(cx.opts.memory))
   dst_byte_length = 0
@@ -2887,7 +2930,7 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
     else:
       worst_case_size = 2 * src_code_units
       assert(worst_case_size <= REALLOC_I32_MAX)
-      ptr = cx.opts.realloc(ptr, src_code_units, 2, worst_case_size)
+      ptr = cx.reallocate(ptr, src_code_units, 2, worst_case_size)
       trap_if(ptr != align_to(ptr, 2))
       trap_if(ptr + worst_case_size > len(cx.opts.memory))
       for j in range(dst_byte_length-1, -1, -1):
@@ -2896,13 +2939,13 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
       encoded = src.encode('utf-16-le')
       cx.opts.memory[ptr+2*dst_byte_length : ptr+len(encoded)] = encoded[2*dst_byte_length : ]
       if worst_case_size > len(encoded):
-        ptr = cx.opts.realloc(ptr, worst_case_size, 2, len(encoded))
+        ptr = cx.reallocate(ptr, worst_case_size, 2, len(encoded))
         trap_if(ptr != align_to(ptr, 2))
         trap_if(ptr + len(encoded) > len(cx.opts.memory))
       tagged_code_units = int(len(encoded) / 2) | utf16_tag(cx.opts.memory.ptr_type())
       return (ptr, tagged_code_units)
   if dst_byte_length < src_code_units:
-    ptr = cx.opts.realloc(ptr, src_code_units, 2, dst_byte_length)
+    ptr = cx.reallocate(ptr, src_code_units, 2, dst_byte_length)
     trap_if(ptr != align_to(ptr, 2))
     trap_if(ptr + dst_byte_length > len(cx.opts.memory))
   return (ptr, dst_byte_length)
@@ -2922,7 +2965,7 @@ inexpensively fused with the UTF-16 validate+copy loop.)
 def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   src_byte_length = 2 * src_code_units
   assert(src_byte_length <= REALLOC_I32_MAX)
-  ptr = cx.opts.realloc(0, 0, 2, src_byte_length)
+  ptr = cx.allocate(2, src_byte_length)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + src_byte_length > len(cx.opts.memory))
   encoded = src.encode('utf-16-le')
@@ -2933,7 +2976,7 @@ def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   latin1_size = int(len(encoded) / 2)
   for i in range(latin1_size):
     cx.opts.memory[ptr + i] = cx.opts.memory[ptr + 2*i]
-  ptr = cx.opts.realloc(ptr, src_byte_length, 1, latin1_size)
+  ptr = cx.reallocate(ptr, src_byte_length, 1, latin1_size)
   trap_if(ptr + latin1_size > len(cx.opts.memory))
   return (ptr, latin1_size)
 ```
@@ -2964,7 +3007,7 @@ def store_list(cx, v, ptr, elem_type, maybe_length):
 def store_list_into_range(cx, v, elem_type):
   byte_length = len(v) * elem_size(elem_type, cx.opts.memory.ptr_type())
   assert(byte_length <= REALLOC_I32_MAX)
-  ptr = cx.opts.realloc(0, 0, alignment(elem_type, cx.opts.memory.ptr_type()), byte_length)
+  ptr = cx.allocate(alignment(elem_type, cx.opts.memory.ptr_type()), byte_length)
   trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type())))
   trap_if(ptr + byte_length > len(cx.opts.memory))
   store_list_into_valid_range(cx, v, ptr, elem_type)
@@ -3490,13 +3533,13 @@ storage with `realloc` or accepting a caller-allocated buffer as an
 out-param:
 ```python
 def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
-  cx.inst.may_leave = False
   flat_types = flatten_types(ts, cx.opts)
   if len(flat_types) > max_flat:
     tuple_type = TupleType(ts)
     tuple_value = {str(i): v for i,v in enumerate(vs)}
     if out_param is None:
-      ptr = cx.opts.realloc(0, 0, alignment(tuple_type, cx.opts.memory.ptr_type()), elem_size(tuple_type, cx.opts.memory.ptr_type()))
+      ptr_type = cx.opts.memory.ptr_type()
+      ptr = cx.allocate(alignment(tuple_type, ptr_type), elem_size(tuple_type, ptr_type))
       flat_vals = [ptr]
     else:
       ptr = out_param.next(cx.opts.memory.ptr_type())
@@ -3508,14 +3551,8 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
     flat_vals = []
     for i in range(len(vs)):
       flat_vals += lower_flat(cx, vs[i], ts[i])
-  cx.inst.may_leave = True
   return flat_vals
 ```
-The `may_leave` flag is guarded by `canon_lower` below to prevent a component
-from calling out of the component while in the middle of lowering, ensuring
-that the relative ordering of the side effects of lifting followed by lowering
-cannot be observed and thus an implementation may reliably fuse lifting with
-lowering when making a cross-component call to avoid the intermediate copy.
 
 
 ## Canonical Definitions
@@ -3629,6 +3666,7 @@ function can free any associated allocations.
       result = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_type())
       task.return_(result)
       if opts.post_return is not None:
+        assert(cx.inst.may_leave)
         inst.may_leave = False
         [] = call_and_trap_on_throw(opts.post_return, flat_results)
         inst.may_leave = True
@@ -4857,6 +4895,7 @@ of the [current thread]:
 ```python
 def canon_thread_index():
   thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
   assert(thread.index is not None)
   return [thread.index]
 ```
