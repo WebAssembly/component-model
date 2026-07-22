@@ -606,18 +606,6 @@ class Store:
       thread.task.inst.leave_to(None)
     self.nesting_depth -= 1
 
-## Lifting and Lowering Context
-
-class LiftLowerContext:
-  opts: LiftLowerOptions
-  inst: ComponentInstance
-  borrow_scope: Optional[Task|Subtask]
-
-  def __init__(self, opts, inst, borrow_scope = None):
-    self.opts = opts
-    self.inst = inst
-    self.borrow_scope = borrow_scope
-
 ## Canonical ABI Options
 
 def ptr_size(ptr_type):
@@ -665,6 +653,18 @@ class CanonicalOptions(LiftLowerOptions):
   post_return: Optional[Callable] = None
   async_: bool = False
   callback: Optional[Callable] = None
+
+## Lifting and Lowering Context
+
+class LiftLowerContext:
+  opts: LiftLowerOptions
+  inst: ComponentInstance
+  borrow_scope: Optional[Task|Subtask]
+
+  def __init__(self, opts, inst, borrow_scope = None):
+    self.opts = opts
+    self.inst = inst
+    self.borrow_scope = borrow_scope
 
 ## Runtime State
 

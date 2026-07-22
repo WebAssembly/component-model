@@ -14,8 +14,8 @@ specified here.
   * [Threads](#threads)
   * [Tasks](#tasks)
 * [Embedding](#embedding)
-* [Lifting and Lowering Context](#lifting-and-lowering-context)
 * [Canonical ABI Options](#canonical-abi-options)
+* [Lifting and Lowering Context](#lifting-and-lowering-context)
 * [Runtime State](#runtime-state)
   * [Table State](#table-state)
   * [Resource State](#resource-state)
@@ -1121,33 +1121,6 @@ one of its imports' component instances was on the stack and not reenterable,
 leading to a spurious trap when it was called.
 
 
-## Lifting and Lowering Context
-
-Most Canonical ABI definitions depend on some ambient information which is
-established by the `canon lift`- or `canon lower`-defined function that is
-being called:
-* the ABI options supplied via [`canonopt`]
-* the containing component instance
-* the `Task` or `Subtask` used to lower or lift, resp., `borrow` handles
-
-These three pieces of ambient information are stored in an `LiftLowerContext`
-object that is threaded through all the Python functions below as the `cx`
-parameter/field.
-```python
-class LiftLowerContext:
-  opts: LiftLowerOptions
-  inst: ComponentInstance
-  borrow_scope: Optional[Task|Subtask]
-
-  def __init__(self, opts, inst, borrow_scope = None):
-    self.opts = opts
-    self.inst = inst
-    self.borrow_scope = borrow_scope
-```
-The `borrow_scope` field may be `None` if the types being lifted/lowered are
-known to not contain `borrow`.
-
-
 ## Canonical ABI Options
 
 The following classes list the various Canonical ABI options ([`canonopt`])
@@ -1221,6 +1194,33 @@ class CanonicalOptions(LiftLowerOptions):
   async_: bool = False
   callback: Optional[Callable] = None
 ```
+
+
+## Lifting and Lowering Context
+
+Most Canonical ABI definitions depend on some ambient information which is
+established by the `canon lift`- or `canon lower`-defined function that is
+being called:
+* the ABI options supplied via [`canonopt`]
+* the containing component instance
+* the `Task` or `Subtask` used to lower or lift, resp., `borrow` handles
+
+These three pieces of ambient information are stored in an `LiftLowerContext`
+object that is threaded through all the Python functions below as the `cx`
+parameter/field.
+```python
+class LiftLowerContext:
+  opts: LiftLowerOptions
+  inst: ComponentInstance
+  borrow_scope: Optional[Task|Subtask]
+
+  def __init__(self, opts, inst, borrow_scope = None):
+    self.opts = opts
+    self.inst = inst
+    self.borrow_scope = borrow_scope
+```
+The `borrow_scope` field may be `None` if the types being lifted/lowered are
+known to not contain `borrow`.
 
 
 ## Runtime State
