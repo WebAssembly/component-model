@@ -87,12 +87,12 @@ sort                ::= 0x00 cs:<core:sort>                                => co
                       | 0x03                                               => type
                       | 0x04                                               => component
                       | 0x05                                               => instance
-inlineexport        ::= na:<nameattributes> si:<sortidx>                   => (export na si)
+inlineexport        ::= n:<exportname'> si:<sortidx>                       => (export n si)
 ```
 Notes:
 * Reused Core binary rules: [`core:name`], (variable-length encoded) [`core:u32`]
 * The `core:sort` values are chosen to match the discriminant opcodes of
-  [`core:externtype`].
+  [`core:importdesc`].
 * `type` is added to `core:sort` in anticipation of the [type-imports] proposal. Until that
   proposal, core modules won't be able to actually import or export types, however, the
   `type` sort is allowed as part of outer aliases (below).
@@ -101,8 +101,8 @@ Notes:
   for aliases (below).
 * Validation of `core:instantiatearg` initially only allows the `instance`
   sort, but would be extended to accept other sorts as core wasm is extended.
-* Validation of `instantiate` requires each `<externname>` in `c` to match a
-  `name` in a `with` argument (using plain string equality) and for the types to
+* Validation of `instantiate` requires each `<importname>` in `c` to match a
+  `name` in a `with` argument (compared as strings) and for the types to
   match.
 * When validating `instantiate`, after each individual type-import is supplied
   via `with`, the actual type supplied is immediately substituted for all uses
@@ -116,23 +116,24 @@ Notes:
 
 (See [Alias Definitions](Explainer.md#alias-definitions) in the explainer.)
 ```ebnf
-alias ::= s:<sort> 0x00 i:<instanceidx> n:<name>           => (alias export i n (s))
-        | s:<sort> 0x01 i:<core:instanceidx> n:<core:name> => (alias core export i n (s))
-        | s:<sort> 0x02 ct:<u32> idx:<u32>                 => (alias outer ct idx (s))  (if s in outeraliassort)
+alias       ::= s:<sort> t:<aliastarget>                => (alias t (s))
+aliastarget ::= 0x00 i:<instanceidx> n:<name>           => export i n
+              | 0x01 i:<core:instanceidx> n:<core:name> => core export i n
+              | 0x02 ct:<u32> idx:<u32>                 => outer ct idx
 ```
 Notes:
 * Reused Core binary rules: (variable-length encoded) [`core:u32`]
-* For (`core`) `export` aliases, `i` is validated to refer to a (core) instance
-  in the (core) instance index space that exports `n` with the specified `sort`.
-* For `outer` aliases:
-  * `ct` is validated to be *less than or equal to* the number of enclosing
-    "scopes" (where a "scope" is one of: a `component` definition, a `component`
-    type, an `instance` type)
-  * `i` is validated to be a valid index in the `s` index space of the target
-    scope (counting outward, starting with `0` referring to the current scope)
-  * if `ct` is greater than 0 and crosses a component (as opposed to type)
-    boundary and `s` is `type`, the target type may not transitively refer to a
-    resource type.
+* For `export` aliases, `i` is validated to refer to an instance in the
+  instance index space that exports `n` with the specified `sort`.
+* For `outer` aliases, `ct` is validated to be *less or equal than* the number
+  of enclosing `component`s and `type`s and `i` is validated to be a valid index
+  in the `sort` index space of the targeted `component`/`type` (counting
+  outward, starting with `0` referring to the current `component`/`type`).
+* For `outer` aliases, validation restricts the `sort` to one of `type`,
+  `module` or `component`.
+* For `outer` aliases that reach across a `component` boundary (as opposed to
+  a `type` boundary), validation additionally requires that any outer-aliased
+  `type` does not transitively refer to a `resource` type.
 
 
 ## Type Definitions
@@ -148,12 +149,13 @@ core:moduledecl  ::= 0x00 i:<core:import>                                 => i
                    | 0x01 t:<core:type>                                   => t
                    | 0x02 a:<core:alias>                                  => a
                    | 0x03 e:<core:exportdecl>                             => e
-core:alias       ::= 0x10 0x01 ct:<u32> idx:<u32>                         => (alias outer ct idx (type))
+core:alias       ::= s:<core:sort> t:<core:aliastarget>                   => (alias t (s))
+core:aliastarget ::= 0x01 ct:<u32> idx:<u32>                              => outer ct idx
 core:importdecl  ::= i:<core:import>                                      => i
-core:exportdecl  ::= n:<core:name> t:<core:externtype>                    => (export n t)
+core:exportdecl  ::= n:<core:name> d:<core:importdesc>                    => (export n d)
 ```
 Notes:
-* Reused Core binary rules: [`core:import`], [`core:externtype`],
+* Reused Core binary rules: [`core:import`], [`core:importdesc`],
   [`core:rectype`]
 * Unfortunately, the `core:deftype` rule results in an encoding ambiguity: the
   `0x50` opcode is used by both `core:moduletype` and a non-final
@@ -169,9 +171,8 @@ Notes:
   core type index space will not contain any core module types.
 * As described in the explainer, each module type is validated with an
   initially-empty type index space.
-* In `core:alias`, the first `0x10` is the opcode for `type` in `core:sort` and
-  `0x01` is an opcode to distinguish `outer` aliases from potential future
-  `export` aliases.
+* `alias` declarators currently only allow `outer` `type` aliases but
+  would add `export` aliases when core wasm adds type exports.
 
 ```ebnf
 type          ::= dt:<deftype>                            => (type dt)
@@ -200,8 +201,8 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x70 t:<valtype>                        => (list t)
                 | 0x67 t:<valtype> len:<u32>              => (list t len)  (if len > 0) 🔧
                 | 0x6f t*:vec(<valtype>)                  => (tuple t+)    (if |t*| > 0)
-                | 0x6e l*:vec(<labellit>)                 => (flags l+)    (if 0 < |l*| <= 32)
-                | 0x6d l*:vec(<labellit>)                 => (enum l+)     (if |l*| > 0)
+                | 0x6e l*:vec(<label'>)                   => (flags l+)    (if 0 < |l*| <= 32)
+                | 0x6d l*:vec(<label'>)                   => (enum l+)     (if |l*| > 0)
                 | 0x6b t:<valtype>                        => (option t)
                 | 0x6a t?:<valtype>? u?:<valtype>?        => (result t? (error u)?)
                 | 0x69 i:<typeidx>                        => (own i)
@@ -209,9 +210,9 @@ defvaltype    ::= pvt:<primvaltype>                       => pvt
                 | 0x66 t?:<valtype>?                      => (stream t?) 🔀
                 | 0x65 t?:<valtype>?                      => (future t?) 🔀
                 | 0x63 k:<valtype> v:<valtype>            => (map k v) (if k is in <keytype>) 🗺️
-labelvaltype  ::= l:<labellit> t:<valtype>                => l t
-case          ::= l:<labellit> t?:<valtype>? 0x00         => (case l t?)
-labellit      ::= len:<u32> l:<label>                     => "l"  (if len = |l|)
+labelvaltype  ::= l:<label'> t:<valtype>                  => l t
+case          ::= l:<label'> t?:<valtype>? 0x00           => (case l t?)
+label'        ::= len:<u32> l:<label>                     => l    (if len = |l|)
 <T>?          ::= 0x00                                    =>
                 | 0x01 t:<T>                              => t
 valtype       ::= i:<typeidx>                             => i
@@ -230,9 +231,9 @@ instancedecl  ::= 0x00 t:<core:type>                      => t
                 | 0x01 t:<type>                           => t
                 | 0x02 a:<alias>                          => a
                 | 0x04 ed:<exportdecl>                    => ed
-importdecl    ::= na:<nameattributes> et:<externtype>     => (import na et)
-exportdecl    ::= na:<nameattributes> et:<externtype>     => (export na et)
-externtype    ::= 0x00 0x11 i:<core:typeidx>              => (core module (type i))
+importdecl    ::= in:<importname'> ed:<externdesc>        => (import in ed)
+exportdecl    ::= en:<exportname'> ed:<externdesc>        => (export en ed)
+externdesc    ::= 0x00 0x11 i:<core:typeidx>              => (core module (type i))
                 | 0x01 i:<typeidx>                        => (func (type i))
                 | 0x02 b:<valuebound>                     => (value b) 🪙
                 | 0x03 b:<typebound>                      => (type b)
@@ -259,13 +260,11 @@ Notes:
   [TODO](Concurrency.md#TODO).
 * Validation of `resourcetype` requires the destructor (if present) to have
   type `[i32] -> []`.
-* In addition to the validation rules for `alias` *definitions* mentioned above,
-  validation of `alias` *declarators* also requires:
-  * `export` aliases only alias the `instance` and `type` sorts
-  * `outer` aliases only alias the `core type` and `type` sorts
+* Validation of `instancedecl` (currently) only allows the `type` and
+  `instance` sorts in `alias` declarators.
 * As described in the explainer, each component and instance type is validated
-  with an initially-empty type index space. (Outer aliases can be used to pull
-  in type definitions from containing `component` and `type` scopes.)
+  with an initially-empty type index space. Outer aliases can be used to pull
+  in type definitions from containing components.
 * `exportdecl` introduces a new type index that can be used by subsequent type
   definitions. In the `(eq i)` case, the new type index is effectively an alias
   to type `i`. In the `(sub resource)` case, the new type index refers to a
@@ -273,15 +272,13 @@ Notes:
   index spaces. (Note: *subsequent* aliases can introduce new type indices
   equivalent to this fresh type.)
 * Validation rejects `resourcetype` type definitions inside `componenttype` and
-  `instancetype`. Thus, handle types inside a `componenttype` can only refer
+  `instancettype`. Thus, handle types inside a `componenttype` can only refer
   to resource types that are imported or exported.
-* `<label>` is defined as part of the
-   [text format](Explainer.md#import-and-export-definitions).
 * All parameter labels, result labels, record field labels, variant case
   labels, flag labels, enum case labels, component import names, component
   export names, instance import names and instance export names must be
   [strongly-unique] in their containing scope.
-* Validation of `externtype` requires the various `typeidx` type constructors
+* Validation of `externdesc` requires the various `typeidx` type constructors
   to match the preceding `sort`.
 * (The `0x00` immediate of `case` may be reinterpreted in the future as the
   `none` case of an optional immediate.)
@@ -305,6 +302,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x05                                                => (canon task.cancel (core func)) 🔀
            | 0x0a v:<valtype> i:<u32>                            => (canon context.get v i (core func)) 🔀
            | 0x0b v:<valtype> i:<u32>                            => (canon context.set v i (core func)) 🔀
+           | 0x0c cancel?:<cancel?>                              => (canon thread.yield cancel? (core func)) 🔀
            | 0x06 async?:<async?>                                => (canon subtask.cancel async? (core func)) 🔀
            | 0x0d                                                => (canon subtask.drop (core func)) 🔀
            | 0x0e t:<typeidx>                                    => (canon stream.new t (core func)) 🔀
@@ -331,13 +329,10 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x23                                                => (canon waitable.join (core func)) 🔀
            | 0x26                                                => (canon thread.index (core func)) 🧵
            | 0x27 ft:<typeidx> tbl:<core:tableidx>               => (canon thread.new-indirect ft tbl (core func)) 🧵
-           | 0x28                                                => (canon thread.resume-later (core func)) 🧵
+           | 0x28 cancel?:<cancel?>                              => (canon thread.switch-to cancel? (core func)) 🧵
            | 0x29 cancel?:<cancel?>                              => (canon thread.suspend cancel? (core func)) 🧵
-           | 0x0c cancel?:<cancel?>                              => (canon thread.yield cancel? (core func)) 🔀
-           | 0x2a cancel?:<cancel?>                              => (canon thread.suspend-then-resume cancel? (core func)) 🧵
-           | 0x2b cancel?:<cancel?>                              => (canon thread.yield-then-resume cancel? (core func)) 🧵
-           | 0x2c cancel?:<cancel?>                              => (canon thread.suspend-then-promote cancel? (core func)) 🧵
-           | 0x2d cancel?:<cancel?>                              => (canon thread.yield-then-promote cancel? (core func)) 🧵
+           | 0x2a                                                => (canon thread.resume-later (core func)) 🧵
+           | 0x2b cancel?:<cancel?>                              => (canon thread.yield-to cancel? (core func)) 🧵
            | 0x40 shared?:<sh?> ft:<typeidx>                     => (canon thread.spawn-ref shared? ft (core func)) 🧵②
            | 0x41 shared?:<sh?> ft:<typeidx> tbl:<core:tableidx> => (canon thread.spawn-indirect shared? ft tbl (core func)) 🧵②
            | 0x42 shared?:<sh?>                                  => (canon thread.available-parallelism shared? (core func)) 🧵②
@@ -394,14 +389,16 @@ flags are set.
 (See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
 in the explainer.)
 ```ebnf
-import         ::= na:<nameattributes> et:<externtype>                  => (import na et)
-export         ::= na:<nameattributes> si:<sortidx> et?:<externtype>?   => (export na si et?)
-nameattributes ::= 0x00 len:<u32> en:<externname>                       => "en"                 (if len = |en|)
-                 | 0x01 len:<u32> en:<externname>                       => "en"                 (if len = |en|)
-                 | 0x02 len:<u32> en:<externname> a*:vec(<attribute>)   => "en" a*              (if len = |en|) 🏷️/🔗
-attribute      ::= 0x00 len:<u32> in:<interfacename>                    => (implements "in")    (if len = |in|) 🏷️
-                 | 0x01 len:<u32> vs:<semversuffix>                     => (versionsuffix "vs") (if len = |vs|) 🔗
-                 | 0x02 n:<name>                                        => (external-id n) 🏷️
+import         ::= in:<importname'> ed:<externdesc>                     => (import in ed)
+export         ::= en:<exportname'> si:<sortidx> ed?:<externdesc>?      => (export en si ed?)
+importname'    ::= 0x00 len:<u32> in:<importname>                       => in      (if len = |in|)
+                 | 0x01 len:<u32> in:<importname>                       => in      (if len = |in|)
+                 | 0x02 len:<u32> in:<importname> opts:vec(<nameopt>)   => in opts (if len = |in|) 🏷️/🔗
+exportname'    ::= 0x00 len:<u32> in:<exportname>                       => in      (if len = |in|)
+                 | 0x01 len:<u32> in:<exportname>                       => in      (if len = |in|)
+                 | 0x02 len:<u32> in:<importname> opts:vec(<nameopt>)   => in opts (if len = |in|) 🏷️/🔗
+nameopt        ::= 0x00 len:<u32> n:<interfacename>                     => (implements i) 🏷️
+                 | 0x01 len:<u32> vs:<semversuffix>                     => (versionsuffix vs) 🔗
 ```
 
 Notes:
@@ -409,30 +406,25 @@ Notes:
   definition and can be used by all subsequent definitions just like an alias.
 * Validation requires that all resource types transitively used in the type of an
   export are introduced by a preceding `importdecl` or `exportdecl`.
-* Validation requires any exported `sortidx` to have a valid `externtype`
+* Validation requires any exported `sortidx` to have a valid `externdesc`
   (which disallows core sorts other than `core module`). When the optional
-  `externtype` immediate is present, validation requires it to be a supertype
-  of the inferred `externtype` of the `sortidx`.
-* `<externname>`, `<interfacename>` and `<semversuffix>` are defined as part of
-  the [text format](Explainer.md#import-and-export-definitions).
-* The redundant `0x00`/`0x01` cases of `nameattributes` will
-  [be cleaned up for a 1.0 release](#binary-format-warts-to-fix-in-a-10-release).
-* The `externname`s of all imports in a given component or component-type must
-  be [strongly-unique]; attributes are ignored.
-* The `externname`s of all exports in a given component, instance, component-
-  type or instance-type must be [strongly-unique]; attributes are ignored.
+  `externdesc` immediate is present, validation requires it to be a supertype
+  of the inferred `externdesc` of the `sortidx`.
+* `<importname>` and `<exportname>` refer to the productions defined in the
+  [text format](Explainer.md#import-and-export-definitions).
+* `<importname'>` and `<exportname'>` will [be cleaned up for a 1.0
+  release](##binary-format-warts-to-fix-in-a-10-release).
+* The `<importname>`s of a component must all be [strongly-unique]. Separately,
+  the `<exportname>`s of a component must also all be [strongly-unique].
 * Validation requires that `[constructor]`, `[method]` and `[static]` annotated
   `plainname`s only occur on `func` imports or exports and that the first label
   of a `[constructor]`, `[method]` or `[static]` matches the `plainname` of a
   preceding `resource` import or export, respectively, in the same scope
   (component, component type or instance type).
 * 🏷️ Validation requires that `implements`-annotated imports or exports are
-  `instance`-typed and have a `plainname` name.
-* 🏷️/🔗 Validation requires that a `vec(<attribute>)` contains each kind of
-  `attribute` at most once.
-* 🏷️/🔗 Even though `componenttype` and `instancetype` structurally contain a
-  `vec(<attribute>)`, this list is entirely ignored when validating the types
-  of components and instances.
+  `instance`-typed.
+* 🏷️ Validation requires that `implements`-annotated imports or exports have a
+  `<plainname>` name.
 * Validation of `[constructor]` names requires a `func` type whose result type
   is either `(own $R)` or `(result (own $R) E?)` where `$R` is a resource type
   labeled `r`.
@@ -443,6 +435,8 @@ Notes:
   the `versionsuffix` results in a `valid semver` as defined by
   [https://semver.org](https://semver.org/). A `versionsuffix` is otherwise
   ignored for validation except to improve diagnostic messages.
+* `<integrity-metadata>` is as defined by the
+  [SRI](https://www.w3.org/TR/SRI/#dfn-integrity-metadata) spec.
 
 ## 🪙 Value Definitions
 
@@ -534,9 +528,12 @@ named once.
 ## Binary Format Warts to Fix in a 1.0 Release
 
 * The opcodes (for types, canon built-ins, etc) should be re-sorted
+* The two `depname` cases should be merged into one (`dep=<...>`)
 * The two `list` type codes should be merged into one with an optional immediate
   and similarly for `func`.
-* The redundant `0x00` and `0x01` opcodes of `nameattributes` will be merged.
+* The `0x00` and `0x01` variant of `importname'` and `exportname'` will be
+  removed. Any remaining variant(s) will be renumbered or the prefix byte will
+  be removed or repurposed.
 * Most built-ins should have a `<canonopt>*` immediate instead of an ad hoc
   subset of `canonopt`s.
 * Add optional `shared` immediate to all canonical definitions (explicitly or
@@ -559,7 +556,7 @@ named once.
 [`core:version`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-version
 [`core:name`]: https://webassembly.github.io/spec/core/binary/values.html#binary-name
 [`core:import`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-import
-[`core:externtype`]: https://webassembly.github.io/spec/core/binary/types.html#binary-externtype
+[`core:importdesc`]: https://webassembly.github.io/spec/core/binary/modules.html#binary-importdesc
 [`core:functype`]: https://webassembly.github.io/spec/core/binary/types.html#binary-functype
 [`core:rectype]: https://webassembly.github.io/gc/core/binary/types.html#recursive-types
 
