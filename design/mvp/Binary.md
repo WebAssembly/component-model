@@ -325,12 +325,12 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x1d opts:<opts>                                    => (canon error-context.debug-message opts (core func)) 📝
            | 0x1e                                                => (canon error-context.drop (core func)) 📝
            | 0x1f                                                => (canon waitable-set.new (core func)) 🔀
-           | 0x20 cancel?:<cancel?> m:<core:memidx>              => (canon waitable-set.wait cancel? (memory m) (core func)) 🔀
-           | 0x21 cancel?:<cancel?> m:<core:memidx>              => (canon waitable-set.poll cancel? (memory m) (core func)) 🔀
+           | 0x20 cancel?:<cancel?> m:<core:memoryidx>           => (canon waitable-set.wait cancel? (memory m) (core func)) 🔀
+           | 0x21 cancel?:<cancel?> m:<core:memoryidx>           => (canon waitable-set.poll cancel? (memory m) (core func)) 🔀
            | 0x22                                                => (canon waitable-set.drop (core func)) 🔀
            | 0x23                                                => (canon waitable.join (core func)) 🔀
            | 0x26                                                => (canon thread.index (core func)) 🧵
-           | 0x27 ft:<typeidx> tbl:<core:tableidx>               => (canon thread.new-indirect ft tbl (core func)) 🧵
+           | 0x27 ft:<core:typeidx> tbl:<core:tableidx>          => (canon thread.new-indirect ft tbl (core func)) 🧵
            | 0x28                                                => (canon thread.resume-later (core func)) 🧵
            | 0x29 cancel?:<cancel?>                              => (canon thread.suspend cancel? (core func)) 🧵
            | 0x0c cancel?:<cancel?>                              => (canon thread.yield cancel? (core func)) 🔀
@@ -338,8 +338,8 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x2b cancel?:<cancel?>                              => (canon thread.yield-then-resume cancel? (core func)) 🧵
            | 0x2c cancel?:<cancel?>                              => (canon thread.suspend-then-promote cancel? (core func)) 🧵
            | 0x2d cancel?:<cancel?>                              => (canon thread.yield-then-promote cancel? (core func)) 🧵
-           | 0x40 shared?:<sh?> ft:<typeidx>                     => (canon thread.spawn-ref shared? ft (core func)) 🧵②
-           | 0x41 shared?:<sh?> ft:<typeidx> tbl:<core:tableidx> => (canon thread.spawn-indirect shared? ft tbl (core func)) 🧵②
+           | 0x40 shared?:<sh?> ft:<core:typeidx>                => (canon thread.spawn-ref shared? ft (core func)) 🧵②
+           | 0x41 shared?:<sh?> ft:<core:typeidx> tbl:<core:tableidx> => (canon thread.spawn-indirect shared? ft tbl (core func)) 🧵②
            | 0x42 shared?:<sh?>                                  => (canon thread.available-parallelism shared? (core func)) 🧵②
 async?   ::= 0x00                                                =>
            | 0x01                                                => async
@@ -351,7 +351,7 @@ opts     ::= opt*:vec(<canonopt>)                                => opt*
 canonopt ::= 0x00                                                => string-encoding=utf8
            | 0x01                                                => string-encoding=utf16
            | 0x02                                                => string-encoding=latin1+utf16
-           | 0x03 m:<core:memidx>                                => (memory m)
+           | 0x03 m:<core:memoryidx>                             => (memory m)
            | 0x04 f:<core:funcidx>                               => (realloc f)
            | 0x05 f:<core:funcidx>                               => (post-return f)
            | 0x06                                                => async 🔀
