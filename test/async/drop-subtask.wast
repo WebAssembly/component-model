@@ -41,7 +41,7 @@
     ))))
     (func (export "loop") async (canon lift
       (core func $core_looper "loop")
-      async (callback (func $core_looper "loop_cb"))
+      async (callback (core func $core_looper "loop_cb"))
     ))
     (func (export "return") async (canon lift
       (core func $core_looper "return")
@@ -110,9 +110,9 @@
     (canon subtask.drop (core func $subtask.drop))
     (canon waitable.join (core func $waitable.join))
     (canon waitable-set.new (core func $waitable-set.new))
-    (canon waitable-set.wait (memory $memory "mem") (core func $waitable-set.wait))
-    (canon lower (func $looper "loop") async (memory $memory "mem") (core func $loop'))
-    (canon lower (func $looper "return") (memory $memory "mem") (core func $return'))
+    (canon waitable-set.wait (memory (core memory $memory "mem")) (core func $waitable-set.wait))
+    (canon lower (func $looper "loop") async (memory (core memory $memory "mem")) (core func $loop'))
+    (canon lower (func $looper "return") (memory (core memory $memory "mem")) (core func $return'))
     (core instance $core_caller (instantiate $CoreCaller (with "" (instance
       (export "mem" (memory $memory "mem"))
       (export "subtask.drop" (func $subtask.drop))

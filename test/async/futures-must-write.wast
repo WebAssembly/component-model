@@ -39,7 +39,7 @@
     )
     (type $FT (future u8))
     (canon future.new $FT (core func $future.new))
-    (canon future.write $FT async (memory $memory "mem") (core func $future.write))
+    (canon future.write $FT async (memory (core memory $memory "mem")) (core func $future.write))
     (canon future.drop-writable $FT (core func $future.drop-writable))
     (core instance $cm (instantiate $CM (with "" (instance
       (export "mem" (memory $memory "mem"))

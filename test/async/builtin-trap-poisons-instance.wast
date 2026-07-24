@@ -25,7 +25,7 @@
   )
   (type $ST (stream u8))
   (canon stream.new $ST (core func $stream.new))
-  (canon stream.write $ST async (memory $memory "mem") (core func $stream.write))
+  (canon stream.write $ST async (memory (core memory $memory "mem")) (core func $stream.write))
   (canon stream.drop-writable $ST (core func $stream.drop-writable))
   (core instance $m (instantiate $M (with "" (instance
     (export "mem" (memory $memory "mem"))

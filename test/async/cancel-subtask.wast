@@ -58,10 +58,10 @@
     )
     (type $FT (future))
     (canon task.cancel (core func $task.cancel))
-    (canon future.read $FT async (memory $memory "mem") (core func $future.read))
+    (canon future.read $FT async (memory (core memory $memory "mem")) (core func $future.read))
     (canon waitable.join (core func $waitable.join))
     (canon waitable-set.new (core func $waitable-set.new))
-    (canon waitable-set.wait (memory $memory "mem") (core func $waitable-set.wait))
+    (canon waitable-set.wait (memory (core memory $memory "mem")) (core func $waitable-set.wait))
     (core instance $cm (instantiate $CM (with "" (instance
       (export "mem" (memory $memory "mem"))
       (export "task.cancel" (func $task.cancel))
@@ -72,7 +72,7 @@
     ))))
     (func (export "f") async (result u32) (canon lift
       (core func $cm "f")
-      async (callback (func $cm "f_cb"))
+      async (callback (core func $cm "f_cb"))
     ))
     (func (export "g") async (param "fut" $FT) (result u32) (canon lift
       (core func $cm "g")
@@ -170,12 +170,12 @@
     (canon subtask.cancel async (core func $subtask.cancel))
     (canon subtask.drop (core func $subtask.drop))
     (canon future.new $FT (core func $future.new))
-    (canon future.write $FT async (memory $memory "mem") (core func $future.write))
+    (canon future.write $FT async (memory (core memory $memory "mem")) (core func $future.write))
     (canon waitable.join (core func $waitable.join))
     (canon waitable-set.new (core func $waitable-set.new))
-    (canon waitable-set.wait (memory $memory "mem") (core func $waitable-set.wait))
-    (canon lower (func $f) async (memory $memory "mem") (core func $f'))
-    (canon lower (func $g) async (memory $memory "mem") (core func $g'))
+    (canon waitable-set.wait (memory (core memory $memory "mem")) (core func $waitable-set.wait))
+    (canon lower (func $f) async (memory (core memory $memory "mem")) (core func $f'))
+    (canon lower (func $g) async (memory (core memory $memory "mem")) (core func $g'))
     (core instance $dm (instantiate $DM (with "" (instance
       (export "mem" (memory $memory "mem"))
       (export "subtask.cancel" (func $subtask.cancel))

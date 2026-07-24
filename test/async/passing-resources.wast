@@ -78,7 +78,7 @@
     (canon resource.new $R (core func $resource.new))
     (canon resource.rep $R (core func $resource.rep))
     (canon stream.new $ST (core func $stream.new))
-    (canon stream.write $ST async (memory $memory "mem") (core func $stream.write))
+    (canon stream.write $ST async (memory (core memory $memory "mem")) (core func $stream.write))
     (canon stream.cancel-write $ST (core func $stream.cancel-write))
     (canon stream.drop-writable $ST (core func $stream.drop-writable))
     (core instance $core (instantiate $Core (with "" (instance
@@ -149,7 +149,7 @@
     )
     (alias export $producer "R" (type $R))
     (type $ST (stream (own $R)))
-    (canon stream.read $ST async (memory $memory "mem") (core func $stream.read))
+    (canon stream.read $ST async (memory (core memory $memory "mem")) (core func $stream.read))
     (canon stream.drop-readable $ST (core func $stream.drop-readable))
     (canon lower (func $producer "[method]R.foo") (core func $R.foo'))
     (canon lower (func $producer "start-stream") (core func $start-stream'))

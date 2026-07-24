@@ -104,11 +104,11 @@
     ))))
     (func (export "blocker") async (result u32) (canon lift
       (core func $cm "blocker")
-      async (callback (func $cm "blocker_cb"))
+      async (callback (core func $cm "blocker_cb"))
     ))
     (func (export "unblocker") async (result u32) (canon lift
       (core func $cm "unblocker")
-      async (callback (func $cm "unblocker_cb"))
+      async (callback (core func $cm "unblocker_cb"))
     ))
   )
 
@@ -176,10 +176,10 @@
     )
     (canon waitable.join (core func $waitable.join))
     (canon waitable-set.new (core func $waitable-set.new))
-    (canon waitable-set.wait (memory $memory "mem") (core func $waitable-set.wait))
+    (canon waitable-set.wait (memory (core memory $memory "mem")) (core func $waitable-set.wait))
     (canon subtask.drop (core func $subtask.drop))
-    (canon lower (func $c "blocker") async (memory $memory "mem") (core func $blocker'))
-    (canon lower (func $c "unblocker") async (memory $memory "mem") (core func $unblocker'))
+    (canon lower (func $c "blocker") async (memory (core memory $memory "mem")) (core func $blocker'))
+    (canon lower (func $c "unblocker") async (memory (core memory $memory "mem")) (core func $unblocker'))
     (core instance $dm (instantiate $DM (with "" (instance
       (export "mem" (memory $memory "mem"))
       (export "waitable.join" (func $waitable.join))

@@ -188,7 +188,7 @@
       (func (export "f") (result i32) unreachable))
     (core instance $i (instantiate $m))
     (type $R (resource (rep i32)))
-    (func $f (result (option (own $R))) (canon lift (core func $i "f") (memory $i "mem")))
+    (func $f (result (option (own $R))) (canon lift (core func $i "f") (memory (core memory $i "mem"))))
     (export "f" (func $f)))
   "func not valid to be used as export")
 
@@ -199,7 +199,7 @@
       (func (export "f") (result i32) unreachable))
     (core instance $i (instantiate $m))
     (type $Rec (record (field "x" u32)))
-    (func $f (result (tuple $Rec u32)) (canon lift (core func $i "f") (memory $i "mem")))
+    (func $f (result (tuple $Rec u32)) (canon lift (core func $i "f") (memory (core memory $i "mem"))))
     (export "f" (func $f)))
   "func not valid to be used as export")
 

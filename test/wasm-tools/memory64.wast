@@ -51,5 +51,5 @@
   (core instance $A (instantiate $A))
   (alias core export $A "m" (core memory $m))
   (core func $realloc (alias core export $A "realloc"))
-  (core func (canon lower (func $x) (memory $m) (realloc (func $realloc))))
+  (core func (canon lower (func $x) (memory $m) (realloc (core func $realloc))))
 )

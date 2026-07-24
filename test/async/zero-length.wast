@@ -93,7 +93,7 @@
     (canon waitable.join (core func $waitable.join))
     (canon waitable-set.new (core func $waitable-set.new))
     (canon stream.new $ST (core func $stream.new))
-    (canon stream.write $ST async (memory $memory "mem") (core func $stream.write))
+    (canon stream.write $ST async (memory (core memory $memory "mem")) (core func $stream.write))
     (canon stream.drop-writable $ST (core func $stream.drop-writable))
     (core instance $core_producer (instantiate $CoreProducer (with "" (instance
       (export "mem" (memory $memory "mem"))
@@ -106,7 +106,7 @@
     ))))
     (func (export "produce") async (result (stream u8)) (canon lift
       (core func $core_producer "produce")
-      async (callback (func $core_producer "produce_cb"))
+      async (callback (core func $core_producer "produce_cb"))
     ))
   )
 
@@ -174,7 +174,7 @@
     (canon task.return (result u32) (core func $task.return))
     (canon waitable.join (core func $waitable.join))
     (canon waitable-set.new (core func $waitable-set.new))
-    (canon stream.read $ST async (memory $memory "mem") (core func $stream.read))
+    (canon stream.read $ST async (memory (core memory $memory "mem")) (core func $stream.read))
     (canon stream.drop-readable $ST (core func $stream.drop-readable))
     (core instance $core_consumer (instantiate $CoreConsumer (with "" (instance
       (export "mem" (memory $memory "mem"))
@@ -186,7 +186,7 @@
     ))))
     (func (export "consume") async (param "in" (stream u8)) (result u32) (canon lift
       (core func $core_consumer "consume")
-      async (callback (func $core_consumer "consume_cb"))
+      async (callback (core func $core_consumer "consume_cb"))
     ))
   )
 

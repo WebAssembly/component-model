@@ -678,7 +678,7 @@
   (core instance $i1 (instantiate $m1))
 
   (type $r1 (resource (rep i32)))
-  (type $r2 (resource (rep i32) (dtor (func $i1 "dtor"))))
+  (type $r2 (resource (rep i32) (dtor (core func $i1 "dtor"))))
 
   (core func $drop1 (canon resource.drop $r1))
   (core func $drop2 (canon resource.drop $r2))
