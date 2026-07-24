@@ -666,6 +666,26 @@ class LiftLowerContext:
     self.inst = inst
     self.borrow_scope = borrow_scope
 
+  def reallocate(self, old, old_byte_length, alignment, new_byte_length):
+    assert(self.inst.may_leave)
+    self.inst.may_leave = False
+    ptrt = U32Type() if self.opts.memory.ptr_type() == 'i32' else U64Type()
+    ft = FuncType([ptrt, ptrt, ptrt, ptrt], [ptrt], async_ = False)
+    opts = CanonicalOptions(async_ = False)
+    def on_start():
+      return [old, old_byte_length, alignment, new_byte_length]
+    ptr = None
+    def on_resolve(result):
+      nonlocal ptr
+      [ptr] = result
+    canon_lift(self.opts.realloc, ft, opts, self.inst, on_start, on_resolve)
+    assert(ptr is not None)
+    self.inst.may_leave = True
+    return ptr
+
+  def allocate(self, alignment, byte_length):
+    return self.reallocate(0, 0, alignment, byte_length)
+
 ## Runtime State
 
 ### Table State
@@ -1633,7 +1653,7 @@ def store_string_into_range(cx, v: String):
 def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment, dst_encoding):
   dst_byte_length = dst_code_unit_size * src_code_units
   assert(dst_byte_length <= REALLOC_I32_MAX)
-  ptr = cx.opts.realloc(0, 0, dst_alignment, dst_byte_length)
+  ptr = cx.allocate(dst_alignment, dst_byte_length)
   trap_if(ptr != align_to(ptr, dst_alignment))
   trap_if(ptr + dst_byte_length > len(cx.opts.memory))
   encoded = src.encode(dst_encoding)
@@ -1651,19 +1671,19 @@ def store_latin1_to_utf8(cx, src, src_code_units):
 
 def store_string_to_utf8(cx, src, src_code_units, worst_case_size):
   assert(src_code_units <= REALLOC_I32_MAX)
-  ptr = cx.opts.realloc(0, 0, 1, src_code_units)
+  ptr = cx.allocate(1, src_code_units)
   trap_if(ptr + src_code_units > len(cx.opts.memory))
   for i,code_point in enumerate(src):
     if ord(code_point) < 2**7:
       cx.opts.memory[ptr + i] = ord(code_point)
     else:
       assert(worst_case_size <= REALLOC_I32_MAX)
-      ptr = cx.opts.realloc(ptr, src_code_units, 1, worst_case_size)
+      ptr = cx.reallocate(ptr, src_code_units, 1, worst_case_size)
       trap_if(ptr + worst_case_size > len(cx.opts.memory))
       encoded = src.encode('utf-8')
       cx.opts.memory[ptr+i : ptr+len(encoded)] = encoded[i : ]
       if worst_case_size > len(encoded):
-        ptr = cx.opts.realloc(ptr, worst_case_size, 1, len(encoded))
+        ptr = cx.reallocate(ptr, worst_case_size, 1, len(encoded))
         trap_if(ptr + len(encoded) > len(cx.opts.memory))
       return (ptr, len(encoded))
   return (ptr, src_code_units)
@@ -1671,13 +1691,13 @@ def store_string_to_utf8(cx, src, src_code_units, worst_case_size):
 def store_utf8_to_utf16(cx, src, src_code_units):
   worst_case_size = 2 * src_code_units
   assert(worst_case_size <= REALLOC_I32_MAX)
-  ptr = cx.opts.realloc(0, 0, 2, worst_case_size)
+  ptr = cx.allocate(2, worst_case_size)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + worst_case_size > len(cx.opts.memory))
   encoded = src.encode('utf-16-le')
   cx.opts.memory[ptr : ptr+len(encoded)] = encoded
   if len(encoded) < worst_case_size:
-    ptr = cx.opts.realloc(ptr, worst_case_size, 2, len(encoded))
+    ptr = cx.reallocate(ptr, worst_case_size, 2, len(encoded))
     trap_if(ptr != align_to(ptr, 2))
     trap_if(ptr + len(encoded) > len(cx.opts.memory))
   code_units = int(len(encoded) / 2)
@@ -1685,7 +1705,7 @@ def store_utf8_to_utf16(cx, src, src_code_units):
 
 def store_string_to_latin1_or_utf16(cx, src, src_code_units):
   assert(src_code_units <= REALLOC_I32_MAX)
-  ptr = cx.opts.realloc(0, 0, 2, src_code_units)
+  ptr = cx.allocate(2, src_code_units)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + src_code_units > len(cx.opts.memory))
   dst_byte_length = 0
@@ -1696,7 +1716,7 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
     else:
       worst_case_size = 2 * src_code_units
       assert(worst_case_size <= REALLOC_I32_MAX)
-      ptr = cx.opts.realloc(ptr, src_code_units, 2, worst_case_size)
+      ptr = cx.reallocate(ptr, src_code_units, 2, worst_case_size)
       trap_if(ptr != align_to(ptr, 2))
       trap_if(ptr + worst_case_size > len(cx.opts.memory))
       for j in range(dst_byte_length-1, -1, -1):
@@ -1705,13 +1725,13 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
       encoded = src.encode('utf-16-le')
       cx.opts.memory[ptr+2*dst_byte_length : ptr+len(encoded)] = encoded[2*dst_byte_length : ]
       if worst_case_size > len(encoded):
-        ptr = cx.opts.realloc(ptr, worst_case_size, 2, len(encoded))
+        ptr = cx.reallocate(ptr, worst_case_size, 2, len(encoded))
         trap_if(ptr != align_to(ptr, 2))
         trap_if(ptr + len(encoded) > len(cx.opts.memory))
       tagged_code_units = int(len(encoded) / 2) | utf16_tag(cx.opts.memory.ptr_type())
       return (ptr, tagged_code_units)
   if dst_byte_length < src_code_units:
-    ptr = cx.opts.realloc(ptr, src_code_units, 2, dst_byte_length)
+    ptr = cx.reallocate(ptr, src_code_units, 2, dst_byte_length)
     trap_if(ptr != align_to(ptr, 2))
     trap_if(ptr + dst_byte_length > len(cx.opts.memory))
   return (ptr, dst_byte_length)
@@ -1719,7 +1739,7 @@ def store_string_to_latin1_or_utf16(cx, src, src_code_units):
 def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   src_byte_length = 2 * src_code_units
   assert(src_byte_length <= REALLOC_I32_MAX)
-  ptr = cx.opts.realloc(0, 0, 2, src_byte_length)
+  ptr = cx.allocate(2, src_byte_length)
   trap_if(ptr != align_to(ptr, 2))
   trap_if(ptr + src_byte_length > len(cx.opts.memory))
   encoded = src.encode('utf-16-le')
@@ -1730,7 +1750,7 @@ def store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units):
   latin1_size = int(len(encoded) / 2)
   for i in range(latin1_size):
     cx.opts.memory[ptr + i] = cx.opts.memory[ptr + 2*i]
-  ptr = cx.opts.realloc(ptr, src_byte_length, 1, latin1_size)
+  ptr = cx.reallocate(ptr, src_byte_length, 1, latin1_size)
   trap_if(ptr + latin1_size > len(cx.opts.memory))
   return (ptr, latin1_size)
 
@@ -1749,7 +1769,7 @@ def store_list(cx, v, ptr, elem_type, maybe_length):
 def store_list_into_range(cx, v, elem_type):
   byte_length = len(v) * elem_size(elem_type, cx.opts.memory.ptr_type())
   assert(byte_length <= REALLOC_I32_MAX)
-  ptr = cx.opts.realloc(0, 0, alignment(elem_type, cx.opts.memory.ptr_type()), byte_length)
+  ptr = cx.allocate(alignment(elem_type, cx.opts.memory.ptr_type()), byte_length)
   trap_if(ptr != align_to(ptr, alignment(elem_type, cx.opts.memory.ptr_type())))
   trap_if(ptr + byte_length > len(cx.opts.memory))
   store_list_into_valid_range(cx, v, ptr, elem_type)
@@ -2107,13 +2127,13 @@ def lift_flat_values(cx, max_flat, vi, ts):
     return [ lift_flat(cx, vi, t) for t in ts ]
 
 def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
-  cx.inst.may_leave = False
   flat_types = flatten_types(ts, cx.opts)
   if len(flat_types) > max_flat:
     tuple_type = TupleType(ts)
     tuple_value = {str(i): v for i,v in enumerate(vs)}
     if out_param is None:
-      ptr = cx.opts.realloc(0, 0, alignment(tuple_type, cx.opts.memory.ptr_type()), elem_size(tuple_type, cx.opts.memory.ptr_type()))
+      ptr_type = cx.opts.memory.ptr_type()
+      ptr = cx.allocate(alignment(tuple_type, ptr_type), elem_size(tuple_type, ptr_type))
       flat_vals = [ptr]
     else:
       ptr = out_param.next(cx.opts.memory.ptr_type())
@@ -2125,7 +2145,6 @@ def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
     flat_vals = []
     for i in range(len(vs)):
       flat_vals += lower_flat(cx, vs[i], ts[i])
-  cx.inst.may_leave = True
   return flat_vals
 
 ## Canonical Definitions
@@ -2149,6 +2168,7 @@ def canon_lift(callee, ft, opts, inst, on_start, on_resolve) -> OnCancel:
       result = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_type())
       task.return_(result)
       if opts.post_return is not None:
+        assert(cx.inst.may_leave)
         inst.may_leave = False
         [] = call_and_trap_on_throw(opts.post_return, flat_results)
         inst.may_leave = True
@@ -2667,6 +2687,7 @@ def drop(EndT, stream_or_future_t, hi):
 
 def canon_thread_index():
   thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
   assert(thread.index is not None)
   return [thread.index]
 
