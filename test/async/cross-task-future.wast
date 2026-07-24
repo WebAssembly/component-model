@@ -35,7 +35,7 @@
     (type $FT (future u8))
     (canon task.return (result $FT) (core func $task.return))
     (canon future.new $FT (core func $future.new))
-    (canon future.write $FT async (memory $memory "mem") (core func $future.write))
+    (canon future.write $FT async (memory (core memory $memory "mem")) (core func $future.write))
     (core instance $cm (instantiate $CM (with "" (instance
       (export "mem" (memory $memory "mem"))
       (export "task.return" (func $task.return))
@@ -47,7 +47,7 @@
     ))
     (func (export "two") async (result (future u8)) (canon lift
       (core func $cm "two")
-      async (callback (func $cm "two_cb"))
+      async (callback (core func $cm "two_cb"))
     ))
   )
 
@@ -83,7 +83,7 @@
       )
     )
     (type $FT (future u8))
-    (canon future.read $FT async (memory $memory "mem") (core func $future.read))
+    (canon future.read $FT async (memory (core memory $memory "mem")) (core func $future.read))
     (canon lower (func $c "one") (core func $one'))
     (canon lower (func $c "two") (core func $two'))
     (core instance $dm (instantiate $DM (with "" (instance

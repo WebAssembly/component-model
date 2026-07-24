@@ -55,7 +55,7 @@
   (canon task.return (result u32) (core func $task.return))
   (canon waitable.join (core func $waitable.join))
   (canon waitable-set.new (core func $waitable-set.new))
-  (canon waitable-set.wait (memory $memory "mem") (core func $waitable-set.wait))
+  (canon waitable-set.wait (memory (core memory $memory "mem")) (core func $waitable-set.wait))
   (canon future.new $FT (core func $future.new))
   (canon future.read $FT async (core func $future.read))
   (canon future.write $FT async (core func $future.write))
@@ -71,7 +71,7 @@
   ))))
   (func (export "run") async (result u32) (canon lift
     (core func $cm "run")
-    async (callback (func $cm "run_cb"))
+    async (callback (core func $cm "run_cb"))
   ))
 )
 (assert_return (invoke "run") (u32.const 42))

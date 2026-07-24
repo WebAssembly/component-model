@@ -15,7 +15,7 @@
       (func (export "f_cb") (param i32 i32 i32) (result i32) unreachable)
     )
     (core instance $i (instantiate $M))
-    (func (export "f") (canon lift (core func $i "f") async (callback (func $i "f_cb"))))
+    (func (export "f") (canon lift (core func $i "f") async (callback (core func $i "f_cb"))))
   )
   "the `async` canonical option requires an async function type")
 

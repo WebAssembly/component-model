@@ -11,7 +11,7 @@
       )
       (core instance $m (instantiate $m))
       (func (export "a") (param "a" string)
-        (canon lift (core func $m "") (realloc (func $m "realloc")) (memory $m "memory"))
+        (canon lift (core func $m "") (realloc (core func $m "realloc")) (memory (core memory $m "memory")))
       )
     )
 
@@ -21,7 +21,7 @@
         (memory (export "memory") 1)
       )
       (core instance $libc (instantiate $libc))
-      (core func $f (canon lower (func $f) string-encoding=utf16 (memory $libc "memory")))
+      (core func $f (canon lower (func $f) string-encoding=utf16 (memory (core memory $libc "memory"))))
       (core module $m
         (import "" "" (func $f (param i32 i32)))
 
@@ -47,7 +47,7 @@
       )
       (core instance $m (instantiate $m))
       (func (export "a") (param "a" string)
-        (canon lift (core func $m "") (realloc (func $m "realloc")) (memory $m "memory"))
+        (canon lift (core func $m "") (realloc (core func $m "realloc")) (memory (core memory $m "memory")))
       )
     )
 
@@ -57,7 +57,7 @@
         (memory (export "memory") 1)
       )
       (core instance $libc (instantiate $libc))
-      (core func $f (canon lower (func $f) string-encoding=latin1+utf16 (memory $libc "memory")))
+      (core func $f (canon lower (func $f) string-encoding=latin1+utf16 (memory (core memory $libc "memory"))))
       (core module $m
         (import "" "" (func $f (param i32 i32)))
 
@@ -83,7 +83,7 @@
       )
       (core instance $m (instantiate $m))
       (func (export "a") (param "a" string)
-        (canon lift (core func $m "") (realloc (func $m "realloc")) (memory $m "memory")
+        (canon lift (core func $m "") (realloc (core func $m "realloc")) (memory (core memory $m "memory"))
           string-encoding=utf8)
       )
     )
@@ -94,7 +94,7 @@
         (memory (export "memory") 1)
       )
       (core instance $libc (instantiate $libc))
-      (core func $f (canon lower (func $f) string-encoding=utf8 (memory $libc "memory")))
+      (core func $f (canon lower (func $f) string-encoding=utf8 (memory (core memory $libc "memory"))))
       (core module $m
         (import "" "" (func $f (param i32 i32)))
 

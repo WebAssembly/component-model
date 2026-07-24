@@ -13,7 +13,7 @@
       (start $start)
     )
     (canon waitable-set.new (core func $waitable-set.new))
-    (canon waitable-set.wait (memory $memory "mem") (core func $waitable-set.wait))
+    (canon waitable-set.wait (memory (core memory $memory "mem")) (core func $waitable-set.wait))
     (core instance $m (instantiate $M (with "" (instance
       (export "waitable-set.new" (func $waitable-set.new))
       (export "waitable-set.wait" (func $waitable-set.wait))
@@ -29,7 +29,7 @@
         (func (export "f_cb") (param i32 i32 i32) (result i32) unreachable)
       )
       (core instance $i (instantiate $M))
-      (func (export "f") async (canon lift (core func $i "f") async (callback (func $i "f_cb"))))
+      (func (export "f") async (canon lift (core func $i "f") async (callback (core func $i "f_cb"))))
     )
     (component $D
       (import "f" (func $f async))

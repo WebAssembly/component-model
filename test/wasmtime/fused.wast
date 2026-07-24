@@ -162,8 +162,8 @@
     (core instance $m (instantiate $m))
 
     (func (export "roundtrip") (type $roundtrip)
-      (canon lift (core func $m "roundtrip") (memory $m "memory")
-        (realloc (func $m "realloc")))
+      (canon lift (core func $m "roundtrip") (memory (core memory $m "memory"))
+        (realloc (core func $m "realloc")))
     )
   )
   (instance $a (instantiate $a))
@@ -191,8 +191,8 @@
     (core instance $libc (instantiate $libc))
     (core func $roundtrip
       (canon lower (func $a "roundtrip")
-        (memory $libc "memory")
-        (realloc (func $libc "realloc")) ;; FIXME(wasm-tools#693) should not be necessary
+        (memory (core memory $libc "memory"))
+        (realloc (core func $libc "realloc")) ;; FIXME(wasm-tools#693) should not be necessary
       )
     )
 
@@ -341,8 +341,8 @@
   (func $foo (param "a" $tuple20)
     (canon lift
       (core func $m "foo")
-      (memory $m "memory")
-      (realloc (func $realloc))
+      (memory (core memory $m "memory"))
+      (realloc (core func $realloc))
     )
   )
 
@@ -357,8 +357,8 @@
     (core instance $libc (instantiate $libc))
     (core func $foo
       (canon lower (func $foo)
-        (memory $libc "memory")
-        (realloc (func $libc "realloc")) ;; FIXME(wasm-tools#693) should not be necessary
+        (memory (core memory $libc "memory"))
+        (realloc (core func $libc "realloc")) ;; FIXME(wasm-tools#693) should not be necessary
       )
     )
     (core module $something
@@ -432,7 +432,7 @@
       )
     )
     (core instance $m (instantiate $m))
-    (func (export "foo") (canon lift (core func $m "foo") (post-return (func $m "foo-post"))))
+    (func (export "foo") (canon lift (core func $m "foo") (post-return (core func $m "foo-post"))))
     (func (export "assert-post") (canon lift (core func $m "assert-post")))
   )
   (instance $a (instantiate $a))
@@ -475,7 +475,7 @@
     )
     (core instance $m (instantiate $m))
     (func (export "foo") (result u32)
-      (canon lift (core func $m "foo") (post-return (func $m "foo-post"))))
+      (canon lift (core func $m "foo") (post-return (core func $m "foo-post"))))
   )
   (instance $a (instantiate $a))
 
@@ -510,14 +510,14 @@
       )
       (core instance $m (instantiate $m))
       (func (export "r") (result (tuple u32 u32))
-        (canon lift (core func $m "r") (memory $m "memory"))
+        (canon lift (core func $m "r") (memory (core memory $m "memory")))
       )
     )
     (component $c2
       (import "r" (func $r (result (tuple u32 u32))))
       (core module $libc (memory (export "memory") 1))
       (core instance $libc (instantiate $libc))
-      (core func $r (canon lower (func $r) (memory $libc "memory")))
+      (core func $r (canon lower (func $r) (memory (core memory $libc "memory"))))
 
       (core module $m
         (import "" "r" (func $r (param i32)))
@@ -546,14 +546,14 @@
       )
       (core instance $m (instantiate $m))
       (func (export "r") (result (tuple u32 u32))
-        (canon lift (core func $m "r") (memory $m "memory"))
+        (canon lift (core func $m "r") (memory (core memory $m "memory")))
       )
     )
     (component $c2
       (import "r" (func $r (result (tuple u32 u32))))
       (core module $libc (memory (export "memory") 1))
       (core instance $libc (instantiate $libc))
-      (core func $r (canon lower (func $r) (memory $libc "memory")))
+      (core func $r (canon lower (func $r) (memory (core memory $libc "memory"))))
 
       (core module $m
         (import "" "r" (func $r (param i32)))
@@ -586,7 +586,7 @@
       )
       (core instance $m (instantiate $m))
       (func (export "r") (param "a" $big)
-        (canon lift (core func $m "r") (memory $m "memory") (realloc (func $m "realloc")))
+        (canon lift (core func $m "r") (memory (core memory $m "memory")) (realloc (core func $m "realloc")))
       )
     )
     (component $c2
@@ -598,8 +598,8 @@
       (core instance $libc (instantiate $libc))
       (core func $r
         (canon lower (func $r)
-          (memory $libc "memory")
-          (realloc (func $libc "realloc")) ;; FIXME(wasm-tools#693) should not be necessary
+          (memory (core memory $libc "memory"))
+          (realloc (core func $libc "realloc")) ;; FIXME(wasm-tools#693) should not be necessary
         )
       )
 
@@ -634,7 +634,7 @@
       )
       (core instance $m (instantiate $m))
       (func (export "r") (param "a" $big)
-        (canon lift (core func $m "r") (memory $m "memory") (realloc (func $m "realloc")))
+        (canon lift (core func $m "r") (memory (core memory $m "memory")) (realloc (core func $m "realloc")))
       )
     )
     (component $c2
@@ -646,8 +646,8 @@
       (core instance $libc (instantiate $libc))
       (core func $r
         (canon lower (func $r)
-          (memory $libc "memory")
-          (realloc (func $libc "realloc")) ;; FIXME(wasm-tools#693) should not be necessary
+          (memory (core memory $libc "memory"))
+          (realloc (core func $libc "realloc")) ;; FIXME(wasm-tools#693) should not be necessary
         )
       )
 
@@ -1376,7 +1376,7 @@
     ;; that the adapter module containing this must be placed in the right
     ;; location.
     (core func $execute
-      (canon lower (func $i "execute") (memory $m "memory") (realloc (func $m "realloc")))
+      (canon lower (func $i "execute") (memory (core memory $m "memory")) (realloc (core func $m "realloc")))
     )
     (core instance (instantiate $shim2
       (with "" (instance

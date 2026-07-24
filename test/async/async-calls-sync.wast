@@ -55,11 +55,11 @@
     ))))
     (func (export "blocking-call") async (result u32) (canon lift
       (core func $core_async_inner "blocking-call")
-      async (callback (func $core_async_inner "blocking-call-cb"))
+      async (callback (core func $core_async_inner "blocking-call-cb"))
     ))
     (func (export "unblock") async (canon lift
       (core func $core_async_inner "unblock")
-      async (callback (func $core_async_inner "unblock-cb"))
+      async (callback (core func $core_async_inner "unblock-cb"))
     ))
   )
 
@@ -101,7 +101,7 @@
     ))))
     (func (export "sync-func") async (result u32) (canon lift
       (core func $core_sync_middle "sync-func")
-      async (callback (func $core_sync_middle "sync-func-cb"))
+      async (callback (core func $core_sync_middle "sync-func-cb"))
     ))
   )
 
@@ -199,8 +199,8 @@
     (canon waitable.join (core func $waitable.join))
     (canon waitable-set.new (core func $waitable-set.new))
     (canon lower (func $unblock) (core func $unblock))
-    (canon lower (func $sync-func1) async (memory $memory "mem") (core func $sync-func1'))
-    (canon lower (func $sync-func2) async (memory $memory "mem") (core func $sync-func2'))
+    (canon lower (func $sync-func1) async (memory (core memory $memory "mem")) (core func $sync-func1'))
+    (canon lower (func $sync-func2) async (memory (core memory $memory "mem")) (core func $sync-func2'))
     (core instance $em (instantiate $CoreAsyncOuter (with "" (instance
       (export "mem" (memory $memory "mem"))
       (export "task.return" (func $task.return))
@@ -213,7 +213,7 @@
     ))))
     (func (export "run") async (result u32) (canon lift
       (core func $em "run")
-      async (callback (func $em "run-cb"))
+      async (callback (core func $em "run-cb"))
     ))
   )
 

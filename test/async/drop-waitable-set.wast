@@ -33,11 +33,11 @@
     ))))
     (func (export "wait-on-set") async (canon lift
       (core func $core "wait-on-set")
-      async (callback (func $core "unreachable-cb"))
+      async (callback (core func $core "unreachable-cb"))
     ))
     (func (export "drop-while-waiting") async (canon lift
       (core func $core "drop-while-waiting")
-      async (callback (func $core "unreachable-cb"))
+      async (callback (core func $core "unreachable-cb"))
     ))
   )
 
@@ -67,7 +67,7 @@
         unreachable
       )
     )
-    (canon lower (func $c "wait-on-set") async (memory $memory "mem") (core func $wait-on-set'))
+    (canon lower (func $c "wait-on-set") async (memory (core memory $memory "mem")) (core func $wait-on-set'))
     (canon lower (func $c "drop-while-waiting") (core func $drop-while-waiting'))
     (core instance $core (instantiate $Core (with "" (instance
       (export "mem" (memory $memory "mem"))

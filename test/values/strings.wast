@@ -18,8 +18,8 @@
     ;; TODO: so many cases left to test, everyone feel free to fill in...
   )
   (core instance $m (instantiate $M))
-  (func (export "f1") (result string) (canon lift (core func $m "f1") (memory $m "mem")))
-  (func (export "f2") (result string) (canon lift (core func $m "f2") (memory $m "mem")))
+  (func (export "f1") (result string) (canon lift (core func $m "f1") (memory (core memory $m "mem"))))
+  (func (export "f2") (result string) (canon lift (core func $m "f2") (memory (core memory $m "mem"))))
 )
 (assert_return (invoke "f1") (str.const "a"))
 (assert_return (invoke "f2") (str.const "☃☺️öツ"))
@@ -35,7 +35,7 @@
     )
   )
   (core instance $m (instantiate $M))
-  (func (export "f") (result string) (canon lift (core func $m "f") (memory $m "mem")))
+  (func (export "f") (result string) (canon lift (core func $m "f") (memory (core memory $m "mem"))))
 )
 (assert_return (invoke "f") (str.const ""))
 
@@ -50,7 +50,7 @@
     )
   )
   (core instance $m (instantiate $M))
-  (func (export "f") (result string) (canon lift (core func $m "f") (memory $m "mem")))
+  (func (export "f") (result string) (canon lift (core func $m "f") (memory (core memory $m "mem"))))
 )
 (assert_return (invoke "f") (str.const ""))
 
@@ -65,7 +65,7 @@
     )
   )
   (core instance $m (instantiate $M))
-  (func (export "f") (result string) (canon lift (core func $m "f") (memory $m "mem")))
+  (func (export "f") (result string) (canon lift (core func $m "f") (memory (core memory $m "mem"))))
 )
 (assert_trap (invoke "f") "string pointer/length out of bounds of memory")
 
@@ -81,7 +81,7 @@
     )
   )
   (core instance $m (instantiate $M))
-  (func (export "f") (result string) (canon lift (core func $m "f") (memory $m "mem")))
+  (func (export "f") (result string) (canon lift (core func $m "f") (memory (core memory $m "mem"))))
 )
 (assert_trap (invoke "f") "invalid utf-8")
 
@@ -97,7 +97,7 @@
     )
   )
   (core instance $m (instantiate $M))
-  (func (export "f") (result string) (canon lift (core func $m "f") (memory $m "mem")))
+  (func (export "f") (result string) (canon lift (core func $m "f") (memory (core memory $m "mem"))))
 )
 (assert_trap (invoke "f") "incomplete utf-8 byte sequence")
 
@@ -115,7 +115,7 @@
     )
   )
   (core instance $m (instantiate $M))
-  (func (export "f") (result string) (canon lift (core func $m "f") (memory $m "mem")))
+  (func (export "f") (result string) (canon lift (core func $m "f") (memory (core memory $m "mem"))))
 )
 (assert_return (invoke "f") (str.const "ok"))
 
@@ -131,6 +131,6 @@
     )
   )
   (core instance $m (instantiate $M))
-  (func (export "f") (result string) (canon lift (core func $m "f") (memory $m "mem")))
+  (func (export "f") (result string) (canon lift (core func $m "f") (memory (core memory $m "mem"))))
 )
 (assert_trap (invoke "f") "string pointer/length out of bounds of memory")
