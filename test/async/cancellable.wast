@@ -199,9 +199,6 @@
         ;; cancel; completes immediately (C is in cancellable yield)
         (local.set $ret (call $subtask.cancel (local.get $subtask)))
         (if (i32.ne (i32.const 4 (; CANCELLED_BEFORE_RETURNED ;)) (local.get $ret))
-          ;; TODO: this currently fails in Wasmtime due to cancellable
-          ;; thread.yield not being directly resumed by subtask.cancel, but it
-          ;; seems like it should pass:
           (then unreachable))
         (call $subtask.drop (local.get $subtask))
 

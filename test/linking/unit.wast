@@ -1945,3 +1945,171 @@
 (assert_return (invoke "direct") (u32.const 1))
 (assert_return (invoke "wrapped") (u32.const 2))
 (assert_return (invoke "direct") (u32.const 3))
+
+;; Linking a core funcref table two ways: a client's table import is
+;; satisfied once by a whole provider instance and once by a synthesized
+;; instance renaming a second provider's table. Indirect calls land in the
+;; linked table, and a table.set through one client is invisible to the other.
+(component
+  (core module $T40
+    (func $f (result i32) (i32.const 40))
+    (table (export "tbl") 1 funcref)
+    (elem (i32.const 0) func $f))
+  (core module $T50
+    (func $f (result i32) (i32.const 50))
+    (table (export "funcs") 1 funcref)
+    (elem (i32.const 0) func $f))
+  (core module $Client
+    (type $t (func (result i32)))
+    (import "env" "tbl" (table 1 funcref))
+    (func $sixty (result i32) (i32.const 60))
+    (elem declare func $sixty)
+    (func (export "set-sixty")
+      (table.set (i32.const 0) (ref.func $sixty)))
+    (func (export "call") (result i32)
+      (call_indirect (type $t) (i32.const 0))))
+  (core instance $t40 (instantiate $T40))
+  (core instance $t50 (instantiate $T50))
+  (core instance $a (instantiate $Client (with "env" (instance $t40))))
+  (core instance $b (instantiate $Client
+    (with "env" (instance (export "tbl" (table $t50 "funcs"))))))
+  (func (export "call-a") (result u32) (canon lift (core func $a "call")))
+  (func (export "call-b") (result u32) (canon lift (core func $b "call")))
+  (func (export "set-sixty-a") (canon lift (core func $a "set-sixty")))
+)
+
+(assert_return (invoke "call-a") (u32.const 40))
+(assert_return (invoke "call-b") (u32.const 50))
+(assert_return (invoke "set-sixty-a"))
+(assert_return (invoke "call-a") (u32.const 60))
+(assert_return (invoke "call-b") (u32.const 50))
+
+;; Aliasing core globals out of an instance and feeding them to another
+;; module through a synthesized instance: the immutable global's value and
+;; live updates to the mutable i64 global both flow through the alias.
+(component
+  (core module $P
+    (global (export "gi") i32 (i32.const 30))
+    (global $g64 (export "g64") (mut i64) (i64.const 7))
+    (func (export "bump64")
+      (global.set $g64 (i64.add (global.get $g64) (i64.const 1)))))
+  (core instance $p (instantiate $P))
+  (alias core export $p "gi" (core global $gi))
+  (core module $User
+    (import "env" "base" (global $base i32))
+    (import "env" "big" (global $big (mut i64)))
+    (func (export "read") (result i32)
+      (i32.add (global.get $base) (i32.wrap_i64 (global.get $big)))))
+  (core instance $u (instantiate $User
+    (with "env" (instance
+      (export "base" (global $gi))
+      (export "big" (global $p "g64"))))))
+  (func (export "bump64") (canon lift (core func $p "bump64")))
+  (func (export "read") (result u32) (canon lift (core func $u "read")))
+)
+
+(assert_return (invoke "read") (u32.const 37))
+(assert_return (invoke "bump64"))
+(assert_return (invoke "read") (u32.const 38))
+
+;; Renaming memory, global, and table exports in a synthesized core instance:
+;; a client's differently-named imports of every non-func kind are satisfied
+;; by renaming one provider instance's exports.
+(component
+  (core module $P
+    (memory (export "1") 1)
+    (data (i32.const 0) "\05")
+    (global (export "2") i32 (i32.const 300))
+    (func $forty (result i32) (i32.const 40))
+    (table (export "3") 1 funcref)
+    (elem (i32.const 0) func $forty))
+  (core instance $p (instantiate $P))
+  (core module $Client
+    (type $t (func (result i32)))
+    (import "env" "mem" (memory 1))
+    (import "env" "glob" (global $g i32))
+    (import "env" "tab" (table 1 funcref))
+    (func (export "sum") (result i32)
+      (i32.add
+        (i32.add (i32.load8_u (i32.const 0)) (global.get $g))
+        (call_indirect (type $t) (i32.const 0)))))
+  (core instance $c (instantiate $Client
+    (with "env" (instance
+      (export "mem" (memory $p "1"))
+      (export "glob" (global $p "2"))
+      (export "tab" (table $p "3"))))))
+  (func (export "sum") (result u32) (canon lift (core func $c "sum")))
+)
+
+(assert_return (invoke "sum") (u32.const 345))
+
+;; TODO: maybe disallow in the spec?
+;; A nested component captures its parent's instantiation argument: the inner
+;; component outer-aliases the module import its parent received, so each
+;; captured copy of the inner component keeps using the module supplied to
+;; that parent instantiation.
+(component
+  (component $C
+    (import "m" (core module $M (export "get" (func (result i32)))))
+    (component $Inner
+      (core instance $m (instantiate $M))
+      (func (export "get") (result u32) (canon lift (core func $m "get"))))
+    (export "inner" (component $Inner)))
+  (core module $M1 (func (export "get") (result i32) (i32.const 410)))
+  (core module $M2 (func (export "get") (result i32) (i32.const 420)))
+  (instance $c1 (instantiate $C (with "m" (core module $M1))))
+  (instance $c2 (instantiate $C (with "m" (core module $M2))))
+  (alias export $c1 "inner" (component $I1))
+  (alias export $c2 "inner" (component $I2))
+  (instance $i1 (instantiate $I1))
+  (instance $i2 (instantiate $I2))
+  (func (export "get-1") (alias export $i1 "get"))
+  (func (export "get-2") (alias export $i2 "get"))
+)
+
+(assert_return (invoke "get-1") (u32.const 410))
+(assert_return (invoke "get-2") (u32.const 420))
+
+;; An instance-typed argument to an imported component: the wrapper imports
+;; both a service instance and a component whose declared import is that
+;; instance type, then instantiates the imported component twice with the
+;; same instance argument, so both copies share the service's state.
+(component
+  (component $Svc
+    (core module $M
+      (global $g (mut i32) (i32.const 100))
+      (func (export "next") (result i32)
+        (global.set $g (i32.add (global.get $g) (i32.const 1)))
+        (global.get $g)))
+    (core instance $m (instantiate $M))
+    (func (export "next") (result u32) (canon lift (core func $m "next"))))
+  (component $User
+    (import "svc" (instance $svc (export "next" (func (result u32)))))
+    (core func $next_l (canon lower (func $svc "next")))
+    (core module $M
+      (import "e" "next" (func $next (result i32)))
+      (func (export "run") (result i32)
+        (i32.add (i32.mul (call $next) (i32.const 10)) (call $next))))
+    (core instance $m (instantiate $M
+      (with "e" (instance (export "next" (func $next_l))))))
+    (func (export "run") (result u32) (canon lift (core func $m "run"))))
+  (component $Wrap
+    (import "svc" (instance $svc (export "next" (func (result u32)))))
+    (import "u" (component $U
+      (import "svc" (instance (export "next" (func (result u32)))))
+      (export "run" (func (result u32)))))
+    (instance $u1 (instantiate $U (with "svc" (instance $svc))))
+    (instance $u2 (instantiate $U (with "svc" (instance $svc))))
+    (func (export "run-1") (alias export $u1 "run"))
+    (func (export "run-2") (alias export $u2 "run")))
+  (instance $svc (instantiate $Svc))
+  (instance $w (instantiate $Wrap
+    (with "svc" (instance $svc))
+    (with "u" (component $User))))
+  (func (export "run-1") (alias export $w "run-1"))
+  (func (export "run-2") (alias export $w "run-2"))
+)
+
+(assert_return (invoke "run-1") (u32.const 1112))
+(assert_return (invoke "run-2") (u32.const 1134))
+(assert_return (invoke "run-1") (u32.const 1156))

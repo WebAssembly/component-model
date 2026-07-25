@@ -356,3 +356,61 @@
   ))
 )
 (assert_return (invoke "f") (u32.const 11))
+
+
+;; on a cross-component call, post-return runs exactly once, before control
+;; returns to the caller, and receives the function's flat results as arguments:
+(component
+  (component $C
+    (core module $CM
+      (global $post-called (mut i32) (i32.const 0))
+      (func (export "foo") (result i32)
+        (if (i32.ne (global.get $post-called) (i32.const 0)) (then unreachable))
+        (i32.const 100)
+      )
+      (func (export "foo-post") (param i32)
+        (if (i32.ne (local.get 0) (i32.const 100)) (then unreachable))
+        (if (i32.ne (global.get $post-called) (i32.const 0)) (then unreachable))
+        (global.set $post-called (i32.const 1))
+      )
+      (func (export "assert-post") (result i32)
+        (global.get $post-called)
+      )
+    )
+    (core instance $cm (instantiate $CM))
+    (func (export "foo") (result u32) (canon lift
+      (core func $cm "foo")
+      (post-return (core func $cm "foo-post"))
+    ))
+    (func (export "assert-post") (result u32) (canon lift
+      (core func $cm "assert-post")
+    ))
+  )
+  (component $D
+    (import "foo" (func $foo (result u32)))
+    (import "assert-post" (func $assert-post (result u32)))
+    (canon lower (func $foo) (core func $foo'))
+    (canon lower (func $assert-post) (core func $assert-post'))
+    (core module $DM
+      (import "" "foo" (func $foo (result i32)))
+      (import "" "assert-post" (func $assert-post (result i32)))
+      (func (export "run") (result i32)
+        (if (i32.ne (call $foo) (i32.const 100)) (then unreachable))
+        (if (i32.ne (call $assert-post) (i32.const 1)) (then unreachable))
+        (i32.const 42)
+      )
+    )
+    (core instance $dm (instantiate $DM (with "" (instance
+      (export "foo" (func $foo'))
+      (export "assert-post" (func $assert-post'))
+    ))))
+    (func (export "run") (result u32) (canon lift (core func $dm "run")))
+  )
+  (instance $c (instantiate $C))
+  (instance $d (instantiate $D
+    (with "foo" (func $c "foo"))
+    (with "assert-post" (func $c "assert-post"))
+  ))
+  (func (export "run") (alias export $d "run"))
+)
+(assert_return (invoke "run") (u32.const 42))

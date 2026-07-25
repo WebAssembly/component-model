@@ -1,3 +1,6 @@
+;; Text-format index and name forms: inline aliases and sugar in each position,
+;; and how definitions, imports, aliases and exports introduce new indices.
+
 ;; test component instantiate parsing
 (component
   (component
@@ -63,6 +66,18 @@
     (core instance (instantiate $M (with "" (instance 0))))
     (core instance (instantiate $M
       (with "" (instance (export "" (func $e ""))))))
+  )
+)
+
+;; test alias sugar in instantiate target position
+(component
+  (component
+    (import "a" (instance $i (export "x" (core module))))
+    (core instance (instantiate (module $i "x")))
+  )
+  (component
+    (import "a" (instance $i (export "x" (component))))
+    (instance (instantiate (component $i "x")))
   )
 )
 
@@ -204,6 +219,19 @@
   )
 )
 
+;; test inverted and anonymous canon resource built-in forms
+(component
+  (component
+    (type $r (resource (rep i32)))
+    (core func (canon resource.new $r))
+    (canon resource.new $r (core func))
+    (core func (canon resource.drop $r))
+    (canon resource.drop $r (core func))
+    (core func (canon resource.rep $r))
+    (canon resource.rep $r (core func))
+  )
+)
+
 ;; test waitable-set.wait/poll parsing
 (component
   (component
@@ -245,5 +273,117 @@
     (canon future.new (type $T) (core func))
     (canon future.new (type 0) (core func))
     (canon future.new (type $i "T") (core func))
+  )
+)
+
+;; test alias sugar in export position
+(component
+  (component
+    (import "a" (instance $foo
+      (export "v" (component))
+      (export "m" (core module))))
+    (export "v" (component $foo "v"))
+    (export "w" (core module $foo "m"))
+  )
+)
+
+;; test inline export sugar on definitions
+(component
+  (component
+    (type (export "foo") u8)
+    (core module (export "x"))
+  )
+)
+
+;; test inline import sugar on instance declarations
+(component
+  (component
+    (type $empty (instance))
+    (instance $d (import "g") (type $empty))
+    (instance (import "h"))
+    (instance (import "i")
+      (export "x" (func)))
+    (instance (export "j") (export "k") (import "x"))
+  )
+)
+
+;; test standalone core module type declarators
+(component
+  (component
+    (core type (module))
+    (core type (module
+      (type $f (func (param i32) (result i32)))
+      (import "a" "b" (func (type $f)))
+      (export "c" (func (type $f)))
+    ))
+  )
+  (component
+    ;; module imports and core module types live in distinct index spaces
+    (import "a" (core module))
+    (core type (module))
+  )
+)
+
+;; test module definitions interleaved with module imports and aliases
+(component
+  (component
+    (core module
+      (func (export "")))
+    (import "a" (core module))
+    (core module
+      (func (export "") (result i32) i32.const 5))
+    (import "b" (instance (export "a" (core module))))
+    (alias export 0 "a" (core module))
+  )
+)
+
+;; test that exports introduce new indices
+(component
+  (component
+    (component
+      (component
+        (component)
+        (instance (instantiate 0))
+        (export "a" (instance 0))
+      )
+      (instance (instantiate 0))
+      (export "a" (instance 0))
+    )
+    (instance (instantiate 0))       ;; instance 0
+    (alias export 0 "a" (instance))  ;; instance 1
+    (export "a" (instance 1))        ;; instance 2
+    (alias export 2 "a" (instance))  ;; instance 3
+    (export "inner-a" (instance 3))  ;; instance 4
+  )
+  (component
+    (component
+      (core module)
+      (export "a" (core module 0))
+    )
+    (instance (instantiate 0))
+    (alias export 0 "a" (core module))  ;; core module 0
+    (export "a" (core module 0))        ;; core module 1
+    (core instance (instantiate 1))
+  )
+)
+
+;; test core global alias parsing
+(component
+  (component
+    (core module $M
+      (global (export "g") i32 (i32.const 0))
+      (global (export "gm") (mut i64) (i64.const 0)))
+    (core instance $m (instantiate $M))
+    (alias core export $m "g" (core global $g))
+    (alias core export $m "gm" (core global $gm))
+    (core module $N
+      (import "" "g" (global i32))
+      (import "" "gm" (global (mut i64))))
+    (core instance (instantiate $N (with "" (instance
+      (export "g" (global $g))
+      (export "gm" (global $gm))))))
+    (core instance (instantiate $N (with "" (instance
+      (export "g" (global $m "g"))
+      (export "gm" (global $m "gm"))))))
   )
 )

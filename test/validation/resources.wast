@@ -1,4 +1,5 @@
-;; Tests for the resource-type parts of Explainer.md#type-checking.
+;; Tests for the resource-type parts of Explainer.md#type-checking and
+;; validation of Explainer.md#resource-built-ins.
 
 ;; `sub` bounds are fresh
 
@@ -349,6 +350,68 @@
     (with "T8" (type $R2))
     (with "a" (type $Rec)))))
 
+;; each instance-typed import generates fresh resources
+
+(component definition
+  (type $I (instance
+    (export "r" (type $r (sub resource)))
+    (export "f" (func (result (own $r))))))
+  (import "i1" (instance $i1 (type $I)))
+  (import "i2" (instance $i2 (type $I)))
+  (component $C
+    (import "r" (type $r (sub resource)))
+    (import "f" (func (result (own $r)))))
+  (instance (instantiate $C
+    (with "r" (type $i1 "r"))
+    (with "f" (func $i1 "f"))))
+  (instance (instantiate $C
+    (with "r" (type $i2 "r"))
+    (with "f" (func $i2 "f")))))
+
+(assert_invalid
+  (component
+    (type $I (instance
+      (export "r" (type $r (sub resource)))
+      (export "f" (func (result (own $r))))))
+    (import "i1" (instance $i1 (type $I)))
+    (import "i2" (instance $i2 (type $I)))
+    (component $C
+      (import "r" (type $r (sub resource)))
+      (import "f" (func (result (own $r)))))
+    (instance (instantiate $C
+      (with "r" (type $i1 "r"))
+      (with "f" (func $i2 "f")))))
+  "resource types are not the same")
+
+;; ...including instance-typed exports of a single imported instance
+(assert_invalid
+  (component
+    (import "x" (instance $i
+      (type $I (instance
+        (export "r" (type (sub resource)))))
+      (export "a" (instance (type $I)))
+      (export "b" (instance (type $I)))))
+    (component $eq
+      (import "a" (type $a (sub resource)))
+      (import "b" (type (eq $a))))
+    (instance (instantiate $eq
+      (with "a" (type $i "a" "r"))
+      (with "b" (type $i "b" "r")))))
+  "resource types are not the same")
+
+;; within one component type, an instance-typed export's resource can be
+;; aliased and eq-referenced by later exports
+(component
+  (type $X (component
+    (type $T (instance
+      (export "r" (type (sub resource)))))
+    (export "t" (instance $t (type $T)))
+    (alias export $t "r" (type $r))
+    (type $T2 (instance
+      (export "r2" (type (eq $r)))
+      (export "r" (type (sub resource)))))
+    (export "t2" (instance (type $T2))))))
+
 ;; resource type definitions are generative
 
 (assert_invalid
@@ -462,6 +525,40 @@
   "resource types are not the same")
 
 
+;; per-instantiation generativity is also enforced through functions using the
+;; resource, not just type imports
+
+(component
+  (component $C
+    (type $R (resource (rep i32)))
+    (export $R' "r" (type $R))
+    (core func $drop (canon resource.drop $R))
+    (func (export "f") (param "x" (own $R')) (canon lift (core func $drop))))
+  (instance $c1 (instantiate $C))
+  (component $D
+    (import "r" (type $R (sub resource)))
+    (import "f" (func (param "x" (own $R)))))
+  (instance (instantiate $D
+    (with "r" (type $c1 "r"))
+    (with "f" (func $c1 "f")))))
+
+(assert_invalid
+  (component
+    (component $C
+      (type $R (resource (rep i32)))
+      (export $R' "r" (type $R))
+      (core func $drop (canon resource.drop $R))
+      (func (export "f") (param "x" (own $R')) (canon lift (core func $drop))))
+    (instance $c1 (instantiate $C))
+    (instance $c2 (instantiate $C))
+    (component $D
+      (import "r" (type $R (sub resource)))
+      (import "f" (func (param "x" (own $R)))))
+    (instance (instantiate $D
+      (with "r" (type $c1 "r"))
+      (with "f" (func $c2 "f")))))
+  "resource types are not the same")
+
 ;; multiple exports of one resource with export ascription
 
 (component
@@ -574,3 +671,176 @@
       (import "x" (type (sub resource))))
     (instance (instantiate $c)))
   "missing import named `x`")
+
+;; `own` and `borrow` require a resource type
+
+(assert_invalid
+  (component
+    (type $x (own 100)))
+  "type index out of bounds")
+
+(assert_invalid
+  (component
+    (type $x (borrow 100)))
+  "type index out of bounds")
+
+(assert_invalid
+  (component
+    (type $t u8)
+    (type $x (own $t)))
+  "not a resource type")
+
+(assert_invalid
+  (component
+    (type $t u8)
+    (type $x (borrow $t)))
+  "not a resource type")
+
+;; `borrow` cannot appear in function results
+
+(assert_invalid
+  (component
+    (type $R (resource (rep i32)))
+    (type $F (func (result (borrow $R)))))
+  "function result cannot contain a `borrow` type")
+
+(assert_invalid
+  (component
+    (type $R (resource (rep i32)))
+    (type $F (func (result (list (borrow $R))))))
+  "function result cannot contain a `borrow` type")
+
+(assert_invalid
+  (component
+    (type $R (resource (rep i32)))
+    (type $F (func (result (option (borrow $R))))))
+  "function result cannot contain a `borrow` type")
+
+(assert_invalid
+  (component
+    (type $R (resource (rep i32)))
+    (type $Rec (record (field "f" (borrow $R))))
+    (type $F (func (result (option (list $Rec))))))
+  "function result cannot contain a `borrow` type")
+
+;; resources can only be defined in concrete components, not in component or
+;; instance types
+
+(assert_invalid
+  (component
+    (type $C (component
+      (type $R (resource (rep i32))))))
+  "resources can only be defined within a concrete component")
+
+(assert_invalid
+  (component
+    (type $I (instance
+      (type $R (resource (rep i32))))))
+  "resources can only be defined within a concrete component")
+
+;; destructors must be core functions of type [i32] -> []
+
+(component
+  (core module $M
+    (func (export "dtor") (param i32)))
+  (core instance $m (instantiate $M))
+  (type $R (resource (rep i32) (dtor (core func $m "dtor"))))
+  (core func (canon resource.new $R)))
+
+(assert_invalid
+  (component
+    (core module $M
+      (func (export "dtor")))
+    (core instance $m (instantiate $M))
+    (type $R (resource (rep i32) (dtor (core func $m "dtor")))))
+  "wrong signature for a destructor")
+
+(assert_invalid
+  (component
+    (type $R (resource (rep i32) (dtor (core func 100)))))
+  "function index out of bounds")
+
+;; canon resource built-ins require a resource type
+
+(assert_invalid
+  (component
+    (type $T (tuple u32))
+    (core func (canon resource.drop $T)))
+  "not a resource type")
+
+(assert_invalid
+  (component
+    (type $C (component))
+    (core func (canon resource.new $C)))
+  "not a resource type")
+
+(assert_invalid
+  (component
+    (type $C (component))
+    (core func (canon resource.drop $C)))
+  "not a resource type")
+
+(assert_invalid
+  (component
+    (core func (canon resource.drop 100)))
+  "type index out of bounds")
+
+;; canon resource.new/resource.rep additionally require a *local* resource type
+
+(assert_invalid
+  (component
+    (import "T" (type $T (sub resource)))
+    (core func (canon resource.new $T)))
+  "not a local resource")
+
+(assert_invalid
+  (component
+    (import "T" (type $T (sub resource)))
+    (core func (canon resource.rep $T)))
+  "not a local resource")
+
+;; a resource aliased from a child instance's export is not local...
+(assert_invalid
+  (component
+    (component $C
+      (type $R (resource (rep i32)))
+      (export "r" (type $R)))
+    (instance $c (instantiate $C))
+    (alias export $c "r" (type $R))
+    (core func (canon resource.rep $R)))
+  "not a local resource")
+
+;; ...though it can still be dropped
+(component
+  (component $C
+    (type $R (resource (rep i32)))
+    (export "r" (type $R)))
+  (instance $c (instantiate $C))
+  (alias export $c "r" (type $R))
+  (core func (canon resource.drop $R)))
+
+;; ...and it stays local if the child's export is this component's own resource
+;; threaded back through `with`
+(component
+  (type $R (resource (rep i32)))
+  (component $C
+    (import "x" (type $x (sub resource)))
+    (export "y" (type $x)))
+  (instance $c (instantiate $C (with "x" (type $R))))
+  (alias export $c "y" (type $R2))
+  (core func (canon resource.rep $R2)))
+
+;; component-typed imports can use abstract resources in their imports and
+;; exports
+
+(component
+  (component $C1
+    (import "X" (type $X (sub resource)))
+    (import "f" (func $f (result (own $X))))
+    (export "g" (func $f)))
+  (component $C2
+    (import "C1" (component
+      (import "X" (type $X (sub resource)))
+      (import "f" (func (result (own $X))))
+      (export "g" (func (result (own $X)))))))
+  (instance $c (instantiate $C2 (with "C1" (component $C1)))))
