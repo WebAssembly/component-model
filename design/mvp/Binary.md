@@ -298,7 +298,6 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x02 rt:<typeidx>                                   => (canon resource.new rt (core func))
            | 0x03 rt:<typeidx>                                   => (canon resource.drop rt (core func))
            | 0x04 rt:<typeidx>                                   => (canon resource.rep rt (core func))
-           | 0x08                                                => (canon backpressure.set (core func)) 🔀✕
            | 0x24                                                => (canon backpressure.inc (core func)) 🔀
            | 0x25                                                => (canon backpressure.dec (core func)) 🔀
            | 0x09 rs:<resultlist> opts:<opts>                    => (canon task.return rs opts (core func)) 🔀
