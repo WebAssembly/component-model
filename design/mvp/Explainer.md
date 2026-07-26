@@ -1540,7 +1540,6 @@ canon ::= ...
         | (canon resource.rep <typeidx> (core func <id>?))
         | (canon context.get <valtype> <u32> (core func <id>?)) 🔀
         | (canon context.set <valtype> <u32> (core func <id>?)) 🔀
-        | (canon backpressure.set (core func <id>?)) 🔀✕
         | (canon backpressure.inc (core func <id>?)) 🔀
         | (canon backpressure.dec (core func <id>?)) 🔀
         | (canon task.return (result <valtype>)? <canonopt>* (core func <id>?)) 🔀
@@ -1703,23 +1702,6 @@ another.
 
 For details, see [Thread-Local Storage] in the concurrency explainer and
 [`canon_context_set`] in the Canonical ABI explainer.
-
-###### 🔀✕ `backpressure.set`
-
-> This built-in is deprecated in favor of `backpressure.{inc,dec}` and will be
-> removed once producer tools have transitioned.
-
-| Synopsis                   |                       |
-| -------------------------- | --------------------- |
-| Approximate WIT signature  | `func(enable: bool)`  |
-| Canonical ABI signature    | `[enable:i32] -> []`  |
-
-The `backpressure.set` built-in allows the async-lifted callee to toggle a
-per-component-instance flag that, when set, prevents new incoming export calls
-to the component (until the flag is unset). This allows the component to exert
-[backpressure].
-
-For details, see [`canon_backpressure_set`] in the Canonical ABI explainer.
 
 ###### 🔀 `backpressure.inc` and `backpressure.dec`
 
@@ -3360,7 +3342,6 @@ For some use-case-focused, worked examples, see:
 [Canonical ABI explainer]: CanonicalABI.md
 [`canon_context_get`]: CanonicalABI.md#-canon-contextget
 [`canon_context_set`]: CanonicalABI.md#-canon-contextset
-[`canon_backpressure_set`]: CanonicalABI.md#-canon-backpressureset
 [`canon_backpressure_{inc,dec}`]: CanonicalABI.md#-canon-backpressureincdec
 [`canon_task_return`]: CanonicalABI.md#-canon-taskreturn
 [`canon_task_cancel`]: CanonicalABI.md#-canon-taskcancel

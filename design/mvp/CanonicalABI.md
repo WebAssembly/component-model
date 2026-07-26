@@ -43,7 +43,6 @@ specified here.
   * [`canon resource.rep`](#canon-resourcerep)
   * [`canon context.get`](#-canon-contextget) 🔀
   * [`canon context.set`](#-canon-contextset) 🔀
-  * [`canon backpressure.set`](#-canon-backpressureset) 🔀✕
   * [`canon backpressure.{inc,dec}`](#-canon-backpressureincdec) 🔀
   * [`canon task.return`](#-canon-taskreturn) 🔀
   * [`canon task.cancel`](#-canon-taskcancel) 🔀
@@ -4133,30 +4132,6 @@ def canon_context_set(t, i, v):
   return []
 ```
 
-
-### 🔀✕ `canon backpressure.set`
-
-> This built-in is deprecated in favor of `backpressure.{inc,dec}` and will be
-> removed once producer tools have transitioned. Producer tools should avoid
-> emitting calls to both `set` and `inc`/`dec` since `set` will clobber the
-> counter.
-
-For a canonical definition:
-```wat
-(canon backpressure.set (core func $f))
-```
-validation specifies:
-* `$f` is given type `(func (param $enabled i32))`
-
-Calling `$f` invokes the following function, which sets the `backpressure`
-counter to `1` or `0`. `Task.enter_implicit_thread` waits for `backpressure` to
-be `0` before allowing new `async`-typed tasks to start.
-```python
-def canon_backpressure_set(flat_args):
-  assert(len(flat_args) == 1)
-  current_instance().backpressure = int(bool(flat_args[0]))
-  return []
-```
 
 ### 🔀 `canon backpressure.{inc,dec}`
 
