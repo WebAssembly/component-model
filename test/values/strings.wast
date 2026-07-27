@@ -15,7 +15,6 @@
       (i32.store16 (i32.const 20) (i32.const 0x84_83))
       (i32.const 0)
     )
-    ;; TODO: so many cases left to test, everyone feel free to fill in...
   )
   (core instance $m (instantiate $M))
   (func (export "f1") (result string) (canon lift (core func $m "f1") (memory (core memory $m "mem"))))

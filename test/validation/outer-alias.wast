@@ -1,5 +1,6 @@
 ;; Validation of `outer` aliases: the allowed sorts, the cross-`component`
-;; no-resource-types rule, de Bruijn counting, and `alias` declarator restrictions.
+;; no-resource-types rule, de Bruijn counting, `alias` declarator restrictions,
+;; and the implicit outer aliases injected by text-format name resolution.
 
 ;; aliasing from the current component (ct=0):
 
@@ -71,6 +72,25 @@
     (component (type (component
       (alias outer 2 0 (type $a))
     )))
+  )
+  "transitively refers to resources")
+
+;; the rule applies to the aliased type as a whole: a component type that
+;; transitively mentions a resource may not cross a `component` boundary either
+
+(assert_invalid
+  (component $C
+    (type $R (resource (rep i32)))
+    (type $U (component (export "a" (type (eq $R)))))
+    (component (alias outer $C $U (type $a)))
+  )
+  "transitively refers to resources")
+
+(assert_invalid
+  (component $C
+    (type $R (resource (rep i32)))
+    (type $U (component (import "a" (type (eq $R)))))
+    (component (alias outer $C $U (type $a)))
   )
   "transitively refers to resources")
 
@@ -214,6 +234,32 @@
   )
   "index out of bounds")
 
+;; the same count/index bounds checks apply to every outer-aliasable sort
+
+(assert_invalid
+  (component (alias outer 1 0 (core type $a)))
+  "invalid outer alias count")
+
+(assert_invalid
+  (component (alias outer 0 0 (core type $a)))
+  "index out of bounds")
+
+(assert_invalid
+  (component (alias outer 1 0 (core module $a)))
+  "invalid outer alias count")
+
+(assert_invalid
+  (component (alias outer 0 0 (core module $a)))
+  "index out of bounds")
+
+(assert_invalid
+  (component (alias outer 1 0 (component $a)))
+  "invalid outer alias count")
+
+(assert_invalid
+  (component (alias outer 0 0 (component $a)))
+  "index out of bounds")
+
 ;; core:alias
 
 (component definition $C
@@ -228,3 +274,12 @@
     (export "c" (func (type 0)))
   ))
 )
+
+;; the text format resolves a name that fails to resolve locally via an
+;; implicit `alias outer`, which only exists for the outer-aliasable sorts
+
+(assert_malformed
+  (component quote
+    "(import \"x\" (func $x))"
+    "(component (export \"x\" (func $x)))")
+  "outer item `x` is not a module, type, or component")
