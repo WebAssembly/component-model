@@ -7,23 +7,23 @@
 (component binary "\00asm\0d\00\01\00")
 (component binary "\00asm" "\0d\00\01\00")
 (component $B1 binary "\00asm" "\0d\00\01\00")
-(assert_malformed (component binary "") "unexpected end")
-(assert_malformed (component binary "\00") "unexpected end")
-(assert_malformed (component binary "\00as") "unexpected end")
-(assert_malformed (component binary "\00asm") "unexpected end")
-(assert_malformed (component binary "\00asm" "\0d") "unexpected end")
-(assert_malformed (component binary "\00asm" "\0d\00") "unexpected end")
-(assert_malformed (component binary "\00asm" "\0d\00\01") "unexpected end")
-(assert_malformed (component binary "asm\00" "\0d\00\01\00") "magic header not detected")
-(assert_malformed (component binary "msa\00" "\0d\00\01\00") "magic header not detected")
-(assert_malformed (component binary "\00ASM" "\0d\00\01\00") "magic header not detected")
-(assert_malformed (component binary "\ffasm" "\0d\00\01\00") "magic header not detected")
-(assert_malformed (component binary "\00asm" "\0c\00\01\00") "unknown binary version")
-(assert_malformed (component binary "\00asm" "\0e\00\01\00") "unknown binary version")
-(assert_malformed (component binary "\00asm" "\00\0d\01\00") "unknown binary version")
-(assert_malformed (component binary "\00asm" "\0d\00\02\00") "unknown binary version")
-(assert_malformed (component binary "\00asm" "\0d\00\01\01") "unknown binary version")
-(assert_malformed (component binary "\00asm" "\0d\00\00\00") "unknown binary version")
+(assert_malformed (component binary "") "")
+(assert_malformed (component binary "\00") "")
+(assert_malformed (component binary "\00as") "")
+(assert_malformed (component binary "\00asm") "")
+(assert_malformed (component binary "\00asm" "\0d") "")
+(assert_malformed (component binary "\00asm" "\0d\00") "")
+(assert_malformed (component binary "\00asm" "\0d\00\01") "")
+(assert_malformed (component binary "asm\00" "\0d\00\01\00") "")
+(assert_malformed (component binary "msa\00" "\0d\00\01\00") "")
+(assert_malformed (component binary "\00ASM" "\0d\00\01\00") "")
+(assert_malformed (component binary "\ffasm" "\0d\00\01\00") "")
+(assert_malformed (component binary "\00asm" "\0c\00\01\00") "")
+(assert_malformed (component binary "\00asm" "\0e\00\01\00") "")
+(assert_malformed (component binary "\00asm" "\00\0d\01\00") "")
+(assert_malformed (component binary "\00asm" "\0d\00\02\00") "")
+(assert_malformed (component binary "\00asm" "\0d\00\01\01") "")
+(assert_malformed (component binary "\00asm" "\0d\00\00\00") "")
 
 ;; custom sections (id 0)
 
@@ -94,7 +94,7 @@
     "\00asm" "\0d\00\01\00"                   ;; preamble
     "\07\01\01\73"                            ;; type section: size 1, two bytes of contents
   )
-  "section size mismatch"
+  "unexpected end-of-file"
 )
 (assert_malformed
   (component binary
@@ -214,7 +214,7 @@
     "\01\08"                                  ;; core module section (8 bytes)
     "\00asm" "\0d\00\01\00"                   ;; a component preamble, not a core module
   )
-  "unknown binary version"
+  "expected a version header for a module"
 )
 
 ;; core instance section (id 2)

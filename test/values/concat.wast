@@ -456,3 +456,333 @@
       (variant.const "w" (u64.const 18446744073709551615))
       (variant.const "b" (u8.const 255))))
   (str.const "718446744073709551615255"))
+
+;; map<K,V> values cannot be written directly in WAST (there is no map.const
+;; yet), so each map-taking function in $C is called through a forwarding
+;; component $D whose exports take the despecialized list<tuple<K,V>> instead.
+(component
+  (component $C
+    (core module $CM
+      (memory (export "mem") 4)
+
+      ;; "true"=[64,4] "false"=[68,5]
+      (data (i32.const 64) "truefalse")
+
+      (global $next (mut i32) (i32.const 65536))
+      (func (export "realloc") (param $old i32) (param $os i32) (param $al i32) (param $ns i32) (result i32)
+        (local $r i32)
+        (global.set $next (i32.and (i32.add (global.get $next) (i32.const 7)) (i32.const -8)))
+        (local.set $r (global.get $next))
+        (global.set $next (i32.add (global.get $next) (local.get $ns)))
+        (local.get $r))
+
+      (global $w (mut i32) (i32.const 1024))
+      (func $emit (param $src i32) (param $len i32)
+        (memory.copy (global.get $w) (local.get $src) (local.get $len))
+        (global.set $w (i32.add (global.get $w) (local.get $len))))
+      (func $emit_char (param $c i32)
+        (i32.store8 (global.get $w) (local.get $c))
+        (global.set $w (i32.add (global.get $w) (i32.const 1))))
+      (func $u64toa (param $v i64) (result i32 i32)
+        (local $p i32)
+        (local.set $p (i32.const 48))
+        (block $z
+          (br_if $z (i64.eqz (local.get $v)))
+          (loop $l
+            (local.set $p (i32.sub (local.get $p) (i32.const 1)))
+            (i32.store8 (local.get $p)
+              (i32.add (i32.const 48)
+                (i32.wrap_i64 (i64.rem_u (local.get $v) (i64.const 10)))))
+            (local.set $v (i64.div_u (local.get $v) (i64.const 10)))
+            (br_if $l (i64.ne (local.get $v) (i64.const 0))))
+          (return (local.get $p) (i32.sub (i32.const 48) (local.get $p))))
+        (i32.store8 (i32.const 47) (i32.const 48))
+        (i32.const 47) (i32.const 1))
+      (func $emit_u64 (param $v i64)
+        (local $p i32) (local $l i32)
+        (call $u64toa (local.get $v))
+        (local.set $l)
+        (local.set $p)
+        (call $emit (local.get $p) (local.get $l)))
+      (func $emit_bool (param $b i32)
+        (if (local.get $b)
+          (then (call $emit (i32.const 64) (i32.const 4)))
+          (else (call $emit (i32.const 68) (i32.const 5)))))
+      (func $emit_u32_list (param $ptr i32) (param $len i32)
+        (local $i i32)
+        (block $d (loop $l
+          (br_if $d (i32.ge_u (local.get $i) (local.get $len)))
+          (call $emit_u64 (i64.extend_i32_u (i32.load (i32.add (local.get $ptr) (i32.mul (local.get $i) (i32.const 4))))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l))))
+      (func $emit_u8_list (param $ptr i32) (param $len i32)
+        (local $i i32)
+        (block $d (loop $l
+          (br_if $d (i32.ge_u (local.get $i) (local.get $len)))
+          (call $emit_u64 (i64.extend_i32_u (i32.load8_u (i32.add (local.get $ptr) (local.get $i)))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l))))
+      (func $finish (result i32)
+        (i32.store (i32.const 0) (i32.const 1024))
+        (i32.store (i32.const 4) (i32.sub (global.get $w) (i32.const 1024)))
+        (i32.const 0))
+
+      (func (export "map-str-u32") (param $p i32) (param $n i32) (result i32)
+        (local $i i32) (local $e i32)
+        (global.set $w (i32.const 1024))
+        (block $d (loop $l
+          (br_if $d (i32.ge_u (local.get $i) (local.get $n)))
+          (local.set $e (i32.add (local.get $p) (i32.mul (local.get $i) (i32.const 12))))
+          (call $emit (i32.load (local.get $e)) (i32.load offset=4 (local.get $e)))
+          (call $emit_u64 (i64.extend_i32_u (i32.load offset=8 (local.get $e))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l)))
+        (call $finish))
+
+      (func (export "map-u32-str") (param $p i32) (param $n i32) (result i32)
+        (local $i i32) (local $e i32)
+        (global.set $w (i32.const 1024))
+        (block $d (loop $l
+          (br_if $d (i32.ge_u (local.get $i) (local.get $n)))
+          (local.set $e (i32.add (local.get $p) (i32.mul (local.get $i) (i32.const 12))))
+          (call $emit_u64 (i64.extend_i32_u (i32.load (local.get $e))))
+          (call $emit (i32.load offset=4 (local.get $e)) (i32.load offset=8 (local.get $e)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l)))
+        (call $finish))
+
+      (func (export "map-char-bool") (param $p i32) (param $n i32) (result i32)
+        (local $i i32) (local $e i32)
+        (global.set $w (i32.const 1024))
+        (block $d (loop $l
+          (br_if $d (i32.ge_u (local.get $i) (local.get $n)))
+          (local.set $e (i32.add (local.get $p) (i32.mul (local.get $i) (i32.const 8))))
+          (call $emit_char (i32.load (local.get $e)))
+          (call $emit_bool (i32.load8_u offset=4 (local.get $e)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l)))
+        (call $finish))
+
+      (func (export "map-u8-u64") (param $p i32) (param $n i32) (result i32)
+        (local $i i32) (local $e i32)
+        (global.set $w (i32.const 1024))
+        (block $d (loop $l
+          (br_if $d (i32.ge_u (local.get $i) (local.get $n)))
+          (local.set $e (i32.add (local.get $p) (i32.mul (local.get $i) (i32.const 16))))
+          (call $emit_u64 (i64.extend_i32_u (i32.load8_u (local.get $e))))
+          (call $emit_u64 (i64.load offset=8 (local.get $e)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l)))
+        (call $finish))
+
+      (func (export "map-str-list") (param $p i32) (param $n i32) (result i32)
+        (local $i i32) (local $e i32)
+        (global.set $w (i32.const 1024))
+        (block $d (loop $l
+          (br_if $d (i32.ge_u (local.get $i) (local.get $n)))
+          (local.set $e (i32.add (local.get $p) (i32.mul (local.get $i) (i32.const 16))))
+          (call $emit (i32.load (local.get $e)) (i32.load offset=4 (local.get $e)))
+          (call $emit_u32_list (i32.load offset=8 (local.get $e)) (i32.load offset=12 (local.get $e)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l)))
+        (call $finish))
+
+      ;; map<string, map<string, list<u8>>>:
+      (func (export "map-str-map") (param $p i32) (param $n i32) (result i32)
+        (local $i i32) (local $e i32) (local $ip i32) (local $il i32) (local $j i32) (local $ie i32)
+        (global.set $w (i32.const 1024))
+        (block $od (loop $ol
+          (br_if $od (i32.ge_u (local.get $i) (local.get $n)))
+          (local.set $e (i32.add (local.get $p) (i32.mul (local.get $i) (i32.const 16))))
+          (call $emit (i32.load (local.get $e)) (i32.load offset=4 (local.get $e)))
+          (local.set $ip (i32.load offset=8 (local.get $e)))
+          (local.set $il (i32.load offset=12 (local.get $e)))
+          (local.set $j (i32.const 0))
+          (block $id (loop $il2
+            (br_if $id (i32.ge_u (local.get $j) (local.get $il)))
+            (local.set $ie (i32.add (local.get $ip) (i32.mul (local.get $j) (i32.const 16))))
+            (call $emit (i32.load (local.get $ie)) (i32.load offset=4 (local.get $ie)))
+            (call $emit_u8_list (i32.load offset=8 (local.get $ie)) (i32.load offset=12 (local.get $ie)))
+            (local.set $j (i32.add (local.get $j) (i32.const 1)))
+            (br $il2)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $ol)))
+        (call $finish))
+    )
+    (core instance $cm (instantiate $CM))
+    (func (export "map-str-u32") (param "a" (map string u32)) (result string)
+      (canon lift (core func $cm "map-str-u32") (memory (core memory $cm "mem")) (realloc (core func $cm "realloc"))))
+    (func (export "map-u32-str") (param "a" (map u32 string)) (result string)
+      (canon lift (core func $cm "map-u32-str") (memory (core memory $cm "mem")) (realloc (core func $cm "realloc"))))
+    (func (export "map-char-bool") (param "a" (map char bool)) (result string)
+      (canon lift (core func $cm "map-char-bool") (memory (core memory $cm "mem")) (realloc (core func $cm "realloc"))))
+    (func (export "map-u8-u64") (param "a" (map u8 u64)) (result string)
+      (canon lift (core func $cm "map-u8-u64") (memory (core memory $cm "mem")) (realloc (core func $cm "realloc"))))
+    (func (export "map-str-list") (param "a" (map string (list u32))) (result string)
+      (canon lift (core func $cm "map-str-list") (memory (core memory $cm "mem")) (realloc (core func $cm "realloc"))))
+    (func (export "map-str-map") (param "a" (map string (map string (list u8)))) (result string)
+      (canon lift (core func $cm "map-str-map") (memory (core memory $cm "mem")) (realloc (core func $cm "realloc"))))
+  )
+
+  (component $D
+    (import "c" (instance $c
+      (export "map-str-u32" (func (param "a" (map string u32)) (result string)))
+      (export "map-u32-str" (func (param "a" (map u32 string)) (result string)))
+      (export "map-char-bool" (func (param "a" (map char bool)) (result string)))
+      (export "map-u8-u64" (func (param "a" (map u8 u64)) (result string)))
+      (export "map-str-list" (func (param "a" (map string (list u32))) (result string)))
+      (export "map-str-map" (func (param "a" (map string (map string (list u8)))) (result string)))))
+
+    (core module $DM
+      (memory (export "mem") 4)
+      (global $next (mut i32) (i32.const 65536))
+      (func (export "realloc") (param $old i32) (param $os i32) (param $al i32) (param $ns i32) (result i32)
+        (local $r i32)
+        (global.set $next (i32.and (i32.add (global.get $next) (i32.const 7)) (i32.const -8)))
+        (local.set $r (global.get $next))
+        (global.set $next (i32.add (global.get $next) (local.get $ns)))
+        (local.get $r))
+    )
+    (core instance $dm (instantiate $DM))
+
+    (core func $map-str-u32' (canon lower (func $c "map-str-u32")
+      (memory (core memory $dm "mem")) (realloc (core func $dm "realloc"))))
+    (core func $map-u32-str' (canon lower (func $c "map-u32-str")
+      (memory (core memory $dm "mem")) (realloc (core func $dm "realloc"))))
+    (core func $map-char-bool' (canon lower (func $c "map-char-bool")
+      (memory (core memory $dm "mem")) (realloc (core func $dm "realloc"))))
+    (core func $map-u8-u64' (canon lower (func $c "map-u8-u64")
+      (memory (core memory $dm "mem")) (realloc (core func $dm "realloc"))))
+    (core func $map-str-list' (canon lower (func $c "map-str-list")
+      (memory (core memory $dm "mem")) (realloc (core func $dm "realloc"))))
+    (core func $map-str-map' (canon lower (func $c "map-str-map")
+      (memory (core memory $dm "mem")) (realloc (core func $dm "realloc"))))
+
+    ;; Each forwarder passes its (ptr, len) list-of-pairs args straight through
+    ;; to the map-taking import and returns the string written at retptr 16.
+    (core module $Fwd
+      (import "" "map-str-u32" (func $str-u32 (param i32 i32 i32)))
+      (import "" "map-u32-str" (func $u32-str (param i32 i32 i32)))
+      (import "" "map-char-bool" (func $char-bool (param i32 i32 i32)))
+      (import "" "map-u8-u64" (func $u8-u64 (param i32 i32 i32)))
+      (import "" "map-str-list" (func $str-list (param i32 i32 i32)))
+      (import "" "map-str-map" (func $str-map (param i32 i32 i32)))
+      (func (export "map-str-u32") (param $p i32) (param $n i32) (result i32)
+        (call $str-u32 (local.get $p) (local.get $n) (i32.const 16))
+        (i32.const 16))
+      (func (export "map-u32-str") (param $p i32) (param $n i32) (result i32)
+        (call $u32-str (local.get $p) (local.get $n) (i32.const 16))
+        (i32.const 16))
+      (func (export "map-char-bool") (param $p i32) (param $n i32) (result i32)
+        (call $char-bool (local.get $p) (local.get $n) (i32.const 16))
+        (i32.const 16))
+      (func (export "map-u8-u64") (param $p i32) (param $n i32) (result i32)
+        (call $u8-u64 (local.get $p) (local.get $n) (i32.const 16))
+        (i32.const 16))
+      (func (export "map-str-list") (param $p i32) (param $n i32) (result i32)
+        (call $str-list (local.get $p) (local.get $n) (i32.const 16))
+        (i32.const 16))
+      (func (export "map-str-map") (param $p i32) (param $n i32) (result i32)
+        (call $str-map (local.get $p) (local.get $n) (i32.const 16))
+        (i32.const 16))
+    )
+    (core instance $fwd (instantiate $Fwd
+      (with "" (instance
+        (export "map-str-u32" (func $map-str-u32'))
+        (export "map-u32-str" (func $map-u32-str'))
+        (export "map-char-bool" (func $map-char-bool'))
+        (export "map-u8-u64" (func $map-u8-u64'))
+        (export "map-str-list" (func $map-str-list'))
+        (export "map-str-map" (func $map-str-map'))))))
+
+    (func (export "map-str-u32") (param "a" (list (tuple string u32))) (result string)
+      (canon lift (core func $fwd "map-str-u32") (memory (core memory $dm "mem")) (realloc (core func $dm "realloc"))))
+    (func (export "map-u32-str") (param "a" (list (tuple u32 string))) (result string)
+      (canon lift (core func $fwd "map-u32-str") (memory (core memory $dm "mem")) (realloc (core func $dm "realloc"))))
+    (func (export "map-char-bool") (param "a" (list (tuple char bool))) (result string)
+      (canon lift (core func $fwd "map-char-bool") (memory (core memory $dm "mem")) (realloc (core func $dm "realloc"))))
+    (func (export "map-u8-u64") (param "a" (list (tuple u8 u64))) (result string)
+      (canon lift (core func $fwd "map-u8-u64") (memory (core memory $dm "mem")) (realloc (core func $dm "realloc"))))
+    (func (export "map-str-list") (param "a" (list (tuple string (list u32)))) (result string)
+      (canon lift (core func $fwd "map-str-list") (memory (core memory $dm "mem")) (realloc (core func $dm "realloc"))))
+    (func (export "map-str-map") (param "a" (list (tuple string (list (tuple string (list u8)))))) (result string)
+      (canon lift (core func $fwd "map-str-map") (memory (core memory $dm "mem")) (realloc (core func $dm "realloc"))))
+  )
+
+  (instance $c (instantiate $C))
+  (instance $d (instantiate $D (with "c" (instance $c))))
+  (func (export "map-str-u32") (alias export $d "map-str-u32"))
+  (func (export "map-u32-str") (alias export $d "map-u32-str"))
+  (func (export "map-char-bool") (alias export $d "map-char-bool"))
+  (func (export "map-u8-u64") (alias export $d "map-u8-u64"))
+  (func (export "map-str-list") (alias export $d "map-str-list"))
+  (func (export "map-str-map") (alias export $d "map-str-map"))
+)
+
+(assert_return
+  (invoke "map-str-u32"
+    (list.const
+      (tuple.const (str.const "a") (u32.const 1))
+      (tuple.const (str.const "b") (u32.const 2))
+      (tuple.const (str.const "c") (u32.const 3))))
+  (str.const "a1b2c3"))
+(assert_return (invoke "map-str-u32" (list.const)) (str.const ""))
+
+(assert_return
+  (invoke "map-str-u32"
+    (list.const
+      (tuple.const (str.const "z") (u32.const 26))
+      (tuple.const (str.const "k") (u32.const 1))
+      (tuple.const (str.const "k") (u32.const 2))
+      (tuple.const (str.const "a") (u32.const 0))))
+  (str.const "z26k1k2a0"))
+
+(assert_return
+  (invoke "map-u32-str"
+    (list.const
+      (tuple.const (u32.const 10) (str.const "x"))
+      (tuple.const (u32.const 20) (str.const "y"))))
+  (str.const "10x20y"))
+
+(assert_return
+  (invoke "map-char-bool"
+    (list.const
+      (tuple.const (char.const "A") (bool.const true))
+      (tuple.const (char.const "z") (bool.const false))))
+  (str.const "Atruezfalse"))
+
+(assert_return
+  (invoke "map-u8-u64"
+    (list.const
+      (tuple.const (u8.const 255) (u64.const 18446744073709551615))
+      (tuple.const (u8.const 0) (u64.const 7))))
+  (str.const "2551844674407370955161507"))
+
+(assert_return
+  (invoke "map-str-list"
+    (list.const
+      (tuple.const (str.const "p") (list.const (u32.const 1) (u32.const 2)))
+      (tuple.const (str.const "q") (list.const))
+      (tuple.const (str.const "r") (list.const (u32.const 3)))))
+  (str.const "p12qr3"))
+
+(assert_return
+  (invoke "map-str-map"
+    (list.const
+      (tuple.const (str.const "a")
+        (list.const
+          (tuple.const (str.const "x") (list.const (u8.const 1) (u8.const 2)))
+          (tuple.const (str.const "y") (list.const))))
+      (tuple.const (str.const "b") (list.const))
+      (tuple.const (str.const "c")
+        (list.const
+          (tuple.const (str.const "z") (list.const (u8.const 255) (u8.const 0) (u8.const 7)))))
+      (tuple.const (str.const "k")
+        (list.const (tuple.const (str.const "d") (list.const (u8.const 0)))))
+      (tuple.const (str.const "k")
+        (list.const
+          (tuple.const (str.const "d") (list.const (u8.const 7) (u8.const 8)))
+          (tuple.const (str.const "d") (list.const (u8.const 9)))))
+    ))
+  (str.const "ax12ybcz25507kd0kd78d9"))
+(assert_return (invoke "map-str-map" (list.const)) (str.const ""))
