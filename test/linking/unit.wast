@@ -2043,7 +2043,6 @@
 
 (assert_return (invoke "sum") (u32.const 345))
 
-;; TODO: maybe disallow in the spec?
 ;; A nested component captures its parent's instantiation argument: the inner
 ;; component outer-aliases the module import its parent received, so each
 ;; captured copy of the inner component keeps using the module supplied to
