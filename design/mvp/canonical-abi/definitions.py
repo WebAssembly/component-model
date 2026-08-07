@@ -2687,6 +2687,7 @@ def canon_thread_resume_later(i):
   trap_if(not inst.may_leave)
   other_thread = inst.threads.get(i)
   trap_if(not other_thread.suspended())
+  assert(current_thread() is not other_thread)
   other_thread.resume_later()
   return []
 
@@ -2713,6 +2714,7 @@ def canon_thread_suspend_then_resume(cancellable, i):
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
+  assert(current_thread() is not other_thread)
   cancelled = thread.suspend_then_resume(lambda: cancellable, other_thread)
   return [cancelled]
 
@@ -2723,6 +2725,7 @@ def canon_thread_yield_then_resume(cancellable, i):
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
+  assert(current_thread() is not other_thread)
   cancelled = thread.yield_then_resume(lambda: cancellable, other_thread)
   return [cancelled]
 
@@ -2731,6 +2734,7 @@ def canon_thread_yield_then_resume(cancellable, i):
 def canon_thread_suspend_then_promote(cancellable, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
+  trap_if(i == thread.index)
   other_thread = thread.task.inst.threads.get(i)
   cancelled = thread.suspend_then_promote(lambda: cancellable, other_thread)
   return [cancelled]
@@ -2740,6 +2744,7 @@ def canon_thread_suspend_then_promote(cancellable, i):
 def canon_thread_yield_then_promote(cancellable, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
+  trap_if(i == thread.index)
   other_thread = thread.task.inst.threads.get(i)
   cancelled = thread.yield_then_promote(lambda: cancellable, other_thread)
   return [cancelled]
