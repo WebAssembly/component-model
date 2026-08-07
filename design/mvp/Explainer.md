@@ -2191,8 +2191,9 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 | Canonical ABI signature    | `[t:i32] -> []`   |
 
 The `thread.resume-later` built-in changes the state of thread `t` from
-"suspended" to "ready" (trapping if `t` is not in a "suspended" state) so that
-the runtime can nondeterministically resume `t` at some point in the future.
+"suspended" to "ready" (trapping if `t` is not in a "suspended" state, including
+if `t` is the current thread) so that the runtime can nondeterministically
+resume `t` at some point in the future.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_resume_later`] in the Canonical ABI explainer.
@@ -2239,9 +2240,10 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 
 The `thread.suspend-then-resume` built-in suspends the [current thread] and
 immediately resumes execution of the thread `t`, trapping if `t` is not in a
-"suspended" state. If `cancellable` is set, `thread.suspend-then-resume` returns
-whether the current task was [cancelled] by the caller; otherwise,
-`thread.suspend-then-resume` always returns `false`.
+"suspended" state, which includes if `t` is the current thread. If `cancellable`
+is set, `thread.suspend-then-resume` returns whether the current task was
+[cancelled] by the caller; otherwise, `thread.suspend-then-resume` always
+returns `false`.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_suspend_then_resume`] in the Canonical ABI explainer.
@@ -2254,11 +2256,12 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 | Canonical ABI signature    | `[t:i32] -> [i32]`                      |
 
 The `thread.yield-then-resume` built-in immediately resumes execution of the
-thread `t` (trapping if `t` is not in a "suspended" state), leaving the [current
-thread] in a "ready" state so that the runtime can nondeterministically resume
-the current thread at some point in the future. If `cancellable` is set,
-`thread.yield-then-resume` returns whether the current task was [cancelled] by
-the caller; otherwise, `thread.yield-then-resume` always returns `false`.
+thread `t` (trapping if `t` is not in a "suspended" state, which includes if `t`
+is the current thread), leaving the [current thread] in a "ready" state so that
+the runtime can nondeterministically resume the current thread at some point in
+the future. If `cancellable` is set, `thread.yield-then-resume` returns whether
+the current task was [cancelled] by the caller; otherwise,
+`thread.yield-then-resume` always returns `false`.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield_then_resume`] in the Canonical ABI explainer.
@@ -2270,11 +2273,12 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 | Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
 | Canonical ABI signature    | `[t:i32] -> [i32]`                      |
 
-The `thread.suspend-then-promote` built-in immediately resumes execution of the
-thread `t` if `t` is in a "ready" state, in any case leaving the current thread
-in a "suspended" state. If `cancellable` is set, `thread.suspend-then-promote`
-returns whether the current task was [cancelled] by the caller; otherwise,
-`thread.suspend-then-promote` always returns `false`.
+The `thread.suspend-then-promote` built-in traps if `t` is the current thread
+and, otherwise, immediately resumes execution of the thread `t` if `t` is in a
+"ready" state, in any case leaving the current thread in a "suspended" state. If
+`cancellable` is set, `thread.suspend-then-promote` returns whether the current
+task was [cancelled] by the caller; otherwise, `thread.suspend-then-promote`
+always returns `false`.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_suspend_then_promote`] in the Canonical ABI explainer.
@@ -2286,11 +2290,12 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 | Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
 | Canonical ABI signature    | `[t:i32] -> [i32]`                      |
 
-The `thread.yield-then-promote` built-in immediately resumes execution of the
-thread `t` if `t` is in a "ready" state, in any case leaving the current thread
-in a "ready" state. If `cancellable` is set, `thread.yield-then-promote` returns
-whether the current task was [cancelled] by the caller; otherwise,
-`thread.yield-then-promote` always returns `false`.
+The `thread.yield-then-promote` built-in traps if `t` is the current thread
+and, otherwise, immediately resumes execution of the thread `t` if `t` is in a
+"ready" state, in any case leaving the current thread in a "ready" state. If
+`cancellable` is set, `thread.yield-then-promote` returns whether the current
+task was [cancelled] by the caller; otherwise, `thread.yield-then-promote`
+always returns `false`.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield_then_promote`] in the Canonical ABI explainer.
