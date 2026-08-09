@@ -1048,7 +1048,10 @@ pointer type `ptr_type ∈ {i32, i64}`, the static in-memory byte size
 `MAX_LIST_BYTE_LENGTH`). Implementations enforce this at component validation
 time as a static error. Implementations may validate incrementally (e.g., when
 checking each type-index definition, with memoization) as long as every
-resolved node satisfies the invariant.
+resolved node satisfies the invariant. Reference validation applies
+`despecialize` at each recursively visited node (the same pattern as
+`contains()`), so nested specialized types such as `map` inside `option` or
+`record` are checked after expansion.
 
 Validation must use overflow-safe size computation: arithmetic is over
 mathematical (non-wrapping) integers, and implementations must not compute

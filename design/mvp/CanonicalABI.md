@@ -2453,6 +2453,7 @@ def valid_valtype_size(t, ptr_type) -> bool:
   return checked_elem_size(t, ptr_type) <= MAX_VALUE_BYTE_LENGTH
 
 def check_resolved_type_size(t) -> bool:
+  t = despecialize(t)
   match t:
     case ListType(elem, maybe_len):
       if elem is not None and not check_resolved_type_size(elem):
@@ -2481,7 +2482,7 @@ def check_resolved_type_size(t) -> bool:
   return True
 
 def check_defvaltype_size(t) -> bool:
-  return check_resolved_type_size(despecialize(t))
+  return check_resolved_type_size(t)
 ```
 
 ## Loading

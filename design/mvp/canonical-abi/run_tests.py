@@ -3071,6 +3071,15 @@ def test_max_value_byte_length():
 
   assert not check_defvaltype_size(MapType(U8Type(), ListType(U8Type(), MAX)))
 
+  assert check_defvaltype_size(OptionType(MapType(U8Type(), U8Type())))
+
+  assert not check_defvaltype_size(
+    OptionType(MapType(U8Type(), ListType(U8Type(), MAX)))
+  )
+  assert not check_defvaltype_size(
+    RecordType([FieldType("m", MapType(U8Type(), ListType(U8Type(), MAX)))])
+  )
+
   assert not check_defvaltype_size(ListType(ListType(U8Type(), MAX), 2))
 
   assert not check_defvaltype_size(ListType(StringType(), 16777216))

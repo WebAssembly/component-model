@@ -64,3 +64,13 @@
 (assert_invalid
   (component (type (list string 16777216)))
   "exceeds maximum byte size")
+
+;; nested map despecialization inside option and record
+
+(assert_invalid
+  (component (type (option (map u8 (list u8 268435455)))))
+  "exceeds maximum byte size")
+
+(assert_invalid
+  (component (type (record (field "m" (map u8 (list u8 268435455))))))
+  "exceeds maximum byte size")
