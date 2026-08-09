@@ -287,6 +287,12 @@ Notes:
   `none` case of an optional immediate.)
 * 🔧 for fixed-sized lists the length of the list must be larger than 0 to pass
   validation.
+* Validation of each `defvaltype` definition rejects types whose resolved
+  structural AST contains a node whose static in-memory byte size exceeds
+  `MAX_VALUE_BYTE_LENGTH` for either `i32` or `i64` pointer types. See
+  [Element Size validation](CanonicalABI.md#element-size) for `elem_size`,
+  `MAX_VALUE_BYTE_LENGTH`, and the overflow-safe validation requirement.
+  This is a static validation error, not a runtime trap.
 
 
 ## Canonical Definitions

@@ -3048,4 +3048,42 @@ test_threads()
 test_sync_threads()
 test_thread_cancel_callback()
 
+def test_max_value_byte_length():
+  MAX = MAX_VALUE_BYTE_LENGTH
+
+  assert check_defvaltype_size(ListType(U8Type(), MAX))
+  assert check_defvaltype_size(ListType(U64Type(), 33554431))
+  assert check_defvaltype_size(ListType(StringType(), 16777215))
+
+  assert not check_defvaltype_size(ListType(U8Type(), MAX + 1))
+  assert not check_defvaltype_size(ListType(U64Type(), 33554432))
+  assert not check_defvaltype_size(ListType(U64Type(), 1 << 29))
+
+  assert not check_defvaltype_size(TupleType([
+    ListType(U8Type(), MAX),
+    ListType(U8Type(), 1),
+  ]))
+
+  assert not check_defvaltype_size(RecordType([
+    FieldType("a", ListType(U8Type(), 134217728)),
+    FieldType("b", ListType(U8Type(), 134217728)),
+  ]))
+
+  assert not check_defvaltype_size(MapType(U8Type(), ListType(U8Type(), MAX)))
+
+  assert not check_defvaltype_size(ListType(ListType(U8Type(), MAX), 2))
+
+  assert not check_defvaltype_size(ListType(StringType(), 16777216))
+
+  length = 1 << 29
+  assert (length * 8) % (1 << 32) == 0
+  assert not check_defvaltype_size(ListType(U64Type(), length))
+
+  nested = ListType(U8Type(), MAX)
+  for _ in range(64):
+    nested = ListType(nested, 2)
+  assert not check_defvaltype_size(nested)
+
+test_max_value_byte_length()
+
 print("All tests passed")

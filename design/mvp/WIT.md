@@ -1888,7 +1888,9 @@ first-class type.
 
 🔧 A `list` with a fixed length provides the low-level memory representation of a
 homogeneous `tuple` of the same length, but with the dynamic indexing of a
-list. E.g., the following two functions have the same low-level (Core
+list. The static in-memory byte size of the resolved type must not exceed
+`2^28 - 1` bytes (see [Element Size validation](CanonicalABI.md#element-size)).
+E.g., the following two functions have the same low-level (Core
 WebAssembly) representation, but will naturally produce different source-level
 bindings:
 
