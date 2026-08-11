@@ -2363,13 +2363,6 @@ def canon_context_set(t, i, v):
   thread.storage[i] = v
   return []
 
-### 🔀 `canon backpressure.set`
-
-def canon_backpressure_set(flat_args):
-  assert(len(flat_args) == 1)
-  current_instance().backpressure = int(bool(flat_args[0]))
-  return []
-
 ### 🔀 `canon backpressure.{inc,dec}`
 
 def canon_backpressure_inc():
