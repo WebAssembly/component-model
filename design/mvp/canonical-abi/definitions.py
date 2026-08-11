@@ -420,7 +420,9 @@ class Thread:
 
   def suspend_then_promote(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running())
-    if other.ready():
+    if self.task.deliver_pending_cancel(cancellable):
+      return Cancelled.TRUE
+    if Task.promotable(other):
       other.stop_waiting_internal(cancelled = False)
       return self.suspend_then_resume(cancellable, other)
     else:
@@ -428,7 +430,9 @@ class Thread:
 
   def yield_then_promote(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running())
-    if other.ready():
+    if self.task.deliver_pending_cancel(cancellable):
+      return Cancelled.TRUE
+    if Task.promotable(other):
       other.stop_waiting_internal(cancelled = False)
       return self.yield_then_resume(cancellable, other)
     else:
@@ -473,6 +477,12 @@ class Task:
   def needs_exclusive(self):
     assert(self.ft.async_)
     return not self.opts.async_ or self.opts.callback
+
+  def promotable(thread):
+    return (thread.ready()
+            and (thread is not thread.task.implicit_thread
+                 or not thread.task.ft.async_
+                 or (thread.task.ft.async_ and not thread.task.needs_exclusive())))
 
   def enter_implicit_thread(self):
     assert(self.state == Task.State.INITIAL)
@@ -2212,7 +2222,7 @@ def canon_lift(callee, ft, opts, inst, on_start, on_resolve) -> OnCancel:
   thread.resume()
   if not ft.async_:
     while task.state != Task.State.RESOLVED:
-      candidates = { t for t in inst.threads if t.ready() and t is not inst.exclusive_thread }
+      candidates = { t for t in inst.threads if Task.promotable(t) }
       trap_if(not candidates)
       random.choice(list(candidates)).resume()
   return task.request_cancellation

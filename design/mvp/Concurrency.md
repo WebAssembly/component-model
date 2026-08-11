@@ -406,7 +406,8 @@ useful if a thread has a long-running computation without I/O but still needs to
 allow other cooperative threads to make progress concurrently.
 
 Lastly, in addition to being able to switch to "suspended" threads, threads can
-also switch to threads that are in a "ready to run" state by calling the
+also switch to threads that are in a "ready to run" state (when doing so would
+not otherwise violate [Component Invariant] #3) by calling the
 [`thread.suspend-then-promote`] and [`thread.yield-then-promote`] built-ins
 which, like the `thread.{suspend,yield}-then-resume` built-ins, leave the
 calling thread in a "suspended" or "ready to run" state, resp. The calling

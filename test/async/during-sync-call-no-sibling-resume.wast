@@ -212,4 +212,4 @@
   (func (export "sync-block") (alias export $inner "sync-block"))
 )
 (assert_return (invoke "arm"))
-(assert_trap (invoke "sync-block") "deadlock detected: event loop cannot make further progress")
+(assert_trap (invoke "sync-block") "cannot block a synchronous task before returning")

@@ -695,15 +695,17 @@ report any pending cancellation if the caller is `cancellable`.
 
 Lastly, the `Thread.suspend_then_promote` and `Thread.yield_then_promote`
 methods *attempt* to immediately resume execution of some `other` thread in the
-same component instance *if* the `other` thread is in a `ready` `waiting` state.
-If so, control flow is transferred directly and the current thread is left
-`suspended` or in a `ready` `waiting` state, resp. If the `other` thread is
-*not* ready to run, then these operations fall back to plain `suspend` or
-`yield_` behavior, resp.
+same component instance *if* the `other` thread is "promotable" (as defined in
+the next section by `Task.promotable`); otherwise these operations fall back to
+plain `suspend` or `yield_` behavior, resp. This allows one thread to give
+another thread in an unknown state a scheduling "boost" (with `pthread_join`
+being an example use case).
 ```python
   def suspend_then_promote(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running())
-    if other.ready():
+    if self.task.deliver_pending_cancel(cancellable):
+      return Cancelled.TRUE
+    if Task.promotable(other):
       other.stop_waiting_internal(cancelled = False)
       return self.suspend_then_resume(cancellable, other)
     else:
@@ -711,7 +713,9 @@ If so, control flow is transferred directly and the current thread is left
 
   def yield_then_promote(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running())
-    if other.ready():
+    if self.task.deliver_pending_cancel(cancellable):
+      return Cancelled.TRUE
+    if Task.promotable(other):
       other.stop_waiting_internal(cancelled = False)
       return self.yield_then_resume(cancellable, other)
     else:
@@ -806,6 +810,21 @@ holding the lock.
   def needs_exclusive(self):
     assert(self.ft.async_)
     return not self.opts.async_ or self.opts.callback
+```
+
+Building on this, the `Task.promotable` predicate defines when a `ready` thread
+can be resumed without violating [Component Invariant] #3 via either the
+`Thread.{suspend,yield}_then_promote` methods or the synchronous thread
+scheduling performed in `canon_lift` below. In particular, explicit threads, the
+implicit threads of non-`async`-typed tasks, and the implicit threads of
+stackful `async`-typed tasks are all "promotable" if they are in the `ready`
+state.
+```python
+  def promotable(thread):
+    return (thread.ready()
+            and (thread is not thread.task.implicit_thread
+                 or not thread.task.ft.async_
+                 or (thread.task.ft.async_ and not thread.task.needs_exclusive())))
 ```
 
 The `Task.enter_implicit_thread` method implements [backpressure] between when
@@ -3752,32 +3771,29 @@ calls `Thread.resume` on the new thread to synchronously transfer control flow
 to it (jumping to the top of `thread_func` above). The new thread executes until
 it either returns from `thread_func` or [blocks] by (transitively) calling
 `Thread.block_internal`. If a non-`async`-typed call blocks before the implicit
-thread has returned a value and there are no other `ready` threads in the same
-component instance, `canon_lift` traps, since non-`async`-typed calls may not
-block. Otherwise, `canon_lift` switches to a thread (nondeterministically, if
-multiple are `ready`), as if the guest code had done so itself using a built-in
-like `thread.suspend-then-promote`. This allows fully-synchronous components to
-still use cooperative pthreads that interleave via threading built-ins (e.g.,
-`thread.yield`) and *even perform blocking I/O* as long as the blocking I/O does
-not transitively block returning a value to the caller (as would also be
-expressible with a CPS transform like [Asyncify]). Lastly, `canon_lift` returns
-`Task.request_cancellation`, bound to the call's new task, as the `OnCancel`
-return value of `FuncInst`.
+thread has returned a value and there are no "promotable" threads in the
+component instance (with `Task.promotable` as defined for the
+`thread.{suspend,yield}-then-promote` built-ins above), `canon_lift` traps,
+since non-`async`-typed calls may not block. Otherwise, `canon_lift` switches to
+a promotable thread (nondeterministically, if there are multiple), as if the
+guest code had done so itself using `thread.{suspend,yield}-then-promote`. This
+allows fully-synchronous components to still use cooperative pthreads that
+interleave via threading built-ins (e.g., `thread.yield`) and *even perform
+blocking I/O* as long as the blocking I/O does not transitively block returning
+a value to the caller (as would also be expressible with a CPS transform like
+[Asyncify]). Lastly, `canon_lift` returns `Task.request_cancellation`, bound to
+the call's new task, as the `OnCancel` return value of `FuncInst`.
 ```python
   task = Task(ft, opts, inst, on_start, on_resolve)
   thread = Thread(task, thread_func)
   thread.resume()
   if not ft.async_:
     while task.state != Task.State.RESOLVED:
-      candidates = { t for t in inst.threads if t.ready() and t is not inst.exclusive_thread }
+      candidates = { t for t in inst.threads if Task.promotable(t) }
       trap_if(not candidates)
       random.choice(list(candidates)).resume()
   return task.request_cancellation
 ```
-The special case that excludes any thread (created by a previous blocked `async`
-call) holding the instance's `exclusive_thread` lock is necessary to preserve
-[Component Invariant] #3, which might otherwise be violated if the current
-synchronous call is using the single global linear memory shadow stack.
 
 Note that, because non-`async`-typed functions can't block, they do not actually
 require a separate thread/fiber/stack to implement the above specified behavior
@@ -5074,8 +5090,8 @@ validation specifies:
 
 Calling `$suspend-then-promote` invokes the following function which loads a
 thread at index `$i` from the current component instance's `threads` table and
-then calls `Thread.suspend_then_resume` to resume the `other_thread` if it's
-`ready` and, in any case, leave the [current thread] suspended.
+resumes that thread if it's `Task.promotable`, leaving the [current thread]
+suspended in any case.
 ```python
 def canon_thread_suspend_then_promote(cancellable, i):
   thread = current_thread()
@@ -5103,9 +5119,9 @@ validation specifies:
 
 Calling `$yield-then-promote` invokes the following function which loads a
 thread at index `$i` from the current component instance's `threads` table and
-then calls `Thread.yield_then_resume` to resume the `other_thread` if it's
-`ready` and, in any case, leave the [current thread] ready to run at some
-nondeterministic point in the future chosen by the embedder.
+resumes that thread if it's `Task.promotable`, leaving the [current thread]
+ready to run at some nondeterministic point in the future chosen by the
+embedder in any case.
 ```python
 def canon_thread_yield_then_promote(cancellable, i):
   thread = current_thread()

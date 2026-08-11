@@ -160,4 +160,4 @@
     (canon lift (core func $core "sync-block")))
 )
 (assert_return (invoke "arm") (u32.const 1))
-(assert_trap (invoke "sync-block") "deadlock detected: event loop cannot make further progress")
+(assert_trap (invoke "sync-block") "cannot block a synchronous task before returning")

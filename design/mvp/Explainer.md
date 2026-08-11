@@ -2277,8 +2277,9 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 | Canonical ABI signature    | `[t:i32] -> [i32]`                      |
 
 The `thread.suspend-then-promote` built-in immediately resumes execution of the
-thread `t` if `t` is in a "ready" state, in any case leaving the current thread
-in a "suspended" state. If `cancellable` is set, `thread.suspend-then-promote`
+thread `t` if `t` is "ready" and doing so would not otherwise violate
+[Component Invariant] #3. In any case, the current thread is left in the
+"suspended" state. If `cancellable` is set, `thread.suspend-then-promote`
 returns whether the current task was [cancelled] by the caller; otherwise,
 `thread.suspend-then-promote` always returns `false`.
 
@@ -2293,9 +2294,10 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 | Canonical ABI signature    | `[t:i32] -> [i32]`                      |
 
 The `thread.yield-then-promote` built-in immediately resumes execution of the
-thread `t` if `t` is in a "ready" state, in any case leaving the current thread
-in a "ready" state. If `cancellable` is set, `thread.yield-then-promote` returns
-whether the current task was [cancelled] by the caller; otherwise,
+thread `t` if `t` is "ready" and doing so would not otherwise violate
+[Component Invariant] #3. In any case, the current thread is left in the "ready"
+state. If `cancellable` is set, `thread.yield-then-promote` returns whether the
+current task was [cancelled] by the caller; otherwise,
 `thread.yield-then-promote` always returns `false`.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
@@ -3011,10 +3013,9 @@ In particular, the Component Model maintains the following invariants:
    restriction in an explicit opt-in manner.)
 
 3. To ease adoption, unless a component opts in (via "stackful" lift 🚟 or
-   cooperative threads 🧵), all core wasm execution inside a component instance
-   is locally serialized (via automatic backpressure applied at export calls) so
-   that producer toolchains can continue to use a single global linear memory
-   shadow stack that is pushed and popped in LIFO order.
+   cooperative threads 🧵), all core wasm inside a component instance executes
+   in a LIFO manner so that producer toolchains can continue to use a single
+   global linear memory shadow stack that is pushed and popped in LIFO order.
 
 
 ## JavaScript Embedding
@@ -3342,6 +3343,7 @@ For some use-case-focused, worked examples, see:
 [GC ABI Option]: https://github.com/WebAssembly/component-model/issues/525
 
 [Strongly-unique]: #name-uniqueness
+[Component Invariant]: #component-invariants
 
 [Donut Wrapped]: Linking.md#higher-order-shared-nothing-linking-aka-donut-wrapping
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions

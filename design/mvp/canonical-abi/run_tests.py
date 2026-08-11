@@ -2949,6 +2949,106 @@ def test_sync_threads():
   assert(result == 42)
   assert(other_result == 43)
 
+def test_promotable():
+  store = Store()
+  inst = ComponentInstance(store)
+
+  run_done = False
+  cb_threadi = None
+  cb_exited = False
+  cb_ft = FuncType([], [U32Type()], async_ = True)
+  cb_opts = mk_opts(async_ = True)
+  def core_cb(args):
+    assert(not args)
+    nonlocal cb_threadi
+    [cb_threadi] = canon_thread_index()
+    [] = canon_task_return([U32Type()], cb_opts, [1])
+    return [CallbackCode.YIELD]
+  def core_cb_callback(args):
+    [event,payload1,payload2] = args
+    assert(event == EventCode.NONE and payload1 == 0 and payload2 == 0)
+    assert(run_done)
+    nonlocal cb_exited
+    cb_exited = True
+    return [CallbackCode.EXIT]
+  cb_opts.callback = core_cb_callback
+  cb_result = None
+  def on_cb_resolve(v):
+    nonlocal cb_result
+    [cb_result] = v
+  _ = store.invoke(store.lift(core_cb, cb_ft, cb_opts, inst), lambda:[], on_cb_resolve)
+  assert(cb_result == 1)
+
+  sf_ft = FuncType([], [U32Type()], async_ = True)
+  sf_opts = mk_opts(async_ = True)
+
+  sf1_done = False
+  def core_sf1(args):
+    assert(not args)
+    [] = canon_task_return([U32Type()], sf_opts, [2])
+    [ret] = canon_thread_yield(False)
+    assert(ret == Cancelled.FALSE)
+    nonlocal sf1_done
+    sf1_done = True
+    return []
+  sf1_result = None
+  def on_sf1_resolve(v):
+    nonlocal sf1_result
+    [sf1_result] = v
+  _ = store.invoke(store.lift(core_sf1, sf_ft, sf_opts, inst), lambda:[], on_sf1_resolve)
+  assert(sf1_result == 2)
+  assert(not sf1_done)
+
+  sf2_threadi = None
+  sf2_done = False
+  def core_sf2(args):
+    assert(not args)
+    nonlocal sf2_threadi
+    [sf2_threadi] = canon_thread_index()
+    [] = canon_task_return([U32Type()], sf_opts, [3])
+    [ret] = canon_thread_suspend(False)
+    assert(ret == Cancelled.FALSE)
+    nonlocal sf2_done
+    sf2_done = True
+    return []
+  sf2_result = None
+  def on_sf2_resolve(v):
+    nonlocal sf2_result
+    [sf2_result] = v
+  _ = store.invoke(store.lift(core_sf2, sf_ft, sf_opts, inst), lambda:[], on_sf2_resolve)
+  assert(sf2_result == 3)
+  assert(not sf2_done)
+
+  def core_run(args):
+    assert(not args)
+
+    while not sf1_done:
+      [ret] = canon_thread_yield(False)
+      assert(ret == Cancelled.FALSE)
+
+    [] = canon_thread_resume_later(sf2_threadi)
+    assert(not sf2_done)
+    [ret] = canon_thread_yield_then_promote(False, sf2_threadi)
+    assert(ret == Cancelled.FALSE)
+    assert(sf2_done)
+
+    for _ in range(10):
+      [ret] = canon_thread_yield_then_promote(False, cb_threadi)
+      assert(ret == Cancelled.FALSE)
+
+    return [42]
+
+  run_result = None
+  def on_run_resolve(v):
+    nonlocal run_result, run_done
+    [run_result] = v
+    run_done = True
+
+  caller_ft = FuncType([], [U8Type()])
+  lift_and_run(mk_opts(), inst, caller_ft, core_run, lambda:[], on_run_resolve)
+  assert(run_result == 42)
+  assert(cb_exited)
+
 def test_thread_cancel_callback():
   store = Store()
   root_inst = ComponentInstance(store)
@@ -3046,6 +3146,7 @@ test_self_copy(F64Type())
 test_async_flat_params()
 test_threads()
 test_sync_threads()
+test_promotable()
 test_thread_cancel_callback()
 
 print("All tests passed")
