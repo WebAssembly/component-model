@@ -712,7 +712,11 @@ the event loop after every event (instead of once at the end of the task),
 stackless async exports release the lock between every event, allowing a higher
 degree of concurrency than synchronous exports. Stackful async exports ignore
 the lock entirely and thus achieve the highest degree of (cooperative)
-concurrency.
+concurrency. Another source of implicit backpressure arises when, in a [donut
+wrapping] scenario, a recursive `async` call into the parent that requires the
+exclusive lock is attempted while the parent is actively executing a
+non-`async`-typed call (as this would otherwise allow non-LIFO execution that
+would break invariant #3).
 
 Since non-`async` functions are not allowed to block (including due to
 backpressure) and also don't pile up like `async` functions, non-`async`

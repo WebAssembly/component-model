@@ -126,6 +126,7 @@ class ComponentInstance:
   threads: Table[Thread]
   may_enter: bool
   may_leave: bool
+  sync_depth: int
   backpressure: int
   num_waiting_to_enter: int
   exclusive_thread: Optional[Thread]
@@ -138,6 +139,7 @@ class ComponentInstance:
     self.threads = Table()
     self.may_enter = True
     self.may_leave = True
+    self.sync_depth = 0
     self.backpressure = 0
     self.num_waiting_to_enter = 0
     self.exclusive_thread = None
@@ -705,7 +707,7 @@ being an example use case).
     assert(self.running())
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
-    if Task.promotable(other):
+    if current_task().promotable(other):
       other.stop_waiting_internal(cancelled = False)
       return self.suspend_then_resume(cancellable, other)
     else:
@@ -715,7 +717,7 @@ being an example use case).
     assert(self.running())
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
-    if Task.promotable(other):
+    if current_task().promotable(other):
       other.stop_waiting_internal(cancelled = False)
       return self.yield_then_resume(cancellable, other)
     else:
@@ -816,14 +818,14 @@ Building on this, the `Task.promotable` predicate defines when a `ready` thread
 can be resumed without violating [Component Invariant] #3 via either the
 `Thread.{suspend,yield}_then_promote` methods or the synchronous thread
 scheduling performed in `canon_lift` below. In particular, explicit threads, the
-implicit threads of non-`async`-typed tasks, and the implicit threads of
-stackful `async`-typed tasks are all "promotable" if they are in the `ready`
-state.
+implicit thread of the current non-`async`-typed task (passed as `self`), and
+the implicit threads of stackful `async`-typed tasks are all "promotable" if
+they are in the `ready` state.
 ```python
-  def promotable(thread):
+  def promotable(self, thread):
     return (thread.ready()
             and (thread is not thread.task.implicit_thread
-                 or not thread.task.ft.async_
+                 or (not thread.task.ft.async_ and thread.task is self)
                  or (thread.task.ft.async_ and not thread.task.needs_exclusive())))
 ```
 
@@ -838,7 +840,10 @@ of backpressure:
     `backpressure.{inc,dec}` which modify the `ComponentInstance.backpressure`
     counter.
  2. *Implicit backpressure* triggered when `Task.needs_exclusive()` is true and
-    the `ComponentInstance.exclusive_thread` lock is already held.
+    either the `ComponentInstance.exclusive_thread` lock is already held *or*,
+    in a [donut wrapping] scenario, a parent's `async` function is being called
+    by a child component's import while the parent has a non-`async` call
+    already on the stack.
  3. *Residual backpressure* triggered by explicit or implicit backpressure
     having been enabled then disabled, but there still being tasks waiting to
     enter that need to be given the chance to start without getting starved
@@ -856,8 +861,10 @@ exports.
     self.implicit_thread = current_thread()
     if self.ft.async_:
       def has_backpressure():
-        return (self.inst.backpressure > 0 or
-                (self.needs_exclusive() and self.inst.exclusive_thread is not None))
+        return (self.inst.backpressure > 0
+                or (self.needs_exclusive()
+                    and (self.inst.exclusive_thread is not None
+                         or self.inst.sync_depth > 0)))
       if has_backpressure() or self.inst.num_waiting_to_enter > 0:
         self.inst.num_waiting_to_enter += 1
         cancelled = self.implicit_thread.wait_until(lambda: not has_backpressure(), cancellable = True)
@@ -868,6 +875,8 @@ exports.
       if self.needs_exclusive():
         assert(self.inst.exclusive_thread is None)
         self.inst.exclusive_thread = self.implicit_thread
+    else:
+      self.inst.sync_depth += 1
     self.register_thread(self.implicit_thread)
     return True
 
@@ -903,9 +912,12 @@ returned a value to its caller.
   def exit_implicit_thread(self):
     assert(current_thread() is self.implicit_thread)
     self.unregister_thread(self.implicit_thread)
-    if self.ft.async_ and self.needs_exclusive():
-      assert(self.inst.exclusive_thread is self.implicit_thread)
-      self.inst.exclusive_thread = None
+    if self.ft.async_:
+      if self.needs_exclusive():
+        assert(self.inst.exclusive_thread is self.implicit_thread)
+        self.inst.exclusive_thread = None
+    else:
+      self.inst.sync_depth -= 1
 
   def unregister_thread(self, thread):
     assert(thread in self.threads and thread.task is self)
@@ -935,9 +947,12 @@ multiple), giving the thread the chance to handle cancellation promptly so that
       self.implicit_thread.resume(Cancelled.TRUE)
     else:
       assert(self.state == Task.State.STARTED)
-      candidates = { t for t in self.threads if t.cancellable }
-      if self.needs_exclusive() and self.inst.exclusive_thread not in { None, self.implicit_thread }:
-        candidates.discard(self.implicit_thread)
+      def exclusive_conflict(thread):
+        return (self.needs_exclusive()
+                and thread is self.implicit_thread
+                and (self.inst.exclusive_thread not in { None, self.implicit_thread }
+                     or self.inst.sync_depth > 0))
+      candidates = { t for t in self.threads if t.cancellable and not exclusive_conflict(t) }
       if candidates and self.inst.may_enter_from(caller):
         self.state = Task.State.CANCEL_DELIVERED
         self.inst.enter_from(caller)
@@ -951,7 +966,8 @@ thread when doing so would violate [Component Invariant] #2 or #3. In
 particular, invariant #2 requires not resuming any thread while the task's
 containing component instance may not be reentered and invariant #3 requires not
 resuming a `needs_exclusive` task's implicit thread while another task's
-implicit thread is running exclusively.
+`needs_exclusive` implicit thread is holding the `exclusive_thread` lock *or*
+there's a non-`async` call on the stack (which must execute in a LIFO manner).
 
 If cancellation cannot be immediately delivered by `Task.request_cancellation`,
 the request is remembered in `Task.state` and delivered at the next opportunity
@@ -3789,7 +3805,7 @@ the call's new task, as the `OnCancel` return value of `FuncInst`.
   thread.resume()
   if not ft.async_:
     while task.state != Task.State.RESOLVED:
-      candidates = { t for t in inst.threads if Task.promotable(t) }
+      candidates = { t for t in inst.threads if task.promotable(t) }
       trap_if(not candidates)
       random.choice(list(candidates)).resume()
   return task.request_cancellation

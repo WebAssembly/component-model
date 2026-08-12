@@ -195,6 +195,7 @@ class ComponentInstance:
   threads: Table[Thread]
   may_enter: bool
   may_leave: bool
+  sync_depth: int
   backpressure: int
   num_waiting_to_enter: int
   exclusive_thread: Optional[Thread]
@@ -207,6 +208,7 @@ class ComponentInstance:
     self.threads = Table()
     self.may_enter = True
     self.may_leave = True
+    self.sync_depth = 0
     self.backpressure = 0
     self.num_waiting_to_enter = 0
     self.exclusive_thread = None
@@ -422,7 +424,7 @@ class Thread:
     assert(self.running())
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
-    if Task.promotable(other):
+    if current_task().promotable(other):
       other.stop_waiting_internal(cancelled = False)
       return self.suspend_then_resume(cancellable, other)
     else:
@@ -432,7 +434,7 @@ class Thread:
     assert(self.running())
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
-    if Task.promotable(other):
+    if current_task().promotable(other):
       other.stop_waiting_internal(cancelled = False)
       return self.yield_then_resume(cancellable, other)
     else:
@@ -478,10 +480,10 @@ class Task:
     assert(self.ft.async_)
     return not self.opts.async_ or self.opts.callback
 
-  def promotable(thread):
+  def promotable(self, thread):
     return (thread.ready()
             and (thread is not thread.task.implicit_thread
-                 or not thread.task.ft.async_
+                 or (not thread.task.ft.async_ and thread.task is self)
                  or (thread.task.ft.async_ and not thread.task.needs_exclusive())))
 
   def enter_implicit_thread(self):
@@ -489,8 +491,10 @@ class Task:
     self.implicit_thread = current_thread()
     if self.ft.async_:
       def has_backpressure():
-        return (self.inst.backpressure > 0 or
-                (self.needs_exclusive() and self.inst.exclusive_thread is not None))
+        return (self.inst.backpressure > 0
+                or (self.needs_exclusive()
+                    and (self.inst.exclusive_thread is not None
+                         or self.inst.sync_depth > 0)))
       if has_backpressure() or self.inst.num_waiting_to_enter > 0:
         self.inst.num_waiting_to_enter += 1
         cancelled = self.implicit_thread.wait_until(lambda: not has_backpressure(), cancellable = True)
@@ -501,6 +505,8 @@ class Task:
       if self.needs_exclusive():
         assert(self.inst.exclusive_thread is None)
         self.inst.exclusive_thread = self.implicit_thread
+    else:
+      self.inst.sync_depth += 1
     self.register_thread(self.implicit_thread)
     return True
 
@@ -513,9 +519,12 @@ class Task:
   def exit_implicit_thread(self):
     assert(current_thread() is self.implicit_thread)
     self.unregister_thread(self.implicit_thread)
-    if self.ft.async_ and self.needs_exclusive():
-      assert(self.inst.exclusive_thread is self.implicit_thread)
-      self.inst.exclusive_thread = None
+    if self.ft.async_:
+      if self.needs_exclusive():
+        assert(self.inst.exclusive_thread is self.implicit_thread)
+        self.inst.exclusive_thread = None
+    else:
+      self.inst.sync_depth -= 1
 
   def unregister_thread(self, thread):
     assert(thread in self.threads and thread.task is self)
@@ -532,9 +541,12 @@ class Task:
       self.implicit_thread.resume(Cancelled.TRUE)
     else:
       assert(self.state == Task.State.STARTED)
-      candidates = { t for t in self.threads if t.cancellable }
-      if self.needs_exclusive() and self.inst.exclusive_thread not in { None, self.implicit_thread }:
-        candidates.discard(self.implicit_thread)
+      def exclusive_conflict(thread):
+        return (self.needs_exclusive()
+                and thread is self.implicit_thread
+                and (self.inst.exclusive_thread not in { None, self.implicit_thread }
+                     or self.inst.sync_depth > 0))
+      candidates = { t for t in self.threads if t.cancellable and not exclusive_conflict(t) }
       if candidates and self.inst.may_enter_from(caller):
         self.state = Task.State.CANCEL_DELIVERED
         self.inst.enter_from(caller)
@@ -2222,7 +2234,7 @@ def canon_lift(callee, ft, opts, inst, on_start, on_resolve) -> OnCancel:
   thread.resume()
   if not ft.async_:
     while task.state != Task.State.RESOLVED:
-      candidates = { t for t in inst.threads if Task.promotable(t) }
+      candidates = { t for t in inst.threads if task.promotable(t) }
       trap_if(not candidates)
       random.choice(list(candidates)).resume()
   return task.request_cancellation

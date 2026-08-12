@@ -3120,6 +3120,134 @@ def test_thread_cancel_callback():
 
   lift_and_run(mk_opts(), consumer_inst, consumer_ft, core_consumer, lambda:[], lambda _:())
 
+def test_donut_sync_defers_async_enter():
+  store = Store()
+  parent_inst = ComponentInstance(store)
+  child_inst = ComponentInstance(store, parent_inst)
+
+  h_ran = RacyBool(False)
+  h_ft = FuncType([],[], async_ = True)
+  def h_core(args):
+    assert(len(args) == 0)
+    h_ran.set()
+    return []
+  h = store.lift(h_core, h_ft, mk_opts(), parent_inst)
+
+  child_mem = bytearray(16)
+  child_opts = mk_opts(memory = MemInst(child_mem, 'i32'), async_ = True)
+  subi = None
+  g_ft = FuncType([],[])
+  def g_core(args):
+    nonlocal subi
+    assert(parent_inst.sync_depth == 1)
+    [ret] = store.lower(h, h_ft, child_opts, child_inst)([])
+    state,subi = unpack_result(ret)
+    assert(state == Subtask.State.STARTING)
+    assert(h_ran.is_clear())
+    return []
+  g = store.lift(g_core, g_ft, mk_opts(), child_inst)
+
+  f_ft = FuncType([],[])
+  def f_core(args):
+    assert(len(args) == 0)
+    [] = store.lower(g, g_ft, mk_opts(), parent_inst)([])
+    assert(h_ran.is_clear())
+    return []
+
+  lift_and_run(mk_opts(), parent_inst, f_ft, f_core, lambda:[], lambda _:())
+  assert(h_ran.is_set())
+
+  def finish_core(args):
+    [seti] = canon_waitable_set_new()
+    [] = canon_waitable_join(subi, seti)
+    retp = 8
+    [event] = canon_waitable_set_wait(True, MemInst(child_mem, 'i32'), seti, retp)
+    assert(event == EventCode.SUBTASK)
+    assert(child_mem[retp+0] == subi)
+    assert(child_mem[retp+4] == Subtask.State.RETURNED)
+    [] = canon_subtask_drop(subi)
+    [] = canon_waitable_set_drop(seti)
+    return []
+  lift_and_run(mk_opts(), child_inst, FuncType([],[]), finish_core, lambda:[], lambda _:())
+
+def test_donut_sync_defers_cancellation():
+  store = Store()
+  parent_inst = ComponentInstance(store)
+  child_inst = ComponentInstance(store, parent_inst)
+
+  parent_mem = bytearray(16)
+  f_done = RacyBool(False)
+  h_ft = FuncType([FutureType(None)],[], async_ = True)
+  def h_core(args):
+    [rfut] = args
+    [ret] = canon_future_read(FutureType(None), mk_opts(MemInst(parent_mem, 'i32'), async_ = True), rfut, 0xdeadbeef)
+    assert(ret == definitions.BLOCKED)
+    [seti] = canon_waitable_set_new()
+    [] = canon_waitable_join(rfut, seti)
+    retp = 8
+    [event] = canon_waitable_set_wait(True, MemInst(parent_mem, 'i32'), seti, retp)
+    assert(event == EventCode.FUTURE_READ)
+    assert(parent_mem[retp+0] == rfut)
+    assert(parent_mem[retp+4] == CopyResult.COMPLETED)
+    assert(f_done.is_set())
+    [cancelled] = canon_thread_yield(True)
+    assert(cancelled == Cancelled.TRUE)
+    [] = canon_future_drop_readable(FutureType(None), rfut)
+    [] = canon_waitable_set_drop(seti)
+    return []
+  h = store.lift(h_core, h_ft, mk_opts(), parent_inst)
+
+  child_mem = bytearray(24)
+  child_async_opts = mk_opts(memory = MemInst(child_mem, 'i32'), async_ = True)
+  subi = None
+  wfut = None
+  setup_ft = FuncType([],[])
+  def setup_core(args):
+    nonlocal subi, wfut
+    [packed] = canon_future_new(FutureType(None))
+    rfut,wfut = unpack_new_ends(packed)
+    [ret] = store.lower(h, h_ft, child_async_opts, child_inst)([rfut])
+    state,subi = unpack_result(ret)
+    assert(state == Subtask.State.STARTED)
+    return []
+  _ = store.invoke(store.lift(setup_core, setup_ft, mk_opts(), child_inst), lambda:[], lambda _:())
+  assert(parent_inst.exclusive_thread is not None)
+
+  do_cancel_ft = FuncType([],[])
+  def do_cancel_core(args):
+    assert(parent_inst.sync_depth == 1)
+    [ret] = canon_subtask_cancel(True, subi)
+    assert(ret == definitions.BLOCKED)
+    [ret] = canon_future_write(FutureType(None), mk_opts(MemInst(child_mem, 'i32')), wfut, 0xdeadbeef)
+    assert(ret == CopyResult.COMPLETED)
+    [] = canon_future_drop_writable(FutureType(None), wfut)
+    return []
+  do_cancel = store.lift(do_cancel_core, do_cancel_ft, mk_opts(), child_inst)
+
+  f_ft = FuncType([],[])
+  def f_core(args):
+    assert(len(args) == 0)
+    [] = store.lower(do_cancel, do_cancel_ft, mk_opts(), parent_inst)([])
+    f_done.set()
+    return []
+  _ = store.invoke(store.lift(f_core, f_ft, mk_opts(), parent_inst), lambda:[], lambda _:())
+
+  while store.waiting:
+    store.tick()
+
+  def finish_core(args):
+    [seti] = canon_waitable_set_new()
+    [] = canon_waitable_join(subi, seti)
+    retp = 8
+    [event] = canon_waitable_set_wait(True, MemInst(child_mem, 'i32'), seti, retp)
+    assert(event == EventCode.SUBTASK)
+    assert(child_mem[retp+0] == subi)
+    assert(child_mem[retp+4] == Subtask.State.RETURNED)
+    [] = canon_subtask_drop(subi)
+    [] = canon_waitable_set_drop(seti)
+    return []
+  lift_and_run(mk_opts(), child_inst, FuncType([],[]), finish_core, lambda:[], lambda _:())
+
 test_roundtrips()
 test_cross_component_realloc()
 test_handles()
@@ -3148,5 +3276,7 @@ test_threads()
 test_sync_threads()
 test_promotable()
 test_thread_cancel_callback()
+test_donut_sync_defers_async_enter()
+test_donut_sync_defers_cancellation()
 
 print("All tests passed")
