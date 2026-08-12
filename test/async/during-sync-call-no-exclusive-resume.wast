@@ -21,6 +21,7 @@
 
       (global $setup-thread-index (mut i32) (i32.const 0xdead))
       (global $implicit-thread-index (mut i32) (i32.const 0xdead))
+      (global $in-sync-call (mut i32) (i32.const 0))
 
       (func $thread-start (param i32)
         (local $r i32)
@@ -38,23 +39,31 @@
         (i32.const 0 (; EXIT ;)))
 
       ;; async callback task resolves, then parks its implicit thread, ready,
-      ;; in its event loop by returning YIELD, but must never be resumed.
+      ;; in its event loop by returning YIELD. Since a YIELD may
+      ;; nondeterministically complete without suspending, 'never-cb' may be
+      ;; called (with a NONE event) while no non-async-typed call is in
+      ;; progress and parks the thread again; it must never be called during
+      ;; 'sync-block'.
       (func (export "arm") (result i32)
         (call $task.return (i32.const 1))
         (i32.const 1 (; YIELD ;)))
 
       (func (export "never-cb") (param i32 i32 i32) (result i32)
-        unreachable)
+        (if (global.get $in-sync-call)
+          (then unreachable))
+        (i32.const 1 (; YIELD ;)))
 
       ;; non-async-typed: 4 rounds of switching to $thread-start and being made ready
       ;; again by it
       (func (export "sync-block") (result i32)
         (local $r i32)
+        (global.set $in-sync-call (i32.const 1))
         (global.set $implicit-thread-index (call $thread.index))
         (loop $rounds
           (drop (call $thread.suspend-then-resume (global.get $setup-thread-index)))
           (local.set $r (i32.add (local.get $r) (i32.const 1)))
           (br_if $rounds (i32.lt_u (local.get $r) (i32.const 4))))
+        (global.set $in-sync-call (i32.const 0))
         (i32.const 42))
     )
     (core type $start-func-ty (func (param i32)))
@@ -117,17 +126,25 @@
     (import "" "task.return" (func $task.return (param i32)))
     (import "" "thread.suspend" (func $thread.suspend (result i32)))
 
+    (global $in-sync-call (mut i32) (i32.const 0))
+
     ;; async callback task resolves, then parks its implicit thread, ready,
-    ;; in its event loop by returning YIELD, but must never be resumed.
+    ;; in its event loop by returning YIELD. Since a YIELD may
+    ;; nondeterministically complete without suspending, 'never-cb' may be
+    ;; called (with a NONE event) while no non-async-typed call is in progress
+    ;; and parks the thread again; it must never be called during 'sync-block'.
     (func (export "arm") (result i32)
       (call $task.return (i32.const 1))
       (i32.const 1 (; YIELD ;)))
 
     (func (export "never-cb") (param i32 i32 i32) (result i32)
-      unreachable)
+      (if (global.get $in-sync-call)
+        (then unreachable))
+      (i32.const 1 (; YIELD ;)))
 
     ;; non-async-typed: suspend with no valid thread to switch to
     (func (export "sync-block")
+      (global.set $in-sync-call (i32.const 1))
       (drop (call $thread.suspend))
       unreachable)
   )

@@ -79,11 +79,20 @@
         (global.set $unblock-value (local.get $val))
       )
 
+      ;; 'yielder'/'yielder-cb' yield until 'poker' has been called (a single
+      ;; yield may nondeterministically complete without suspending, which
+      ;; would resolve the task before the caller gets to call 'poker').
+      (global $poked (mut i32) (i32.const 0))
+
       (func (export "yielder")
-        (drop (call $thread.yield))
+        (global.set $poked (i32.const 0))
+        (loop $again
+          (drop (call $thread.yield))
+          (br_if $again (i32.eqz (global.get $poked))))
         (call $task.return (global.get $unblock-value))
       )
       (func (export "yielder-cb") (result i32)
+        (global.set $poked (i32.const 0))
         (i32.const 1 (; YIELD ;))
       )
       (func (export "yielder-cb-cb") (param $event_code i32) (param $index i32) (param $payload i32) (result i32)
@@ -93,10 +102,13 @@
           (then unreachable))
         (if (i32.ne (i32.const 0) (local.get $payload))
           (then unreachable))
+        (if (i32.eqz (global.get $poked))
+          (then (return (i32.const 1 (; YIELD ;)))))
         (call $task.return (global.get $unblock-value))
         (i32.const 0 (; EXIT ;))
       )
       (func (export "poker") (param $val i32)
+        (global.set $poked (i32.const 1))
         (global.set $unblock-value (local.get $val))
       )
     )
