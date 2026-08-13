@@ -414,31 +414,35 @@ the 4 `outeraliassort`s, as opposed to the full set of `sort`s, but this
 may be relaxed in the future if needed.
 
 To ensure that nested components can be arbitrarily "unbundled" (transforming
-inline `component` definitions into `import`s of out-of-line `component`
-definitions), `outer` aliases that cross component boundaries must only refer to
-definitions that can be substituted inline, if needed for unbundling. Of the
-available `outeraliassort`s: `core module`, `core type` and `component`
-definitions are *always* substitutable. However, due to the *generativity* of
-`resource` types (discussed in the next section), `type` definitions that
-transitively refer to a `resource` type may *not* be `outer`-aliased and are
-thus rejected by validation.
+inline definitions into `import`s of out-of-line definitions), `outer` aliases
+that cross component boundaries must only refer to definitions that can be
+substituted inline, if needed. `outer` aliases can also refer to `import`
+definitions, in which case unbundling would replace the `alias` definition with
+a copy of the `import`. Of the available `outeraliassort`s: `core module`, `core
+type` and `component` definitions are *always* substitutable. However, due to
+the *generativity* of `resource` types (discussed in the next section), `type`
+definitions that transitively refer to a `resource` type may *not* be
+`outer`-aliased and are thus rejected by validation.
 
 For example, in the following component, `$T2` and `$T3` cannot be `outer`-
 aliased by `$E`:
 ```wat
 (component $C
   (component $D)
+  (import "I" (component $I))
   (type $T1 (record (field "x" u32) (field "y" u32)))
   (type $T2 (resource (rep i32)))
   (type $T3 (borrow $T2))
   (import "f" (func $f))
   (alias outer $C $D (component $D'))
+  (alias outer $C $I (component $I'))
   (alias outer $C $T1 (type $T1'))
   (alias outer $C $T2 (type $T2'))
   (alias outer $C $T3 (type $T3'))
   ;; (alias outer $C $f (func $f))     ❌ 'func' not in 'outeraliassort'
   (component $E
     (alias outer $C $D (component $D))
+    (alias outer $C $I (component $I))
     (alias outer $C $T1 (type $T1))
     ;; (alias outer $C $T2 (type $T2)) ❌ resource type
     ;; (alias outer $C $T3 (type $T3)) ❌ refers to resource type
@@ -1071,16 +1075,16 @@ all 5 variations of `$ListListStringX` are considered equal since, after
 decoding, they all have the same AST.
 
 Next, the type equality relation on ASTs is relaxed to a more flexible
-[subtyping] relation. Currently, subtyping is only relaxed for `instance` and
-`component` types, but may be relaxed for more type constructors in the future
-to better support API Evolution (being careful to understand how subtyping
-manifests itself in the wide variety of source languages so that
+[subtyping] relation. Currently, subtyping is only relaxed for `module`,
+`instance` and `component` types, but may be relaxed for more type constructors
+in the future to better support API Evolution (being careful to understand how
+subtyping manifests itself in the wide variety of source languages so that
 subtype-compatible updates don't inadvertently break source-level clients).
 
-Component and instance subtyping allows a subtype to export more and import
-less than is declared by the supertype, ignoring the exact order of imports and
-exports and considering only names. For example, here, `$I1` is a subtype of
-`$I2`:
+Module, component and instance subtyping allows a subtype to export more and
+import less than is declared by the supertype, ignoring the exact order of
+imports and exports and considering only names. For example, here, `$I1` is a
+subtype of `$I2`:
 ```wat
 (component
   (type $I1 (instance
@@ -1544,8 +1548,8 @@ canon ::= ...
         | (canon resource.new <typeidx> (core func <id>?))
         | (canon resource.drop <typeidx> (core func <id>?))
         | (canon resource.rep <typeidx> (core func <id>?))
-        | (canon context.get <valtype> <u32> (core func <id>?)) 🔀
-        | (canon context.set <valtype> <u32> (core func <id>?)) 🔀
+        | (canon context.get <core:valtype> <u32> (core func <id>?)) 🔀
+        | (canon context.set <core:valtype> <u32> (core func <id>?)) 🔀
         | (canon backpressure.inc (core func <id>?)) 🔀
         | (canon backpressure.dec (core func <id>?)) 🔀
         | (canon task.return (result <valtype>)? <canonopt>* (core func <id>?)) 🔀
@@ -1598,8 +1602,8 @@ canon ::= ...
 | Canonical ABI signature    | `[rep: T.rep] -> [i32]`    |
 
 The `resource.new` built-in creates a new resource (of resource type `T`) with
-`rep` as its representation, and returns a new handle pointing to the new
-resource. Validation only allows `resource.rep T` to be used within the
+`rep` as its representation and returns a new owning handle pointing to the new
+resource. Validation only allows `resource.new T` to be used within the
 component that defined `T`.
 
 In the Canonical ABI, `T.rep` is defined to be the `$rep` in the
@@ -1617,9 +1621,7 @@ For details, see [`canon_resource_new`] in the Canonical ABI explainer.
 | Canonical ABI signature    | `[t:i32] -> []`                    |
 
 The `resource.drop` built-in drops a resource handle `t` (with resource type
-`T`). If the dropped handle owns the resource, the resource's `dtor` is called,
-if present. Validation only allows `resource.rep T` to be used within the
-component that defined `T`.
+`T`) and, if the handle was owning, calls the resource's `dtor`, if present.
 
 For details, see [`canon_resource_drop`] in the Canonical ABI explainer.
 
@@ -2745,7 +2747,7 @@ The `plainname` production captures several language-neutral syntactic hints
 that allow bindings generators to produce more idiomatic bindings in their
 target language. At the top-level, a `plainname` allows functions to be
 annotated as being a constructor, method or static function of a preceding
-resource and/or being asynchronous.
+resource.
 
 When a function is annotated with `constructor`, `method` or `static`, the
 first `label` is the name of the resource and the second `label` is the logical
@@ -2923,13 +2925,13 @@ client components would have no way to refer to `$R` and thus no way to write
 To address this problem, when validating `import` and `export` definitions, the
 Component Model requires that any resource type transitively used in the type of
 an import or export has an *externally-visible name*. Concretely, the `typeidx`
-introduced by the `import` or `export` of a `resource` type is considered an
-"externally-visible name", since the `typeidx` is uniquely associated with an
-`import`/`export`, which has a name. (Note: for `export`s, the `typeidx` that
-gets passed *into* the `export` does *not* get retroactively named by the
-`export`; only the *new* `typeidx` introduced by the `export`.) Lastly,
-according to usual component acyclicity rules, *imported* types cannot
-transitively refer to the external names of *exported* types.
+introduced by the `import` or `export` of a `resource` type, or any transitive
+alias thereof, is considered an "externally-visible name", since the `typeidx`
+is uniquely associated with an `import`/`export`, which has a name. (Note: for
+`export`s, the `typeidx` that gets passed *into* the `export` does *not* get
+retroactively named by the `export`; only the *new* `typeidx` introduced by the
+`export`.) Lastly, according to usual component acyclicity rules, *imported*
+types cannot transitively refer to the external names of *exported* types.
 
 Based on these rules, the above example can be expanded with the following valid
 imports and exports:

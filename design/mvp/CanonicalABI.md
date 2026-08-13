@@ -4010,7 +4010,7 @@ def canon_resource_new(rt, rep):
 
 For a canonical definition:
 ```wat
-(canon resource.drop $rt $async? (core func $f))
+(canon resource.drop $rt (core func $f))
 ```
 validation specifies:
 * `$rt` must refer to resource type
