@@ -51,12 +51,20 @@ feature](FutureFeatures.md) backlog.)
 By default, the features described in this explainer (as well as the supporting
 [Binary.md](Binary.md), [WIT.md](WIT.md) and [CanonicalABI.md](CanonicalABI.md))
 have been implemented and are included in the [WASI] 0.2 Developer Preview
-release. The WASI 0.3 Developer Preview release additionally includes the
-features gated by 🔀.
+release. All additions since 0.2 are explicitly marked with Unicode symbols
+("emoji-gated") to indicate which specific text- and binary-format productions
+or semantic rules were added.
 
-The other features, in various stages of implementation, polish and release,
-are gated by the following emojis and, when ready, may be included in
-subsequent WASI Developer Preview minor releases:
+The following features have already shipped as part of a subsequent [WASI]
+Developer Preview release, as recorded in the [top-level readme](../../README.md),
+and thus are not open to breaking changes before the final 1.0 release:
+* 🔀: native concurrency support with `async`, `stream` and `future`
+* 🗺️: the `map` type
+* 🏷️: `implements` and `external-id` annotations for imports/exports
+
+All other features are in various stages of implementation, are not enabled by
+default, may have breaking changes, and, after a suitable [WASI] SG vote, may be
+shipped as part of a future WASI Developer Preview release:
 * 🪙: value imports/exports and component-level start function
 * 🪺: nested namespaces and packages in import/export names
 * 🚝: enabling more canonical ABI options on more async-related builtins
@@ -67,8 +75,6 @@ subsequent WASI Developer Preview minor releases:
 * 📝: the `error-context` type
 * 🔗: canonical interface names
 * 🐘: [memory64]
-* 🗺️: the `map` type
-* 🏷️: `implements` annotations for plain-named interface imports/exports
 
 
 ## Grammar
