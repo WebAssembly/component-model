@@ -340,6 +340,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x2b cancel?:<cancel?>                              => (canon thread.yield-then-resume cancel? (core func)) 🧵
            | 0x2c cancel?:<cancel?>                              => (canon thread.suspend-then-promote cancel? (core func)) 🧵
            | 0x2d cancel?:<cancel?>                              => (canon thread.yield-then-promote cancel? (core func)) 🧵
+           | 0x2e                                                => (canon thread.set-task (core func)) 🧵
            | 0x40 shared?:<sh?> ft:<core:typeidx>                => (canon thread.spawn-ref shared? ft (core func)) 🧵②
            | 0x41 shared?:<sh?> ft:<core:typeidx> tbl:<core:tableidx> => (canon thread.spawn-indirect shared? ft tbl (core func)) 🧵②
            | 0x42 shared?:<sh?>                                  => (canon thread.available-parallelism shared? (core func)) 🧵②

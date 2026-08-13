@@ -268,11 +268,18 @@ Thread
 where a **component store** is the top-level "thing" and analogous to a Core
 WebAssembly [store].
 
-The reason for the thread/task split is that, when one thread creates a new
-thread, the new thread is contained by the task of the original thread which
-creates an N:1 relationship between threads and tasks that ties N threads to
-the original export call (= "task") that transitively spawned those N threads.
-This relationship serves several purposes described in the following sections.
+The reason for the thread/task split is that a single component export call,
+which spawns a task, can then lead to N more threads being spawned internally
+as part of the execution of that task. This ends up creating an N:1 relationship
+between threads and tasks. This relationship serves several purposes described
+in the following sections.
+
+While the store:instance and instance:task relationships are immutably set on
+creation, the task:thread relationship is *mutable*: guest code running inside a
+component instance can change which task a thread is currently executing on
+behalf of by calling the [`thread.set-task`] built-in. However, threads
+immutably record their **original task** so that they can always return to it by
+calling `thread.set-task` with the sentinel value `0`.
 
 In the Canonical ABI explainer, threads, tasks, component instances and
 component stores are represented by the [`Thread`], [`Task`],
@@ -311,9 +318,15 @@ supertask, they can be thought of as a single node in the async call stack.
 
 A subtask/supertask relationship is immutably established when an import is
 called, setting the [current task](#current-thread-and-task) as the supertask
-of the new subtask created for the import call. Thus, one reason for
-associating every thread with a "containing task" is to ensure that there is
-always a well-defined async call stack.
+of the new subtask created for the import call. Thus, one reason for associating
+every thread with a "containing task" is to ensure that there is always a
+well-defined async call stack. Note that guest code can call [`thread.set-task`]
+to change the containing task of a thread and thus the async call stack can
+change completely between two program points while executing on a single thread.
+For example, when a JS runtime flushes its microtask queue and encounters a
+JS callback associated with a task other than the current thread's task, the JS
+runtime would call `thread.set-task` so that the async call stack matches the
+JS developer's expectation.
 
 The async call stack is not currently observable to running components, except
 that it may nondeterministically appear as part of the callstack stored in
@@ -336,7 +349,7 @@ not enforcing a stricter form of Structured Concurrency at the Component Model
 level is that there are important use cases where forcing a supertask's thread
 to stay resident just to wait for subtasks to finish would waste resources
 without tangible benefit. Instead, we can say that once a supertask's last
-thread finishes execution, the supertask semantically "tail calls" any still-
+thread exits or leaves, the supertask semantically "tail calls" any still-
 executing subtasks, staying technically-alive and on the async call stack until
 they complete, but not consuming real resources.
 
@@ -374,13 +387,16 @@ New threads are created with the [`thread.new-indirect`] built-in. As mentioned
 [above](#threads-and-tasks), a spawned thread inherits the task of the spawning
 thread which is why threads and tasks are N:1. `thread.new-indirect` adds a new
 thread to the component instance's threads table and returns the `i32` index of
-this table entry to the Core WebAssembly caller. Like [`pthread_create`],
-`thread.new-indirect` takes a Core WebAssembly function (via index into a
-`funcref` table) and a "closure" parameter to pass to the function when called
-on the new thread. However, unlike `pthread_create`, the new thread is
-initially in a "suspended" state and must be explicitly "resumed" using one of
-the following 3 thread built-ins. Once the thread is resumed, the thread can
-learn its own index by calling the [`thread.index`] built-in.
+this table entry to the Core WebAssembly caller. After creation, the
+implicitly-set containing task of a thread can be explicitly overridden using
+the [`thread.set-task`] built-in mentioned above.
+
+Like [`pthread_create`], `thread.new-indirect` takes a Core WebAssembly function
+(via index into a `funcref` table) and a "closure" parameter to pass to the
+function when called on the new thread. However, unlike `pthread_create`, the
+new thread is initially in a "suspended" state and must be explicitly "resumed"
+using one of the following 3 thread built-ins. Once the thread is resumed, the
+thread can learn its own index by calling the [`thread.index`] built-in.
 
 A suspended thread (identified by thread-table index) can be resumed at some
 nondeterministic point in future via the [`thread.resume-later`] built-in. In
@@ -725,10 +741,7 @@ the "started" state.
 The way an `async` export returns its value using the async ABI is by calling
 [`task.return`], passing the core values that are to be lifted as *parameters*.
 When using the async ABI, *any* of the threads contained by a task can call
-`task.return`; there is no "main thread" of a task. When the last thread of a
-task returns, there is a trap if `task.return` has not been called. Thus, *some*
-thread (either the thread created implicitly for the initial export call or some
-thread transitively created by that thread) must call `task.return`.
+`task.return`; there is no "main thread" of a task.
 
 Returning values by calling `task.return` allows a task to continue executing
 even after it has passed its initial results to the caller. This is also
@@ -1540,6 +1553,7 @@ the concurrency story:
 [`waitable-set.wait`]: Explainer.md#-waitable-setwait
 [`waitable-set.poll`]: Explainer.md#-waitable-setpoll
 [`waitable.join`]: Explainer.md#-waitablejoin
+[`thread.set-task`]: Explainer.md#-threadset-task
 [`thread.index`]: Explainer.md#-threadindex
 [`thread.new-indirect`]: Explainer.md#-threadnew-indirect
 [`thread.resume-later`]: Explainer.md#-threadresume-later

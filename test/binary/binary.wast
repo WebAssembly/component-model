@@ -1047,8 +1047,8 @@
   "\03\05"                                    ;; core type section (5 bytes)
   "\01"                                       ;; 1 core type
   "\60\01\7f\00"                              ;; core functype (i32)->()
-  "\08\93\01"                                 ;; canon section (147 bytes)
-  "\2f"                                       ;; 47 canons
+  "\08\94\01"                                 ;; canon section (148 bytes)
+  "\30"                                       ;; 48 canons
   "\00\00\00\00\00"                           ;; lift core func 0 (f), no opts, type 0
   "\00\00\01\03\00\03\00\04\05\01"            ;; lift core func 1 (g), utf8 + (memory 0) + (realloc 5), type 1
   "\00\00\02\02\06\07\03\02"                  ;; lift core func 2 (run), async + (callback 3), type 2
@@ -1096,6 +1096,7 @@
   "\2b\00"                                    ;; 0x2b thread.yield-then-resume
   "\2c\00"                                    ;; 0x2c thread.suspend-then-promote
   "\2d\01"                                    ;; 0x2d thread.yield-then-promote cancellable
+  "\2e"                                       ;; 0x2e thread.set-task
 )
 
 (assert_malformed
@@ -1112,9 +1113,9 @@
     "\00asm" "\0d\00\01\00"                   ;; preamble
     "\08\02"                                  ;; canon section (2 bytes)
     "\01"                                     ;; 1 canon
-    "\2e"                                     ;; 0x2e is unallocated
+    "\2f"                                     ;; 0x2f is unallocated
   )
-  "invalid leading byte (0x2e) for canonical function"
+  "invalid leading byte (0x2f) for canonical function"
 )
 (assert_malformed
   (component binary

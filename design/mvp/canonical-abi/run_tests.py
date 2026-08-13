@@ -513,6 +513,11 @@ def test_cross_component_realloc():
       fail("thread.index must trap during realloc")
     except Trap:
       pass
+    try:
+      canon_thread_set_task(consumer_thread.index)
+      fail("thread.set-task must trap during realloc")
+    except Trap:
+      pass
     return consumer_heap.realloc(args)
 
   consumer_opts = mk_opts(MemInst(consumer_heap.memory, 'i32'), realloc = core_consumer_realloc)
@@ -3043,6 +3048,84 @@ def test_thread_cancel_callback():
 
   lift_and_run(mk_opts(), consumer_inst, consumer_ft, core_consumer, lambda:[], lambda _:())
 
+def test_thread_set_task():
+  store = Store()
+  inst = ComponentInstance(store)
+  opts = mk_opts(async_ = True)
+
+  ftbl = Table()
+  ft = CoreFuncType(['i32'],[])
+
+  t1i = None
+  bi = None
+
+  def thread_func1(args):
+    assert(args == [201])
+    task_a = current_task()
+    assert(task_a.state == Task.State.RESOLVED)
+    assert(canon_thread_index() == [t1i])
+
+    # moving to one's own task, whether by index or by passing 0, is a no-op
+    [] = canon_thread_set_task(t1i)
+    assert(current_task() is task_a)
+    [] = canon_thread_set_task(0)
+    assert(current_task() is task_a)
+
+    # join task B; the thread's index is unchanged by the move
+    [] = canon_thread_set_task(bi)
+    task_b = current_task()
+    assert(task_b is not task_a)
+    assert(task_b is inst.threads.get(bi).task)
+    assert(canon_thread_index() == [t1i])
+
+    # task.return now refers to task B
+    [] = canon_task_return([U8Type()], opts, [55])
+
+    # passing 0 always moves back to the thread's *original* task
+    [] = canon_thread_set_task(0)
+    assert(current_task() is task_a)
+
+    # a resolved task can be rejoined and exited from
+    [] = canon_thread_set_task(bi)
+    assert(current_task() is task_b)
+    [] = canon_thread_resume_later(bi)
+    return []
+  fi1 = ftbl.add(CoreFuncRef(ft, thread_func1))
+
+  def core_func_a(args):
+    assert(not args)
+    nonlocal t1i
+    [t1i] = canon_thread_new_indirect(ft, ftbl, fi1, 201)
+    [] = canon_thread_resume_later(t1i)
+    [] = canon_task_return([U8Type()], opts, [11])
+    return []
+
+  def core_func_b(args):
+    assert(not args)
+    nonlocal bi
+    [bi] = canon_thread_index()
+    [cancelled] = canon_thread_suspend(False)
+    assert(cancelled == Cancelled.FALSE)
+    return []
+
+  a_result = None
+  def on_resolve_a(v):
+    nonlocal a_result
+    [a_result] = v
+
+  b_result = None
+  def on_resolve_b(v):
+    nonlocal b_result
+    [b_result] = v
+
+  caller_ft = FuncType([], [U8Type()], async_ = True)
+  _ = store.invoke(store.lift(core_func_a, caller_ft, opts, inst), lambda:[], on_resolve_a)
+  _ = store.invoke(store.lift(core_func_b, caller_ft, opts, inst), lambda:[], on_resolve_b)
+  while store.waiting:
+    store.tick()
+  assert(a_result == 11)
+  assert(b_result == 55)
+
 test_roundtrips()
 test_cross_component_realloc()
 test_handles()
@@ -3071,5 +3154,6 @@ test_async_flat_params()
 test_threads()
 test_sync_threads()
 test_thread_cancel_callback()
+test_thread_set_task()
 
 print("All tests passed")
