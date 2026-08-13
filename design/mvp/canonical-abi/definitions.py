@@ -334,6 +334,9 @@ class Thread:
   def ready(self):
     return self.waiting() and self.ready_func()
 
+  def explicit(self):
+    return self is not self.task.implicit_thread
+
   def __init__(self, task, thread_func):
     def cont_func(cancelled):
       assert(self.running() and not cancelled)
@@ -519,6 +522,16 @@ class Task:
       assert(self.num_borrows == 0)
     assert(thread.index is not None)
     self.inst.threads.remove(thread.index)
+
+  def change_thread_registration(self, thread, new_task):
+    assert(thread in self.threads and thread.task is self)
+    assert(thread.explicit())
+    self.threads.remove(thread)
+    new_task.threads.append(thread)
+    thread.task = new_task
+    if len(self.threads) == 0:
+      trap_if(self.state != Task.State.RESOLVED)
+      assert(self.num_borrows == 0)
 
   def request_cancellation(self, caller: Optional[ComponentInstance]):
     if self.state == Task.State.INITIAL:
@@ -2703,7 +2716,7 @@ def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], fi, c):
   trap_if(f.t != ft)
   def thread_func():
     [] = call_and_trap_on_throw(f.callee, [c])
-    task.unregister_thread(new_thread)
+    new_thread.task.unregister_thread(new_thread)
   new_thread = Thread(task, thread_func)
   assert(new_thread.suspended())
   task.register_thread(new_thread)
@@ -2772,6 +2785,16 @@ def canon_thread_yield_then_promote(cancellable, i):
   other_thread = thread.task.inst.threads.get(i)
   cancelled = thread.yield_then_promote(cancellable, other_thread)
   return [cancelled]
+
+### 🧵 `canon thread.set-task`
+
+def canon_thread_set_task(i):
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  trap_if(not thread.explicit())
+  other_thread = thread.task.inst.threads.get(i)
+  thread.task.change_thread_registration(thread, other_thread.task)
+  return []
 
 ### 📝 `canon error-context.new`
 

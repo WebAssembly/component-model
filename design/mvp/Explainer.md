@@ -1584,6 +1584,7 @@ canon ::= ...
         | (canon thread.yield-then-resume cancellable? (core func <id>?)) 🧵
         | (canon thread.suspend-then-promote cancellable? (core func <id>?)) 🧵
         | (canon thread.yield-then-promote cancellable? (core func <id>?)) 🧵
+        | (canon thread.set-task (core func <id>?)) 🧵
         | (canon error-context.new <canonopt>* (core func <id>?)) 📝
         | (canon error-context.debug-message <canonopt>* (core func <id>?)) 📝
         | (canon error-context.drop (core func <id>?)) 📝
@@ -2302,6 +2303,23 @@ whether the current task was [cancelled] by the caller; otherwise,
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield_then_promote`] in the Canonical ABI explainer.
+
+###### 🧵 `thread.set-task`
+
+| Synopsis                   |                   |
+| -------------------------- | ----------------- |
+| Approximate WIT signature  | `func(t: thread)` |
+| Canonical ABI signature    | `[t:i32] -> []`   |
+
+The `thread.set-task` built-in sets the containing task of the [current thread],
+which must be explicitly created, to be that of the given thread `t`. A thread's
+containing task determines the behavior of `task.return` and cancellation as
+well as the [async call stack]. `thread.set-task` traps if called from an
+implicit thread (not created by `thread.new-indirect`) or if the current
+thread's old task is unresolved and would end up containing no threads.
+
+For details, see [Threads and Tasks] in the concurrency explainer and
+[`canon_thread_set_task`] in the Canonical ABI explainer.
 
 ###### 🧵② `thread.spawn-ref`
 
@@ -3382,6 +3400,7 @@ For some use-case-focused, worked examples, see:
 [`canon_thread_yield_then_resume`]: CanonicalABI.md#-canon-threadyield-then-resume
 [`canon_thread_suspend_then_promote`]: CanonicalABI.md#-canon-threadsuspend-then-promote
 [`canon_thread_yield_then_promote`]: CanonicalABI.md#-canon-threadyield-then-promote
+[`canon_thread_set_task`]: CanonicalABI.md#-canon-threadset-task
 [`canon_thread_spawn_ref`]: CanonicalABI.md#-canon-threadspawn-ref
 [`canon_thread_spawn_indirect`]: CanonicalABI.md#-canon-threadspawn-indirect
 [`canon_thread_available_parallelism`]: CanonicalABI.md#-canon-threadavailable_parallelism
@@ -3396,6 +3415,8 @@ For some use-case-focused, worked examples, see:
 [Current Thread]: Concurrency.md#current-thread-and-task
 [Current Task]: Concurrency.md#current-thread-and-task
 [Thread-Local Storage]: Concurrency.md#thread-local-storage
+[Threads and Tasks]: Concurrency.md#threads-and-tasks
+[Async Call Stack]: Concurrency.md#subtasks-and-supertasks
 [Subtask]: Concurrency.md#subtasks-and-supertasks
 [Stream or Future]: Concurrency.md#streams-and-futures
 [Streams and Futures]: Concurrency.md#streams-and-futures

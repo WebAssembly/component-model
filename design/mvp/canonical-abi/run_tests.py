@@ -503,6 +503,7 @@ def test_cross_component_realloc():
     assert(thread is not consumer_thread)
     assert(thread.task is not consumer_thread.task)
     assert(thread.task.inst is consumer_inst)
+    assert(thread is thread.task.implicit_thread)
     assert(current_instance() is consumer_inst)
     assert(not consumer_inst.may_enter)
     assert(not consumer_inst.may_leave)
@@ -513,6 +514,11 @@ def test_cross_component_realloc():
     try:
       canon_thread_index()
       fail("thread.index must trap during realloc")
+    except Trap:
+      pass
+    try:
+      canon_thread_set_task(consumer_thread.index)
+      fail("thread.set-task must trap during realloc")
     except Trap:
       pass
     return consumer_heap.realloc(args)
@@ -3020,6 +3026,160 @@ def test_thread_cancel_callback():
 
   lift_and_run(mk_opts(), consumer_inst, consumer_ft, core_consumer, lambda:[], lambda _:())
 
+def test_thread_set_task():
+  store = Store()
+  inst = ComponentInstance(store)
+  opts = mk_opts(async_ = True)
+
+  ftbl = Table()
+  ft = CoreFuncType(['i32'],[])
+
+  t1i = None
+  t2i = None
+  bi = None
+
+  def thread_func1(args):
+    assert(args == [201])
+    task_a = current_task()
+    assert(task_a.state == Task.State.RESOLVED)
+    assert(len(task_a.threads) == 2)
+
+    assert(canon_thread_index() == [t1i])
+    [] = canon_thread_set_task(t1i)
+    assert(current_task() is task_a)
+    [] = canon_thread_set_task(t2i)
+    assert(current_task() is task_a)
+    assert(canon_thread_index() == [t1i])
+
+    [] = canon_thread_set_task(bi)
+    assert(current_task() is not task_a)
+    assert(current_task() is inst.threads.get(bi).task)
+    assert(canon_thread_index() == [t1i])
+    assert(len(task_a.threads) == 1)
+
+    [] = canon_task_return([U8Type()], opts, [55])
+    [] = canon_thread_resume_later(t2i)
+    return []
+  fi1 = ftbl.add(CoreFuncRef(ft, thread_func1))
+
+  def thread_func2(args):
+    assert(args == [202])
+    task_a = current_task()
+    assert(task_a.state == Task.State.RESOLVED)
+    assert(len(task_a.threads) == 1)
+
+    try:
+      canon_thread_set_task(t1i)
+      fail("thread.set-task must trap on an exited thread's index")
+    except Trap:
+      pass
+
+    [] = canon_thread_set_task(bi)
+    assert(current_task() is not task_a)
+    assert(len(task_a.threads) == 0)
+    assert(canon_thread_index() == [t2i])
+
+    [] = canon_thread_resume_later(bi)
+    return []
+  fi2 = ftbl.add(CoreFuncRef(ft, thread_func2))
+
+  def core_func_a(args):
+    assert(not args)
+    nonlocal t1i, t2i
+
+    [ai] = canon_thread_index()
+    try:
+      canon_thread_set_task(ai)
+      fail("thread.set-task must trap on an implicit thread")
+    except Trap:
+      pass
+
+    [t1i] = canon_thread_new_indirect(ft, ftbl, fi1, 201)
+    [t2i] = canon_thread_new_indirect(ft, ftbl, fi2, 202)
+    [] = canon_thread_resume_later(t1i)
+    [] = canon_task_return([U8Type()], opts, [11])
+    return []
+
+  def core_func_b(args):
+    assert(not args)
+    nonlocal bi
+    [bi] = canon_thread_index()
+    [cancelled] = canon_thread_suspend(False)
+    assert(cancelled == Cancelled.FALSE)
+    return []
+
+  a_result = None
+  def on_resolve_a(v):
+    nonlocal a_result
+    [a_result] = v
+
+  b_result = None
+  def on_resolve_b(v):
+    nonlocal b_result
+    [b_result] = v
+
+  caller_ft = FuncType([], [U8Type()], async_ = True)
+  _ = store.invoke(store.lift(core_func_a, caller_ft, opts, inst), lambda:[], on_resolve_a)
+  _ = store.invoke(store.lift(core_func_b, caller_ft, opts, inst), lambda:[], on_resolve_b)
+  while store.waiting:
+    store.tick()
+  assert(a_result == 11)
+  assert(b_result == 55)
+
+  # Moving the last thread of an unresolved task traps.
+  store2 = Store()
+  inst2 = ComponentInstance(store2)
+  ftbl2 = Table()
+
+  di = None
+  trapped = False
+
+  def thread_func3(args):
+    assert(args == [203])
+    nonlocal trapped
+    task_c = current_task()
+    assert(task_c.state == Task.State.STARTED)
+    assert(len(task_c.threads) == 1)
+
+    try:
+      canon_thread_set_task(di)
+      fail("moving the last thread of an unresolved task must trap")
+    except Trap:
+      trapped = True
+
+    assert(current_task() is not task_c)
+    [] = canon_thread_resume_later(di)
+    return []
+  fi3 = ftbl2.add(CoreFuncRef(ft, thread_func3))
+
+  def core_func_c(args):
+    assert(not args)
+    [t3i] = canon_thread_new_indirect(ft, ftbl2, fi3, 203)
+    [] = canon_thread_resume_later(t3i)
+    return []  # no canon_task_return, so task c is left unresolved
+
+  def core_func_d(args):
+    assert(not args)
+    nonlocal di
+    [di] = canon_thread_index()
+    [cancelled] = canon_thread_suspend(False)
+    assert(cancelled == Cancelled.FALSE)
+    [] = canon_task_return([U8Type()], opts, [77])
+    return []
+
+  d_result = None
+  def on_resolve_d(v):
+    nonlocal d_result
+    [d_result] = v
+
+  _ = store2.invoke(store2.lift(core_func_c, caller_ft, opts, inst2), lambda:[],
+                    lambda v: fail("task c must not resolve"))
+  _ = store2.invoke(store2.lift(core_func_d, caller_ft, opts, inst2), lambda:[], on_resolve_d)
+  while store2.waiting:
+    store2.tick()
+  assert(trapped)
+  assert(d_result == 77)
+
 test_roundtrips()
 test_cross_component_realloc()
 test_handles()
@@ -3047,5 +3207,6 @@ test_async_flat_params()
 test_threads()
 test_sync_threads()
 test_thread_cancel_callback()
+test_thread_set_task()
 
 print("All tests passed")

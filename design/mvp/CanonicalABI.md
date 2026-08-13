@@ -67,6 +67,7 @@ specified here.
   * [`canon thread.yield-then-resume`](#-canon-threadyield-then-resume) 🧵
   * [`canon thread.suspend-then-promote`](#-canon-threadsuspend-then-promote) 🧵
   * [`canon thread.yield-then-promote`](#-canon-threadyield-then-promote) 🧵
+  * [`canon thread.set-task`](#-canon-threadset-task) 🧵
   * [`canon error-context.new`](#-canon-error-contextnew) 📝
   * [`canon error-context.debug-message`](#-canon-error-contextdebug-message) 📝
   * [`canon error-context.drop`](#-canon-error-contextdrop) 📝
@@ -532,6 +533,16 @@ class Thread:
     return self.waiting() and self.ready_func()
 ```
 
+As described in the [concurrency explainer], every `Thread` belongs to a `Task`,
+which is stored in the `Thread.task` field. Tasks store their *implicit* thread
+(i.e., the entry thread created when a `lift`ed function is called) in the
+`Task.implicit_thread` field. Thus, the test for whether a thread is *implicit*
+or *explicit* (i.e., created by `thread.new-indirect`) can be defined as:
+```python
+  def explicit(self):
+    return self is not self.task.implicit_thread
+```
+
 When a `Thread` is created, a new continuation is created for `thread_func`
 (wrapping the `thread_func` with `cont_func` to exactly match the function type
 expected by `cont_new`) and leaving the thread initially in the `suspended`
@@ -729,9 +740,10 @@ As described in the [concurrency explainer], a "task" is created for each call
 to a component export (in `canon_lift` below). Each task contains 1..N threads
 that execute on behalf of the task, starting with the *implicit* thread that is
 spawned by `canon_lift` and transitively including additional *explicit* threads
-spawned by the implicit thread via `thread.new-indirect`. Tasks contain internal
-state that is used to ensure (via trapping guards) that guest code obeys the
-Canonical ABI rules.
+spawned by the implicit thread via `thread.new-indirect` as well as any explicit
+threads moved to the task via `thread.set-task`. Tasks contain internal state
+that is used to ensure (via trapping guards) that guest code obeys the Canonical
+ABI rules.
 
 At a high-level, all cross-component calls funnel through the same `FuncInst`
 spec-level function type, where the host can be the caller, the callee or even
@@ -883,7 +895,7 @@ implicit thread returns to reverse the effects of `Task.enter_implicit_thread`.
 In particular, if the `exclusive_thread` lock was acquired, it is released.
 `Task.unregister_thread` (which is also called by `thread.new-indirect`, below)
 traps if the task's last thread is unregistered and the task has not yet
-returned a value to its caller.
+resolved.
 ```python
   def exit_implicit_thread(self):
     assert(current_thread() is self.implicit_thread)
@@ -901,6 +913,24 @@ returned a value to its caller.
     assert(thread.index is not None)
     self.inst.threads.remove(thread.index)
 ```
+The `Task.{register,unregister}_thread` methods shown above are also called
+for explicit threads (in `canon_thread_new_indirect` below). Between
+registration and unregistration, explicit threads (and only explicit threads)
+can also move between tasks by calling the `thread.set-task` built-in, which
+calls the following `Task.change_thread_registration` method:
+```python
+  def change_thread_registration(self, thread, new_task):
+    assert(thread in self.threads and thread.task is self)
+    assert(thread.explicit())
+    self.threads.remove(thread)
+    new_task.threads.append(thread)
+    thread.task = new_task
+    if len(self.threads) == 0:
+      trap_if(self.state != Task.State.RESOLVED)
+      assert(self.num_borrows == 0)
+```
+Like `unregister_thread`, `change_thread_registration` traps if it would
+otherwise leave an unresolved task that doesn't contain threads.
 
 The `Task.request_cancellation` method is called by the host or wasm caller to
 signal that they don't need the return value and that the callee should hurry up
@@ -4913,7 +4943,7 @@ def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], fi, c):
   trap_if(f.t != ft)
   def thread_func():
     [] = call_and_trap_on_throw(f.callee, [c])
-    task.unregister_thread(new_thread)
+    new_thread.task.unregister_thread(new_thread)
   new_thread = Thread(task, thread_func)
   assert(new_thread.suspended())
   task.register_thread(new_thread)
@@ -4922,6 +4952,10 @@ def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], fi, c):
 The newly-created thread starts out in a "suspended" state and so, to
 actually start executing, Core WebAssembly code must call one of the other
 `thread.*` built-ins defined below.
+
+Note that between when a thread is spawned and when it exits, its containing
+task can change and thus implementations must be careful to avoid unregistering
+from a stale task.
 
 
 ### 🧵 `canon thread.resume-later`
@@ -5124,6 +5158,45 @@ requested cancellation. `thread.yield-then-promote` (and other cancellable
 operations) will only indicate cancellation once and thus, if a caller is not
 prepared to propagate cancellation, they can omit `cancellable` so that
 cancellation is instead delivered at a later `cancellable` call.
+
+
+### 🧵 `canon thread.set-task`
+
+For a canonical definition:
+```wat
+(canon thread.set-task (core func $set_task))
+```
+validation specifies:
+* `$set_task` is given type `(func (param i32))`
+
+Calling `$set_task` invokes the following function, which traps if called by an
+implicit thread and otherwise sets the current thread's containing task to be
+the same as that of the given thread.
+```python
+def canon_thread_set_task(i):
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  trap_if(not thread.explicit())
+  other_thread = thread.task.inst.threads.get(i)
+  thread.task.change_thread_registration(thread, other_thread.task)
+  return []
+```
+Changing task membership is semantically visible in the following ways:
+* `task.return` and `task.cancel` will refer to the new task.
+* Cancellation requests for the new task (and no longer the old task) may
+  be delivered to the current thread.
+* If the old task drops down to containing zero threads and it has not yet
+  resolved (returned a value or acknowledged cancellation), there is a trap.
+
+Additionally, the host may use task membership to attribute execution in the
+current thread (or in a host import called by the current thread) to the host
+activity that spawned the current thread's task. For example, in `wasi:http`,
+the host spawns guest tasks in response to incoming HTTP requests and so this
+attribution allows a host to correlate *outgoing* HTTP requests (sent by host
+imports) with *incoming* HTTP requests, even when a single component instance
+handles multiple incoming HTTP requests concurrently. Since this
+import-to-export attribution is fully specified, in the future, this attribution
+could also be exposed to parent components [donut wrapping] child components.
 
 
 ### 📝 `canon error-context.new`
