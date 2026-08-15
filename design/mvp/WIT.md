@@ -1811,11 +1811,14 @@ desugar to an owned return value.
 Specifically, the syntax for a `resource` definition is:
 ```ebnf
 resource-item ::= 'resource' id ';'
-                | 'resource' id '{' ( external-id? resource-method )* '}'
+                | 'resource' id '{' ( gate external-id? resource-method )* '}'
 resource-method ::= func-item
                   | id ':' 'static' func-type ';'
                   | 'constructor' param-list ';'
 ```
+
+As with the items of a `world` or an `interface`, the methods of a `resource`
+can be individually gated, as described [above](#feature-gates).
 
 The optional `async` on `static` functions has the same meaning as in a
 non-`static` `func-item`.
