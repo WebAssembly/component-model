@@ -28,6 +28,8 @@ The current WASI Developer Preview releases are:
          Model and [WIT]; adds `async` functions, `stream`s and `future`s as
          well as new [ABI] built-in functions (additions are marked by the 🔀
          emoji throughout the repo).
+* 0.3.1: adds the `map<K,V>` type (🗺️) and the `implements` and `external-id`
+         annotations (🏷️).
 
 Subsequent WASI Developer Preview releases will include other emoji-[gated
 features] such as cooperative threads (🧵).

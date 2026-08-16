@@ -174,74 +174,74 @@ Notes:
   `export` aliases.
 
 ```ebnf
-type          ::= dt:<deftype>                            => (type dt)
-deftype       ::= dvt:<defvaltype>                        => dvt
-                | ft:<functype>                           => ft
-                | ct:<componenttype>                      => ct
-                | it:<instancetype>                       => it
-                | rt:<resourcetype>                       => rt
-primvaltype   ::= 0x7f                                    => bool
-                | 0x7e                                    => s8
-                | 0x7d                                    => u8
-                | 0x7c                                    => s16
-                | 0x7b                                    => u16
-                | 0x7a                                    => s32
-                | 0x79                                    => u32
-                | 0x78                                    => s64
-                | 0x77                                    => u64
-                | 0x76                                    => f32
-                | 0x75                                    => f64
-                | 0x74                                    => char
-                | 0x73                                    => string
-                | 0x64                                    => error-context 📝
-defvaltype    ::= pvt:<primvaltype>                       => pvt
-                | 0x72 lt*:vec(<labelvaltype>)            => (record (field lt)*)    (if |lt*| > 0)
-                | 0x71 case*:vec(<case>)                  => (variant case+) (if |case*| > 0)
-                | 0x70 t:<valtype>                        => (list t)
-                | 0x67 t:<valtype> len:<u32>              => (list t len)  (if len > 0) 🔧
-                | 0x6f t*:vec(<valtype>)                  => (tuple t+)    (if |t*| > 0)
-                | 0x6e l*:vec(<labellit>)                 => (flags l+)    (if 0 < |l*| <= 32)
-                | 0x6d l*:vec(<labellit>)                 => (enum l+)     (if |l*| > 0)
-                | 0x6b t:<valtype>                        => (option t)
-                | 0x6a t?:<valtype>? u?:<valtype>?        => (result t? (error u)?)
-                | 0x69 i:<typeidx>                        => (own i)
-                | 0x68 i:<typeidx>                        => (borrow i)
-                | 0x66 t?:<valtype>?                      => (stream t?) 🔀
-                | 0x65 t?:<valtype>?                      => (future t?) 🔀
-                | 0x63 k:<valtype> v:<valtype>            => (map k v) (if k is in <keytype>) 🗺️
-labelvaltype  ::= l:<labellit> t:<valtype>                => l t
-case          ::= l:<labellit> t?:<valtype>? 0x00         => (case l t?)
-labellit      ::= len:<u32> l:<label>                     => "l"  (if len = |l|)
-<T>?          ::= 0x00                                    =>
-                | 0x01 t:<T>                              => t
-valtype       ::= i:<typeidx>                             => i
-                | pvt:<primvaltype>                       => pvt
-resourcetype  ::= 0x3f v:<valtype> f?:<core:funcidx>?     => (resource (rep v) (dtor f)?)
-functype      ::= 0x40 ps:<paramlist> rs:<resultlist>     => (func ps rs)
-                | 0x43 ps:<paramlist> rs:<resultlist>     => (func async ps rs)
-paramlist     ::= lt*:vec(<labelvaltype>)                 => (param lt)*
-resultlist    ::= 0x00 t:<valtype>                        => (result t)
-                | 0x01 0x00                               =>
-componenttype ::= 0x41 cd*:vec(<componentdecl>)           => (component cd*)
-instancetype  ::= 0x42 id*:vec(<instancedecl>)            => (instance id*)
-componentdecl ::= 0x03 id:<importdecl>                    => id
-                | id:<instancedecl>                       => id
-instancedecl  ::= 0x00 t:<core:type>                      => t
-                | 0x01 t:<type>                           => t
-                | 0x02 a:<alias>                          => a
-                | 0x04 ed:<exportdecl>                    => ed
-importdecl    ::= na:<nameattributes> et:<externtype>     => (import na et)
-exportdecl    ::= na:<nameattributes> et:<externtype>     => (export na et)
-externtype    ::= 0x00 0x11 i:<core:typeidx>              => (core module (type i))
-                | 0x01 i:<typeidx>                        => (func (type i))
-                | 0x02 b:<valuebound>                     => (value b) 🪙
-                | 0x03 b:<typebound>                      => (type b)
-                | 0x04 i:<typeidx>                        => (component (type i))
-                | 0x05 i:<typeidx>                        => (instance (type i))
-typebound     ::= 0x00 i:<typeidx>                        => (eq i)
-                | 0x01                                    => (sub resource)
-valuebound    ::= 0x00 i:<valueidx>                       => (eq i) 🪙
-                | 0x01 t:<valtype>                        => t 🪙
+type          ::= dt:<deftype>                             => (type dt)
+deftype       ::= dvt:<defvaltype>                         => dvt
+                | ft:<functype>                            => ft
+                | ct:<componenttype>                       => ct
+                | it:<instancetype>                        => it
+                | rt:<resourcetype>                        => rt
+primvaltype   ::= 0x7f                                     => bool
+                | 0x7e                                     => s8
+                | 0x7d                                     => u8
+                | 0x7c                                     => s16
+                | 0x7b                                     => u16
+                | 0x7a                                     => s32
+                | 0x79                                     => u32
+                | 0x78                                     => s64
+                | 0x77                                     => u64
+                | 0x76                                     => f32
+                | 0x75                                     => f64
+                | 0x74                                     => char
+                | 0x73                                     => string
+                | 0x64                                     => error-context 📝
+defvaltype    ::= pvt:<primvaltype>                        => pvt
+                | 0x72 lt*:vec(<labelvaltype>)             => (record (field lt)*)    (if |lt*| > 0)
+                | 0x71 case*:vec(<case>)                   => (variant case+) (if |case*| > 0)
+                | 0x70 t:<valtype>                         => (list t)
+                | 0x67 t:<valtype> len:<u32>               => (list t len)  (if len > 0) 🔧
+                | 0x6f t*:vec(<valtype>)                   => (tuple t+)    (if |t*| > 0)
+                | 0x6e l*:vec(<labellit>)                  => (flags l+)    (if 0 < |l*| <= 32)
+                | 0x6d l*:vec(<labellit>)                  => (enum l+)     (if |l*| > 0)
+                | 0x6b t:<valtype>                         => (option t)
+                | 0x6a t?:<valtype>? u?:<valtype>?         => (result t? (error u)?)
+                | 0x69 i:<typeidx>                         => (own i)
+                | 0x68 i:<typeidx>                         => (borrow i)
+                | 0x66 t?:<valtype>?                       => (stream t?) 🔀
+                | 0x65 t?:<valtype>?                       => (future t?) 🔀
+                | 0x63 k:<valtype> v:<valtype>             => (map k v) (if k is in <keytype>) 🗺️
+labelvaltype  ::= l:<labellit> t:<valtype>                 => l t
+case          ::= l:<labellit> t?:<valtype>? 0x00          => (case l t?)
+labellit      ::= len:<u32> l:<label>                      => "l"  (if len = |l|)
+<T>?          ::= 0x00                                     =>
+                | 0x01 t:<T>                               => t
+valtype       ::= i:<typeidx>                              => i
+                | pvt:<primvaltype>                        => pvt
+resourcetype  ::= 0x3f v:<valtype> f?:<core:funcidx>?      => (resource (rep v) (dtor f)?)
+functype      ::= 0x40 ps:<paramlist> rs:<resultlist>      => (func ps rs)
+                | 0x43 ps:<paramlist> rs:<resultlist>      => (func async ps rs)
+paramlist     ::= lt*:vec(<labelvaltype>)                  => (param lt)*
+resultlist    ::= 0x00 t:<valtype>                         => (result t)
+                | 0x01 0x00                                =>
+componenttype ::= 0x41 cd*:vec(<componentdecl>)            => (component cd*)
+instancetype  ::= 0x42 id*:vec(<instancedecl>)             => (instance id*)
+componentdecl ::= 0x03 id:<importdecl>                     => id
+                | id:<instancedecl>                        => id
+instancedecl  ::= 0x00 t:<core:type>                       => t
+                | 0x01 t:<type>                            => t
+                | 0x02 a:<alias>                           => a
+                | 0x04 ed:<exportdecl>                     => ed
+importdecl    ::= na:<nameattributes> et:<externtype>      => (import na et)
+exportdecl    ::= na:<nameattributes> et:<externtype>      => (export na et)
+externtype    ::= 0x00 0x11 i:<core:typeidx>               => (core module (type i))
+                | 0x01 i:<typeidx>                         => (func (type i))
+                | 0x02 b:<valuebound>                      => (value b) 🪙
+                | 0x03 b:<typebound>                       => (type b)
+                | 0x04 i:<typeidx>                         => (component (type i))
+                | 0x05 i:<typeidx>                         => (instance (type i))
+typebound     ::= 0x00 i:<typeidx>                         => (eq i)
+                | 0x01                                     => (sub resource)
+valuebound    ::= 0x00 i:<valueidx>                        => (eq i) 🪙
+                | 0x01 t:<valtype>                         => t 🪙
 ```
 Notes:
 * The type opcodes follow the same negative-SLEB128 scheme as Core WebAssembly,

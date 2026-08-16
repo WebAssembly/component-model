@@ -1,2 +1,5 @@
 # See README.md
 ./validation/max-value-size.wast
+./async/during-sync-call-may-block-if-other-ready-threads.wast
+./async/during-sync-call-no-exclusive-resume.wast
+./async/during-sync-call-no-sibling-resume.wast

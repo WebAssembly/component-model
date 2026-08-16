@@ -4,7 +4,7 @@
 ;; Component $C exports five async callback-lifted functions that block in
 ;; their initial core function (the callbacks are never invoked):
 ;;   wait-cancel: blocks on cancellable waitable-set.wait, expects TASK_CANCELLED
-;;   yield-cancel: yields with cancellable, caller cancels during yield
+;;   yield-cancel: yields with cancellable until the caller cancels
 ;;   poll-cancel-pending: blocks on non-cancellable wait, then polls with cancellable
 ;;   yield-cancel-pending: blocks on non-cancellable wait, then yields with cancellable
 ;;
@@ -40,11 +40,11 @@
 
       ;; Test 2: direct cancel delivery through cancellable thread.yield
       (func $yield-cancel (export "yield-cancel") (result i32)
-        (local $ret i32)
-        ;; yield with cancellable; suspends with cancellable=true, caller cancels
-        (local.set $ret (call $thread.yield-cancellable))
-        (if (i32.ne (i32.const 1 (; CANCELLED ;)) (local.get $ret))
-          (then unreachable))
+        ;; yield with cancellable until cancelled by the caller (a single
+        ;; yield may nondeterministically complete without suspending and
+        ;; thus without the cancellation being delivered)
+        (loop $again
+          (br_if $again (i32.eqz (call $thread.yield-cancellable))))
         (call $task.cancel)
         (i32.const 0 (; EXIT ;))
       )
