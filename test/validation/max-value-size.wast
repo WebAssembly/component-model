@@ -1,5 +1,5 @@
 ;; Validation rejects defvaltypes whose resolved structural AST exceeds
-;; MAX_VALUE_BYTE_LENGTH (2^28 - 1 bytes). See CanonicalABI.md#element-size.
+;; 2^28 - 1 bytes. See CanonicalABI.md#element-size.
 
 ;; valid boundaries
 
@@ -13,6 +13,12 @@
 
 (component
   (type (list string 16777215))
+)
+
+;; valid map despecialization (pair record is well under the bound)
+
+(component
+  (type (map u8 (list u8 4)))
 )
 
 ;; single fixed list just over the limit
@@ -73,4 +79,14 @@
 
 (assert_invalid
   (component (type (record (field "m" (map u8 (list u8 268435455))))))
+  "exceeds maximum byte size")
+
+;; stream/future handle size is 4; payload must still be checked
+
+(assert_invalid
+  (component (type (stream (list u8 268435455))))
+  "exceeds maximum byte size")
+
+(assert_invalid
+  (component (type (future (list u8 268435455))))
   "exceeds maximum byte size")

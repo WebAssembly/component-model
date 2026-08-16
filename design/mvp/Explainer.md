@@ -738,9 +738,6 @@ and sequencing contained values.
 🔧 When the optional `<u32>` immediate of the `list` type constructor is present,
 the list has a fixed length and the representation of the list in memory is
 specialized to this length. Note that the fixed length must be larger than 0.
-The static in-memory byte size of every node in the resolved structural type
-AST must not exceed `MAX_VALUE_BYTE_LENGTH` (`2^28 - 1` bytes); see
-[Element Size validation](CanonicalABI.md#element-size).
 
 ##### Handle types
 
@@ -1045,33 +1042,12 @@ type-compatible with the `import`s of the component being instantiated.
 
 ##### Maximum static value type size
 
-Each `defvaltype` definition must satisfy a size invariant over the resolved
-structural type AST (after despecialization, including implicit nodes such as
-the pair record introduced by `map`). For every node `t` in that AST and each
-pointer type `ptr_type ∈ {i32, i64}`, the static in-memory byte size
-`elem_size(t, ptr_type)` must not exceed `MAX_VALUE_BYTE_LENGTH`
-(`2^28 - 1`, the same limit as `MAX_STRING_BYTE_LENGTH` and
-`MAX_LIST_BYTE_LENGTH`). Implementations enforce this at component validation
-time as a static error. Implementations may validate incrementally (e.g., when
-checking each type-index definition, with memoization) as long as every
-resolved node satisfies the invariant. Reference validation applies
-`despecialize` at each recursively visited node (the same pattern as
-`contains()`), so nested specialized types such as `map` inside `option` or
-`record` are checked after expansion.
-
-Validation must use overflow-safe size computation: arithmetic is over
-mathematical (non-wrapping) integers, and implementations must not compute
-`length * elem_size(element)` in fixed-width arithmetic before comparing to
-`MAX_VALUE_BYTE_LENGTH`. A preferred pattern for fixed-length lists is to
-validate element types first, then reject when
-`length > MAX_VALUE_BYTE_LENGTH // elem_size(element, ptr_type)`.
-
-Dynamic `string` and variable `list` payload sizes remain limited at runtime
-by `MAX_STRING_BYTE_LENGTH` and `MAX_LIST_BYTE_LENGTH`; their static
-`elem_size` is only the pointer pair (`2 * ptr_size`).
-
-See [Element Size validation](CanonicalABI.md#element-size) for reference
-algorithms.
+Each `defvaltype` is rejected unless every node of its resolved structural AST
+(after despecialization) has `elem_size` at most `2^28 − 1` for both `i32` and
+`i64` pointer types. Checking only the root is not enough: wrappers such as
+`map`, `option`, `stream`, and `future` can have a small header while a nested
+node exceeds the bound. This is a static validation error. See
+[Element Size](CanonicalABI.md#element-size).
 
 To incrementally describe how type-checking works, we'll start by asking how
 *type equality* works for non-resource, non-handle, local type definitions and

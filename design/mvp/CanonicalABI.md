@@ -2361,129 +2361,16 @@ def elem_size_flags(labels):
   return 4
 ```
 
-`MAX_VALUE_BYTE_LENGTH` is `(1 << 28) - 1`, the same value as
-`MAX_STRING_BYTE_LENGTH` and `MAX_LIST_BYTE_LENGTH`. Component validation
-requires that every node in the resolved structural type AST (after
-despecialization) satisfies `elem_size(t, ptr_type) <= MAX_VALUE_BYTE_LENGTH`
-for each pointer type `ptr_type ∈ {i32, i64}`. This is a static validation
-error, not a runtime trap. Implementations may validate incrementally as long
-as the invariant holds for every resolved node. Validation arithmetic must be
-overflow-safe: use non-wrapping integer arithmetic and, for fixed-length lists,
-prefer rejecting when
-`length > MAX_VALUE_BYTE_LENGTH // elem_size(element, ptr_type)` before
-multiplying.
-
-```python
-MAX_VALUE_BYTE_LENGTH = (1 << 28) - 1
-
-def checked_exceeds_max(n):
-  return n > MAX_VALUE_BYTE_LENGTH
-
-def checked_add(a, b):
-  s = a + b
-  if checked_exceeds_max(s):
-    return MAX_VALUE_BYTE_LENGTH + 1
-  return s
-
-def checked_mul(a, b):
-  if b != 0 and a > MAX_VALUE_BYTE_LENGTH // b:
-    return MAX_VALUE_BYTE_LENGTH + 1
-  return a * b
-
-def checked_align_to(ptr, alignment):
-  r = align_to(ptr, alignment)
-  if checked_exceeds_max(r):
-    return MAX_VALUE_BYTE_LENGTH + 1
-  return r
-
-def checked_elem_size_list(elem_type, maybe_length, ptr_type):
-  if maybe_length is not None:
-    es = checked_elem_size(elem_type, ptr_type)
-    if es == 0:
-      return MAX_VALUE_BYTE_LENGTH + 1
-    return checked_mul(maybe_length, es)
-  r = 2 * ptr_size(ptr_type)
-  return r if not checked_exceeds_max(r) else MAX_VALUE_BYTE_LENGTH + 1
-
-def checked_elem_size_record(fields, ptr_type):
-  s = 0
-  for f in fields:
-    s = checked_align_to(s, alignment(f.t, ptr_type))
-    if checked_exceeds_max(s):
-      return MAX_VALUE_BYTE_LENGTH + 1
-    s = checked_add(s, checked_elem_size(f.t, ptr_type))
-    if checked_exceeds_max(s):
-      return MAX_VALUE_BYTE_LENGTH + 1
-  if s == 0:
-    return MAX_VALUE_BYTE_LENGTH + 1
-  return checked_align_to(s, alignment_record(fields, ptr_type))
-
-def checked_elem_size_variant(cases, ptr_type):
-  s = checked_elem_size(discriminant_type(cases), ptr_type)
-  s = checked_align_to(s, max_case_alignment(cases, ptr_type))
-  cs = 0
-  for c in cases:
-    if c.t is not None:
-      cs = max(cs, checked_elem_size(c.t, ptr_type))
-  s = checked_add(s, cs)
-  if checked_exceeds_max(s):
-    return MAX_VALUE_BYTE_LENGTH + 1
-  return checked_align_to(s, alignment_variant(cases, ptr_type))
-
-def checked_elem_size(t, ptr_type):
-  match despecialize(t):
-    case BoolType()                  : return 1
-    case S8Type() | U8Type()         : return 1
-    case S16Type() | U16Type()       : return 2
-    case S32Type() | U32Type()       : return 4
-    case S64Type() | U64Type()       : return 8
-    case F32Type()                   : return 4
-    case F64Type()                   : return 8
-    case CharType()                  : return 4
-    case StringType()                : return checked_mul(2, ptr_size(ptr_type))
-    case ErrorContextType()          : return 4
-    case ListType(t, l)              : return checked_elem_size_list(t, l, ptr_type)
-    case RecordType(fields)          : return checked_elem_size_record(fields, ptr_type)
-    case VariantType(cases)          : return checked_elem_size_variant(cases, ptr_type)
-    case FlagsType(labels)           : return elem_size_flags(labels)
-    case OwnType() | BorrowType()    : return 4
-    case StreamType() | FutureType() : return 4
-
-def valid_valtype_size(t, ptr_type) -> bool:
-  return checked_elem_size(t, ptr_type) <= MAX_VALUE_BYTE_LENGTH
-
-def check_resolved_type_size(t) -> bool:
-  t = despecialize(t)
-  match t:
-    case ListType(elem, maybe_len):
-      if elem is not None and not check_resolved_type_size(elem):
-        return False
-      if maybe_len is not None:
-        for ptr_type in ['i32', 'i64']:
-          elem_sz = checked_elem_size(elem, ptr_type)
-          if elem_sz == 0 or maybe_len > MAX_VALUE_BYTE_LENGTH // elem_sz:
-            return False
-    case StreamType(elem) | FutureType(elem):
-      if elem is not None and not check_resolved_type_size(elem):
-        return False
-    case RecordType(fields):
-      for f in fields:
-        if not check_resolved_type_size(f.t):
-          return False
-    case VariantType(cases):
-      for c in cases:
-        if c.t is not None and not check_resolved_type_size(c.t):
-          return False
-    case _:
-      pass
-  for ptr_type in ['i32', 'i64']:
-    if not valid_valtype_size(t, ptr_type):
-      return False
-  return True
-
-def check_defvaltype_size(t) -> bool:
-  return check_resolved_type_size(t)
-```
+Validation of each `defvaltype` requires that every node `u` in the resolved
+structural AST — after `despecialize`, including implicit nodes such as `map`'s
+key/value record — satisfies `elem_size(u, ptr_type) ≤ 2^28−1` for both
+`ptr_type ∈ {i32, i64}`. This is a static validation error, not a runtime trap.
+The bound is the same number as `MAX_LIST_BYTE_LENGTH` / `MAX_STRING_BYTE_LENGTH`.
+`elem_size` is unbounded-integer math; fixed-width implementations must reject
+overflow rather than wrap. Checking only the root type is not enough:
+`map<u8, list<u8, 2^28−1>>` has a small list header but an oversized pair record.
+Incremental or memoized checking is allowed only if every resolved node of that
+definition is still covered.
 
 ## Loading
 
@@ -3718,6 +3605,9 @@ performed for a component. These are defined as:
 * `lift(T)`
   * requires `realloc` if `T` contains a `list` or `string`
 
+Value types used by `lift`/`lower` are already rejected at `defvaltype`
+definition if they exceed the [Element Size](#element-size) bound, so lift and
+lower may assume static layouts fit.
 
 ### `canon lift`
 
