@@ -488,7 +488,19 @@
     "\73"                                     ;; string
     "\06\05"                                  ;; alias section (5 bytes)
     "\01"                                     ;; 1 alias
-    "\03\02\02\00"                            ;; outer alias ct=2: only 1 enclosing scope
+    "\03\02\01\00"                            ;; outer alias ct=1: no enclosing scopes
+  )
+  "invalid outer alias count of 1"
+)
+(assert_invalid
+  (component binary
+    "\00asm" "\0d\00\01\00"                   ;; preamble
+    "\07\02"                                  ;; type section (2 bytes)
+    "\01"                                     ;; 1 type
+    "\73"                                     ;; string
+    "\06\05"                                  ;; alias section (5 bytes)
+    "\01"                                     ;; 1 alias
+    "\03\02\02\00"                            ;; outer alias ct=2: still no enclosing scopes
   )
   "invalid outer alias count of 2"
 )
