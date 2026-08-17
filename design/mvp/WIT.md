@@ -1069,6 +1069,7 @@ keyword ::= 'as'
           | 'from'
           | 'func'
           | 'future'
+          | 'get'
           | 'import'
           | 'include'
           | 'interface'
@@ -1084,6 +1085,7 @@ keyword ::= 'as'
           | 's32'
           | 's64'
           | 's8'
+          | 'set'
           | 'static'
           | 'stream'
           | 'string'
@@ -1765,15 +1767,26 @@ transform: func(blob) -> blob;
 
 As syntactic sugar, resource statements can also declare any number of
 *methods*, which are functions that implicitly take a `self` parameter that is
-a handle. A resource statement can also contain any number of *static
-functions*, which do not have an implicit `self` parameter but are meant to be
-lexically nested in the scope of the resource type. Lastly, a resource
-statement can contain at most one *constructor* function, which is syntactic
-sugar for a function returning a handle of the containing resource type.
+a handle. A resource statement can also contain any number of *getters* and
+*setters*, which also implicitly take a `self` parameter and have additional
+validation restrictions on their result and parameter types. A resource
+statement can also contain any number of *static functions*, which do not have
+an implicit `self` parameter but are meant to be lexically nested in the scope
+of the resource type. Lastly, a resource statement can contain at most one
+*constructor* function, which is syntactic sugar for a function returning a
+handle of the containing resource type.
+
 Constructors can be fallible or infallible. Fallible constructors have an
-explicitly-written return type which must be of the form `result<r, ...>`
-where `r` is the name of the containing `resource`. Infallible constructors
-have no written return type and are given the implicit return type `r`.
+explicitly-written return type which must be of the form `result<r, ...>` where
+`r` is the name of the containing `resource`. Infallible constructors have no
+written return type and are given the implicit return type `r`.
+
+Getters take no parameters (besides the implicit `self` parameter) and must
+return a value. Setters take exactly one parameter (besides the implicit `self`
+parameter) and may not return a value unless that value is of type
+`result<_, error?>`. If a getter and setter are defined with the same name, and
+the setter's value type is `t`, then the getter's return type must be either
+`t` or `result<t, error?>`.
 
 For example, the following resource definition:
 ```wit
@@ -1782,6 +1795,8 @@ resource blob {
     write: func(bytes: list<u8>);
     read: func(n: u32) -> list<u8>;
     merge: static func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob;
+    position: get() -> u64;
+    position: set(value: u64);
 }
 resource blob2 {
     constructor(init: list<u8>) -> result<blob2>;
@@ -1795,6 +1810,8 @@ resource blob;
 %[method]blob.write: func(self: borrow<blob>, bytes: list<u8>);
 %[method]blob.read: func(self: borrow<blob>, n: u32) -> list<u8>;
 %[static]blob.merge: func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob;
+%[get]blob.position: func(self: borrow<blob>) -> u64;
+%[set]blob.position: func(self: borrow<blob>, value: u64);
 ```
 These `%`-prefixed strings embed the resource type name so that bindings
 generators can generate idiomatic syntax for the target language or (for
@@ -1814,6 +1831,8 @@ resource-item ::= 'resource' id ';'
                 | 'resource' id '{' ( gate external-id? resource-method )* '}'
 resource-method ::= func-item
                   | id ':' 'static' func-type ';'
+                  | id ':' 'get' param-list result-list ';'
+                  | id ':' 'set' param-list result-list ';'
                   | 'constructor' param-list ';'
 ```
 
@@ -1960,7 +1979,8 @@ is expanded into:
 resource file
 %[method]file.read: func(self: borrow<file>, n: u32) -> list<u8>;
 ```
-where `%[method]file.read` is the desugared name of a method.
+where `%[method]file.read` is the desugared name of a method. The same applies
+to the getter and setter syntax.
 
 
 ## Name resolution
