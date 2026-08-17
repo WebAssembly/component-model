@@ -658,6 +658,11 @@ where bind-id(X) parses '(' sort <id>? Y ')' when X parses '(' sort Y ')'
 Because there is nothing in this type grammar analogous to the [gc] proposal's
 [`rectype`], none of these types are recursive.
 
+To prevent integer overflow in obscure corner cases, as an extra validation
+requirement, `defvaltype`s may not be equal or greater than 2<sup>28</sup> bytes
+when serialized into linear memory according to the `i64` ABI definition of
+[Element Size](CanonicalABI.md#element-size).
+
 #### Fundamental value types
 
 The value types in `valtype` can be broken into two categories: *fundamental*
@@ -1039,15 +1044,6 @@ definitions of a component are checked for basic consistency. Type checking
 is a central part of validation and, e.g., occurs when validating that the
 `with` arguments of an [`instantiate`](#instance-definitions) expression are
 type-compatible with the `import`s of the component being instantiated.
-
-##### Maximum static value type size
-
-Each `defvaltype` is rejected unless every node of its resolved structural AST
-(after despecialization) has `elem_size` at most `2^28 − 1` for both `i32` and
-`i64` pointer types. Checking only the root is not enough: wrappers such as
-`map`, `option`, `stream`, and `future` can have a small header while a nested
-node exceeds the bound. This is a static validation error. See
-[Element Size](CanonicalABI.md#element-size).
 
 To incrementally describe how type-checking works, we'll start by asking how
 *type equality* works for non-resource, non-handle, local type definitions and

@@ -287,10 +287,7 @@ Notes:
   `none` case of an optional immediate.)
 * 🔧 for fixed-sized lists the length of the list must be larger than 0 to pass
   validation.
-* Validation of each `defvaltype` requires every resolved AST node (after
-  despecialization) to satisfy the `elem_size` bound in
-  [Element Size](CanonicalABI.md#element-size). This is a static validation
-  error, not a runtime trap.
+* Validation requires that, for every `defvaltype` `t`, `elem_size(t, 'i64')` is less than 2<sup>28</sup>, as defined by the [Canonical ABI](CanonicalABI.md#element-size).
 
 
 ## Canonical Definitions

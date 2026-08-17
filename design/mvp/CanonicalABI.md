@@ -2306,7 +2306,10 @@ byte size be a static property of the type instead of attempting to use a
 variable-length element-encoding scheme both simplifies the implementation and
 maps well to languages which represent `list`s as random-access arrays. Empty
 types, such as records with no fields, are not permitted, to avoid
-complications in source languages.
+complications in source languages. To prevent integer overflow in obscure corner
+cases, component validation rules require that for every value type `t` defined
+by a component, `elem_size(t, 'i64')` is less than 2<sup>28</sup> (the same
+upper bound as `MAX_LIST_BYTE_LENGTH`).
 ```python
 def elem_size(t, ptr_type):
   match despecialize(t):
@@ -2360,17 +2363,6 @@ def elem_size_flags(labels):
   if n <= 16: return 2
   return 4
 ```
-
-Validation of each `defvaltype` requires that every node `u` in the resolved
-structural AST — after `despecialize`, including implicit nodes such as `map`'s
-key/value record — satisfies `elem_size(u, ptr_type) ≤ 2^28−1` for both
-`ptr_type ∈ {i32, i64}`. This is a static validation error, not a runtime trap.
-The bound is the same number as `MAX_LIST_BYTE_LENGTH` / `MAX_STRING_BYTE_LENGTH`.
-`elem_size` is unbounded-integer math; fixed-width implementations must reject
-overflow rather than wrap. Checking only the root type is not enough:
-`map<u8, list<u8, 2^28−1>>` has a small list header but an oversized pair record.
-Incremental or memoized checking is allowed only if every resolved node of that
-definition is still covered.
 
 ## Loading
 
@@ -3606,8 +3598,7 @@ performed for a component. These are defined as:
   * requires `realloc` if `T` contains a `list` or `string`
 
 Value types used by `lift`/`lower` are already rejected at `defvaltype`
-definition if they exceed the [Element Size](#element-size) bound, so lift and
-lower may assume static layouts fit.
+definition if they exceed the [Element Size](#element-size) bound.
 
 ### `canon lift`
 

@@ -1,24 +1,23 @@
-;; Validation rejects defvaltypes whose resolved structural AST exceeds
-;; 2^28 - 1 bytes. See CanonicalABI.md#element-size.
+;; Validation requires elem_size(t, i64) < 2^28 for every defvaltype t.
+;; See CanonicalABI.md#element-size.
 
-;; valid boundaries
+;; valid boundaries (single component)
 
 (component
   (type (list u8 268435455))
-)
-
-(component
   (type (list u64 33554431))
-)
-
-(component
   (type (list string 16777215))
-)
-
-;; valid map despecialization (pair record is well under the bound)
-
-(component
   (type (map u8 (list u8 4)))
+  (type (tuple (list u8 268435454) (list u8 1)))
+  (type (record
+    (field "a" (list u8 134217727))
+    (field "b" (list u8 134217728))))
+  (type (list (list u8 134217727) 2))
+  (type (map u8 (list u8 268435455)))
+  (type (option (map u8 (list u8 268435455))))
+  (type (record (field "m" (map u8 (list u8 268435455)))))
+  (type (stream (list u8 268435455)))
+  (type (future (list u8 268435455)))
 )
 
 ;; single fixed list just over the limit
@@ -53,12 +52,6 @@
       (field "b" (list u8 134217728)))))
   "exceeds maximum byte size")
 
-;; map despecialization: inner list valid alone, pair record is MAX + 1
-
-(assert_invalid
-  (component (type (map u8 (list u8 268435455))))
-  "exceeds maximum byte size")
-
 ;; nested fixed list
 
 (assert_invalid
@@ -69,24 +62,4 @@
 
 (assert_invalid
   (component (type (list string 16777216)))
-  "exceeds maximum byte size")
-
-;; nested map despecialization inside option and record
-
-(assert_invalid
-  (component (type (option (map u8 (list u8 268435455)))))
-  "exceeds maximum byte size")
-
-(assert_invalid
-  (component (type (record (field "m" (map u8 (list u8 268435455))))))
-  "exceeds maximum byte size")
-
-;; stream/future handle size is 4; payload must still be checked
-
-(assert_invalid
-  (component (type (stream (list u8 268435455))))
-  "exceeds maximum byte size")
-
-(assert_invalid
-  (component (type (future (list u8 268435455))))
   "exceeds maximum byte size")
