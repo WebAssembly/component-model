@@ -1182,8 +1182,7 @@ the enclosing `interface` is what gives that import an identity for a consumer
 to name. The types above are structural, so a referencing `interface` can depend
 on one directly, without an `interface` having to be invented to hold it and
 without an instance having to be supplied to satisfy the dependency (see
-[Package Format][package-format]). The same reasoning is why outer aliases are
-also limited to structural types.
+[Package Format][package-format]).
 
 ### Feature Gates
 
