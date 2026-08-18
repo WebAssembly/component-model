@@ -1,7 +1,7 @@
 ;; This test exercises the 'cancellable' immediate on waitable-set.wait,
-;; waitable-set.poll, and thread.yield.
+;; waitable-set.poll, thread.yield and thread.suspend.
 ;;
-;; Component $C exports five async callback-lifted functions that block in
+;; Component $C exports six async callback-lifted functions that block in
 ;; their initial core function (the callbacks are never invoked):
 ;;   wait-cancel: blocks on cancellable waitable-set.wait, expects TASK_CANCELLED
 ;;   yield-cancel: yields with cancellable until the caller cancels
@@ -10,6 +10,10 @@
 ;;   pending-survives-nc-yield: blocks on non-cancellable wait, then a
 ;;     non-cancellable yield (which must not report the pending cancel), then
 ;;     yields with cancellable
+;;   suspend-not-interrupted: suspends with cancellable; the cancel must not be
+;;     delivered while it is suspended (a suspension is a rendezvous with
+;;     thread.resume-later, not a blocked wait), so it stays pending until the
+;;     waker thread resumes it
 ;;
 ;; Component $D calls each function and cancels it, verifying the cancel is
 ;; delivered correctly through the cancellable built-in in each case.
@@ -17,8 +21,11 @@
   (component $C
     (core module $Memory (memory (export "mem") 1))
     (core instance $memory (instantiate $Memory))
+    (core module $Table (table (export "tbl") 1 funcref))
+    (core instance $table (instantiate $Table))
     (core module $CM
       (import "" "mem" (memory 1))
+      (import "" "tbl" (table $tbl 1 funcref))
       (import "" "task.cancel" (func $task.cancel))
       (import "" "future.read" (func $future.read (param i32 i32) (result i32)))
       (import "" "waitable.join" (func $waitable.join (param i32 i32)))
@@ -28,6 +35,20 @@
       (import "" "waitable-set.poll-cancellable" (func $waitable-set.poll-cancellable (param i32 i32) (result i32)))
       (import "" "thread.yield-cancellable" (func $thread.yield-cancellable (result i32)))
       (import "" "thread.yield" (func $thread.yield (result i32)))
+      (import "" "thread.index" (func $thread.index (result i32)))
+      (import "" "thread.new-indirect" (func $thread.new-indirect (param i32 i32) (result i32)))
+      (import "" "thread.resume-later" (func $thread.resume-later (param i32)))
+      (import "" "thread.suspend-cancellable" (func $thread.suspend-cancellable (result i32)))
+
+      (global $main-thread (mut i32) (i32.const 0))
+      (global $waker-ran (mut i32) (i32.const 0))
+
+      ;; wakes the suspended main thread, which must be what lets the pending
+      ;; cancellation finally be delivered
+      (func $waker (param i32)
+        (global.set $waker-ran (i32.const 1))
+        (call $thread.resume-later (global.get $main-thread)))
+      (elem (table $tbl) (i32.const 0) func $waker)
 
       ;; Test 1: direct cancel delivery through cancellable waitable-set.wait
       (func $wait-cancel (export "wait-cancel") (result i32)
@@ -129,12 +150,30 @@
         (i32.const 0 (; EXIT ;))
       )
 
-      ;; callback that should never be called
+      ;; Test 6: a cancellable thread.suspend is a rendezvous with
+      ;; thread.resume-later, not a blocked wait, so a suspended thread is not a
+      ;; candidate for delivery; the cancel stays pending until the waker
+      ;; resumes us, and is then reported on top of that wake-up
+      (func $suspend-not-interrupted (export "suspend-not-interrupted") (result i32)
+        (local $ret i32)
+        (global.set $main-thread (call $thread.index))
+        (call $thread.resume-later (call $thread.new-indirect (i32.const 0) (i32.const 0)))
+        (local.set $ret (call $thread.suspend-cancellable))
+        (if (i32.ne (i32.const 1 (; CANCELLED ;)) (local.get $ret))
+          (then unreachable))
+        (if (i32.eqz (global.get $waker-ran))
+          (then unreachable))
+        (call $task.cancel)
+        (i32.const 0 (; EXIT ;))
+      )
+
       (func (export "unreachable-cb") (param i32 i32 i32) (result i32)
         unreachable
       )
     )
     (type $FT (future))
+    (alias core export $table "tbl" (core table $tbl))
+    (core type $start-func-ty (func (param i32)))
     (canon task.cancel (core func $task.cancel))
     (canon future.read $FT async (memory (core memory $memory "mem")) (core func $future.read))
     (canon waitable.join (core func $waitable.join))
@@ -144,8 +183,13 @@
     (canon waitable-set.poll cancellable (memory (core memory $memory "mem")) (core func $waitable-set.poll-cancellable))
     (canon thread.yield cancellable (core func $thread.yield-cancellable))
     (canon thread.yield (core func $thread.yield))
+    (canon thread.index (core func $thread.index))
+    (core func $thread.new-indirect (canon thread.new-indirect $start-func-ty (core table $tbl)))
+    (canon thread.resume-later (core func $thread.resume-later))
+    (canon thread.suspend cancellable (core func $thread.suspend-cancellable))
     (core instance $cm (instantiate $CM (with "" (instance
       (export "mem" (memory $memory "mem"))
+      (export "tbl" (table $tbl))
       (export "task.cancel" (func $task.cancel))
       (export "future.read" (func $future.read))
       (export "waitable.join" (func $waitable.join))
@@ -155,6 +199,10 @@
       (export "waitable-set.poll-cancellable" (func $waitable-set.poll-cancellable))
       (export "thread.yield-cancellable" (func $thread.yield-cancellable))
       (export "thread.yield" (func $thread.yield))
+      (export "thread.index" (func $thread.index))
+      (export "thread.new-indirect" (func $thread.new-indirect))
+      (export "thread.resume-later" (func $thread.resume-later))
+      (export "thread.suspend-cancellable" (func $thread.suspend-cancellable))
     ))))
     (func (export "wait-cancel") async (result u32) (canon lift
       (core func $cm "wait-cancel")
@@ -176,6 +224,10 @@
       (core func $cm "pending-survives-nc-yield")
       async (callback (core func $cm "unreachable-cb"))
     ))
+    (func (export "suspend-not-interrupted") async (result u32) (canon lift
+      (core func $cm "suspend-not-interrupted")
+      async (callback (core func $cm "unreachable-cb"))
+    ))
   )
 
   (component $D
@@ -185,6 +237,7 @@
     (import "poll-cancel-pending" (func $poll-cancel-pending async (param "fut" $FT) (result u32)))
     (import "yield-cancel-pending" (func $yield-cancel-pending async (param "fut" $FT) (result u32)))
     (import "pending-survives-nc-yield" (func $pending-survives-nc-yield async (param "fut" $FT) (result u32)))
+    (import "suspend-not-interrupted" (func $suspend-not-interrupted async (result u32)))
 
     (core module $Memory (memory (export "mem") 1))
     (core instance $memory (instantiate $Memory))
@@ -202,6 +255,7 @@
       (import "" "poll-cancel-pending" (func $poll-cancel-pending (param i32 i32) (result i32)))
       (import "" "yield-cancel-pending" (func $yield-cancel-pending (param i32 i32) (result i32)))
       (import "" "pending-survives-nc-yield" (func $pending-survives-nc-yield (param i32 i32) (result i32)))
+      (import "" "suspend-not-interrupted" (func $suspend-not-interrupted (param i32) (result i32)))
 
       (func $run (export "run") (result i32)
         (local $ret i32) (local $ret64 i64)
@@ -357,6 +411,34 @@
           (then unreachable))
         (call $subtask.drop (local.get $subtask))
 
+        ;; ==========================================
+        ;; Test 6: a suspended thread is not interrupted by cancellation
+        ;; ==========================================
+
+        ;; call suspend-not-interrupted; it arms a waker and then suspends
+        (local.set $ret (call $suspend-not-interrupted (local.get $retp)))
+        (if (i32.ne (i32.const 1 (; STARTED ;)) (i32.and (local.get $ret) (i32.const 0xf)))
+          (then unreachable))
+        (local.set $subtask (i32.shr_u (local.get $ret) (i32.const 4)))
+
+        ;; cancel; blocks because C's only cancellable thread is suspended
+        (local.set $ret (call $subtask.cancel (local.get $subtask)))
+        (if (i32.ne (i32.const -1 (; BLOCKED ;)) (local.get $ret))
+          (then unreachable))
+
+        ;; wait for subtask to complete; C's waker runs, resumes the suspended
+        ;; thread, and the pending cancel is delivered on top of that wake-up
+        (local.set $ws (call $waitable-set.new))
+        (call $waitable.join (local.get $subtask) (local.get $ws))
+        (local.set $event_code (call $waitable-set.wait (local.get $ws) (local.get $retp2)))
+        (if (i32.ne (i32.const 1 (; SUBTASK ;)) (local.get $event_code))
+          (then unreachable))
+        (if (i32.ne (local.get $subtask) (i32.load (local.get $retp2)))
+          (then unreachable))
+        (if (i32.ne (i32.const 4 (; CANCELLED_BEFORE_RETURNED ;)) (i32.load offset=4 (local.get $retp2)))
+          (then unreachable))
+        (call $subtask.drop (local.get $subtask))
+
         ;; all tests passed
         (i32.const 42)
       )
@@ -373,6 +455,7 @@
     (canon lower (func $poll-cancel-pending) async (memory (core memory $memory "mem")) (core func $poll-cancel-pending'))
     (canon lower (func $yield-cancel-pending) async (memory (core memory $memory "mem")) (core func $yield-cancel-pending'))
     (canon lower (func $pending-survives-nc-yield) async (memory (core memory $memory "mem")) (core func $pending-survives-nc-yield'))
+    (canon lower (func $suspend-not-interrupted) async (memory (core memory $memory "mem")) (core func $suspend-not-interrupted'))
     (core instance $dm (instantiate $DM (with "" (instance
       (export "mem" (memory $memory "mem"))
       (export "subtask.cancel" (func $subtask.cancel))
@@ -387,6 +470,7 @@
       (export "poll-cancel-pending" (func $poll-cancel-pending'))
       (export "yield-cancel-pending" (func $yield-cancel-pending'))
       (export "pending-survives-nc-yield" (func $pending-survives-nc-yield'))
+      (export "suspend-not-interrupted" (func $suspend-not-interrupted'))
     ))))
     (func (export "run") async (result u32) (canon lift (core func $dm "run")))
   )
@@ -398,6 +482,7 @@
     (with "poll-cancel-pending" (func $c "poll-cancel-pending"))
     (with "yield-cancel-pending" (func $c "yield-cancel-pending"))
     (with "pending-survives-nc-yield" (func $c "pending-survives-nc-yield"))
+    (with "suspend-not-interrupted" (func $c "suspend-not-interrupted"))
   ))
   (func (export "run") (alias export $d "run"))
 )

@@ -354,9 +354,10 @@ class Thread:
 
   def suspend(self, cancellable) -> Cancelled:
     assert(self.running())
+    cancelled = self.block_internal(cancellable)
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
-    return self.block_internal(cancellable)
+    return cancelled
 
   def wait_until(self, ready_func, cancellable = lambda: False) -> Cancelled:
     assert(self.running())
@@ -377,21 +378,21 @@ class Thread:
 
   def suspend_then_resume(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running() and other.suspended())
+    cancelled = self.switch_to_internal(cancellable, other)
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
-    return self.switch_to_internal(cancellable, other)
+    return cancelled
 
   def yield_then_resume(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running() and other.suspended())
+    self.start_waiting_internal(lambda: True)
+    cancelled = self.switch_to_internal(cancellable, other)
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
-    self.start_waiting_internal(lambda: True)
-    return self.switch_to_internal(cancellable, other)
+    return cancelled
 
   def suspend_then_promote(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running())
-    if self.task.deliver_pending_cancel(cancellable):
-      return Cancelled.TRUE
     if other.ready():
       other.stop_waiting_internal(cancelled = False)
       return self.suspend_then_resume(cancellable, other)
@@ -400,8 +401,6 @@ class Thread:
 
   def yield_then_promote(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running())
-    if self.task.deliver_pending_cancel(cancellable):
-      return Cancelled.TRUE
     if other.ready():
       other.stop_waiting_internal(cancelled = False)
       return self.yield_then_resume(cancellable, other)
@@ -497,7 +496,7 @@ class Task:
       self.implicit_thread.resume(Cancelled.TRUE)
     else:
       assert(self.state == Task.State.STARTED)
-      candidates = { t for t in self.threads if t.cancellable() }
+      candidates = { t for t in self.threads if t.cancellable() and not t.suspended() }
       if candidates:
         self.state = Task.State.CANCEL_DELIVERED
         random.choice(list(candidates)).resume(Cancelled.TRUE)

@@ -2429,7 +2429,7 @@ def test_cancel_subtask():
   def thread_func(cancellable, args):
     [mainthreadi] = args
     if cancellable:
-      [ret] = canon_thread_suspend_then_resume(True, mainthreadi)
+      [ret] = canon_thread_yield_then_resume(True, mainthreadi)
       assert(ret == Cancelled.TRUE)
       [ret] = canon_thread_suspend_then_resume(True, mainthreadi)
       assert(ret == Cancelled.FALSE)
@@ -3043,6 +3043,311 @@ def test_thread_cancel_callback():
 
   lift_and_run(mk_opts(), consumer_inst, consumer_ft, core_consumer, lambda:[], lambda _:())
 
+def test_thread_cancel_delivery():
+  # Receiving `cancelled=1` from a cancellable built-in must be unambiguous: it
+  # implies everything the uncancelled return implies (the `other` thread was
+  # resumed, this thread's own wake-up rendezvous happened) *plus* that
+  # cancellation was requested. These tests request cancellation at a precise
+  # point in the schedule by calling the `on_cancel` returned by `Store.invoke`
+  # in between individual `Store.tick`s.
+  store = Store()
+  ft = FuncType([], [], async_ = True)
+  core_ft = CoreFuncType(['i32'], [])
+
+  def start_task(core_func):
+    inst = ComponentInstance(store)
+    resolved = []
+    func_inst = store.lift(core_func, ft, mk_opts(async_ = True), inst)
+    on_cancel = store.invoke(func_inst, lambda:[], resolved.append)
+    return (on_cancel, resolved)
+
+  def drain():
+    while store.waiting:
+      store.tick()
+
+  # 1. A thread suspended in a cancellable `thread.suspend` is not a candidate for
+  # delivery, so the request goes pending instead of stealing the suspension. The
+  # suspended thread keeps its rendezvous with `thread.resume-later` and
+  # cancellation is delivered on top of that normal wake-up.
+  log1 = []
+  ftbl1 = Table()
+  def waker1(args):
+    [mainthreadi] = args
+    log1.append('waker')
+    [] = canon_thread_resume_later(mainthreadi)
+    return []
+  wakerfi1 = ftbl1.add(CoreFuncRef(core_ft, waker1))
+  def core_func1(args):
+    [mainthreadi] = canon_thread_index()
+    [wakeri] = canon_thread_new_indirect(core_ft, ftbl1, wakerfi1, mainthreadi)
+    [] = canon_thread_resume_later(wakeri)
+    [ret] = canon_thread_suspend(True)
+    assert(ret == Cancelled.TRUE)
+    assert(log1 == ['waker'])
+    log1.append('main')
+    [] = canon_task_cancel()
+    return []
+  on_cancel,resolved = start_task(core_func1)
+  on_cancel()
+  assert(log1 == [])
+  drain()
+  assert(log1 == ['waker', 'main'])
+  assert(resolved == [None])
+
+  # 2. The same program as 1, but cancelled one tick later: once
+  # `thread.resume-later` has been called, the thread *is* a candidate again, so
+  # cancellation is delivered directly, before it gets scheduled. `cancelled=1`
+  # still means the same thing, viz. that the wake-up already happened.
+  log2 = []
+  ftbl2 = Table()
+  def waker2(args):
+    [mainthreadi] = args
+    log2.append('waker')
+    [] = canon_thread_resume_later(mainthreadi)
+    return []
+  wakerfi2 = ftbl2.add(CoreFuncRef(core_ft, waker2))
+  def core_func2(args):
+    [mainthreadi] = canon_thread_index()
+    [wakeri] = canon_thread_new_indirect(core_ft, ftbl2, wakerfi2, mainthreadi)
+    [] = canon_thread_resume_later(wakeri)
+    [ret] = canon_thread_suspend(True)
+    assert(ret == Cancelled.TRUE)
+    assert(log2 == ['waker'])
+    log2.append('main')
+    [] = canon_task_cancel()
+    return []
+  on_cancel,resolved = start_task(core_func2)
+  store.tick()
+  assert(log2 == ['waker'])
+  on_cancel()
+  assert(log2 == ['waker', 'main'])
+  drain()
+  assert(resolved == [None])
+
+  # 3. With cancellation already pending, a cancellable `thread.suspend-then-resume`
+  # must still resume `other` and only report the cancellation at its own wake-up;
+  # returning `cancelled=1` eagerly would strand `other`. (`main` suspends
+  # non-cancellably so that the request has no candidate and thus goes pending.)
+  log3 = []
+  ftbl3 = Table()
+  mainthreadi3 = None
+  helperi3 = None
+  otheri3 = None
+  def other3(args):
+    log3.append('other')
+    [] = canon_thread_resume_later(helperi3)
+    return []
+  otherfi3 = ftbl3.add(CoreFuncRef(core_ft, other3))
+  def helper3(args):
+    [ret] = canon_thread_suspend_then_resume(True, otheri3)
+    assert(ret == Cancelled.TRUE)
+    assert(log3 == ['other'])
+    log3.append('helper')
+    [] = canon_task_cancel()
+    [] = canon_thread_resume_later(mainthreadi3)
+    return []
+  helperfi3 = ftbl3.add(CoreFuncRef(core_ft, helper3))
+  def core_func3(args):
+    nonlocal mainthreadi3, helperi3, otheri3
+    [mainthreadi3] = canon_thread_index()
+    [helperi3] = canon_thread_new_indirect(core_ft, ftbl3, helperfi3, 0)
+    [otheri3] = canon_thread_new_indirect(core_ft, ftbl3, otherfi3, 0)
+    [] = canon_thread_resume_later(helperi3)
+    [ret] = canon_thread_suspend(False)
+    assert(ret == Cancelled.FALSE)
+    log3.append('main')
+    return []
+  on_cancel,resolved = start_task(core_func3)
+  on_cancel()
+  assert(log3 == [])
+  drain()
+  assert(log3 == ['other', 'helper', 'main'])
+  assert(resolved == [None])
+
+  # 4. Same for a cancellable `thread.yield-then-resume`.
+  log4 = []
+  ftbl4 = Table()
+  mainthreadi4 = None
+  otheri4 = None
+  def other4(args):
+    log4.append('other')
+    return []
+  otherfi4 = ftbl4.add(CoreFuncRef(core_ft, other4))
+  def helper4(args):
+    [ret] = canon_thread_yield_then_resume(True, otheri4)
+    assert(ret == Cancelled.TRUE)
+    assert(log4 == ['other'])
+    log4.append('helper')
+    [] = canon_task_cancel()
+    [] = canon_thread_resume_later(mainthreadi4)
+    return []
+  helperfi4 = ftbl4.add(CoreFuncRef(core_ft, helper4))
+  def core_func4(args):
+    nonlocal mainthreadi4, otheri4
+    [mainthreadi4] = canon_thread_index()
+    [helperi] = canon_thread_new_indirect(core_ft, ftbl4, helperfi4, 0)
+    [otheri4] = canon_thread_new_indirect(core_ft, ftbl4, otherfi4, 0)
+    [] = canon_thread_resume_later(helperi)
+    [ret] = canon_thread_suspend(False)
+    assert(ret == Cancelled.FALSE)
+    log4.append('main')
+    return []
+  on_cancel,resolved = start_task(core_func4)
+  on_cancel()
+  assert(log4 == [])
+  drain()
+  assert(log4 == ['other', 'helper', 'main'])
+  assert(resolved == [None])
+
+  # 5. When `other` is suspended (thus not ready), a cancellable
+  # `thread.suspend-then-promote` degrades to a plain cancellable `thread.suspend`
+  # and delivers the pending cancellation at its wake-up.
+  log5 = []
+  ftbl5 = Table()
+  def idle5(args):
+    log5.append('idle')
+    return []
+  idlefi5 = ftbl5.add(CoreFuncRef(core_ft, idle5))
+  def waker5(args):
+    [mainthreadi] = args
+    log5.append('waker')
+    [] = canon_thread_resume_later(mainthreadi)
+    return []
+  wakerfi5 = ftbl5.add(CoreFuncRef(core_ft, waker5))
+  def core_func5(args):
+    [mainthreadi] = canon_thread_index()
+    [wakeri] = canon_thread_new_indirect(core_ft, ftbl5, wakerfi5, mainthreadi)
+    [] = canon_thread_resume_later(wakeri)
+    [idlei] = canon_thread_new_indirect(core_ft, ftbl5, idlefi5, 0)
+    [ret] = canon_thread_suspend_then_promote(True, idlei)
+    assert(ret == Cancelled.TRUE)
+    assert(log5 == ['waker'])
+    log5.append('main')
+    [] = canon_task_cancel()
+    [] = canon_thread_resume_later(idlei)
+    return []
+  on_cancel,resolved = start_task(core_func5)
+  on_cancel()
+  assert(log5 == [])
+  drain()
+  assert(log5 == ['waker', 'main', 'idle'])
+  assert(resolved == [None])
+
+  # 6. When `other` is ready and cancellation is already pending, a cancellable
+  # `thread.suspend-then-promote` must still promote `other` before reporting the
+  # cancellation.
+  log6 = []
+  ftbl6 = Table()
+  mainthreadi6 = None
+  helperi6 = None
+  otheri6 = None
+  def other6(args):
+    log6.append('other')
+    [] = canon_thread_resume_later(helperi6)
+    return []
+  otherfi6 = ftbl6.add(CoreFuncRef(core_ft, other6))
+  def helper6(args):
+    [] = canon_thread_resume_later(otheri6)
+    [ret] = canon_thread_suspend_then_promote(True, otheri6)
+    assert(ret == Cancelled.TRUE)
+    assert(log6 == ['other'])
+    log6.append('helper')
+    [] = canon_task_cancel()
+    [] = canon_thread_resume_later(mainthreadi6)
+    return []
+  helperfi6 = ftbl6.add(CoreFuncRef(core_ft, helper6))
+  def core_func6(args):
+    nonlocal mainthreadi6, helperi6, otheri6
+    [mainthreadi6] = canon_thread_index()
+    [helperi6] = canon_thread_new_indirect(core_ft, ftbl6, helperfi6, 0)
+    [otheri6] = canon_thread_new_indirect(core_ft, ftbl6, otherfi6, 0)
+    [] = canon_thread_resume_later(helperi6)
+    [ret] = canon_thread_suspend(False)
+    assert(ret == Cancelled.FALSE)
+    log6.append('main')
+    return []
+  on_cancel,resolved = start_task(core_func6)
+  on_cancel()
+  assert(log6 == [])
+  drain()
+  assert(log6 == ['other', 'helper', 'main'])
+  assert(resolved == [None])
+
+  # 7. Same for a cancellable `thread.yield-then-promote`.
+  log7 = []
+  ftbl7 = Table()
+  mainthreadi7 = None
+  otheri7 = None
+  def other7(args):
+    log7.append('other')
+    return []
+  otherfi7 = ftbl7.add(CoreFuncRef(core_ft, other7))
+  def helper7(args):
+    [] = canon_thread_resume_later(otheri7)
+    [ret] = canon_thread_yield_then_promote(True, otheri7)
+    assert(ret == Cancelled.TRUE)
+    assert(log7 == ['other'])
+    log7.append('helper')
+    [] = canon_task_cancel()
+    [] = canon_thread_resume_later(mainthreadi7)
+    return []
+  helperfi7 = ftbl7.add(CoreFuncRef(core_ft, helper7))
+  def core_func7(args):
+    nonlocal mainthreadi7, otheri7
+    [mainthreadi7] = canon_thread_index()
+    [helperi] = canon_thread_new_indirect(core_ft, ftbl7, helperfi7, 0)
+    [otheri7] = canon_thread_new_indirect(core_ft, ftbl7, otherfi7, 0)
+    [] = canon_thread_resume_later(helperi)
+    [ret] = canon_thread_suspend(False)
+    assert(ret == Cancelled.FALSE)
+    log7.append('main')
+    return []
+  on_cancel,resolved = start_task(core_func7)
+  on_cancel()
+  assert(log7 == [])
+  drain()
+  assert(log7 == ['other', 'helper', 'main'])
+  assert(resolved == [None])
+
+  # 8. A cancellable `thread.suspend` reached with the cancellation *already*
+  # pending must suspend too, and report it only at its wake-up. `main` first
+  # suspends non-cancellably (so the request has no candidate and goes pending)
+  # and is woken by `h1`, which leaves it running with a pending cancellation.
+  log8 = []
+  ftbl8 = Table()
+  def waker8(args):
+    [mainthreadi] = args
+    log8.append('h1')
+    [] = canon_thread_resume_later(mainthreadi)
+    return []
+  wakerfi8 = ftbl8.add(CoreFuncRef(core_ft, waker8))
+  def second8(args):
+    [mainthreadi] = args
+    log8.append('h2')
+    [] = canon_thread_resume_later(mainthreadi)
+    return []
+  secondfi8 = ftbl8.add(CoreFuncRef(core_ft, second8))
+  def core_func8(args):
+    [mainthreadi] = canon_thread_index()
+    [h1i] = canon_thread_new_indirect(core_ft, ftbl8, wakerfi8, mainthreadi)
+    [] = canon_thread_resume_later(h1i)
+    [ret] = canon_thread_suspend(False)
+    assert(ret == Cancelled.FALSE)
+    [h2i] = canon_thread_new_indirect(core_ft, ftbl8, secondfi8, mainthreadi)
+    [] = canon_thread_resume_later(h2i)
+    [ret] = canon_thread_suspend(True)
+    assert(ret == Cancelled.TRUE)
+    assert(log8 == ['h1', 'h2'])
+    log8.append('main')
+    [] = canon_task_cancel()
+    return []
+  on_cancel,resolved = start_task(core_func8)
+  on_cancel()
+  assert(log8 == [])
+  drain()
+  assert(log8 == ['h1', 'h2', 'main'])
+  assert(resolved == [None])
+
 test_roundtrips()
 test_cross_component_realloc()
 test_handles()
@@ -3071,5 +3376,6 @@ test_async_flat_params()
 test_threads()
 test_sync_threads()
 test_thread_cancel_callback()
+test_thread_cancel_delivery()
 
 print("All tests passed")
