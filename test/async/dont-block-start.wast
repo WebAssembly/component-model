@@ -24,11 +24,23 @@
 (assert_trap
   (component
     (component $C
+      (core module $Memory (memory (export "mem") 1))
+      (core instance $memory (instantiate $Memory))
       (core module $M
-        (func (export "f") (result i32) unreachable)
+        (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
+        (import "" "waitable-set.wait" (func $waitable-set.wait (param i32 i32) (result i32)))
+        (func (export "f") (result i32)
+          (drop (call $waitable-set.wait (call $waitable-set.new) (i32.const 0)))
+          unreachable
+        )
         (func (export "f_cb") (param i32 i32 i32) (result i32) unreachable)
       )
-      (core instance $i (instantiate $M))
+      (canon waitable-set.new (core func $waitable-set.new))
+      (canon waitable-set.wait (memory (core memory $memory "mem")) (core func $waitable-set.wait))
+      (core instance $i (instantiate $M (with "" (instance
+        (export "waitable-set.new" (func $waitable-set.new))
+        (export "waitable-set.wait" (func $waitable-set.wait))
+      ))))
       (func (export "f") async (canon lift (core func $i "f") async (callback (core func $i "f_cb"))))
     )
     (component $D
