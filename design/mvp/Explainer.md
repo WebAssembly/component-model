@@ -2832,21 +2832,22 @@ within the same scope.
 
 To determine whether two names (defined as sequences of [Unicode Scalar
 Values]) are **strongly-unique**:
-* If one name is `l` and the other name is `[constructor]l` (for the same
-  `label` `l`), they *are* strongly-unique.
-* If one name is `l` and the other name is `[*]l.l` (for the same
-  `label` `l` and any annotation `*` with a dotted `l.l` name), they *are
-  not* strongly-unique.
-* Otherwise:
-  * Lowercase all the `acronym`s (uppercase letters) in both names.
-  * Strip any `[...]` annotation prefix from both names.
-  * The names are strongly-unique if the resulting strings are unequal.
+1. Canonicalize each name:
+  1. Lowercase all the `acronym`s (uppercase letters) in the name.
+  2. If the name is `[method]l.l` or `[static]l.l` for some `label` `l`, replace
+    the name with `l` (e.g. `[method]foo.foo` becomes `foo`).
+  3. If the name has any `[...]` annotation prefix other than `[constructor]`,
+    strip it from the name.
+2. The names are strongly-unique if the resulting canonicalized strings are
+  unequal.
 
 Thus, the following set of names are strongly-unique and can thus all be imports (or exports) of the same component (or component type or instance type):
-* `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[method]foo.baz`, `foo:bar/baz`
+* `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[static]foo.baz`, `foo:bar/baz`
 
 but attempting to add *any* of the following names would be a validation error:
-* `foo`, `foo-BAR`, `[constructor]foo-BAR`, `[method]foo.foo`, `[method]foo.BAR`, `foo:bar/baz`, `bar`
+* `foo`, `FOO`, `foo-BAR`, `[constructor]FOO`, `[method]foo.BAR`, `[static]foo.bar`, `[method]foo.baz`, `[method]foo.foo`, `[static]foo-BAR.FOO-bar`, `foo:bar/BAZ`
+
+The purpose of steps 1.2 and 1.3 is to play nice with constructors: in many languages, constructors are the only item that can have the same name as the class.
 
 Note that additional validation rules involving types apply to names with
 annotations. For example, the validation rules for `[constructor]foo` require
