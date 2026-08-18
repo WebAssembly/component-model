@@ -1913,7 +1913,7 @@ For details, see [Waitables and Waitable Sets] in the concurrency explainer and
 | Canonical ABI signature    | `[subtask:i32] -> [i32]`                                  |
 
 The `subtask.cancel` built-in requests [cancellation] of the indicated subtask.
-If the `async` is present, `none` is returned (reprented as `-1` in the
+If the `async` is present, `none` is returned (represented as `-1` in the
 Canonical ABI) to indicate that the subtask blocked before it was [resolved].
 Otherwise, `subtask.cancel` returns the `subtask-state` that the subtask
 resolved to (which is one of `returned`, `cancelled-before-started` or
@@ -3015,21 +3015,15 @@ In particular, the Component Model maintains the following invariants:
    after a trap, it's no longer possible to observe the internal state of a
    component instance.
 
-2. Components can only be reentered (via component export or thread resumption)
-   when they explicitly [block] or call a [donut wrapped] child component. Calls
-   to non-`async` functions do *not* count as "blocking" nor do non-blocking
-   (`async`-lowered) calls to `async` functions. Thus, bindings generators and
-   component authors do not need to always safely handle reentrance at all
-   import call sites. (In the [future](Concurrency.md#TODO), support for
-   first-class functions (as parameter and result values) would loosen this
-   restriction in an explicit opt-in manner.)
-
-3. To ease adoption, unless a component opts in (via "stackful" lift 🚟 or
-   cooperative threads 🧵), all core wasm execution inside a component instance
-   is locally serialized (via automatic backpressure applied at export calls) so
-   that producer toolchains can continue to use a single global linear memory
-   shadow stack that is pushed and popped in LIFO order.
-
+2. When components implement `async` functions using the 0.3.0 sync or
+   async-callback ABIs, core wasm execution is "run to completion" within the
+   scope of a single component instance: the runtime automatically exerts
+   backpressure to prevent there from being multiple core wasm stacks live at
+   the same time. Multiple stacks may, however, be live across *multiple*
+   component instances, or within a *single* component instance if the component
+   uses the "stackful" async ABI 🚟, cooperative thread built-ins 🧵, or exposes
+   synchronously-typed functions (since non-`async` functions cannot exert
+   backpressure when called).
 
 ## JavaScript Embedding
 

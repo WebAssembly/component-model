@@ -54,7 +54,7 @@
         ;; synchronously, switch to the caller who will write and rendezvous
         (local.set $bufp (i32.const 16))
         (local.set $ret (call $stream.read (local.get $rx) (local.get $bufp) (i32.const 4)))
-        (if (i32.ne (i32.const 0x41 (; DROPPED=1 | (4<<4) ;)) (local.get $ret))
+        (if (i32.ne (i32.const 0x40 (; COMPLETED=0 | (4<<4) ;)) (local.get $ret))
           (then unreachable))
         (if (i32.ne (i32.const 0x89abcdef) (i32.load (local.get $bufp)))
           (then unreachable))
@@ -142,7 +142,7 @@
         (local.set $rx (i32.wrap_i64 (local.get $ret64)))
         (local.set $tx (i32.wrap_i64 (i64.shr_u (local.get $ret64) (i64.const 32))))
         (local.set $ret (call $set (local.get $rx)))
-        (if (i32.ne (i32.const 1 (; STARTED ;)) (i32.and (local.get $ret) (i32.const 0xf)))
+        (if (i32.ne (i32.const 0 (; STARTING ;)) (i32.and (local.get $ret) (i32.const 0xf)))
           (then unreachable))
         (local.set $subtask (i32.shr_u (local.get $ret) (i32.const 4)))
 
@@ -150,7 +150,7 @@
         (local.set $bufp (i32.const 16))
         (i32.store (local.get $bufp) (i32.const 0x89abcdef))
         (local.set $ret (call $stream.write (local.get $tx) (local.get $bufp) (i32.const 4)))
-        (if (i32.ne (i32.const 0x40 (; COMPLETED=0 | (4<<4) ;)) (local.get $ret))
+        (if (i32.ne (i32.const 0x41 (; DROPPED=1 | (4<<4) ;)) (local.get $ret))
           (then unreachable))
 
         (call $stream.drop-writable (local.get $tx))
@@ -172,7 +172,7 @@
     (type $ST (stream u8))
     (canon stream.new $ST (core func $stream.new))
     (canon stream.read $ST async (memory (core memory $memory "mem")) (core func $stream.read))
-    (canon stream.write $ST async (memory (core memory $memory "mem")) (core func $stream.write))
+    (canon stream.write $ST (memory (core memory $memory "mem")) (core func $stream.write))
     (canon stream.drop-readable $ST (core func $stream.drop-readable))
     (canon stream.drop-writable $ST (core func $stream.drop-writable))
     (canon waitable-set.new (core func $waitable-set.new))
