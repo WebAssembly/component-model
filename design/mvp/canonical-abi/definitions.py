@@ -420,6 +420,8 @@ class Thread:
 
   def suspend_then_promote(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running())
+    if self.task.deliver_pending_cancel(cancellable):
+      return Cancelled.TRUE
     if other.ready():
       other.stop_waiting_internal(cancelled = False)
       return self.suspend_then_resume(cancellable, other)
@@ -428,6 +430,8 @@ class Thread:
 
   def yield_then_promote(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running())
+    if self.task.deliver_pending_cancel(cancellable):
+      return Cancelled.TRUE
     if other.ready():
       other.stop_waiting_internal(cancelled = False)
       return self.yield_then_resume(cancellable, other)
