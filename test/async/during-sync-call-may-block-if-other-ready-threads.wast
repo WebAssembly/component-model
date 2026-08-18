@@ -2,7 +2,7 @@
 ;; depend on the thread's task's function type (since threads can arbitrarily
 ;; switch to any other thread running in the same component instance). Rather,
 ;; it depends on whether, at the point of blocking, there are any other
-;; threads that are ready to run and able to use the stack.
+;; threads that are ready to run.
 ;;
 ;; To test this, the tester below has two non-async-typed exports, so both
 ;; run their bodies inside a dynamic scope where the "cannot block before
