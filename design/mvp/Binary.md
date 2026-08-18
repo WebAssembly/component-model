@@ -287,7 +287,9 @@ Notes:
   `none` case of an optional immediate.)
 * 🔧 for fixed-sized lists the length of the list must be larger than 0 to pass
   validation.
-* Validation requires that, for every `defvaltype` `t`, `elem_size(t, 'i64')` is less than 2<sup>28</sup>, as defined by the [Canonical ABI](CanonicalABI.md#element-size).
+* Validation requires that, for every `defvaltype` `t`, `elem_size(t, 'i64')` is
+  less than 2<sup>28</sup>, as defined by the
+  [Canonical ABI](CanonicalABI.md#element-size).
 
 
 ## Canonical Definitions
