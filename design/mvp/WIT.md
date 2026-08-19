@@ -1767,26 +1767,26 @@ transform: func(blob) -> blob;
 
 As syntactic sugar, resource statements can also declare any number of
 *methods*, which are functions that implicitly take a `self` parameter that is
-a handle. A resource statement can also contain any number of *getters* and
-*setters*, which also implicitly take a `self` parameter and have additional
-validation restrictions on their result and parameter types. A resource
-statement can also contain any number of *static functions*, which do not have
-an implicit `self` parameter but are meant to be lexically nested in the scope
-of the resource type. Lastly, a resource statement can contain at most one
-*constructor* function, which is syntactic sugar for a function returning a
-handle of the containing resource type.
+a handle. A resource statement can also contain any number of *static
+functions*, which do not have an implicit `self` parameter but are meant to be
+lexically nested in the scope of the resource type. Lastly, a resource
+statement can contain at most one *constructor* function, which is syntactic
+sugar for a function returning a handle of the containing resource type.
 
 Constructors can be fallible or infallible. Fallible constructors have an
 explicitly-written return type which must be of the form `result<r, ...>` where
 `r` is the name of the containing `resource`. Infallible constructors have no
 written return type and are given the implicit return type `r`.
 
-Getters take no parameters (besides the implicit `self` parameter) and must
-return a value. Setters take exactly one parameter (besides the implicit `self`
-parameter) and may not return a value unless that value is of type
-`result<_, error?>`. If a getter and setter are defined with the same name, and
-the setter's value type is `t`, then the getter's return type must be either
-`t` or `result<t, error?>`.
+📡 A resource statement can also contain any number of *getters* and
+*setters*, which also implicitly take a `self` parameter. Getters take no
+parameters (besides the implicit `self` parameter) and must return a value.
+Setters take exactly one parameter (besides the implicit `self` parameter) and
+may not return a value unless that value is of type `result<_, error?>`. Every
+setter must have a corresponding getter with the same name, and if the setter's
+value type is `t`, then the getter's return type must be either `t` or
+`result<t, error?>`. To simplify validation, the getter must be defined before
+the setter.
 
 For example, the following resource definition:
 ```wit
@@ -1831,8 +1831,8 @@ resource-item ::= 'resource' id ';'
                 | 'resource' id '{' ( gate external-id? resource-method )* '}'
 resource-method ::= func-item
                   | id ':' 'static' func-type ';'
-                  | id ':' 'get' param-list result-list ';'
-                  | id ':' 'set' param-list result-list ';'
+                  | id ':' 'get' param-list result-list ';' 📡
+                  | id ':' 'set' param-list result-list ';' 📡
                   | 'constructor' param-list ';'
 ```
 
@@ -1979,8 +1979,7 @@ is expanded into:
 resource file
 %[method]file.read: func(self: borrow<file>, n: u32) -> list<u8>;
 ```
-where `%[method]file.read` is the desugared name of a method. The same applies
-to the getter and setter syntax.
+where `%[method]file.read` is the desugared name of a method.
 
 
 ## Name resolution

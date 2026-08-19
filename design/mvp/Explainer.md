@@ -75,6 +75,7 @@ shipped as part of a future WASI Developer Preview release:
 * 📝: the `error-context` type
 * 🔗: canonical interface names
 * 🐘: [memory64]
+* 📡: getters and setters
 
 
 ## Grammar
@@ -2711,8 +2712,8 @@ plainname         ::= <label>
                     | '[constructor]' <label>
                     | '[method]' <label> '.' <label>
                     | '[static]' <label> '.' <label>
-                    | '[get]' <label> '.' <label>
-                    | '[set]' <label> '.' <label>
+                    | '[get]' <label> '.' <label> 📡
+                    | '[set]' <label> '.' <label> 📡
 labellit          ::= '"' <label> '"'
 label             ::= <first-fragment> ( '-' <fragment> )*
 first-fragment    ::= <first-word>
@@ -2748,16 +2749,16 @@ The names of component imports and exports provide two options:
 The `plainname` production captures several language-neutral syntactic hints
 that allow bindings generators to produce more idiomatic bindings in their
 target language. At the top-level, a `plainname` allows functions to be
-annotated as being a constructor, method, getter, setter or static function of
-a preceding resource.
+annotated as being a constructor, method, 📡 getter, 📡 setter, or static
+function of a preceding resource.
 
-When a function is annotated with `constructor`, `method`, `static`, `get`, or
-`set`, the first `label` is the name of the resource and the second `label` is
-the logical field name of the function. This additional nesting information
-allows bindings generators to insert the function into the nested scope of a
-class, abstract data type, object, namespace, package, module or whatever
-resources get bound to. For example, a function named `[method]C.foo` could be
-bound in C++ to a member function `foo` in a class `C`. The JS API
+When a function is annotated with `constructor`, `method`, `static`, 📡 `get`,
+or 📡 `set`, the first `label` is the name of the resource and the second
+`label` is the logical field name of the function. This additional nesting
+information allows bindings generators to insert the function into the nested
+scope of a class, abstract data type, object, namespace, package, module or
+whatever resources get bound to. For example, a function named `[method]C.foo`
+could be bound in C++ to a member function `foo` in a class `C`. The JS API
 [below](#JS-API) describes how the native JavaScript bindings could look.
 
 To restrict the set of cases that bindings generators need to consider, these
@@ -2771,7 +2772,7 @@ annotations trigger additional type-validation rules (listed in detail in
   where `$R` is the type-index of the resource type named `R`.
 * An import or export named `[method]R.foo` must be a function whose
   first parameter must be `(param "self" (borrow $R))`.
-* An import or export named `[get|set]R.foo` must be a function whose first
+* 📡 An import or export named `[get|set]R.foo` must be a function whose first
   parameter must be `(param "self" (borrow $R))` and which is required to have
   a result type or second parameter respectively.
 
@@ -2842,35 +2843,45 @@ Values]) are **strongly-unique**:
     2. If the name is `[*]l.l` for any annotation [*] and some `label` `l`,
         replace the name with `l` (e.g. `[method]foo.foo` becomes `foo`).
     3. If the name has any `[...]` annotation prefix other than `[constructor]`
-        or `[set]`, strip it from the name.
+        (📡 or `[set]`), strip it from the name.
 2. The names are strongly-unique if the resulting canonicalized strings are
   unequal.
 
 Thus, the following set of names are strongly-unique and can thus all be imports (or exports) of the same component (or component type or instance type):
 * `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[static]foo.baz`,
-  `foo:bar/baz`, `[get]foo.prop`, `[set]foo.prop`, `[method]foo.get-prop`,
+  `foo:bar/baz`, 📡 `[get]foo.prop`, 📡 `[set]foo.prop`, `[method]foo.get-prop`,
   `[method]foo.set-prop`
 
 but attempting to add *any* of the following names would be a validation error:
 * `foo`, `FOO`, `foo-BAR`, `[constructor]FOO`, `[method]foo.BAR`,
   `[static]foo.bar`, `[method]foo.baz`, `[method]foo.foo`,
-  `[static]foo-BAR.FOO-bar`, `[get]foo.foo`, `foo:bar/BAZ`, `[method]foo.prop`,
-  `[static]foo.PROP`, `[get]foo.PROP`, `[set]foo.PROP`
-
-The purpose of step 1.2 and the `[constructor]` provision of step 1.3 is to
-play nice with constructors: in many languages, a constructor is the only item
-that can have the same name as the class.
+  `[static]foo-BAR.FOO-bar`, `[get]foo.foo`, `foo:bar/BAZ`,
+  📡 `[method]foo.prop`, 📡 `[static]foo.PROP`, 📡 `[get]foo.PROP`,
+  📡 `[set]foo.PROP`
 
 Note that additional validation rules involving types apply to names with
 annotations. For example, the validation rules for `[constructor]foo` require
 `foo` to be a resource type. See [Binary.md](Binary.md#import-and-export-definitions)
 for details.
 
-Note also that `[get]foo.prop` and `[method]foo.get-prop` are considered
-strongly-unique even though in practice they may conflict. If this results in
-a conflict for a bindings generator, the bindings generator may just pick one
-of the two. This is a temporary measure that is expected to be restricted for a
-1.0 release.
+Note that these rules prevent having a method or static function (📡 or getter
+or setter) with the same name as its resource type, leaving room for a
+constructor. This is to satisfy the naming rules around constructors in many
+languages.
+
+📡 Also note that, although `[get]foo.prop` and `[method]foo.prop` are not
+considered strongly-unique, `[set]foo.prop` and `[method]foo.prop` are.
+However, since `[set]foo.prop` separately requires `[get]foo.prop` to be
+present, there is no practical concern of a bindings conflict between
+`[set]foo.prop` and `[method]foo.prop`.
+
+📡 Note also that `[get]foo.prop` and `[method]foo.get-prop` are considered
+strongly-unique even though in practice they may conflict. Likewise,
+`[set]foo.prop` and `[method]foo.set-prop` are considered strongly-unique. If
+this results in a conflict for a bindings generator, the bindings generator may
+choose one of the two and ignore the other. This is a temporary measure: in a
+later release, it is expected that both of these examples will not be
+considered strongly-unique, so API designers are encouraged to avoid this case.
 
 
 #### 🔗 Canonical Interface Name

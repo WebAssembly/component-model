@@ -421,9 +421,9 @@ Notes:
 * The `externname`s of all exports in a given component, instance, component-
   type or instance-type must be [strongly-unique]; attributes are ignored.
 * Validation requires that `plainname`s annotated with `[constructor]`,
-  `[method]`, `[static]`, `[get]`, or `[set]` only occur on `func` imports or
-  exports and that the first `label` of such a name matches the `plainname` of
-  a preceding `resource` import or export, respectively, in the same scope
+  `[method]`, `[static]`, 📡 `[get]`, or 📡 `[set]` only occur on `func` imports
+  or exports and that the first `label` of such a name matches the `plainname`
+  of a preceding `resource` import or export, respectively, in the same scope
   (component, component type or instance type).
 * 🏷️ Validation requires that `implements`-annotated imports or exports are
   `instance`-typed and have a `plainname` name.
@@ -437,17 +437,19 @@ Notes:
   resource type.
 * Validation of `[method]` names requires the first parameter of the function
   to be `(param "self" (borrow $R))`, where `$R` is the named resource type.
-* Validation of `[get]` names requires that the function have a single
+* 📡 Validation of `[get]` names requires that the function have a single
   parameter `(param "self" (borrow $R))`, where `$R` is the named resource
   type, and that the function have a return type.
-* Validation of `[set]` names requires that the function have exactly two
+* 📡 Validation of `[set]` names requires that the function have exactly two
   parameters, that the first parameter be `(param "self" (borrow $R))`, and
   that the function have either no return type or `(result (error $E)?)`.
-* If both a `[get]` and `[set]` are defined with the same name (that is, if
-  they have the same `label`s), and the setter's second parameter has type
-  `$T`, then the getter's result type must be either `$T` or
+* 📡 If `[set]a.b` is defined within a particular scope, then `[get]a.b` must
+  have already been defined in that same scope. (That is, the `label`s must be
+  equal, and the getter must precede the setter.)
+* 📡 If a `[set]` function's second parameter has type `$T`, then its
+  corresponding `[get]` function's result type must be either `$T` or
   `(result $T (error $E)?)`.
-* 🔀 Functions with `[get]` or `[set]` names must not be `async`.
+* 🔀/📡 Functions with `[get]` or `[set]` names must not be `async`.
 * 🔗 Validation requires that `versionsuffix` is preceded by an `interfaceversion`
   matching `canonversion` and that the concatenation of the `canonversion` and
   the `versionsuffix` results in a `valid semver` as defined by
