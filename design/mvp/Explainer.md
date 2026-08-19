@@ -2838,11 +2838,11 @@ within the same scope.
 To determine whether two names (defined as sequences of [Unicode Scalar
 Values]) are **strongly-unique**:
 1. Canonicalize each name:
-  1. Lowercase all the `acronym`s (uppercase letters) in the name.
-  2. If the name is `[method]l.l` or `[static]l.l` for some `label` `l`, replace
-    the name with `l` (e.g. `[method]foo.foo` becomes `foo`).
-  3. If the name has any `[...]` annotation prefix other than `[constructor]`
-    or `[set]`, strip it from the name.
+    1. Lowercase all the `acronym`s (uppercase letters) in the name.
+    2. If the name is `[*]l.l` for any annotation [*] and some `label` `l`,
+        replace the name with `l` (e.g. `[method]foo.foo` becomes `foo`).
+    3. If the name has any `[...]` annotation prefix other than `[constructor]`
+        or `[set]`, strip it from the name.
 2. The names are strongly-unique if the resulting canonicalized strings are
   unequal.
 
@@ -2852,9 +2852,10 @@ Thus, the following set of names are strongly-unique and can thus all be imports
   `[method]foo.set-prop`
 
 but attempting to add *any* of the following names would be a validation error:
-* `foo`, `foo-BAR`, `[constructor]foo-BAR`, `[method]foo.foo`,
-  `[method]foo.BAR`, `foo:bar/baz`, `[method]foo.prop`, `[static]foo.PROP`,
-  `[get]foo.PROP`, `[set]foo.PROP`
+* `foo`, `FOO`, `foo-BAR`, `[constructor]FOO`, `[method]foo.BAR`,
+  `[static]foo.bar`, `[method]foo.baz`, `[method]foo.foo`,
+  `[static]foo-BAR.FOO-bar`, `[get]foo.foo`, `foo:bar/BAZ`, `[method]foo.prop`,
+  `[static]foo.PROP`, `[get]foo.PROP`, `[set]foo.PROP`
 
 The purpose of step 1.2 and the `[constructor]` provision of step 1.3 is to
 play nice with constructors: in many languages, a constructor is the only item
