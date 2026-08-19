@@ -439,16 +439,14 @@ Notes:
   to be `(param "self" (borrow $R))`, where `$R` is the named resource type.
 * 📡 Validation of `[get]` names requires that the function have a single
   parameter `(param "self" (borrow $R))`, where `$R` is the named resource
-  type, and that the function have a return type.
+  type, and that the function have a result type.
 * 📡 Validation of `[set]` names requires that the function have exactly two
   parameters, that the first parameter be `(param "self" (borrow $R))`, and
-  that the function have either no return type or `(result (error $E)?)`.
-* 📡 If `[set]a.b` is defined within a particular scope, then `[get]a.b` must
-  have already been defined in that same scope. (That is, the `label`s must be
-  equal, and the getter must precede the setter.)
-* 📡 If a `[set]` function's second parameter has type `$T`, then its
-  corresponding `[get]` function's result type must be either `$T` or
-  `(result $T (error $E)?)`.
+  that the function have either no result type or `(result (error $E)?)`.
+* 📡 If `[set]a.b` is defined as an import or export within a particular scope,
+  then `[get]a.b` must have already been defined as an import or export
+  respectively in that same scope. (That is, the `label`s must be equal, and
+  the getter must precede the setter.)
 * 🔀/📡 Functions with `[get]` or `[set]` names must not be `async`.
 * 🔗 Validation requires that `versionsuffix` is preceded by an `interfaceversion`
   matching `canonversion` and that the concatenation of the `canonversion` and

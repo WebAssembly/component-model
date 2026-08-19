@@ -25,7 +25,7 @@ document, a pseudo-formal [grammar specification][lexical-structure], and
 additionally a specification of the [package format][package-format] of a WIT
 package suitable for distribution.
 
-See [Gated Features] for an explanation of 🔧 and 🏷️.
+See [Gated Features] for an explanation of emoji like 🔧 and 🏷️.
 
 [IDL]: https://en.wikipedia.org/wiki/Interface_description_language
 [components]: https://github.com/webassembly/component-model
@@ -1069,7 +1069,7 @@ keyword ::= 'as'
           | 'from'
           | 'func'
           | 'future'
-          | 'get'
+          | 'get' 📡
           | 'import'
           | 'include'
           | 'interface'
@@ -1085,7 +1085,7 @@ keyword ::= 'as'
           | 's32'
           | 's64'
           | 's8'
-          | 'set'
+          | 'set' 📡
           | 'static'
           | 'stream'
           | 'string'
@@ -1783,10 +1783,8 @@ written return type and are given the implicit return type `r`.
 parameters (besides the implicit `self` parameter) and must return a value.
 Setters take exactly one parameter (besides the implicit `self` parameter) and
 may not return a value unless that value is of type `result<_, error?>`. Every
-setter must have a corresponding getter with the same name, and if the setter's
-value type is `t`, then the getter's return type must be either `t` or
-`result<t, error?>`. To simplify validation, the getter must be defined before
-the setter.
+setter must have a corresponding getter with the same name. To simplify
+validation, the getter must be defined before the setter.
 
 For example, the following resource definition:
 ```wit
@@ -1795,8 +1793,8 @@ resource blob {
     write: func(bytes: list<u8>);
     read: func(n: u32) -> list<u8>;
     merge: static func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob;
-    position: get() -> u64;
-    position: set(value: u64);
+    position: get() -> u64; // 📡
+    position: set(value: u64); // 📡
 }
 resource blob2 {
     constructor(init: list<u8>) -> result<blob2>;
