@@ -662,6 +662,11 @@ where bind-id(X) parses '(' sort <id>? Y ')' when X parses '(' sort Y ')'
 Because there is nothing in this type grammar analogous to the [gc] proposal's
 [`rectype`], none of these types are recursive.
 
+To prevent integer overflow in obscure corner cases, as an extra validation
+requirement, `defvaltype`s may not be equal or greater than 2<sup>28</sup> bytes
+when serialized into linear memory according to the `i64` ABI definition of
+[Element Size](CanonicalABI.md#element-size).
+
 #### Fundamental value types
 
 The value types in `valtype` can be broken into two categories: *fundamental*

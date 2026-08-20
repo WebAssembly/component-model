@@ -2310,7 +2310,10 @@ byte size be a static property of the type instead of attempting to use a
 variable-length element-encoding scheme both simplifies the implementation and
 maps well to languages which represent `list`s as random-access arrays. Empty
 types, such as records with no fields, are not permitted, to avoid
-complications in source languages.
+complications in source languages. To prevent integer overflow in obscure corner
+cases, component validation rules require that for every value type `t` defined
+by a component, `elem_size(t, 'i64')` is less than 2<sup>28</sup> (the same
+upper bound as `MAX_LIST_BYTE_LENGTH`).
 ```python
 def elem_size(t, ptr_type):
   match despecialize(t):
@@ -3598,6 +3601,8 @@ performed for a component. These are defined as:
 * `lift(T)`
   * requires `realloc` if `T` contains a `list` or `string`
 
+Value types used by `lift`/`lower` are already rejected at `defvaltype`
+definition if they exceed the [Element Size](#element-size) bound.
 
 ### `canon lift`
 
