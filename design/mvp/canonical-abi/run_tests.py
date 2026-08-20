@@ -61,7 +61,7 @@ def lift_and_run(opts, inst, ft, callee, on_start, on_resolve):
 def mk_host_func(store, host_func, ft):
   def func_inst(on_start, on_resume, caller) -> OnCancel:
     def thread_func():
-      wait_until = lambda rf: host_thread.wait_until(rf, cancellable = True)
+      wait_until = lambda rf: host_thread.wait_until(rf, cancellable = lambda: True)
       host_func(caller, on_start, on_resume, wait_until)
     inst = ComponentInstance(store)
     task = Task(ft, CanonicalOptions(), inst, on_start, on_resume)
@@ -2961,7 +2961,7 @@ def test_thread_cancel_callback():
     return [CallbackCode.YIELD]
   def core_producer_callback1(args):
     [event,payload1,payload2] = args
-    assert(event == EventCode.NONE and payload1 == 0 and payload2 == 0)
+    assert(event == EventCode.TASK_CANCELLED and payload1 == 0 and payload2 == 0)
     [] = canon_task_return([U32Type()], producer_opts1, [42])
     return [CallbackCode.EXIT]
   producer_opts1.callback = core_producer_callback1

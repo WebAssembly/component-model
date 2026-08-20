@@ -515,7 +515,7 @@ class Thread:
   cont: Optional[Continuation]
   ready_func: Optional[Callable[[], bool]]
   task: Task
-  cancellable: bool
+  cancellable: Callable[[], bool]
   index: Optional[int]
   storage: tuple[int,int]
 
@@ -545,7 +545,7 @@ state.
     self.cont = cont_new(cont_func)
     self.ready_func = None
     self.task = task
-    self.cancellable = False
+    self.cancellable = lambda: False
     self.index = None
     self.storage = [0,0]
     assert(self.suspended())
@@ -588,7 +588,7 @@ so on, repeatedly, until the continuation either returns or suspends with no
 thread to `switch_to`.
 ```python
   def resume(self, cancelled = Cancelled.FALSE):
-    assert(not self.running() and (self.cancellable or not cancelled))
+    assert(not self.running() and (self.cancellable() or not cancelled))
     if self.waiting():
       self.stop_waiting_internal(cancelled)
     thread = self
@@ -610,30 +610,23 @@ optimization of `suspend` followed by `resume`. The non-optimized version is
 used here to simplify storing of the new `Continuation` into `Thread.cont`.
 However, an optimized implementation could do the direct switch.
 
-The next two `Thread` methods are only called by `Thread` methods below to
-suspend with the `block` effect (defined in the preceding section).
-`Thread.block_internal` passes no thread to `switch_to` and so causes
-`Thread.resume` to actually [block]. In contrast, `Thread.switch_to_internal`
-passes a thread to `switch_to`, causing the loop in `Thread.resume` to directly
-switch to that thread without blocking.
+The `Thread.block` method wraps the `block` function (defined in the previous
+section) with cancellation support. `Thread.block` is only called by other
+`Thread` methods and only after they've already eagerly checked for pending
+cancellation requests. However, while this thread is suspended, it's possible
+for a pending cancellation request to be set on the `Task`, in which case this
+thread must promptly deliver the pending cancellation request if the caller is
+`cancellable`.
 ```python
-  def block_internal(self, cancellable):
+  def block(self, cancellable, switch_to = None):
+    assert(not (cancellable() and self.task.has_pending_cancel()))
     self.cancellable = cancellable
-    cancelled = block(switch_to = None)
-    assert(self.running() and (cancellable or not cancelled))
-    return cancelled
-
-  def switch_to_internal(self, cancellable, other):
-    self.cancellable = cancellable
-    cancelled = block(switch_to = other)
-    assert(self.running() and (cancellable or not cancelled))
+    cancelled = block(switch_to)
+    assert(self.running() and (cancellable() or not cancelled))
+    if self.task.deliver_pending_cancel(cancellable):
+      cancelled = Cancelled.TRUE
     return cancelled
 ```
-The `cancellable` parameters in these methods indicate whether the caller is
-prepared to handle cancellation. If `cancellable` is false for all of a task's
-threads, the cancellation request will be stored in `Task.state` and delivered
-the next time `Task.deliver_pending_cancel()` is called with `cancellable` set
-by one of the `Thread` methods below.
 
 Once a thread is `Thread.resume()`ed and starts executing, it can suspend its
 execution by calling the `thread.suspend` built-in which calls `Thread.suspend`
@@ -644,7 +637,7 @@ requests and then otherwise simply [blocks].
     assert(self.running())
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
-    return self.block_internal(cancellable)
+    return self.block(cancellable)
 ```
 
 The `Thread.wait_until` method is used by all the synchronous blocking
@@ -652,14 +645,16 @@ built-ins, as well as auto-backpressure and the `callback` event loop, to wait
 until a particular readiness condition is met. Given `wait_until`, "yielding"
 can simply be defined as waiting on a readiness condition that is already met.
 ```python
-  def wait_until(self, ready_func, cancellable = False) -> Cancelled:
+  def wait_until(self, ready_func, cancellable = lambda: False) -> Cancelled:
     assert(self.running())
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
     if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):
       return Cancelled.FALSE
-    self.start_waiting_internal(ready_func)
-    return self.block_internal(cancellable)
+    def ready_or_cancelled():
+      return ready_func() or (cancellable() and self.task.has_pending_cancel())
+    self.start_waiting_internal(ready_or_cancelled)
+    return self.block(cancellable)
 
   def yield_(self, cancellable) -> Cancelled:
     return self.wait_until(lambda: True, cancellable)
@@ -673,6 +668,11 @@ a caller makes an `async` call to a callee which `wait_until`s a condition
 that's already met (e.g. in the case of `yield`), the embedder can use
 scheduling heuristics to decide whether or not to block the current thread.
 
+The `ready_or_cancelled` predicate in `Thread.wait_until` allows a `cancellable`
+waiting thread to be resumed if it is temporarily not `cancellable` (e.g., due
+to the `exclusive_thread` lock being held), a pending cancellation is set on the
+task, and then it becomes `cancellable` again.
+
 The `Thread.suspend_then_resume` and `Thread.yield_then_resume` methods
 immediately resume execution of some `other` `suspended` thread in the same
 component instance, leaving the original thread in either a `suspended` or
@@ -683,14 +683,14 @@ report any pending cancellation if the caller is `cancellable`.
     assert(self.running() and other.suspended())
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
-    return self.switch_to_internal(cancellable, other)
+    return self.block(cancellable, switch_to = other)
 
   def yield_then_resume(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running() and other.suspended())
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
     self.start_waiting_internal(lambda: True)
-    return self.switch_to_internal(cancellable, other)
+    return self.block(cancellable, switch_to = other)
 ```
 
 Lastly, the `Thread.suspend_then_promote` and `Thread.yield_then_promote`
@@ -703,21 +703,22 @@ If so, control flow is transferred directly and the current thread is left
 ```python
   def suspend_then_promote(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running())
-    if self.task.deliver_pending_cancel(cancellable):
-      return Cancelled.TRUE
     if other.ready():
+      if self.task.deliver_pending_cancel(cancellable):
+        return Cancelled.TRUE
       other.stop_waiting_internal(cancelled = False)
-      return self.suspend_then_resume(cancellable, other)
+      return self.block(cancellable, switch_to = other)
     else:
       return self.suspend(cancellable)
 
   def yield_then_promote(self, cancellable, other: Thread) -> Cancelled:
     assert(self.running())
-    if self.task.deliver_pending_cancel(cancellable):
-      return Cancelled.TRUE
     if other.ready():
+      if self.task.deliver_pending_cancel(cancellable):
+        return Cancelled.TRUE
       other.stop_waiting_internal(cancelled = False)
-      return self.yield_then_resume(cancellable, other)
+      self.start_waiting_internal(lambda: True)
+      return self.block(cancellable, switch_to = other)
     else:
       return self.yield_(cancellable)
 ```
@@ -845,7 +846,8 @@ exports.
                 (self.needs_exclusive() and self.inst.exclusive_thread is not None))
       if has_backpressure() or self.inst.num_waiting_to_enter > 0:
         self.inst.num_waiting_to_enter += 1
-        cancelled = self.implicit_thread.wait_until(lambda: not has_backpressure(), cancellable = True)
+        cancelled = self.implicit_thread.wait_until(lambda: not has_backpressure(),
+                                                    cancellable = lambda: True)
         self.inst.num_waiting_to_enter -= 1
         if cancelled:
           self.cancel()
@@ -920,9 +922,7 @@ multiple), giving the thread the chance to handle cancellation promptly so that
       self.implicit_thread.resume(Cancelled.TRUE)
     else:
       assert(self.state == Task.State.STARTED)
-      candidates = { t for t in self.threads if t.cancellable }
-      if self.needs_exclusive() and self.inst.exclusive_thread not in { None, self.implicit_thread }:
-        candidates.discard(self.implicit_thread)
+      candidates = { t for t in self.threads if t.cancellable() }
       if candidates and self.inst.may_enter_from(caller):
         self.state = Task.State.CANCEL_DELIVERED
         self.inst.enter_from(caller)
@@ -931,19 +931,22 @@ multiple), giving the thread the chance to handle cancellation promptly so that
       else:
         self.state = Task.State.PENDING_CANCEL
 ```
-As handled above, cancellation must additionally avoid resuming a `cancellable`
-thread when doing so would violate [Component Invariant] #2 or #3. In
-particular, invariant #2 requires not resuming any thread while the task's
-containing component instance may not be reentered and invariant #3 requires not
-resuming a `needs_exclusive` task's implicit thread while another task's
-implicit thread is running exclusively.
+Note that `Thread.cancellable` is a first-class function, instead of a boolean
+flag, so that whether a `Thread` is cancellable or not can vary dynamically.
+Concretely, `cancellable` only varies dynamically in one situation: in
+`canon_lift`, when a `callback`-lifted `async` function is waiting in its event
+loop and must not be resumed if some other thread holds the `exclusive_thread`
+lock (to preserve [Component Invariant] #3).
 
 If cancellation cannot be immediately delivered by `Task.request_cancellation`,
 the request is remembered in `Task.state` and delivered at the next opportunity
 by `Task.deliver_pending_cancel`, which is checked at all cancellation points:
 ```python
+  def has_pending_cancel(self):
+    return self.state == Task.State.PENDING_CANCEL
+
   def deliver_pending_cancel(self, cancellable) -> bool:
-    if cancellable and self.state == Task.State.PENDING_CANCEL:
+    if cancellable() and self.has_pending_cancel():
       self.state = Task.State.CANCEL_DELIVERED
       return True
     return False
@@ -1474,7 +1477,7 @@ class Waitable:
   def wait_for_pending_event(self):
     assert(not self.in_waitable_set() and not self.has_sync_waiter)
     self.has_sync_waiter = True
-    current_thread().wait_until(self.has_pending_event, cancellable = False)
+    current_thread().wait_until(self.has_pending_event, cancellable = lambda: False)
     self.has_sync_waiter = False
 
   def get_pending_event(self) -> EventTuple:
@@ -3713,9 +3716,11 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
     while code != CallbackCode.EXIT:
       assert(task.needs_exclusive() and inst.exclusive_thread is task.implicit_thread)
       inst.exclusive_thread = None
+      def lock_available():
+        return inst.exclusive_thread is None
       match code:
         case CallbackCode.YIELD:
-          cancelled = thread.wait_until(lambda: not inst.exclusive_thread, cancellable = True)
+          cancelled = thread.wait_until(lock_available, cancellable = lock_available)
           if cancelled:
             event = (EventCode.TASK_CANCELLED, 0, 0)
           else:
@@ -3723,7 +3728,7 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
         case CallbackCode.WAIT:
           wset = inst.handles.get(si)
           trap_if(not isinstance(wset, WaitableSet))
-          event = wset.wait_for_event_and(lambda: not inst.exclusive_thread, cancellable = True)
+          event = wset.wait_for_event_and(lock_available, cancellable = lock_available)
         case _:
           trap()
       assert(inst.exclusive_thread is None)
@@ -3736,10 +3741,11 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
 ```
 The `Thread.wait_until` and `WaitableSet.wait_for_event_and` methods called by
 the event loop are the same methods called by the `thread.yield` and
-`waitable-set.wait` built-ins. Thus, the main difference between stackful and
-stackless async is whether these suspending operations are performed from an
-empty or non-empty core wasm callstack (with the former allowing additional
-engine optimization).
+`waitable-set.wait` built-ins. The main difference (other than whether they are
+called from an empty vs. non-empty guest call stack, which allows an engine
+to reuse the stack in the former case) is the `lock_available` predicate used
+to additionally gate readiness and cancellability in order to ensure
+[Component Invariant] #2.
 
 The event loop releases `ComponentInstance.exclusive_thread` (which was acquired
 by `Task.enter_implicit_thread`) before potentially blocking the thread to allow
@@ -3755,7 +3761,7 @@ The end of `canon_lift` creates a new task/thread pair for the call and then
 calls `Thread.resume` on the new thread to synchronously transfer control flow
 to it (jumping to the top of `thread_func` above). The new thread executes until
 it either returns from `thread_func` or [blocks] by (transitively) calling
-`Thread.block_internal`. If a non-`async`-typed call blocks before the implicit
+`Thread.block`. If a non-`async`-typed call blocks before the implicit
 thread has returned a value and there are no other `ready` threads in the same
 component instance, `canon_lift` traps, since non-`async`-typed calls may not
 block. Otherwise, `canon_lift` switches to a thread (nondeterministically, if
@@ -4287,7 +4293,7 @@ def canon_waitable_set_wait(cancellable, mem, si, ptr):
   trap_if(not inst.may_leave)
   wset = inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
-  event = wset.wait_for_event(cancellable)
+  event = wset.wait_for_event(lambda: cancellable)
   return unpack_event(mem, inst, ptr, event)
 
 def unpack_event(mem, inst, ptr, e: EventTuple):
@@ -4325,7 +4331,7 @@ def canon_waitable_set_poll(cancellable, mem, si, ptr):
   trap_if(not inst.may_leave)
   wset = inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
-  event = wset.poll(cancellable)
+  event = wset.poll(lambda: cancellable)
   return unpack_event(mem, inst, ptr, event)
 ```
 If `cancellable` is set, then `waitable-set.poll` will return whether the
@@ -4966,7 +4972,7 @@ calling component.
 def canon_thread_suspend(cancellable):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  cancelled = thread.suspend(cancellable)
+  cancelled = thread.suspend(lambda: cancellable)
   return [cancelled]
 ```
 If `cancellable` is set, then `thread.suspend` will return a `Cancelled`
@@ -4995,7 +5001,7 @@ other threads in a cooperative setting.
 def canon_thread_yield(cancellable):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  cancelled = thread.yield_(cancellable)
+  cancelled = thread.yield_(lambda: cancellable)
   return [cancelled]
 ```
 If `cancellable` is set, then `thread.yield` will return a `Cancelled`
@@ -5025,7 +5031,7 @@ def canon_thread_suspend_then_resume(cancellable, i):
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
-  cancelled = thread.suspend_then_resume(cancellable, other_thread)
+  cancelled = thread.suspend_then_resume(lambda: cancellable, other_thread)
   return [cancelled]
 ```
 If `cancellable` is set, then `thread.suspend-then-resume` will return a
@@ -5056,7 +5062,7 @@ def canon_thread_yield_then_resume(cancellable, i):
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
-  cancelled = thread.yield_then_resume(cancellable, other_thread)
+  cancelled = thread.yield_then_resume(lambda: cancellable, other_thread)
   return [cancelled]
 ```
 If `cancellable` is set, then `thread.yield-then-resume` will return a
@@ -5085,7 +5091,7 @@ def canon_thread_suspend_then_promote(cancellable, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
-  cancelled = thread.suspend_then_promote(cancellable, other_thread)
+  cancelled = thread.suspend_then_promote(lambda: cancellable, other_thread)
   return [cancelled]
 ```
 If `cancellable` is set, then `thread.suspend-then-promote` will return a
@@ -5115,7 +5121,7 @@ def canon_thread_yield_then_promote(cancellable, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
-  cancelled = thread.yield_then_promote(cancellable, other_thread)
+  cancelled = thread.yield_then_promote(lambda: cancellable, other_thread)
   return [cancelled]
 ```
 If `cancellable` is set, then `thread.yield-then-promote` will return a

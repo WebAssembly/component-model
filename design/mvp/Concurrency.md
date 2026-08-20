@@ -810,11 +810,12 @@ the subtask's threads which is in a cancellable state, passing it a sentinel
 "cancelled" value. A thread is in a "cancellable" state if it calls one of the
 [blocking](#blocking) built-ins with the `cancellable` immediate set (indicating
 that the caller expects and propagates cancellation appropriately) or, if using
-a `callback`, returns to the event loop (which always waits cancellably). If a
-subtask has no cancellable threads, no thread is resumed and the request for
-cancellation is remembered in the task state, to be delivered immediately at
-the next cancellable wait. In the worst case, though, a component may never
-wait cancellably and thus cancellation may be silently ignored.
+a `callback`, returns to the event loop and no other "exclusive" threads need
+to run to completion. If a subtask has no cancellable threads, no thread is
+resumed and the request for cancellation is remembered in the task state, to be
+delivered at the next cancellable opportunity. In the worst case, though, a
+component may *never* wait cancellably and thus cancellation may be silently
+ignored.
 
 `subtask.cancel` can be called synchronously or asynchronously. If called
 synchronously, `subtask.cancel` blocks until the subtask reaches a resolved
