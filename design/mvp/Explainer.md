@@ -3097,7 +3097,7 @@ object*] steps need to be expanded to cover them:
 
 For type exports, each type definition would export a JS constructor function.
 This function would be callable iff a `[constructor]`-annotated function was
-also exported. All `[method]`- and `[static]`-annotated functions, would be
+also exported. All `[method]`- and `[static]`-annotated functions would be
 dynamically installed on the constructor's prototype chain, making sure to
 register `[get]` and `[set]` functions as getters and setters. In the case of
 re-exports and multiple exports of the same definition, the same constructor
