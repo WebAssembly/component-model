@@ -1134,9 +1134,55 @@ wit-file ::= (package-decl ';')? (package-items | nested-package-definition)*
 nested-package-definition ::= package-decl '{' package-items* '}'
 
 package-items ::= toplevel-use-item | interface-item | world-item
+                | gate package-typedef-item
+
+package-typedef-item ::= variant-items
+                       | record-item
+                       | flags-items
+                       | enum-items
+                       | type-item
 ```
 
-Essentially, these top level items are [worlds], [interfaces], [use statements][use] and other package definitions.
+Essentially, these top level items are [worlds], [interfaces], [use statements][use], [package-scope types](#package-scope-types) and other package definitions.
+
+### Package-scope Types
+
+A `variant`, `record`, `flags`, `enum` or `type` may be declared directly at
+package scope, without an enclosing `interface` or `world`. A package-scope type
+is in scope for every `interface` and `world` in the package, with no `use`
+required, since there is no container to path through:
+
+```wit
+package local:demo;
+
+record point { x: u32, y: u32 }
+
+enum direction { north, south, east, west }
+
+interface api {
+  move-to: func(p: point);
+  heading: func() -> direction;
+}
+
+world w {
+  export api;
+}
+```
+
+Package-scope types share the one name space that all top-level definitions are
+exported into, so a package-scope `point` conflicts with an `interface point` or
+a `world point` in the same package. That shared name space is also what lets a
+`namespace:package/name` path address a package-scope type from another package,
+with no new syntax: `use local:demo/point;`.
+
+`resource` is deliberately excluded from `package-typedef-item`, which is why it
+names its alternatives rather than reusing `typedef-item`. Resource types carry
+identity rather than structure, so sharing one requires an abstract import, and
+the enclosing `interface` is what gives that import an identity for a consumer
+to name. The types above are structural, so a referencing `interface` can depend
+on one directly, without an `interface` having to be invented to hold it and
+without an instance having to be supplied to satisfy the dependency (see
+[Package Format][package-format]).
 
 ### Feature Gates
 
@@ -1413,6 +1459,12 @@ use-path ::= id
 Here `use-path` is an [interface name]. The bare form `id`
 refers to interfaces defined within the current package, and the full form
 refers to interfaces in package dependencies.
+
+A `use-path` may also name a [package-scope type](#package-scope-types), which
+brings the type into scope under its own name, or under the `as` name when one
+is given. This is the only way to name a package-scope type from another
+package, since the `use-path '.' '{' ... '}'` form of [`use`](#item-use)
+projects names out of an `interface` and a type has no such names to project.
 
 The `as` syntax can be optionally used to specify a name that should be assigned
 to the interface. Otherwise the name is inferred from `use-path`.
@@ -2096,6 +2148,63 @@ This example illustrates the basic structure of interfaces:
   Note that there is *always* an outer wrapping component-type, even when the
   interface contains no `use`s.
 
+A [package-scope type](#package-scope-types) is encoded like a `use` of an
+`interface`, just without the wrapping `instance` type: the wrapping
+component-type gets an `import` named by the type's fully-qualified
+`namespace:package/name`, bound with `eq` to the type itself. The WIT:
+
+```wit
+package local:demo;
+
+record point { x: u32, y: u32 }
+
+interface api {
+    move-to: func(p: point);
+}
+```
+
+is encoded as:
+
+```wat
+(component
+  (type $point (export "point") (record (field "x" u32) (field "y" u32)))
+  (type (export "api") (component
+    (import "local:demo/point" (type $point' (eq $point)))
+    (export "local:demo/api" (instance
+      (export "move-to" (func (param "p" $point')))
+    ))
+  ))
+)
+```
+
+Because the type is structural, the import is bound with `eq` to the
+package-scope definition rather than left abstract with `sub`, so nothing has to
+be supplied to satisfy it. A `resource`, whose bound is necessarily abstract,
+could not be encoded this way, which is why it may not be declared at package
+scope.
+
+A package-scope type may refer to another one. Since an exported type may only
+refer to types named by an `import` or an `export`, the referenced definition is
+exported under its own id first:
+
+```wit
+package local:demo;
+
+record point { x: u32, y: u32 }
+
+type point-list = list<point>;
+```
+
+is encoded as:
+
+```wat
+(component
+  (type $point (record (field "x" u32) (field "y" u32)))
+  (export $point' "point" (type $point))
+  (type (export "point-list") (list $point'))
+)
+```
+
 One useful consequence of this encoding scheme is that each top-level
 definition is self-contained and valid (according to Component Model validation
 rules) independent of each other definition. This allows packages to be
@@ -2138,6 +2247,40 @@ is encoded as:
   ))
 )
 ```
+
+No structure appears above because `request` is a `resource` and its bound is
+abstract. A by-value type is different: a component self-contains every type
+definition it needs, so the definition is restated locally and the `import`
+names where it came from. That applies to a [package-scope
+type](#package-scope-types) just as it does to a type projected out of an
+`interface`. The WIT:
+
+```wit
+package other:app;
+
+use local:demo/point;
+
+interface api {
+    move-to: func(p: point);
+}
+```
+
+is encoded as:
+
+```wat
+(component
+  (type (export "api") (component
+    (type $point (record (field "x" u32) (field "y" u32)))
+    (import "local:demo/point" (type $point' (eq $point)))
+    (export "other:app/api" (instance
+      (export "move-to" (func (param "p" $point')))
+    ))
+  ))
+)
+```
+
+Defining a package-scope type and depending on one are thus independent: a
+package may export a definition, depend on one defined elsewhere, or do both.
 
 Worlds are encoded similarly to interfaces, but replace the inner exported
 instance with an inner exported *component*. For example, this WIT:
@@ -2206,6 +2349,34 @@ is encoded as:
 This duplication is useful in the case of cross-package references or split
 packages, allowing a compiled `world` definition to be fully self-contained and
 able to be used to compile a component without additional type information.
+
+Similarly, a `world` that mentions a [package-scope
+type](#package-scope-types) puts the `import` inside its inner exported
+component-type:
+
+```wit
+package local:demo;
+
+record point { x: u32, y: u32 }
+
+world the-world {
+    export move-to: func(p: point);
+}
+```
+
+is encoded as:
+
+```wat
+(component
+  (type $point (export "point") (record (field "x" u32) (field "y" u32)))
+  (type (export "the-world") (component
+    (export "local:demo/the-world" (component
+      (import "local:demo/point" (type $point' (eq $point)))
+      (export "move-to" (func (param "p" $point')))
+    ))
+  ))
+)
+```
 
 🏷️ When a world imports or exports a named interface with a custom plain name
 (using the `id: use-path` syntax), the encoding uses the `(implements "I")`
