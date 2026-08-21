@@ -2838,7 +2838,8 @@ within the same scope.
 To determine whether two names (defined as sequences of [Unicode Scalar
 Values]) are **strongly-unique**:
 1. Canonicalize each name:
-  1. Lowercase all the `acronym`s (uppercase letters) in the name.
+  1. Remove all hyphens and lowercase all the `acronym`s (uppercase letters) in
+    the name.
   2. If the name is `[method]l.l` or `[static]l.l` for some `label` `l`, replace
     the name with `l` (e.g. `[method]foo.foo` becomes `foo`).
   3. If the name has any `[...]` annotation prefix other than `[constructor]`,
@@ -2847,10 +2848,13 @@ Values]) are **strongly-unique**:
   unequal.
 
 Thus, the following set of names are strongly-unique and can thus all be imports (or exports) of the same component (or component type or instance type):
-* `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[static]foo.baz`, `foo:bar/baz`
+* `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[static]foo.baz`,
+  `foo:bar/baz`
 
 but attempting to add *any* of the following names would be a validation error:
-* `foo`, `FOO`, `foo-BAR`, `[constructor]FOO`, `[method]foo.BAR`, `[static]foo.bar`, `[method]foo.baz`, `[method]foo.foo`, `[static]foo-BAR.FOO-bar`, `foo:bar/BAZ`
+* `foo`, `FOO`, `foo-BAR`, `foobar`, `foob-ar`, `[constructor]FOO`,
+  `[method]foo.BAR`, `[static]foo.bar`, `[method]foo.baz`, `[method]foo.foo`,
+  `[static]foobar.FOOBAR`, `foo:bar/BAZ`
 
 The purpose of steps 1.2 and 1.3 is to play nice with constructors: in many languages, constructors are the only item that can have the same name as the class.
 
