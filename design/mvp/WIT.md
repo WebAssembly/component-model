@@ -1809,8 +1809,7 @@ implicitly take a `self` parameter. Getters take no parameters (besides the
 implicit `self` parameter) and must return a value. Setters take exactly one
 parameter (besides the implicit `self` parameter) and must not return a value
 unless that value is of type `result<_, error?>`. Every setter must have a
-corresponding getter with the same name and same static-ness. To simplify
-validation, the getter must be defined before the setter.
+corresponding getter with the same name and same static-ness.
 
 For example, the following resource definitions:
 
