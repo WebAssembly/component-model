@@ -24,7 +24,7 @@
         (i32.wrap_i64 (local.get $ret64))
       )
       (func $write4 (export "write4")
-        ;; write 6 bytes into the stream, expecting to rendezvous with a stream.read
+        ;; write 4 bytes into the stream, expecting to rendezvous with a stream.read
         (local $ret i32)
         (i32.store (i32.const 8) (i32.const 0x12345678))
         (local.set $ret (call $stream.write (global.get $sw) (i32.const 8) (i32.const 4)))
