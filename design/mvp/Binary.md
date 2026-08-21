@@ -442,7 +442,7 @@ Notes:
 * 📡 Validation of `[get]` names requires that the function have no parameters,
   unless the name is also annotated with `[method]`, in which case `self` must
   be the only parameter.
-* 📡 Validation of `[get]` names requires that the function a result type.
+* 📡 Validation of `[get]` names requires that the function have a result type.
 * 📡 Validation of `[set]` names requires that the function have exactly one
   parameter, unless the name is also annotated with `[method]`, in which case
   there must be two parameters, the first of which is `self`.
@@ -450,9 +450,9 @@ Notes:
   result type or a result type of `(result (error $E)?)`.
 * 📡 If a name with `[set]` is defined as an import or export within a
   particular scope, the equivalent name with `[get]` must have already been
-  defined in as an import or export respectively in that same scope—that is,
-  all labels must be equal (before canonicalization), and all annotations must
-  be the same except that `[set]` is replaced with `[get]`, and the `[get]`
+  defined as an import or export respectively in that same scope—that is, all
+  labels must be equal (before canonicalization), and all annotations must be
+  the same except that `[set]` is replaced with `[get]`, and the `[get]`
   import/export must precede the `[set]` import/export. For example,
   `[set]prop` requires `[get]prop`, and `[method][set]foo.bar` requires
   `[method][get]foo.bar`.

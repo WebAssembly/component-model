@@ -2847,7 +2847,7 @@ Values]) are **strongly-unique**:
     2. If the name is `[...]*l.l` for any annotations `[...]*` and some `label`
         `l`, replace the name with `l` (e.g. `[method]foo.foo` becomes `foo`).
     3. Strip all `[...]` annotations from the name besides `[constructor]`
-        (📡 and `[set]`).
+        and 📡 `[set]`.
 2. The names are strongly-unique if the resulting canonicalized strings are
     unequal.
 
@@ -3097,8 +3097,9 @@ object*] steps need to be expanded to cover them:
 
 For type exports, each type definition would export a JS constructor function.
 This function would be callable iff a `[constructor]`-annotated function was
-also exported. All `[method]`- and `[static]`-annotated functions would be
-dynamically installed on the constructor's prototype chain. In the case of
+also exported. All `[method]`- and `[static]`-annotated functions, would be
+dynamically installed on the constructor's prototype chain, making sure to
+register `[get]` and `[set]` functions as getters and setters. In the case of
 re-exports and multiple exports of the same definition, the same constructor
 function object would be exported (following the same rules as WebAssembly
 Exported Functions today). In pathological cases (which, importantly, don't

@@ -1559,8 +1559,8 @@ typedef-item ::= resource-item
 func-item ::= id ':' func-type ';'
 
 func-type ::= 'async'? 'func' param-list result-list
-            | 'get' param-list result-list
-            | 'set' param-list result-list
+            | 'get' param-list result-list 📡
+            | 'set' param-list result-list 📡
 
 param-list ::= '(' named-type-list ')'
 
@@ -1863,8 +1863,6 @@ resource-item ::= 'resource' id ';'
                 | 'resource' id '{' ( gate external-id? resource-method )* '}'
 resource-method ::= func-item
                   | id ':' 'static' func-type ';'
-                  | id ':' 'static'? 'get' param-list result-list ';' 📡
-                  | id ':' 'static'? 'set' param-list result-list ';' 📡
                   | 'constructor' param-list ';'
 ```
 
