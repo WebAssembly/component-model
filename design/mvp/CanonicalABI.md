@@ -4948,6 +4948,7 @@ def canon_thread_resume_later(i):
   trap_if(not inst.may_leave)
   other_thread = inst.threads.get(i)
   trap_if(not other_thread.suspended())
+  assert(current_thread() is not other_thread)
   other_thread.resume_later()
   return []
 ```
@@ -5030,6 +5031,7 @@ def canon_thread_suspend_then_resume(cancellable, i):
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
+  assert(current_thread() is not other_thread)
   cancelled = thread.suspend_then_resume(cancellable, other_thread)
   return [cancelled]
 ```
@@ -5061,6 +5063,7 @@ def canon_thread_yield_then_resume(cancellable, i):
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
+  assert(current_thread() is not other_thread)
   cancelled = thread.yield_then_resume(cancellable, other_thread)
   return [cancelled]
 ```
@@ -5082,13 +5085,15 @@ validation specifies:
 * `$suspend-then-promote` is given type `(func (param $i i32) (result i32))`
 
 Calling `$suspend-then-promote` invokes the following function which loads a
-thread at index `$i` from the current component instance's `threads` table and
+thread at index `$i` from the current component instance's `threads` table,
+trapping on out-of-bounds or if the index of the current thread is passed, and
 then calls `Thread.suspend_then_resume` to resume the `other_thread` if it's
 `ready` and, in any case, leave the [current thread] suspended.
 ```python
 def canon_thread_suspend_then_promote(cancellable, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
+  trap_if(i == thread.index)
   other_thread = thread.task.inst.threads.get(i)
   cancelled = thread.suspend_then_promote(cancellable, other_thread)
   return [cancelled]
@@ -5111,7 +5116,8 @@ validation specifies:
 * `$yield-then-promote` is given type `(func (param $i i32) (result i32))`
 
 Calling `$yield-then-promote` invokes the following function which loads a
-thread at index `$i` from the current component instance's `threads` table and
+thread at index `$i` from the current component instance's `threads` table,
+trapping on out-of-bounds or if the index of the current thread is passed, and
 then calls `Thread.yield_then_resume` to resume the `other_thread` if it's
 `ready` and, in any case, leave the [current thread] ready to run at some
 nondeterministic point in the future chosen by the embedder.
@@ -5119,6 +5125,7 @@ nondeterministic point in the future chosen by the embedder.
 def canon_thread_yield_then_promote(cancellable, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
+  trap_if(i == thread.index)
   other_thread = thread.task.inst.threads.get(i)
   cancelled = thread.yield_then_promote(cancellable, other_thread)
   return [cancelled]
