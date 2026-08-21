@@ -423,9 +423,11 @@ Notes:
   be [strongly-unique]; attributes are ignored.
 * The `externname`s of all exports in a given component, instance, component-
   type or instance-type must be [strongly-unique]; attributes are ignored.
-* Validation requires that `[constructor]`, `[method]` and `[static]` annotated
-  `plainname`s only occur on `func` imports or exports and that the first label
-  of a `[constructor]`, `[method]` or `[static]` matches the `plainname` of a
+* Validation requires that `plainname`s annotated with `[constructor]`,
+  `[method]`, `[static]`, 📡 `[get]`, or 📡 `[set]` only occur on `func` imports
+  or exports.
+* Validation requires that, for `plainname`s annotated with `[constructor]`,
+  `[method]`, or `[static]`, the first `label` matches the `plainname` of a
   preceding `resource` import or export, respectively, in the same scope
   (component, component type or instance type).
 * 🏷️ Validation requires that `implements`-annotated imports or exports are
@@ -436,10 +438,28 @@ Notes:
   `vec(<attribute>)`, this list is entirely ignored when validating the types
   of components and instances.
 * Validation of `[constructor]` names requires a `func` type whose result type
-  is either `(own $R)` or `(result (own $R) E?)` where `$R` is a resource type
-  labeled `r`.
+  is either `(own $R)` or `(result (own $R) (error $E)?)`, where `$R` is the
+  named resource type.
 * Validation of `[method]` names requires the first parameter of the function
-  to be `(param "self" (borrow $R))`, where `$R` is the resource labeled `r`.
+  to be `(param "self" (borrow $R))`, where `$R` is the named resource type.
+* 📡 Validation of `[get]` names requires that the function have no parameters,
+  unless the name is also annotated with `[method]`, in which case `self` must
+  be the only parameter.
+* 📡 Validation of `[get]` names requires that the function have a result type.
+* 📡 Validation of `[set]` names requires that the function have exactly one
+  parameter, unless the name is also annotated with `[method]`, in which case
+  there must be two parameters, the first of which is `self`.
+* 📡 Validation of `[set]` names requires that the function have either no
+  result type or a result type of `(result (error $E)?)`.
+* 📡 If a name with `[set]` is defined as an import or export within a
+  particular scope, the equivalent name with `[get]` must have already been
+  defined as an import or export respectively in that same scope—that is, all
+  labels must be equal (before canonicalization), and all annotations must be
+  the same except that `[set]` is replaced with `[get]`, and the `[get]`
+  import/export must precede the `[set]` import/export. For example,
+  `[set]prop` requires `[get]prop`, and `[method][set]foo.bar` requires
+  `[method][get]foo.bar`.
+* 🔀/📡 Functions with `[get]` or `[set]` names must not be `async`.
 * 🔗 Validation requires that `versionsuffix` is preceded by an `interfaceversion`
   matching `canonversion` and that the concatenation of the `canonversion` and
   the `versionsuffix` results in a `valid semver` as defined by
