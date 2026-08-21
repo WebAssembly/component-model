@@ -2709,11 +2709,11 @@ externnamelit     ::= '"' <externname> '"'
 externname        ::= <plainname>
                     | <interfacename>
 plainname         ::= <label>
+                    | '[get]' <label> 📡
+                    | '[set]' <label> 📡
                     | '[constructor]' <label>
-                    | '[method]' <label> '.' <label>
-                    | '[static]' <label> '.' <label>
-                    | '[get]' <label> '.' <label> 📡
-                    | '[set]' <label> '.' <label> 📡
+                    | '[method]' (📡 '[get]' | '[set]')? <label> '.' <label>
+                    | '[static]' (📡 '[get]' | '[set]')? <label> '.' <label>
 labellit          ::= '"' <label> '"'
 label             ::= <first-fragment> ( '-' <fragment> )*
 first-fragment    ::= <first-word>
@@ -2748,33 +2748,36 @@ The names of component imports and exports provide two options:
 
 The `plainname` production captures several language-neutral syntactic hints
 that allow bindings generators to produce more idiomatic bindings in their
-target language. At the top-level, a `plainname` allows functions to be
-annotated as being a constructor, method, 📡 getter, 📡 setter, or static
-function of a preceding resource.
+target language. At the top level, a `plainname` allows functions to be
+annotated as being a constructor, method, 📡 property getter, 📡 property setter,
+or static function of a preceding resource, as well as a 📡 property getter or
+📡 property setter not attached to a resource.
 
-When a function is annotated with `constructor`, `method`, `static`, 📡 `get`,
-or 📡 `set`, the first `label` is the name of the resource and the second
-`label` is the logical field name of the function. This additional nesting
-information allows bindings generators to insert the function into the nested
-scope of a class, abstract data type, object, namespace, package, module or
-whatever resources get bound to. For example, a function named `[method]C.foo`
-could be bound in C++ to a member function `foo` in a class `C`. The JS API
-[below](#JS-API) describes how the native JavaScript bindings could look.
+When a function is annotated with `constructor`, `method`, or `static`, the
+first `label` is the name of the resource and the second `label` is the logical
+field name of the function. This additional nesting information allows bindings
+generators to insert the function into the nested scope of a class, abstract
+data type, object, namespace, package, module or whatever resources get bound
+to. For example, a function named `[method]C.foo` could be bound in C++ to a
+member function `foo` in a class `C`. The JS API [below](#JS-API) describes how
+the native JavaScript bindings could look.
 
 To restrict the set of cases that bindings generators need to consider, these
 annotations trigger additional type-validation rules (listed in detail in
 [Binary.md](Binary.md)):
-* An import or export named `[static]R.foo` must be a function and `R` must
-  be the name of an imported or exported resource type in the same `instance`
-  or `component` type.
-* An import or export named `[constructor]R` must be a function
-  whose return type must be `(own $R)` or `(result (own $R) (error <valtype>)?)`
-  where `$R` is the type-index of the resource type named `R`.
-* An import or export named `[method]R.foo` must be a function whose
-  first parameter must be `(param "self" (borrow $R))`.
-* 📡 An import or export named `[get|set]R.foo` must be a function whose first
-  parameter must be `(param "self" (borrow $R))` and which is required to have
-  a result type or second parameter respectively.
+* A `[constructor]` import or export named `R` must be a function whose result
+  type is `(own $R)` or `(result (own $R) (error <valtype>)?)`, where `$R` is
+  the index of the resource type named `R`.
+* A `[method]` import or export named `R.foo` must be a function whose first
+  parameter is `(param "self" (borrow $R))`, where `$R` is the index of the
+  resource type named `R`.
+* A `[static]` import or export named `R.foo` must be a function, and `R` must
+  be the name of a resource type.
+* 📡 A `[get]` import or export must have no parameters (besides the required
+  `self` parameter from `[method]`), and must have a result type.
+* 📡 A `[set]` import or export must have exactly one parameter (besides the
+  required `self` parameter from `[method]`), and must have either no result
+  type or a result type of `(result (error <valtype>)?)`.
 
 The `valid semver` production is as defined by the [Semantic Versioning 2.0]
 spec and is meant to be interpreted according to that specification. The use of
@@ -2838,26 +2841,40 @@ within the same scope.
 
 To determine whether two names (defined as sequences of [Unicode Scalar
 Values]) are **strongly-unique**:
+
 1. Canonicalize each name:
     1. Lowercase all the `acronym`s (uppercase letters) in the name.
-    2. If the name is `[*]l.l` for any annotation `[*]` and some `label` `l`,
-        replace the name with `l` (e.g. `[method]foo.foo` becomes `foo`).
-    3. If the name has any `[...]` annotation prefix other than `[constructor]`
-        (📡 or `[set]`), strip it from the name.
+    2. If the name is `[...]*l.l` for any annotations `[...]*` and some `label`
+        `l`, replace the name with `l` (e.g. `[method]foo.foo` becomes `foo`).
+    3. Strip all `[...]` annotations from the name besides `[constructor]`
+        (📡 and `[set]`).
 2. The names are strongly-unique if the resulting canonicalized strings are
-  unequal.
+    unequal.
 
-Thus, the following set of names are strongly-unique and can thus all be imports (or exports) of the same component (or component type or instance type):
+Thus, the following set of names are strongly-unique and can thus all be
+imports (or exports) of the same component (or component type or instance
+type):
+
 * `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[static]foo.baz`,
-  `foo:bar/baz`, 📡 `[get]foo.prop`, 📡 `[set]foo.prop`, `[method]foo.get-prop`,
-  `[method]foo.set-prop`
+  `foo:bar/baz`, 📡 `[get]prop`, 📡 `[set]prop`, 📡 `[method][get]foo.prop`,
+  📡 `[method][set]foo.prop`, 📡 `[static][get]foo.prop-2`,
+  📡 `[static][set]foo.prop-2`, `[method]foo.get-prop`, `[method]foo.set-prop`
 
 but attempting to add *any* of the following names would be a validation error:
-* `foo`, `FOO`, `foo-BAR`, `[constructor]FOO`, `[method]foo.BAR`,
-  `[static]foo.bar`, `[method]foo.baz`, `[method]foo.foo`,
-  `[static]foo-BAR.FOO-bar`, 📡 `[get]foo.foo`, `foo:bar/BAZ`,
-  📡 `[method]foo.prop`, 📡 `[static]foo.PROP`, 📡 `[get]foo.PROP`,
-  📡 `[set]foo.PROP`
+
+* `foo`, `FOO`, `[method]foo.foo`, 📡 `[get]foo`, 📡 `[method][get]foo.foo`,
+  📡 `[static][set]foo.FOO` (conflicts with `foo`)
+* `foo-BAR`, `[static]foo-BAR.FOO-bar` (conflicts with `foo-bar`)
+* `[constructor]FOO` (conflicts with `[constructor]foo`)
+* `[method]foo.BAR`, `[static]foo.bar` (conflicts with `[method]foo.bar`)
+* `[method]foo.baz` (conflicts with `[static]foo.baz`)
+* `foo:bar/BAZ` (conflicts with `foo:bar/baz`)
+* 📡 `prop` (conflicts with `[get]prop`)
+* 📡 `[set]PROP` (conflicts with `[set]prop`)
+* 📡 `[method]foo.prop`, 📡 `[static]foo.PROP`, 📡 `[method][get]foo.PROP`,
+  📡 `[static][get]foo.prop` (conflicts with `[method][get]foo.prop`)
+* 📡 `[method][set]foo.PROP`, 📡 `[static][set]foo.prop` (conflicts with
+  `[method][set]foo.prop`)
 
 Note that additional validation rules involving types apply to names with
 annotations. For example, the validation rules for `[constructor]foo` require
@@ -2869,19 +2886,20 @@ or setter) with the same name as its resource type, leaving room for a
 constructor. This is to satisfy the naming rules around constructors in many
 languages.
 
-📡 Also note that, although `[get]foo.prop` and `[method]foo.prop` are not
-considered strongly-unique, `[set]foo.prop` and `[method]foo.prop` are.
-However, since `[set]foo.prop` separately requires `[get]foo.prop` to be
-present, there is no practical concern of a bindings conflict between
-`[set]foo.prop` and `[method]foo.prop`.
+📡 Also note that, although `[get]foo` and `foo` are not considered
+strongly-unique, `[set]foo` and `foo` are. However, since `[set]foo` separately
+requires `[get]foo` to be present, there is no practical concern of a bindings
+conflict between `[set]foo` and `foo`. The same goes for other uses of `[get]`
+and `[set]` annotations.
 
-📡 Note also that `[get]foo.prop` and `[method]foo.get-prop` are considered
-strongly-unique even though in practice they may conflict. Likewise,
-`[set]foo.prop` and `[method]foo.set-prop` are considered strongly-unique. If
-this results in a conflict for a bindings generator, the bindings generator may
-choose one of the two and ignore the other. This is a temporary measure: in a
-later release, it is expected that both of these examples will not be
-considered strongly-unique, so API designers are encouraged to avoid this case.
+📡 Note also that `[method][get]foo.prop` and `[method]foo.get-prop` are
+considered strongly-unique even though in practice they may conflict. Likewise,
+`[method][set]foo.prop` and `[method]foo.set-prop` are considered
+strongly-unique. If this results in a conflict for a bindings generator, the
+bindings generator may choose one of the two and ignore the other. This is a
+temporary measure: in a later release, it is expected that both of these
+examples will not be considered strongly-unique, so API designers are
+encouraged to avoid this case.
 
 
 #### 🔗 Canonical Interface Name

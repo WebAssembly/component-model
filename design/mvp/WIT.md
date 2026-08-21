@@ -1559,6 +1559,8 @@ typedef-item ::= resource-item
 func-item ::= id ':' func-type ';'
 
 func-type ::= 'async'? 'func' param-list result-list
+            | 'get' param-list result-list
+            | 'set' param-list result-list
 
 param-list ::= '(' named-type-list ')'
 
@@ -1576,6 +1578,29 @@ may block and thus the caller should use the async ABI and asynchronous
 source-language bindings (e.g., `async` functions in JS, Python, C# or Rust) if
 concurrency execution is desired. For more details, see the [concurrency
 explainer](Concurrency.md#summary).
+
+📡 As syntactic sugar, functions can be declared as *getters* or *setters* by
+replacing the `func` keyword with `get` or `set`. Such functions cannot be
+async and have additional restrictions on their parameters and results. A `get`
+function must have no parameters and must return a value. A `set` function
+must have exactly one parameter and must not return a value unless that value
+is of type `result<_, error?>`. Every setter must have a corresponding getter
+with the same name. To simplify validation, the getter must be defined before
+the setter. For example, the following definitions:
+
+```wit
+foo: func(x: u32);
+bar: get() -> u64;
+bar: set(v: u64);
+```
+
+desugar into:
+
+```wit
+foo: func(x: u32);
+[get]bar: func() -> u64;
+[set]bar: func(v: u64);
+```
 
 🏷️ As with `import`s and `export`s in worlds, and for the same use cases,
 interface items can be annotated with `@external-id`:
@@ -1779,14 +1804,16 @@ explicitly-written return type which must be of the form `result<r, ...>` where
 written return type and are given the implicit return type `r`.
 
 📡 A resource statement can also contain any number of *getters* and
-*setters*, which also implicitly take a `self` parameter. Getters take no
-parameters (besides the implicit `self` parameter) and must return a value.
-Setters take exactly one parameter (besides the implicit `self` parameter) and
-may not return a value unless that value is of type `result<_, error?>`. Every
-setter must have a corresponding getter with the same name. To simplify
+*setters*, which may or may not be static. Non-static getters and setters also
+implicitly take a `self` parameter. Getters take no parameters (besides the
+implicit `self` parameter) and must return a value. Setters take exactly one
+parameter (besides the implicit `self` parameter) and must not return a value
+unless that value is of type `result<_, error?>`. Every setter must have a
+corresponding getter with the same name and same static-ness. To simplify
 validation, the getter must be defined before the setter.
 
-For example, the following resource definition:
+For example, the following resource definitions:
+
 ```wit
 resource blob {
     constructor(init: list<u8>);
@@ -1795,22 +1822,29 @@ resource blob {
     merge: static func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob;
     position: get() -> u64; // 📡
     position: set(value: u64); // 📡
+    max-size: static get() -> u64; // 📡
+    max-size: static set(value: u64) -> result<_, string>; // 📡
 }
 resource blob2 {
     constructor(init: list<u8>) -> result<blob2>;
 }
 ```
-desugars into:
+
+desugar into:
+
 ```wit
 resource blob;
 %[constructor]blob: func(init: list<u8>) -> blob;
-%[constructor]blob2: func(init: list<u8>) -> result<blob2>;
 %[method]blob.write: func(self: borrow<blob>, bytes: list<u8>);
 %[method]blob.read: func(self: borrow<blob>, n: u32) -> list<u8>;
 %[static]blob.merge: func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob;
-%[get]blob.position: func(self: borrow<blob>) -> u64;
-%[set]blob.position: func(self: borrow<blob>, value: u64);
+%[method][get]blob.position: func(self: borrow<blob>) -> u64;
+%[method][set]blob.position: func(self: borrow<blob>, value: u64);
+%[static][get]blob.max-size: func() -> u64;
+%[static][set]blob.max-size: func(value: u64) -> result<_, string>;
+%[constructor]blob2: func(init: list<u8>) -> result<blob2>;
 ```
+
 These `%`-prefixed strings embed the resource type name so that bindings
 generators can generate idiomatic syntax for the target language or (for
 languages like C) fall back to an appropriately-prefixed free function name.
@@ -1829,8 +1863,8 @@ resource-item ::= 'resource' id ';'
                 | 'resource' id '{' ( gate external-id? resource-method )* '}'
 resource-method ::= func-item
                   | id ':' 'static' func-type ';'
-                  | id ':' 'get' param-list result-list ';' 📡
-                  | id ':' 'set' param-list result-list ';' 📡
+                  | id ':' 'static'? 'get' param-list result-list ';' 📡
+                  | id ':' 'static'? 'set' param-list result-list ';' 📡
                   | 'constructor' param-list ';'
 ```
 
