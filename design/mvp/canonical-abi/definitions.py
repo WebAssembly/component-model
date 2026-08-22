@@ -318,7 +318,7 @@ class Thread:
   cont: Optional[Continuation]
   ready_func: Optional[Callable[[], bool]]
   task: Task
-  cancellable: bool
+  cancellable: Callable[[], bool]
   index: Optional[int]
   storage: tuple[int,int]
 
@@ -342,7 +342,7 @@ class Thread:
     self.cont = cont_new(cont_func)
     self.ready_func = None
     self.task = task
-    self.cancellable = False
+    self.cancellable = lambda: False
     self.index = None
     self.storage = [0,0]
     assert(self.suspended())
@@ -364,7 +364,7 @@ class Thread:
     assert(self.ready())
 
   def resume(self, cancelled = Cancelled.FALSE):
-    assert(not self.running() and (self.cancellable or not cancelled))
+    assert(not self.running() and (self.cancellable() or not cancelled))
     if self.waiting():
       self.stop_waiting_internal(cancelled)
     thread = self
@@ -378,13 +378,13 @@ class Thread:
   def block_internal(self, cancellable):
     self.cancellable = cancellable
     cancelled = block(switch_to = None)
-    assert(self.running() and (cancellable or not cancelled))
+    assert(self.running() and (cancellable() or not cancelled))
     return cancelled
 
   def switch_to_internal(self, cancellable, other):
     self.cancellable = cancellable
     cancelled = block(switch_to = other)
-    assert(self.running() and (cancellable or not cancelled))
+    assert(self.running() and (cancellable() or not cancelled))
     return cancelled
 
   def suspend(self, cancellable) -> Cancelled:
@@ -393,14 +393,19 @@ class Thread:
       return Cancelled.TRUE
     return self.block_internal(cancellable)
 
-  def wait_until(self, ready_func, cancellable = False) -> Cancelled:
+  def wait_until(self, ready_func, cancellable = lambda: False) -> Cancelled:
     assert(self.running())
     if self.task.deliver_pending_cancel(cancellable):
       return Cancelled.TRUE
     if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):
       return Cancelled.FALSE
-    self.start_waiting_internal(ready_func)
-    return self.block_internal(cancellable)
+    def ready_or_cancelled():
+      return ready_func() or (cancellable() and self.task.has_pending_cancel())
+    self.start_waiting_internal(ready_or_cancelled)
+    cancelled = self.block_internal(cancellable)
+    if self.task.deliver_pending_cancel(cancellable):
+      return Cancelled.TRUE
+    return cancelled
 
   def yield_(self, cancellable) -> Cancelled:
     return self.wait_until(lambda: True, cancellable)
@@ -487,7 +492,8 @@ class Task:
                 (self.needs_exclusive() and self.inst.exclusive_thread is not None))
       if has_backpressure() or self.inst.num_waiting_to_enter > 0:
         self.inst.num_waiting_to_enter += 1
-        cancelled = self.implicit_thread.wait_until(lambda: not has_backpressure(), cancellable = True)
+        cancelled = self.implicit_thread.wait_until(lambda: not has_backpressure(),
+                                                    cancellable = lambda: True)
         self.inst.num_waiting_to_enter -= 1
         if cancelled:
           self.cancel()
@@ -526,9 +532,7 @@ class Task:
       self.implicit_thread.resume(Cancelled.TRUE)
     else:
       assert(self.state == Task.State.STARTED)
-      candidates = { t for t in self.threads if t.cancellable }
-      if self.needs_exclusive() and self.inst.exclusive_thread not in { None, self.implicit_thread }:
-        candidates.discard(self.implicit_thread)
+      candidates = { t for t in self.threads if t.cancellable() }
       if candidates and self.inst.may_enter_from(caller):
         self.state = Task.State.CANCEL_DELIVERED
         self.inst.enter_from(caller)
@@ -537,8 +541,11 @@ class Task:
       else:
         self.state = Task.State.PENDING_CANCEL
 
+  def has_pending_cancel(self):
+    return self.state == Task.State.PENDING_CANCEL
+
   def deliver_pending_cancel(self, cancellable) -> bool:
-    if cancellable and self.state == Task.State.PENDING_CANCEL:
+    if cancellable() and self.has_pending_cancel():
       self.state = Task.State.CANCEL_DELIVERED
       return True
     return False
@@ -790,7 +797,7 @@ class Waitable:
   def wait_for_pending_event(self):
     assert(not self.in_waitable_set() and not self.has_sync_waiter)
     self.has_sync_waiter = True
-    current_thread().wait_until(self.has_pending_event, cancellable = False)
+    current_thread().wait_until(self.has_pending_event, cancellable = lambda: False)
     self.has_sync_waiter = False
 
   def get_pending_event(self) -> EventTuple:
@@ -2190,9 +2197,11 @@ def canon_lift(callee, ft, opts, inst, on_start, on_resolve) -> OnCancel:
     while code != CallbackCode.EXIT:
       assert(task.needs_exclusive() and inst.exclusive_thread is task.implicit_thread)
       inst.exclusive_thread = None
+      def lock_available():
+        return inst.exclusive_thread is None
       match code:
         case CallbackCode.YIELD:
-          cancelled = thread.wait_until(lambda: not inst.exclusive_thread, cancellable = True)
+          cancelled = thread.wait_until(lock_available, cancellable = lock_available)
           if cancelled:
             event = (EventCode.TASK_CANCELLED, 0, 0)
           else:
@@ -2200,7 +2209,7 @@ def canon_lift(callee, ft, opts, inst, on_start, on_resolve) -> OnCancel:
         case CallbackCode.WAIT:
           wset = inst.handles.get(si)
           trap_if(not isinstance(wset, WaitableSet))
-          event = wset.wait_for_event_and(lambda: not inst.exclusive_thread, cancellable = True)
+          event = wset.wait_for_event_and(lock_available, cancellable = lock_available)
         case _:
           trap()
       assert(inst.exclusive_thread is None)
@@ -2420,7 +2429,7 @@ def canon_waitable_set_wait(cancellable, mem, si, ptr):
   trap_if(not inst.may_leave)
   wset = inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
-  event = wset.wait_for_event(cancellable)
+  event = wset.wait_for_event(lambda: cancellable)
   return unpack_event(mem, inst, ptr, event)
 
 def unpack_event(mem, inst, ptr, e: EventTuple):
@@ -2437,7 +2446,7 @@ def canon_waitable_set_poll(cancellable, mem, si, ptr):
   trap_if(not inst.may_leave)
   wset = inst.handles.get(si)
   trap_if(not isinstance(wset, WaitableSet))
-  event = wset.poll(cancellable)
+  event = wset.poll(lambda: cancellable)
   return unpack_event(mem, inst, ptr, event)
 
 ### 🔀 `canon waitable-set.drop`
@@ -2724,7 +2733,7 @@ def canon_thread_resume_later(i):
 def canon_thread_suspend(cancellable):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  cancelled = thread.suspend(cancellable)
+  cancelled = thread.suspend(lambda: cancellable)
   return [cancelled]
 
 ### 🧵 `canon thread.yield`
@@ -2732,7 +2741,7 @@ def canon_thread_suspend(cancellable):
 def canon_thread_yield(cancellable):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  cancelled = thread.yield_(cancellable)
+  cancelled = thread.yield_(lambda: cancellable)
   return [cancelled]
 
 ### 🧵 `canon thread.suspend-then-resume`
@@ -2742,7 +2751,7 @@ def canon_thread_suspend_then_resume(cancellable, i):
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
-  cancelled = thread.suspend_then_resume(cancellable, other_thread)
+  cancelled = thread.suspend_then_resume(lambda: cancellable, other_thread)
   return [cancelled]
 
 ### 🧵 `canon thread.yield-then-resume`
@@ -2752,7 +2761,7 @@ def canon_thread_yield_then_resume(cancellable, i):
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
   trap_if(not other_thread.suspended())
-  cancelled = thread.yield_then_resume(cancellable, other_thread)
+  cancelled = thread.yield_then_resume(lambda: cancellable, other_thread)
   return [cancelled]
 
 ### 🧵 `canon thread.suspend-then-promote`
@@ -2761,7 +2770,7 @@ def canon_thread_suspend_then_promote(cancellable, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
-  cancelled = thread.suspend_then_promote(cancellable, other_thread)
+  cancelled = thread.suspend_then_promote(lambda: cancellable, other_thread)
   return [cancelled]
 
 ### 🧵 `canon thread.yield-then-promote`
@@ -2770,7 +2779,7 @@ def canon_thread_yield_then_promote(cancellable, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   other_thread = thread.task.inst.threads.get(i)
-  cancelled = thread.yield_then_promote(cancellable, other_thread)
+  cancelled = thread.yield_then_promote(lambda: cancellable, other_thread)
   return [cancelled]
 
 ### 📝 `canon error-context.new`
