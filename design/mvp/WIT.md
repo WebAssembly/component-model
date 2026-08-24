@@ -1583,8 +1583,7 @@ async and have additional restrictions on their parameters and results. A `get`
 function must have no parameters and must return a value. A `set` function
 must have exactly one parameter and must not return a value unless that value
 is of type `result<_, error?>`. Every setter must have a corresponding getter
-with the same name. To simplify validation, the getter must be defined before
-the setter. For example, the following definitions:
+with the same name. For example, the following definitions:
 
 ```wit
 foo: func(x: u32);
@@ -1592,7 +1591,7 @@ bar: get() -> u64;
 bar: set(v: u64);
 ```
 
-desugar into:
+will desugar into:
 
 ```wit
 foo: func(x: u32);
