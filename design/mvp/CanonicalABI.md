@@ -1751,7 +1751,7 @@ class BufferGuestImpl(Buffer):
   def is_zero_length(self):
     return self.length == 0
 
-class ReadableBufferGuestImpl(BufferGuestImpl):
+class ReadableBufferGuestImpl(BufferGuestImpl, ReadableBuffer):
   def read(self, n):
     assert(n <= self.remain())
     if self.t:
@@ -2124,7 +2124,7 @@ by `WritableFutureEnd.drop` so it can be asserted here:
     if not self.dropped:
       self.dropped = True
       if self.pending_buffer:
-        assert(isinstance(self.pending_buffer, WritableBuffer))
+        assert(isinstance(self.pending_buffer, ReadableBuffer))
         self.reset_and_notify_pending(CopyResult.DROPPED)
 ```
 Lastly, `read` and `write` work mostly like streams, but simplified based on

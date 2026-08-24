@@ -962,7 +962,7 @@ class BufferGuestImpl(Buffer):
   def is_zero_length(self):
     return self.length == 0
 
-class ReadableBufferGuestImpl(BufferGuestImpl):
+class ReadableBufferGuestImpl(BufferGuestImpl, ReadableBuffer):
   def read(self, n):
     assert(n <= self.remain())
     if self.t:
@@ -1158,7 +1158,7 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
     if not self.dropped:
       self.dropped = True
       if self.pending_buffer:
-        assert(isinstance(self.pending_buffer, WritableBuffer))
+        assert(isinstance(self.pending_buffer, ReadableBuffer))
         self.reset_and_notify_pending(CopyResult.DROPPED)
 
   def read(self, inst, dst_buffer, on_copy_done):
