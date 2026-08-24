@@ -312,6 +312,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x0e t:<typeidx>                                    => (canon stream.new t (core func)) 🔀
            | 0x0f t:<typeidx> opts:<opts>                        => (canon stream.read t opts (core func)) 🔀
            | 0x10 t:<typeidx> opts:<opts>                        => (canon stream.write t opts (core func)) 🔀
+           | 0x2e t:<typeidx>                                    => (canon stream.forward t (core func)) ⏩
            | 0x11 t:<typeidx> async?:<async?>                    => (canon stream.cancel-read t async? (core func)) 🔀
            | 0x12 t:<typeidx> async?:<async?>                    => (canon stream.cancel-write t async? (core func)) 🔀
            | 0x13 t:<typeidx>                                    => (canon stream.drop-readable t (core func)) 🔀
@@ -319,6 +320,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x15 t:<typeidx>                                    => (canon future.new t (core func)) 🔀
            | 0x16 t:<typeidx> opts:<opts>                        => (canon future.read t opts (core func)) 🔀
            | 0x17 t:<typeidx> opts:<opts>                        => (canon future.write t opts (core func)) 🔀
+           | 0x2f t:<typeidx>                                    => (canon future.forward t (core func)) ⏩
            | 0x18 t:<typeidx> async?:<async?>                    => (canon future.cancel-read t async? (core func)) 🔀
            | 0x19 t:<typeidx> async?:<async?>                    => (canon future.cancel-write t async? (core func)) 🔀
            | 0x1a t:<typeidx>                                    => (canon future.drop-readable t (core func)) 🔀

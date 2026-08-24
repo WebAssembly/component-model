@@ -69,6 +69,7 @@ shipped as part of a future WASI Developer Preview release:
 * 🪺: nested namespaces and packages in import/export names
 * 🚝: enabling more canonical ABI options on more async-related builtins
 * 🚟: using `async` with `canon lift` without `callback` (stackful lift)
+* ⏩: the `stream.forward` and `future.forward` built-ins
 * 🧵: threading built-ins
   * 🧵②: [shared-everything-threads]-based threading built-ins
 * 🔧: fixed-length lists
@@ -1569,6 +1570,7 @@ canon ::= ...
         | (canon stream.new <typeidx> (core func <id>?)) 🔀
         | (canon stream.read <typeidx> <canonopt>* (core func <id>?)) 🔀
         | (canon stream.write <typeidx> <canonopt>* (core func <id>?)) 🔀
+        | (canon stream.forward <typeidx> (core func <id>?)) ⏩
         | (canon stream.cancel-read <typeidx> async? (core func <id>?)) 🔀
         | (canon stream.cancel-write <typeidx> async? (core func <id>?)) 🔀
         | (canon stream.drop-readable <typeidx> (core func <id>?)) 🔀
@@ -1576,6 +1578,7 @@ canon ::= ...
         | (canon future.new <typeidx> (core func <id>?)) 🔀
         | (canon future.read <typeidx> <canonopt>* (core func <id>?)) 🔀
         | (canon future.write <typeidx> <canonopt>* (core func <id>?)) 🔀
+        | (canon future.forward <typeidx> (core func <id>?)) ⏩
         | (canon future.cancel-read <typeidx> async? (core func <id>?)) 🔀
         | (canon future.cancel-write <typeidx> async? (core func <id>?)) 🔀
         | (canon future.drop-readable <typeidx> (core func <id>?)) 🔀
@@ -2103,6 +2106,50 @@ by the `enum` definition above.
 
 For details, see [Streams and Futures] in the concurrency explainer and
 [`canon_future_read`] in the Canonical ABI explainer.
+
+###### ⏩ `stream.forward` and `future.forward`
+
+| Synopsis                                       |                                                                             |
+| ---------------------------------------------- | --------------------------------------------------------------------------- |
+| Approximate WIT signature for `stream.forward` | `func<stream<T?>>(r: readable-stream-end<T?>, w: writable-stream-end<T?>)`  |
+| Approximate WIT signature for `future.forward` | `func<future<T?>>(r: readable-future-end<T?>, w: writable-future-end<T?>)`  |
+| Canonical ABI signature                        | `[readable-end:i32 writable-end:i32] -> []`                                 |
+
+The `stream.forward` built-in forwards *all* remaining elements from the
+readable end `r` of one stream into the writable end `w` of another stream and
+then propagates the resulting end of the stream or drop in both directions.
+Analogously, the `future.forward` built-in forwards the value of the future
+with readable end `r` into the future with writable end `w`, propagating
+drops in both directions. `{stream,future}.forward` *transfers* both ends
+out of the calling component: `r` and `w` are removed from the component
+instance's table, `{stream,future}.forward` returns immediately without a
+result, and no event is ever delivered. As with other transfers of stream and
+future ends, `{stream,future}.forward` traps if `r` or `w` is currently in a
+[waitable set]. A `{stream,future}.forward` cannot be cancelled and, since it
+never blocks the caller, has no `async` immediate. `{stream,future}.forward`
+takes no `canonopt`s, since no elements pass through the calling component's
+linear memory.
+
+`{stream,future}.forward` fuses the source and destination into one: the
+destination is replaced by the source, as if `r` had been transferred directly
+to the consumer in place of the destination's readable end. Elements flow
+directly from the source's producer to the destination's consumer: there is
+no intermediate buffering, backpressure is end-to-end and elements are copied
+directly from the producer's buffer into the consumer's buffer. When the
+source stream reaches its end (or the source future's value is written), the
+consumer observes it after receiving all forwarded elements. Symmetrically,
+if the consumer drops the destination's readable end, the producer observes
+`dropped`. Since the calling component gives up both ends and receives no
+notification of the outcome, the host can remove the calling component from
+the path entirely (in chains of forwarding components, this allows forwarding
+state and even whole component instances that are no longer otherwise
+reachable to be eagerly torn down).
+
+Forwards may be chained, and a `{stream,future}.forward` that would make a
+stream or future (transitively) its own source traps.
+
+For details, see [Streams and Futures] in the concurrency explainer and
+[`canon_stream_forward`] in the Canonical ABI explainer.
 
 ###### 🔀 `stream.cancel-read`, `stream.cancel-write`, `future.cancel-read`, and `future.cancel-write`
 
@@ -3368,6 +3415,7 @@ For some use-case-focused, worked examples, see:
 [`canon_stream_read`]: CanonicalABI.md#-canon-streamreadwrite
 [`canon_future_read`]: CanonicalABI.md#-canon-futurereadwrite
 [`canon_future_write`]: CanonicalABI.md#-canon-futurereadwrite
+[`canon_stream_forward`]: CanonicalABI.md#-canon-streamfutureforward
 [`canon_stream_cancel_read`]: CanonicalABI.md#-canon-streamfuturecancel-readwrite
 [`canon_stream_drop_readable`]: CanonicalABI.md#-canon-streamfuturedrop-readablewritable
 [`canon_subtask_cancel`]: CanonicalABI.md#-canon-subtaskcancel
