@@ -2308,6 +2308,42 @@ def test_futures():
   lift_and_run(lift_opts, inst, caller_ft, core_func, lambda:[], lambda _:())
 
 
+def test_future_drop_readable_with_pending_write():
+  store = Store()
+  inst = ComponentInstance(store)
+  mem = bytearray(24)
+  opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
+  future_t = FutureType(U8Type())
+
+  def core_func(args):
+    assert(len(args) == 0)
+    [] = canon_task_return([], opts, [])
+    [packed] = canon_future_new(future_t)
+    rfi,wfi = unpack_new_ends(packed)
+
+    mem[0] = 42
+    [ret] = canon_future_write(future_t, opts, wfi, 0)
+    assert(ret == definitions.BLOCKED)
+
+    # The reader may drop its end before reading a value; the blocked write
+    # is notified that the readable end was dropped.
+    [] = canon_future_drop_readable(future_t, rfi)
+    retp = 16
+    [seti] = canon_waitable_set_new()
+    [] = canon_waitable_join(wfi, seti)
+    [event] = canon_waitable_set_wait(True, MemInst(mem, 'i32'), seti, retp)
+    assert(event == EventCode.FUTURE_WRITE)
+    assert(mem[retp+0] == wfi)
+    assert(mem[retp+4] == CopyResult.DROPPED)
+    [] = canon_waitable_join(wfi, 0)
+    [] = canon_waitable_set_drop(seti)
+    [] = canon_future_drop_writable(future_t, wfi)
+    return []
+
+  caller_ft = FuncType([], [], async_ = True)
+  lift_and_run(opts, inst, caller_ft, core_func, lambda:[], lambda _:())
+
+
 def test_cancel_subtask():
   store = Store()
   root_inst = ComponentInstance(store)
@@ -3039,6 +3075,7 @@ test_wasm_to_wasm_stream()
 test_wasm_to_wasm_stream_empty()
 test_cancel_copy()
 test_futures()
+test_future_drop_readable_with_pending_write()
 test_cancel_subtask()
 test_self_copy(None)
 test_self_copy(U8Type())
