@@ -943,7 +943,7 @@
   "invalid leading byte (0x0) for outer alias target"
 )
 
-(assert_invalid
+(assert_malformed
   (component binary
     "\00asm" "\0d\00\01\00"                   ;; preamble
     "\03\0a"                                  ;; core type section (10 bytes)
@@ -1376,7 +1376,7 @@
   )
   "is not a valid extern name"
 )
-(assert_invalid
+(assert_malformed
   (component binary
     "\00asm" "\0d\00\01\00"                   ;; preamble
     "\07\03"                                  ;; type section (3 bytes)
