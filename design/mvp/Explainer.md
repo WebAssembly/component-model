@@ -75,6 +75,7 @@ shipped as part of a future WASI Developer Preview release:
 * 📝: the `error-context` type
 * 🔗: canonical interface names
 * 🐘: [memory64]
+* 📡: getters and setters
 
 
 ## Grammar
@@ -2713,9 +2714,11 @@ externnamelit     ::= '"' <externname> '"'
 externname        ::= <plainname>
                     | <interfacename>
 plainname         ::= <label>
+                    | '[get]' <label> 📡
+                    | '[set]' <label> 📡
                     | '[constructor]' <label>
-                    | '[method]' <label> '.' <label>
-                    | '[static]' <label> '.' <label>
+                    | '[method]' (📡 '[get]' | '[set]')? <label> '.' <label>
+                    | '[static]' (📡 '[get]' | '[set]')? <label> '.' <label>
 labellit          ::= '"' <label> '"'
 label             ::= <first-fragment> ( '-' <fragment> )*
 first-fragment    ::= <first-word>
@@ -2750,11 +2753,12 @@ The names of component imports and exports provide two options:
 
 The `plainname` production captures several language-neutral syntactic hints
 that allow bindings generators to produce more idiomatic bindings in their
-target language. At the top-level, a `plainname` allows functions to be
-annotated as being a constructor, method or static function of a preceding
-resource.
+target language. At the top level, a `plainname` allows functions to be
+annotated as being a constructor, method, 📡 property getter, 📡 property setter,
+or static function of a preceding resource, as well as a 📡 property getter or
+📡 property setter not attached to a resource.
 
-When a function is annotated with `constructor`, `method` or `static`, the
+When a function is annotated with `constructor`, `method`, or `static`, the
 first `label` is the name of the resource and the second `label` is the logical
 field name of the function. This additional nesting information allows bindings
 generators to insert the function into the nested scope of a class, abstract
@@ -2764,16 +2768,21 @@ member function `foo` in a class `C`. The JS API [below](#JS-API) describes how
 the native JavaScript bindings could look.
 
 To restrict the set of cases that bindings generators need to consider, these
-annotations trigger additional type-validation rules (listed in
-[Binary.md](Binary.md)) such as:
-* An import or export named `[static]R.foo` must be a function and `R` must
-  be the name of an imported or exported resource type in the same `instance`
-  or `component` type.
-* Similarly, an import or export named `[constructor]R` must be a function
-  whose return type must be `(own $R)` or `(result (own $R) (error <valtype>)?)`
-  where `$R` is the type-index of the resource type named `R`.
-* Similarly, an import or export named `[method]R.foo` must be a function whose
-  first parameter must be `(param "self" (borrow $R))`.
+annotations trigger additional type-validation rules (listed in detail in
+[Binary.md](Binary.md)):
+* A `[constructor]` import or export named `R` must be a function whose result
+  type is `(own $R)` or `(result (own $R) (error <valtype>)?)`, where `$R` is
+  the index of the resource type named `R`.
+* A `[method]` import or export named `R.foo` must be a function whose first
+  parameter is `(param "self" (borrow $R))`, where `$R` is the index of the
+  resource type named `R`.
+* A `[static]` import or export named `R.foo` must be a function, and `R` must
+  be the name of a resource type.
+* 📡 A `[get]` import or export must have no parameters (besides the required
+  `self` parameter from `[method]`), and must have a result type.
+* 📡 A `[set]` import or export must have exactly one parameter (besides the
+  required `self` parameter from `[method]`), and must have either no result
+  type or a result type of `(result (error <valtype>)?)`.
 
 The `valid semver` production is as defined by the [Semantic Versioning 2.0]
 spec and is meant to be interpreted according to that specification. The use of
@@ -2837,27 +2846,65 @@ within the same scope.
 
 To determine whether two names (defined as sequences of [Unicode Scalar
 Values]) are **strongly-unique**:
-1. Canonicalize each name:
-  1. Lowercase all the `acronym`s (uppercase letters) in the name.
-  2. If the name is `[method]l.l` or `[static]l.l` for some `label` `l`, replace
-    the name with `l` (e.g. `[method]foo.foo` becomes `foo`).
-  3. If the name has any `[...]` annotation prefix other than `[constructor]`,
-    strip it from the name.
-2. The names are strongly-unique if the resulting canonicalized strings are
-  unequal.
 
-Thus, the following set of names are strongly-unique and can thus all be imports (or exports) of the same component (or component type or instance type):
-* `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[static]foo.baz`, `foo:bar/baz`
+1. Canonicalize each name:
+    1. Lowercase all the `acronym`s (uppercase letters) in the name.
+    2. If the name is `[...]*l.l` for any annotations `[...]*` and some `label`
+        `l`, replace the name with `l` (e.g. `[method]foo.foo` becomes `foo`).
+    3. Strip all `[...]` annotations from the name besides `[constructor]`
+        and 📡 `[set]`.
+2. The names are strongly-unique if the resulting canonicalized strings are
+    unequal.
+
+Thus, the following set of names are strongly-unique and can thus all be
+imports (or exports) of the same component (or component type or instance
+type):
+
+* `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[static]foo.baz`,
+  `foo:bar/baz`, 📡 `[get]prop`, 📡 `[set]prop`, 📡 `[method][get]foo.prop`,
+  📡 `[method][set]foo.prop`, 📡 `[static][get]foo.prop-2`,
+  📡 `[static][set]foo.prop-2`, `[method]foo.get-prop`, `[method]foo.set-prop`
 
 but attempting to add *any* of the following names would be a validation error:
-* `foo`, `FOO`, `foo-BAR`, `[constructor]FOO`, `[method]foo.BAR`, `[static]foo.bar`, `[method]foo.baz`, `[method]foo.foo`, `[static]foo-BAR.FOO-bar`, `foo:bar/BAZ`
 
-The purpose of steps 1.2 and 1.3 is to play nice with constructors: in many languages, constructors are the only item that can have the same name as the class.
+* `foo`, `FOO`, `[method]foo.foo`, 📡 `[get]foo`, 📡 `[method][get]foo.foo`,
+  📡 `[static][set]foo.FOO` (conflicts with `foo`)
+* `foo-BAR`, `[static]foo-BAR.FOO-bar` (conflicts with `foo-bar`)
+* `[constructor]FOO` (conflicts with `[constructor]foo`)
+* `[method]foo.BAR`, `[static]foo.bar` (conflicts with `[method]foo.bar`)
+* `[method]foo.baz` (conflicts with `[static]foo.baz`)
+* `foo:bar/BAZ` (conflicts with `foo:bar/baz`)
+* 📡 `prop` (conflicts with `[get]prop`)
+* 📡 `[set]PROP` (conflicts with `[set]prop`)
+* 📡 `[method]foo.prop`, 📡 `[static]foo.PROP`, 📡 `[method][get]foo.PROP`,
+  📡 `[static][get]foo.prop` (conflicts with `[method][get]foo.prop`)
+* 📡 `[method][set]foo.PROP`, 📡 `[static][set]foo.prop` (conflicts with
+  `[method][set]foo.prop`)
 
 Note that additional validation rules involving types apply to names with
 annotations. For example, the validation rules for `[constructor]foo` require
 `foo` to be a resource type. See [Binary.md](Binary.md#import-and-export-definitions)
 for details.
+
+Note that these rules prevent having a method or static function (📡 or getter
+or setter) with the same name as its resource type, leaving room for a
+constructor. This is to satisfy the naming rules around constructors in many
+languages.
+
+📡 Also note that, although `[get]foo` and `foo` are not considered
+strongly-unique, `[set]foo` and `foo` are. However, since `[set]foo` separately
+requires `[get]foo` to be present, there is no practical concern of a bindings
+conflict between `[set]foo` and `foo`. The same goes for other uses of `[get]`
+and `[set]` annotations.
+
+📡 Note also that `[method][get]foo.prop` and `[method]foo.get-prop` are
+considered strongly-unique even though in practice they may conflict. Likewise,
+`[method][set]foo.prop` and `[method]foo.set-prop` are considered
+strongly-unique. If this results in a conflict for a bindings generator, the
+bindings generator may choose one of the two and ignore the other. This is a
+temporary measure: in a later release, it is expected that both of these
+examples will not be considered strongly-unique, so API designers are
+encouraged to avoid this case.
 
 
 #### 🔗 Canonical Interface Name
@@ -3056,7 +3103,8 @@ object*] steps need to be expanded to cover them:
 For type exports, each type definition would export a JS constructor function.
 This function would be callable iff a `[constructor]`-annotated function was
 also exported. All `[method]`- and `[static]`-annotated functions would be
-dynamically installed on the constructor's prototype chain. In the case of
+dynamically installed on the constructor's prototype chain, making sure to
+register `[get]` and `[set]` functions as getters and setters. In the case of
 re-exports and multiple exports of the same definition, the same constructor
 function object would be exported (following the same rules as WebAssembly
 Exported Functions today). In pathological cases (which, importantly, don't
