@@ -441,11 +441,12 @@ Notes:
   to be `(param "self" (borrow $R))`, where `$R` is the named resource type.
 * 📡 Validation of `[get]` names requires that the function have no parameters,
   unless the name is also annotated with `[method]`, in which case `self` must
-  be the only parameter.
+  be the only parameter (subject to the `[method]` validation rules above).
 * 📡 Validation of `[get]` names requires that the function have a result type.
 * 📡 Validation of `[set]` names requires that the function have exactly one
   parameter, unless the name is also annotated with `[method]`, in which case
-  there must be two parameters, the first of which is `self`.
+  there must be two parameters, the first of which is `self` (subject to the
+  `[method]` validation rules above).
 * 📡 Validation of `[set]` names requires that the function have either no
   result type or a result type of `(result (error $E)?)`.
 * 📡 If a name with `[set]` is defined as an import or export within a
