@@ -515,3 +515,134 @@
   (func (export "run") (result u32) (canon lift (core func $m2 "run")))
 )
 (assert_return (invoke "run") (u32.const 42))
+
+;; Reentrance between two sibling instances, where there is an outer sync
+;; call and an inner async call that blocks:
+;;   $A.run -> $B.mid -> $A.inner (blocks) -> run yield-then-resumes inner then returns 42
+(component
+  (core module $Wiring
+    (type $ft (func (result i32)))
+    (table (export "tbl") 2 2 funcref)
+    (func (export "to-mid")   (result i32) (call_indirect (type $ft) (i32.const 0)))
+    (func (export "to-check") (result i32) (call_indirect (type $ft) (i32.const 1)))
+  )
+  (core instance $wiring (instantiate $Wiring))
+  (func $to-mid (result u32) (canon lift (core func $wiring "to-mid")))
+  (func $to-check (result u32) (canon lift (core func $wiring "to-check")))
+
+  (component $A
+    (import "mid" (func $mid (result u32)))
+    (import "check" (func $check (result u32)))
+    (canon lower (func $mid) (core func $mid'))
+    (canon lower (func $check) (core func $check'))
+    (canon thread.index (core func $thread.index))
+    (canon thread.suspend (core func $thread.suspend))
+    (canon thread.yield-then-resume (core func $thread.yield-then-resume))
+    (canon thread.suspend-then-resume (core func $thread.suspend-then-resume))
+    (core module $AM
+      (import "" "mid" (func $mid (result i32)))
+      (import "" "check" (func $check (result i32)))
+      (import "" "thread.index" (func $thread.index (result i32)))
+      (import "" "thread.suspend" (func $thread.suspend (result i32)))
+      (import "" "thread.yield-then-resume" (func $thread.yield-then-resume (param i32) (result i32)))
+      (import "" "thread.suspend-then-resume" (func $thread.suspend-then-resume (param i32) (result i32)))
+      (global $inner-thread (mut i32) (i32.const 0))
+      ;; reenters $A through $B; "mid" hands back the state of its call to
+      ;; "inner", which must be STARTED because "inner" blocked
+      (func (export "run") (result i32)
+        (if (i32.ne (call $mid) (i32.const 1 (; STARTED ;)))
+          (then unreachable))
+        ;; control is back here with "inner" still suspended, still holding
+        ;; $A's exclusive lock; switch to it, staying ready ourselves
+        (if (call $thread.yield-then-resume (global.get $inner-thread))
+          (then unreachable))
+        ;; "inner" exited and this thread was picked back up
+        (call $check))
+      ;; async-typed, but lifted with the sync ABI: takes $A's exclusive lock
+      ;; and holds it until it returns
+      (func (export "inner") (result i32)
+        (global.set $inner-thread (call $thread.index))
+        (if (call $thread.suspend) (then unreachable))
+        (i32.const 42))
+    )
+    (core instance $am (instantiate $AM (with "" (instance
+      (export "mid" (func $mid'))
+      (export "check" (func $check'))
+      (export "thread.index" (func $thread.index))
+      (export "thread.suspend" (func $thread.suspend))
+      (export "thread.yield-then-resume" (func $thread.yield-then-resume))
+      (export "thread.suspend-then-resume" (func $thread.suspend-then-resume))))))
+    ;; sync-typed: doesn't take $A's exclusive lock
+    (func (export "run") (result u32) (canon lift (core func $am "run")))
+    (func (export "run-trap") (result u32) (canon lift (core func $am "run-trap")))
+    (func (export "inner") async (result u32) (canon lift (core func $am "inner")))
+  )
+  (instance $a (instantiate $A (with "mid" (func $to-mid)) (with "check" (func $to-check))))
+
+  (component $B
+    (import "inner" (func $inner async (result u32)))
+    (core module $Memory (memory (export "mem") 1))
+    (core instance $memory (instantiate $Memory))
+    (canon lower (func $inner) async (memory (core memory $memory "mem")) (core func $inner'))
+    (canon waitable-set.new (core func $waitable-set.new))
+    (canon waitable.join (core func $waitable.join))
+    (canon waitable-set.poll (memory (core memory $memory "mem")) (core func $waitable-set.poll))
+    (canon subtask.drop (core func $subtask.drop))
+    (core module $BM
+      (import "" "mem" (memory 1))
+      (import "" "inner" (func $inner (param i32) (result i32)))
+      (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
+      (import "" "waitable.join" (func $waitable.join (param i32 i32)))
+      (import "" "waitable-set.poll" (func $waitable-set.poll (param i32 i32) (result i32)))
+      (import "" "subtask.drop" (func $subtask.drop (param i32)))
+      (global $ws (mut i32) (i32.const 0))
+      (global $sub (mut i32) (i32.const 0))
+      (func $start (global.set $ws (call $waitable-set.new)))
+      (start $start)
+      ;; sync-typed export calling an async-typed import
+      (func (export "mid") (result i32)
+        (local $packed i32)
+        (local.set $packed (call $inner (i32.const 4)))
+        (global.set $sub (i32.shr_u (local.get $packed) (i32.const 4)))
+        (call $waitable.join (global.get $sub) (global.get $ws))
+        (i32.and (local.get $packed) (i32.const 0xf)))
+      ;; called once "inner" has exited, so the poll must report it returned
+      (func (export "check") (result i32)
+        (if (i32.ne (call $waitable-set.poll (global.get $ws) (i32.const 8))
+                    (i32.const 1 (; SUBTASK ;)))
+          (then unreachable))
+        (if (i32.ne (i32.load (i32.const 8)) (global.get $sub)) (then unreachable))
+        (if (i32.ne (i32.load (i32.const 12)) (i32.const 2 (; RETURNED ;))) (then unreachable))
+        (call $subtask.drop (global.get $sub))
+        (i32.load (i32.const 4)))
+    )
+    (core instance $bm (instantiate $BM (with "" (instance
+      (export "mem" (memory $memory "mem"))
+      (export "inner" (func $inner'))
+      (export "waitable-set.new" (func $waitable-set.new))
+      (export "waitable.join" (func $waitable.join))
+      (export "waitable-set.poll" (func $waitable-set.poll))
+      (export "subtask.drop" (func $subtask.drop))))))
+    (func (export "mid") (result u32) (canon lift (core func $bm "mid")))
+    (func (export "check") (result u32) (canon lift (core func $bm "check")))
+  )
+  (instance $b (instantiate $B (with "inner" (func $a "inner"))))
+
+  (canon lower (func $b "mid") (core func $mid'))
+  (canon lower (func $b "check") (core func $check'))
+  (core module $Elem
+    (import "" "tbl" (table 2 2 funcref))
+    (import "" "mid" (func $mid (result i32)))
+    (import "" "check" (func $check (result i32)))
+    (elem (i32.const 0) func $mid $check)
+  )
+  (core instance $elem (instantiate $Elem (with "" (instance
+    (export "tbl" (table $wiring "tbl"))
+    (export "mid" (func $mid'))
+    (export "check" (func $check'))))))
+
+  (export "run" (func $a "run"))
+  (export "run-trap" (func $a "run-trap"))
+)
+(assert_return (invoke "run") (u32.const 42))
+(assert_trap (invoke "run-trap") "cannot block a synchronous task before returning")
