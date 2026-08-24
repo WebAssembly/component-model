@@ -1,0 +1,8 @@
+(lang dune 2.8)
+(name wasm_components)
+
+(source (github dbp/components))
+(license Apache-2.0)
+(authors "Daniel Patterson")
+(maintainers "dbp@dbpmail.net")
+(using menhir 2.1)
