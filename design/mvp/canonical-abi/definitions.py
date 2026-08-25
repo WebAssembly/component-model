@@ -996,6 +996,7 @@ OnCopyDone = Callable[[CopyResult], None]
 
 class SharedBase:
   t: ValType
+  dropped: bool
   cancel: Callable[[], None]
   drop: Callable[[], None]
 
@@ -1006,15 +1007,17 @@ class WritableStream(SharedBase):
   write: Callable[[ComponentInstance, ReadableBuffer, OnCopy, OnCopyDone], None]
 
 class SharedStreamImpl(ReadableStream, WritableStream):
-  dropped: bool
+  forward: Optional[ReadableStream]
   pending_inst: Optional[ComponentInstance]
   pending_buffer: Optional[Buffer]
   pending_on_copy: Optional[OnCopy]
   pending_on_copy_done: Optional[OnCopyDone]
+  pending_copied: bool
 
   def __init__(self, t):
     self.t = t
     self.dropped = False
+    self.forward = None
     self.reset_pending()
 
   def reset_pending(self):
@@ -1025,6 +1028,13 @@ class SharedStreamImpl(ReadableStream, WritableStream):
     self.pending_buffer = buffer
     self.pending_on_copy = on_copy
     self.pending_on_copy_done = on_copy_done
+    self.pending_copied = False
+
+  def take_pending(self):
+    pending = (self.pending_inst, self.pending_buffer,
+               self.pending_on_copy, self.pending_on_copy_done)
+    self.reset_pending()
+    return pending
 
   def reset_and_notify_pending(self, result):
     pending_on_copy_done = self.pending_on_copy_done
@@ -1032,16 +1042,23 @@ class SharedStreamImpl(ReadableStream, WritableStream):
     pending_on_copy_done(result)
 
   def cancel(self):
-    self.reset_and_notify_pending(CopyResult.CANCELLED)
+    if self.forward:
+      self.forward.cancel()
+    else:
+      self.reset_and_notify_pending(CopyResult.CANCELLED)
 
   def drop(self):
-    if not self.dropped:
+    if self.forward:
+      self.forward.drop()
+    elif not self.dropped:
       self.dropped = True
       if self.pending_buffer:
         self.reset_and_notify_pending(CopyResult.DROPPED)
 
   def read(self, inst, dst_buffer, on_copy, on_copy_done):
-    if self.dropped:
+    if self.forward:
+      self.forward.read(inst, dst_buffer, on_copy, on_copy_done)
+    elif self.dropped:
       on_copy_done(CopyResult.DROPPED)
     elif not self.pending_buffer:
       self.set_pending(inst, dst_buffer, on_copy, on_copy_done)
@@ -1052,6 +1069,7 @@ class SharedStreamImpl(ReadableStream, WritableStream):
         if dst_buffer.remain() > 0:
           n = min(dst_buffer.remain(), self.pending_buffer.remain())
           dst_buffer.write(self.pending_buffer.read(n))
+          self.pending_copied = True
           self.pending_on_copy(self.reset_pending)
         on_copy_done(CopyResult.COMPLETED)
       else:
@@ -1070,6 +1088,7 @@ class SharedStreamImpl(ReadableStream, WritableStream):
         if src_buffer.remain() > 0:
           n = min(src_buffer.remain(), self.pending_buffer.remain())
           self.pending_buffer.write(src_buffer.read(n))
+          self.pending_copied = True
           self.pending_on_copy(self.reset_pending)
         on_copy_done(CopyResult.COMPLETED)
       elif src_buffer.is_zero_length() and self.pending_buffer.is_zero_length():
@@ -1128,7 +1147,7 @@ class WritableFuture(SharedBase):
   write: Callable[[ComponentInstance, ReadableBuffer, OnCopyDone], None]
 
 class SharedFutureImpl(ReadableFuture, WritableFuture):
-  dropped: bool
+  forward: Optional[ReadableFuture]
   pending_inst: Optional[ComponentInstance]
   pending_buffer: Optional[Buffer]
   pending_on_copy_done: Optional[OnCopyDone]
@@ -1136,6 +1155,7 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
   def __init__(self, t):
     self.t = t
     self.dropped = False
+    self.forward = None
     self.reset_pending()
 
   def reset_pending(self):
@@ -1146,22 +1166,35 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
     self.pending_buffer = buffer
     self.pending_on_copy_done = on_copy_done
 
+  def take_pending(self):
+    pending = (self.pending_inst, self.pending_buffer, self.pending_on_copy_done)
+    self.reset_pending()
+    return pending
+
   def reset_and_notify_pending(self, result):
     pending_on_copy_done = self.pending_on_copy_done
     self.reset_pending()
     pending_on_copy_done(result)
 
   def cancel(self):
-    self.reset_and_notify_pending(CopyResult.CANCELLED)
+    if self.forward:
+      self.forward.cancel()
+    else:
+      self.reset_and_notify_pending(CopyResult.CANCELLED)
 
   def drop(self):
-    if not self.dropped:
+    if self.forward:
+      self.forward.drop()
+    elif not self.dropped:
       self.dropped = True
       if self.pending_buffer:
         assert(isinstance(self.pending_buffer, ReadableBuffer))
         self.reset_and_notify_pending(CopyResult.DROPPED)
 
   def read(self, inst, dst_buffer, on_copy_done):
+    if self.forward:
+      self.forward.read(inst, dst_buffer, on_copy_done)
+      return
     assert(not self.dropped and dst_buffer.remain() == 1)
     if not self.pending_buffer:
       self.set_pending(inst, dst_buffer, on_copy_done)
@@ -2631,6 +2664,54 @@ def future_copy(EndT, BufferT, event_code, future_t, opts, i, ptr):
   code,index,payload = e.get_pending_event()
   assert(code == event_code and index == i)
   return [payload]
+
+### ⏩ `canon {stream,future}.forward`
+
+def canon_stream_forward(stream_t, ri, wi):
+  return forward(ReadableStreamEnd, WritableStreamEnd, stream_t, ri, wi)
+
+def canon_future_forward(future_t, ri, wi):
+  return forward(ReadableFutureEnd, WritableFutureEnd, future_t, ri, wi)
+
+def forward_source(shared):
+  while isinstance(shared, SharedStreamImpl | SharedFutureImpl) and shared.forward:
+    shared = shared.forward
+  return shared
+
+def forward(ReadableEndT, WritableEndT, stream_or_future_t, ri, wi):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  r = inst.handles.get(ri)
+  trap_if(not isinstance(r, ReadableEndT))
+  trap_if(r.shared.t != stream_or_future_t.t)
+  trap_if(r.state != CopyState.IDLE)
+  trap_if(r.in_waitable_set())
+  w = inst.handles.get(wi)
+  trap_if(not isinstance(w, WritableEndT))
+  trap_if(w.shared.t != stream_or_future_t.t)
+  trap_if(w.state != CopyState.IDLE)
+  trap_if(w.in_waitable_set())
+  src = forward_source(r.shared)
+  trap_if(src is w.shared)
+  assert(not contains_borrow(stream_or_future_t))
+
+  inst.handles.remove(ri)
+  inst.handles.remove(wi)
+
+  if w.shared.dropped:
+    src.drop()
+  else:
+    w.shared.forward = src
+    if w.shared.pending_buffer:
+      if isinstance(w.shared, SharedStreamImpl) and w.shared.pending_copied:
+        if src.dropped:
+          w.shared.reset_and_notify_pending(CopyResult.DROPPED)
+        else:
+          w.shared.reset_and_notify_pending(CopyResult.COMPLETED)
+      else:
+        pending = w.shared.take_pending()
+        src.read(*pending)
+  return []
 
 ### 🔀 `canon {stream,future}.cancel-{read,write}`
 

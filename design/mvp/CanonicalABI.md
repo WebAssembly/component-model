@@ -56,6 +56,7 @@ specified here.
   * [`canon {stream,future}.new`](#-canon-streamfuturenew) 🔀
   * [`canon stream.{read,write}`](#-canon-streamreadwrite) 🔀
   * [`canon future.{read,write}`](#-canon-futurereadwrite) 🔀
+  * [`canon {stream,future}.forward`](#-canon-streamfutureforward) ⏩
   * [`canon {stream,future}.cancel-{read,write}`](#-canon-streamfuturecancel-readwrite) 🔀
   * [`canon {stream,future}.drop-{readable,writable}`](#-canon-streamfuturedrop-readablewritable) 🔀
   * [`canon thread.index`](#-canon-threadindex) 🧵
@@ -1828,6 +1829,7 @@ OnCopyDone = Callable[[CopyResult], None]
 
 class SharedBase:
   t: ValType
+  dropped: bool
   cancel: Callable[[], None]
   drop: Callable[[], None]
 
@@ -1857,6 +1859,11 @@ follows:
   the buffer has been returned; `cancel` only lets the caller *request* that
   one of the `OnCopy*` callbacks be called ASAP (which may or may not happen
   during `cancel`).
+* ⏩ `dropped` indicates that the stream has permanently ended (e.g., because
+  one of its ends has been dropped) and thus every subsequent `read` or
+  `write` immediately completes with `DROPPED`. It is read by
+  [`stream.forward`](Explainer.md#-streamforward-and-futureforward) below to
+  determine whether a source stream has already ended.
 * The client may not call `read`, `write` or `drop` while there is a previous
   `read` or `write` in progress.
 
@@ -1877,15 +1884,17 @@ below).
 Introducing `SharedStreamImpl` in chunks, starting with the fields and initialization:
 ```python
 class SharedStreamImpl(ReadableStream, WritableStream):
-  dropped: bool
+  forward: Optional[ReadableStream]
   pending_inst: Optional[ComponentInstance]
   pending_buffer: Optional[Buffer]
   pending_on_copy: Optional[OnCopy]
   pending_on_copy_done: Optional[OnCopyDone]
+  pending_copied: bool
 
   def __init__(self, t):
     self.t = t
     self.dropped = False
+    self.forward = None
     self.reset_pending()
 
   def reset_pending(self):
@@ -1896,12 +1905,32 @@ class SharedStreamImpl(ReadableStream, WritableStream):
     self.pending_buffer = buffer
     self.pending_on_copy = on_copy
     self.pending_on_copy_done = on_copy_done
+    self.pending_copied = False
+
+  def take_pending(self):
+    pending = (self.pending_inst, self.pending_buffer,
+               self.pending_on_copy, self.pending_on_copy_done)
+    self.reset_pending()
+    return pending
 ```
 If set, the `pending_*` fields record the `Buffer` and `OnCopy*` callbacks of a
 `read` or `write` that is waiting to rendezvous with a complementary `write` or
-`read`. Dropping the readable or writable end of a stream or cancelling a
-`read` or `write` notifies any pending `read` or `write` via its `OnCopyDone`
-callback:
+`read`. The `pending_copied` flag records whether any elements have been copied
+to or from the `pending_buffer` since it was set (in which case the progress
+event queued by `pending_on_copy` has not yet been delivered and refers to this
+stream); it is used by ⏩ [`stream.forward`](Explainer.md#-streamforward-and-futureforward)
+below.
+
+The ⏩ `forward` field is set once this stream's *writable* end has been passed
+to [`stream.forward`](Explainer.md#-streamforward-and-futureforward), in which case this stream
+has been permanently replaced by the source stream given to `stream.forward`
+and all subsequent operations are simply delegated to that stream. As defined
+by `forward` (below), the field stores the source's own *transitive* source,
+resolved when `stream.forward` is called, so that a forward fused onto an
+existing chain of forwards does not add a delegation hop.
+
+Dropping the readable or writable end of a stream or cancelling a `read` or
+`write` notifies any pending `read` or `write` via its `OnCopyDone` callback:
 ```python
   def reset_and_notify_pending(self, result):
     pending_on_copy_done = self.pending_on_copy_done
@@ -1909,10 +1938,15 @@ callback:
     pending_on_copy_done(result)
 
   def cancel(self):
-    self.reset_and_notify_pending(CopyResult.CANCELLED)
+    if self.forward:
+      self.forward.cancel()
+    else:
+      self.reset_and_notify_pending(CopyResult.CANCELLED)
 
   def drop(self):
-    if not self.dropped:
+    if self.forward:
+      self.forward.drop()
+    elif not self.dropped:
       self.dropped = True
       if self.pending_buffer:
         self.reset_and_notify_pending(CopyResult.DROPPED)
@@ -1940,7 +1974,9 @@ copy without blocking. In the final special case where the pending writer has a
 zero-length buffer, the writer is notified, but the reader remains blocked:
 ```python
   def read(self, inst, dst_buffer, on_copy, on_copy_done):
-    if self.dropped:
+    if self.forward:
+      self.forward.read(inst, dst_buffer, on_copy, on_copy_done)
+    elif self.dropped:
       on_copy_done(CopyResult.DROPPED)
     elif not self.pending_buffer:
       self.set_pending(inst, dst_buffer, on_copy, on_copy_done)
@@ -1951,6 +1987,7 @@ zero-length buffer, the writer is notified, but the reader remains blocked:
         if dst_buffer.remain() > 0:
           n = min(dst_buffer.remain(), self.pending_buffer.remain())
           dst_buffer.write(self.pending_buffer.read(n))
+          self.pending_copied = True
           self.pending_on_copy(self.reset_pending)
         on_copy_done(CopyResult.COMPLETED)
       else:
@@ -1985,6 +2022,7 @@ pending:
         if src_buffer.remain() > 0:
           n = min(src_buffer.remain(), self.pending_buffer.remain())
           self.pending_buffer.write(src_buffer.read(n))
+          self.pending_copied = True
           self.pending_on_copy(self.reset_pending)
         on_copy_done(CopyResult.COMPLETED)
       elif src_buffer.is_zero_length() and self.pending_buffer.is_zero_length():
@@ -2087,10 +2125,16 @@ progress (since at most 1 value is copied) and the given `Buffer` must have
 `remain() == 1`.
 
 Introducing `SharedFutureImpl` in chunks, the first part is exactly
-symmetric to `SharedStreamImpl` in how initialization and cancellation work:
+symmetric to `SharedStreamImpl` in how initialization and cancellation work.
+In particular, the ⏩ `forward` field works just like its stream counterpart
+(described in [Stream State](#stream-state) above): once set (by
+[`future.forward`](Explainer.md#-streamforward-and-futureforward)), this
+future has been permanently replaced by the source future given to
+`future.forward` and all subsequent operations are simply delegated to that
+future:
 ```python
 class SharedFutureImpl(ReadableFuture, WritableFuture):
-  dropped: bool
+  forward: Optional[ReadableFuture]
   pending_inst: Optional[ComponentInstance]
   pending_buffer: Optional[Buffer]
   pending_on_copy_done: Optional[OnCopyDone]
@@ -2098,6 +2142,7 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
   def __init__(self, t):
     self.t = t
     self.dropped = False
+    self.forward = None
     self.reset_pending()
 
   def reset_pending(self):
@@ -2108,20 +2153,30 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
     self.pending_buffer = buffer
     self.pending_on_copy_done = on_copy_done
 
+  def take_pending(self):
+    pending = (self.pending_inst, self.pending_buffer, self.pending_on_copy_done)
+    self.reset_pending()
+    return pending
+
   def reset_and_notify_pending(self, result):
     pending_on_copy_done = self.pending_on_copy_done
     self.reset_pending()
     pending_on_copy_done(result)
 
   def cancel(self):
-    self.reset_and_notify_pending(CopyResult.CANCELLED)
+    if self.forward:
+      self.forward.cancel()
+    else:
+      self.reset_and_notify_pending(CopyResult.CANCELLED)
 ```
 Dropping works the same in futures as in streams, except that a future
 writable end cannot be dropped without having written a value. This is guarded
 by `WritableFutureEnd.drop` so it can be asserted here:
 ```python
   def drop(self):
-    if not self.dropped:
+    if self.forward:
+      self.forward.drop()
+    elif not self.dropped:
       self.dropped = True
       if self.pending_buffer:
         assert(isinstance(self.pending_buffer, ReadableBuffer))
@@ -2133,6 +2188,9 @@ that, as mentioned above, only the writable end can observe that the readable
 end was dropped before receiving a value.
 ```python
   def read(self, inst, dst_buffer, on_copy_done):
+    if self.forward:
+      self.forward.read(inst, dst_buffer, on_copy_done)
+      return
     assert(not self.dropped and dst_buffer.remain() == 1)
     if not self.pending_buffer:
       self.set_pending(inst, dst_buffer, on_copy_done)
@@ -4760,6 +4818,116 @@ synchronously and returning either the progress made or `BLOCKED`.
   assert(code == event_code and index == i)
   return [payload]
 ```
+
+
+### ⏩ `canon {stream,future}.forward`
+
+For canonical definitions:
+```wat
+(canon stream.forward $stream_t (core func $f))
+(canon future.forward $future_t (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param i32 i32))`
+* `$stream_t` must be a type of the form `(stream $t?)`
+* `$future_t` must be a type of the form `(future $t?)`
+
+Calling `$f` forwards *all* remaining elements of the readable stream end at
+index `$ri` (resp., the value of the readable future end at index `$ri`) into
+the writable end at index `$wi` of another stream (resp., future) of the same
+type. `{stream,future}.forward` *transfers* both ends out of the calling
+component instance: the ends are removed from the `handles` table, `$f`
+returns immediately with no result and no event is ever delivered.
+
+The `canon_stream_forward` and `canon_future_forward` functions share a single
+implementation, `forward`, that sets the destination's `forward` field
+(defined in [Stream State](#stream-state) and [Future State](#future-state)
+above), permanently delegating every subsequent `read`, `cancel` and `drop` of
+the destination to the source, and transfers any consumer `read` already
+blocked on the destination to the source (performing rendezvous immediately if
+the source has a pending `write`). A blocked `read` that has already received
+elements (indicated by `pending_copied`, which only ever happens for streams)
+cannot be transferred, since the progress event queued for it refers to the
+destination; instead, such a `read` is completed at its current progress. If
+the source has already ended (indicated by its `dropped` field), the `read`
+is completed as `DROPPED`, merging its progress and the end of the stream
+into the single event the consumer would have observed without the forward;
+otherwise it is completed as `COMPLETED` and the consumer observes the
+source with its next `read`. If the destination's
+readable end has already been dropped, there is nothing left to forward into,
+and so the source is simply dropped, notifying the source's writer:
+```python
+def canon_stream_forward(stream_t, ri, wi):
+  return forward(ReadableStreamEnd, WritableStreamEnd, stream_t, ri, wi)
+
+def canon_future_forward(future_t, ri, wi):
+  return forward(ReadableFutureEnd, WritableFutureEnd, future_t, ri, wi)
+
+def forward_source(shared):
+  while isinstance(shared, SharedStreamImpl | SharedFutureImpl) and shared.forward:
+    shared = shared.forward
+  return shared
+
+def forward(ReadableEndT, WritableEndT, stream_or_future_t, ri, wi):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  r = inst.handles.get(ri)
+  trap_if(not isinstance(r, ReadableEndT))
+  trap_if(r.shared.t != stream_or_future_t.t)
+  trap_if(r.state != CopyState.IDLE)
+  trap_if(r.in_waitable_set())
+  w = inst.handles.get(wi)
+  trap_if(not isinstance(w, WritableEndT))
+  trap_if(w.shared.t != stream_or_future_t.t)
+  trap_if(w.state != CopyState.IDLE)
+  trap_if(w.in_waitable_set())
+  src = forward_source(r.shared)
+  trap_if(src is w.shared)
+  assert(not contains_borrow(stream_or_future_t))
+
+  inst.handles.remove(ri)
+  inst.handles.remove(wi)
+
+  if w.shared.dropped:
+    src.drop()
+  else:
+    w.shared.forward = src
+    if w.shared.pending_buffer:
+      if isinstance(w.shared, SharedStreamImpl) and w.shared.pending_copied:
+        if src.dropped:
+          w.shared.reset_and_notify_pending(CopyResult.DROPPED)
+        else:
+          w.shared.reset_and_notify_pending(CopyResult.COMPLETED)
+      else:
+        pending = w.shared.take_pending()
+        src.read(*pending)
+  return []
+```
+Since `{stream,future}.forward` transfers both ends out of the component
+instance, it traps if either end is currently in a waitable set, exactly as
+when a readable end is transferred to another component (in `lift_async_value`
+above). Forwards may be chained, but a forward that would (transitively) make
+a stream or future its own source traps; the `forward_source` helper follows
+an existing chain of forwards to the stream or future that ultimately serves
+as the source of a given stream or future. The destination's `forward` field
+is set to this transitive source (rather than to the given readable end's own
+stream or future), so each new forward delegates directly to the current end
+of the chain; the stored source may itself be forwarded later, in which case
+delegation continues transitively.
+
+Once `{stream,future}.forward` returns, the source and destination have been
+fused into one: the producer and consumer on either side observe exactly what
+they would observe if the source's readable end had been transferred directly
+to the consumer in place of the destination's readable end. Elements
+rendezvous end-to-end with no intermediate buffering (as described in
+[Stream State](#stream-state) above) and drops propagate in both directions:
+when the source stream reaches its end (resp., the source future's value is
+written), the consumer observes it and, when the consumer drops the
+destination's readable end, the drop is delegated to the source where the
+producer observes it. This gives a host the opportunity to remove the calling
+component from the copy path entirely which, in chains of forwarding
+components, allows forwarding state (and even whole component instances that
+are no longer otherwise reachable) to be eagerly torn down.
 
 
 ### 🔀 `canon {stream,future}.cancel-{read,write}`

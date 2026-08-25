@@ -606,6 +606,18 @@ write in the future) can be queried and signalled by performing a `0`-length
 read or write (see the [Stream State] section in the Canonical ABI explainer
 for details).
 
+⏩ When a component wants to pipe the contents of one stream (or the value of
+one future) into another without an intermediate copy, it can use the
+`stream.forward` (resp., `future.forward`) built-in, which is given the
+readable end of a source and the writable end of a destination of the same
+type and *transfers* both ends out of the calling component, returning
+immediately and forwarding elements until the source stream ends or the
+destination's readable end is dropped, with the resulting end of the stream
+or drop propagated in both directions. Since the calling component keeps no
+handle on (and receives no notification of) the outcome, the runtime can fuse
+the source and destination together and remove the calling component from the
+path entirely.
+
 As a temporary limitation, if a `read` and `write` for a single stream or
 future occur from within the same component and the element type is a
 non-empty, non-number type, there is a trap. In the future this limitation will
@@ -1501,7 +1513,9 @@ specified, the following features are being considered for addition to complete
 the concurrency story:
 * remove the temporary trap mentioned above that occurs when a `read` and
   `write` of a stream/future happen from within the same component instance
-* zero-copy forwarding/splicing
+* a built-in complementing ⏩ `{stream,future}.forward` that forwards a
+  bounded number of stream elements with zero copies while reporting the
+  outcome back to the caller
 * allow the `stream<char>` type to validate; make it use `string-encoding`
   and not split code points
 * add built-ins providing guest code more control over its containing
