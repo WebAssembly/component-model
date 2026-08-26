@@ -2883,15 +2883,23 @@ type checking already required).
 
 Any `valid semver` (as used in WIT) can be canonicalized by splitting it into
 two parts - the `canonversion` prefix and the remaining `semversuffix`. Using
-the `<major>.<minor>.<patch>` syntax of [Semantic Versioning 2.0], the split
-point is chosen as follows:
+the `<major>.<minor>.<patch>(-<pre>)(+<build>)` syntax of [Semantic Versioning
+2.0], the split point is chosen as follows:
 
-- if `major` > 0, split immediately after `major`
+- build metadata, if present, is always part of the `semversuffix`
+  - `0.0.1+sha.5114f85` &rarr; `0.0.1` / `+sha.5114f85`
+- if the version has a pre-release label, then the version itself is not split
+  - `0.0.1-alpha` &rarr; `0.0.1-alpha` / nothing
+  - `0.0.1-alpha+sha.5114f85` &rarr; `0.0.1-alpha` / `+sha.5114f85`
+- otherwise if `major` > 0, split immediately after `major`
   - `1.2.3` &rarr; `1` / `.2.3`
+  - `1.2.3+sha.5114f85` &rarr; `1` / `.2.3+sha.5114f85`
 - otherwise if `minor` > 0, split immediately after `minor`
-  - `0.2.6-rc.1` &rarr; `0.2` / `.6-rc.1`
-- otherwise, split immediately after `patch`
-  - `0.0.1-alpha` &rarr; `0.0.1` / `-alpha`
+  - `0.2.6` &rarr; `0.2` / `.6`
+  - `0.2.6+sha.5114f85` &rarr; `0.2` / `.6+sha.5114f85`
+- otherwise, the version is already canonical
+  - `0.0.1` &rarr; `0.0.1`
+  - `0.0.1+sha.5114f85` &rarr; `0.0.1` / `+sha.5114f85`
 
 When a version is canonicalized, any `semversuffix` that was split off of the
 version should be preserved in the `versionsuffix` field of any resulting
