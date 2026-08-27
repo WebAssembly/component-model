@@ -1,14 +1,12 @@
 ;; Validation of kebab-case plain names and `ns:pkg/iface` extern names, and
-;; case-insensitive uniqueness of import/export names.
+;; case-insensitive and hyphen-insensitive uniqueness of import/export names.
 
 (component (component
   (import "a" (func))
   (import "a1" (func))
-  (import "a-1" (func))
   (import "a-1-b-2-c-3" (func))
   (import "B" (func))
   (import "B1" (func))
-  (import "B-1" (func))
   (import "B-1-C-2-D-3" (func))
   (import "a11-B11-123-ABC-abc" (func))
   (import "ns-1-a:b-1-c/D-2" (func))
@@ -117,7 +115,7 @@
     (import "DOWn" (instance)))
   "`DOWn` is not in kebab case")
 
-;; import/export names must be unique, compared case-insensitively
+;; import/export names must be unique, compared case- and hyphen-insensitively
 (assert_invalid
   (component
     (import "f" (func $f))
@@ -148,3 +146,28 @@
       (export "foo-BAR-baz" (func))
       (export "FOO-bar-BAZ" (func)))))
   "export name `FOO-bar-BAZ` conflicts with previous name `foo-BAR-baz`")
+(assert_invalid
+  (component
+    (import "foo-bar" (func))
+    (import "foobar" (func)))
+  "import name `foobar` conflicts with previous name `foo-bar`")
+(assert_invalid
+  (component
+    (import "foo-bar" (func))
+    (import "FOOBAR" (func)))
+  "import name `FOOBAR` conflicts with previous name `foo-bar`")
+(assert_invalid
+  (component
+    (import "foo-bar" (func))
+    (import "FOOB-ar" (func)))
+  "import name `foob-ar` conflicts with previous name `foo-bar`")
+(assert_invalid
+  (component
+    (import "foo-bar" (type (sub resource)))
+    (import "[static]foo-bar.FO-ob-AR" (func)))
+  "import name `[static]foo-bar.FO-ob-AR` conflicts with previous name `foo-bar`")
+(assert_invalid
+  (component
+    (import "foo-bar" (type $t (sub resource)))
+    (import "[method]foo-bar.foobar" (func (param "self" (borrow $t)))))
+  "import name `[method]foo-bar.foobar` conflicts with previous name `foo-bar`")
