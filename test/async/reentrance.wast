@@ -428,97 +428,132 @@
 )
 (assert_trap (invoke "a") "deadlock detected: event loop cannot make further progress")
 
-;; 'subtask.cancel' delivers cancellation immediately even when the callee's
-;; component instance is on the stack.
+;; 'subtask.cancel' may be called reentrantly, while the subtask's own
+;; component instance is on the stack. Here "run" starts $Callee's "park",
+;; which blocks in $Callee's event loop, and then calls back into $Callee via
+;; "reenter", which reenters the root instance to cancel the parked subtask.
+;; "reenter" is not async-typed, so it doesn't take $Callee's exclusive lock
+;; and thus doesn't keep "park" from being resumed to receive the
+;; cancellation. Whether "park" is resumed before 'subtask.cancel async'
+;; returns is nondeterministic, though, so the cancellation is either already
+;; delivered when the built-in returns or the built-in reports BLOCKED and
+;; "run" waits for the resolution on a waitable set. Either way the subtask
+;; ends up CANCELLED_BEFORE_RETURNED.
 (component
-  (canon subtask.cancel (core func $subtask.cancel))
+  (core module $Memory (memory (export "mem") 1))
+  (core instance $memory (instantiate $Memory))
   (canon subtask.cancel async (core func $subtask.cancel-async))
   (canon subtask.drop (core func $subtask.drop))
-  (core module $M1
-    (import "" "subtask.cancel" (func $subtask.cancel (param i32) (result i32)))
-    (import "" "subtask.cancel-async" (func $subtask.cancel-async (param i32) (result i32)))
-    (import "" "subtask.drop" (func $subtask.drop (param i32)))
-    (global $s1 (export "s1") (mut i32) (i32.const 0))
-    (global $s2 (export "s2") (mut i32) (i32.const 0))
-    (func (export "h") (result i32)
-      (local $r1 i32) (local $r2 i32)
-      (local.set $r1 (call $subtask.cancel (global.get $s1)))
-      (local.set $r2 (call $subtask.cancel-async (global.get $s2)))
-      (call $subtask.drop (global.get $s1))
-      (call $subtask.drop (global.get $s2))
-      (i32.or (local.get $r1) (i32.shl (local.get $r2) (i32.const 8))))
-  )
-  (core instance $m1 (instantiate $M1 (with "" (instance
-    (export "subtask.cancel" (func $subtask.cancel))
-    (export "subtask.cancel-async" (func $subtask.cancel-async))
-    (export "subtask.drop" (func $subtask.drop))))))
-  (func $h (result u32) (canon lift (core func $m1 "h")))
+  (canon waitable.join (core func $waitable.join))
+  (canon waitable-set.new (core func $waitable-set.new))
+  (canon waitable-set.wait (memory (core memory $memory "mem")) (core func $waitable-set.wait))
 
-  (component $B
-    (import "h" (func $h (result u32)))
-    (canon lower (func $h) (core func $h'))
+  ;; Called by $Callee.reenter, and thus reached while $Callee is on the
+  ;; stack, to cancel the subtask of $Callee.park started by "run" below.
+  (core module $Canceller
+    (import "" "subtask.cancel-async" (func $subtask.cancel-async (param i32) (result i32)))
+    (global $parked-subtask (export "parked-subtask") (mut i32) (i32.const 0))
+    (func (export "cancel-parked") (result i32)
+      (call $subtask.cancel-async (global.get $parked-subtask)))
+  )
+  (core instance $canceller (instantiate $Canceller (with "" (instance
+    (export "subtask.cancel-async" (func $subtask.cancel-async))))))
+  (func $cancel-parked (result u32) (canon lift (core func $canceller "cancel-parked")))
+
+  (component $Callee
+    (import "cancel-parked" (func $cancel-parked (result u32)))
+    (canon lower (func $cancel-parked) (core func $cancel-parked'))
     (canon task.cancel (core func $task.cancel))
     (canon waitable-set.new (core func $waitable-set.new))
-    (core module $BM
-      (import "" "h" (func $h (result i32)))
+    (core module $CalleeModule
+      (import "" "cancel-parked" (func $cancel-parked (result i32)))
       (import "" "task.cancel" (func $task.cancel))
       (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
-      (global $ws (mut i32) (i32.const 0))
-      (func $start (global.set $ws (call $waitable-set.new)))
+      (global $never-signalled (mut i32) (i32.const 0))
+      (func $start (global.set $never-signalled (call $waitable-set.new)))
       (start $start)
-      ;; parks cancellably in its event loop on a set that never gets an event
-      (func (export "f") (result i32)
-        (i32.or (i32.const 2 (; WAIT ;)) (i32.shl (global.get $ws) (i32.const 4))))
-      (func (export "f-cb") (param i32 i32 i32) (result i32)
-        (if (i32.ne (local.get 0) (i32.const 6 (; TASK_CANCELLED ;))) (then unreachable))
+      ;; Parks in the event loop on a waitable set that never gets an event,
+      ;; so only the delivery of a pending cancellation can wake this task.
+      (func (export "park") (result i32)
+        (i32.or (i32.const 2 (; WAIT ;))
+                (i32.shl (global.get $never-signalled) (i32.const 4))))
+      (func (export "park-cb") (param $event i32) (param i32 i32) (result i32)
+        (if (i32.ne (local.get $event) (i32.const 6 (; TASK_CANCELLED ;)))
+          (then unreachable))
         (call $task.cancel)
         (i32.const 0 (; EXIT ;)))
-      ;; non-async-typed, so it doesn't take $B's exclusive lock
-      (func (export "g") (result i32) (call $h))
+      ;; Not async-typed, so it doesn't take this instance's exclusive lock
+      ;; and "park" above stays resumable while this call is on the stack.
+      (func (export "reenter") (result i32) (call $cancel-parked))
     )
-    (core instance $bm (instantiate $BM (with "" (instance
-      (export "h" (func $h'))
+    (core instance $callee (instantiate $CalleeModule (with "" (instance
+      (export "cancel-parked" (func $cancel-parked'))
       (export "task.cancel" (func $task.cancel))
       (export "waitable-set.new" (func $waitable-set.new))))))
-    (func (export "f") async
-      (canon lift (core func $bm "f") async (callback (core func $bm "f-cb"))))
-    (func (export "g") (result u32) (canon lift (core func $bm "g")))
+    (func (export "park") async
+      (canon lift (core func $callee "park") async (callback (core func $callee "park-cb"))))
+    (func (export "reenter") (result u32) (canon lift (core func $callee "reenter")))
   )
-  (instance $b (instantiate $B (with "h" (func $h))))
-  (canon lower (func $b "f") async (core func $f'))
-  (canon lower (func $b "g") (core func $g'))
+  (instance $c (instantiate $Callee (with "cancel-parked" (func $cancel-parked))))
+  (canon lower (func $c "park") async (core func $park'))
+  (canon lower (func $c "reenter") (core func $reenter'))
 
-  (core module $M2
-    (import "" "f" (func $f (result i32)))
-    (import "" "g" (func $g (result i32)))
-    (import "" "s1" (global $s1 (mut i32)))
-    (import "" "s2" (global $s2 (mut i32)))
+  (core module $Main
+    (import "" "mem" (memory 1))
+    (import "" "park" (func $park (result i32)))
+    (import "" "reenter" (func $reenter (result i32)))
+    (import "" "parked-subtask" (global $parked-subtask (mut i32)))
+    (import "" "subtask.drop" (func $subtask.drop (param i32)))
+    (import "" "waitable.join" (func $waitable.join (param i32 i32)))
+    (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
+    (import "" "waitable-set.wait" (func $waitable-set.wait (param i32 i32) (result i32)))
     (func (export "run") (result i32)
-      (local $p i32)
-      (local.set $p (call $f))
-      (if (i32.ne (i32.and (local.get $p) (i32.const 0xf)) (i32.const 1 (; STARTED ;)))
+      (local $packed i32) (local $state i32) (local $waiters i32)
+      (local.set $packed (call $park))
+      (if (i32.ne (i32.and (local.get $packed) (i32.const 0xf)) (i32.const 1 (; STARTED ;)))
         (then unreachable))
-      (global.set $s1 (i32.shr_u (local.get $p) (i32.const 4)))
-      (local.set $p (call $f))
-      (if (i32.ne (i32.and (local.get $p) (i32.const 0xf)) (i32.const 1 (; STARTED ;)))
+      (global.set $parked-subtask (i32.shr_u (local.get $packed) (i32.const 4)))
+      ;; reentrantly cancel the parked subtask from inside $Callee
+      (local.set $state (call $reenter))
+      (if (i32.eq (local.get $state) (i32.const -1 (; BLOCKED ;)))
+        (then
+          ;; the request was only recorded; wait for $Callee's event loop to
+          ;; deliver it and resolve the subtask
+          (local.set $waiters (call $waitable-set.new))
+          (call $waitable.join (global.get $parked-subtask) (local.get $waiters))
+          (if (i32.ne (call $waitable-set.wait (local.get $waiters) (i32.const 0))
+                      (i32.const 1 (; SUBTASK ;)))
+            (then unreachable))
+          (if (i32.ne (i32.load (i32.const 0)) (global.get $parked-subtask))
+            (then unreachable))
+          (local.set $state (i32.load (i32.const 4)))
+          (call $waitable.join (global.get $parked-subtask) (i32.const 0))))
+      (if (i32.ne (local.get $state) (i32.const 4 (; CANCELLED_BEFORE_RETURNED ;)))
         (then unreachable))
-      (global.set $s2 (i32.shr_u (local.get $p) (i32.const 4)))
-      ;; both cancels report CANCELLED_BEFORE_RETURNED (4), neither blocks
-      (if (i32.ne (call $g) (i32.const 0x404)) (then unreachable))
+      (call $subtask.drop (global.get $parked-subtask))
       (i32.const 42))
   )
-  (core instance $m2 (instantiate $M2 (with "" (instance
-    (export "f" (func $f'))
-    (export "g" (func $g'))
-    (export "s1" (global $m1 "s1"))
-    (export "s2" (global $m1 "s2"))))))
-  (func (export "run") (result u32) (canon lift (core func $m2 "run")))
+  (core instance $main (instantiate $Main (with "" (instance
+    (export "mem" (memory $memory "mem"))
+    (export "park" (func $park'))
+    (export "reenter" (func $reenter'))
+    (export "parked-subtask" (global $canceller "parked-subtask"))
+    (export "subtask.drop" (func $subtask.drop))
+    (export "waitable.join" (func $waitable.join))
+    (export "waitable-set.new" (func $waitable-set.new))
+    (export "waitable-set.wait" (func $waitable-set.wait))))))
+  ;; async-typed (but sync-ABI-lifted) so that "run" may block
+  (func (export "run") async (result u32) (canon lift (core func $main "run")))
 )
 (assert_return (invoke "run") (u32.const 42))
 
 ;; Reentrance between two sibling instances, where there is an outer sync
 ;; call and an inner async call that blocks:
 ;;   $A.run -> $B.mid -> $A.inner (blocks) -> run yield-then-resumes inner then returns 42
+;; "inner" parks itself with a thread.suspend-then-promote that targets run's
+;; thread which, at that point, is *running* (on the stack below the reentrant
+;; call). A running thread is not "ready", so the promote must not switch to
+;; it and instead falls back to a plain suspend.
 (component
   (core module $Wiring
     (type $ft (func (result i32)))
@@ -536,20 +571,22 @@
     (canon lower (func $mid) (core func $mid'))
     (canon lower (func $check) (core func $check'))
     (canon thread.index (core func $thread.index))
-    (canon thread.suspend (core func $thread.suspend))
+    (canon thread.suspend-then-promote (core func $thread.suspend-then-promote))
     (canon thread.yield-then-resume (core func $thread.yield-then-resume))
     (canon thread.suspend-then-resume (core func $thread.suspend-then-resume))
     (core module $AM
       (import "" "mid" (func $mid (result i32)))
       (import "" "check" (func $check (result i32)))
       (import "" "thread.index" (func $thread.index (result i32)))
-      (import "" "thread.suspend" (func $thread.suspend (result i32)))
+      (import "" "thread.suspend-then-promote" (func $thread.suspend-then-promote (param i32) (result i32)))
       (import "" "thread.yield-then-resume" (func $thread.yield-then-resume (param i32) (result i32)))
       (import "" "thread.suspend-then-resume" (func $thread.suspend-then-resume (param i32) (result i32)))
+      (global $run-thread (mut i32) (i32.const 0))
       (global $inner-thread (mut i32) (i32.const 0))
       ;; reenters $A through $B; "mid" hands back the state of its call to
       ;; "inner", which must be STARTED because "inner" blocked
       (func (export "run") (result i32)
+        (global.set $run-thread (call $thread.index))
         (if (i32.ne (call $mid) (i32.const 1 (; STARTED ;)))
           (then unreachable))
         ;; control is back here with "inner" still suspended, still holding
@@ -562,14 +599,17 @@
       ;; and holds it until it returns
       (func (export "inner") (result i32)
         (global.set $inner-thread (call $thread.index))
-        (if (call $thread.suspend) (then unreachable))
+        ;; run's thread is running (this reentrant call is on top of it), so
+        ;; it is not "ready" and this must fall back to a plain suspend
+        (if (call $thread.suspend-then-promote (global.get $run-thread))
+          (then unreachable))
         (i32.const 42))
     )
     (core instance $am (instantiate $AM (with "" (instance
       (export "mid" (func $mid'))
       (export "check" (func $check'))
       (export "thread.index" (func $thread.index))
-      (export "thread.suspend" (func $thread.suspend))
+      (export "thread.suspend-then-promote" (func $thread.suspend-then-promote))
       (export "thread.yield-then-resume" (func $thread.yield-then-resume))
       (export "thread.suspend-then-resume" (func $thread.suspend-then-resume))))))
     ;; sync-typed: doesn't take $A's exclusive lock
@@ -654,6 +694,10 @@
 ;; the caller: the explicit thread is still on the stack underneath. Instead,
 ;; the sync mini-scheduler driving the reentrant "inner" call must switch back
 ;; to inner's implicit thread, which stayed ready.
+;; Additionally, "inner" starts by thread.yield-then-promote-ing the explicit
+;; thread which, at that point, is *running* (on the stack below the reentrant
+;; call). A running thread is not "ready", so the promote must not switch to
+;; it and instead falls back to a plain yield.
 (component
   (core module $Wiring
     (type $ft (func (result i32)))
@@ -675,6 +719,7 @@
     (canon thread.index (core func $thread.index))
     (canon thread.suspend-then-resume (core func $thread.suspend-then-resume))
     (canon thread.yield-then-resume (core func $thread.yield-then-resume))
+    (canon thread.yield-then-promote (core func $thread.yield-then-promote))
     (core module $AM
       (import "" "tbl" (table $tbl 1 1 funcref))
       (import "" "mid" (func $mid (result i32)))
@@ -682,7 +727,9 @@
       (import "" "thread.new-indirect" (func $thread.new-indirect (param i32 i32) (result i32)))
       (import "" "thread.suspend-then-resume" (func $thread.suspend-then-resume (param i32) (result i32)))
       (import "" "thread.yield-then-resume" (func $thread.yield-then-resume (param i32) (result i32)))
+      (import "" "thread.yield-then-promote" (func $thread.yield-then-promote (param i32) (result i32)))
       (global $outer-thread (mut i32) (i32.const 0))
+      (global $explicit-thread (mut i32) (i32.const 0))
       (global $phase (mut i32) (i32.const 0))
 
       ;; the explicit thread spawned by "run"; the call into $B only returns
@@ -695,9 +742,9 @@
 
       (func (export "run") (result i32)
         (global.set $outer-thread (call $thread.index))
+        (global.set $explicit-thread (call $thread.new-indirect (i32.const 0) (i32.const 0)))
         ;; switch to a fresh explicit thread of this same task, suspending
-        (if (call $thread.suspend-then-resume
-              (call $thread.new-indirect (i32.const 0) (i32.const 0)))
+        (if (call $thread.suspend-then-resume (global.get $explicit-thread))
           (then unreachable))
         ;; resumed by "inner"'s implicit thread, which stayed ready
         (if (i32.ne (global.get $phase) (i32.const 1)) (then unreachable))
@@ -709,6 +756,11 @@
       ;; the implicit thread of a fresh task
       (func (export "inner") (result i32)
         (if (i32.ne (global.get $phase) (i32.const 0)) (then unreachable))
+        ;; the explicit thread is running (this reentrant call is on top of
+        ;; it), so it is not "ready" and this must fall back to a plain yield
+        ;; without switching
+        (if (call $thread.yield-then-promote (global.get $explicit-thread))
+          (then unreachable))
         (global.set $phase (i32.const 1))
         ;; switch to run's implicit thread, staying ready ourselves
         (if (call $thread.yield-then-resume (global.get $outer-thread))
@@ -725,7 +777,8 @@
       (export "thread.index" (func $thread.index))
       (export "thread.new-indirect" (func $thread.new-indirect))
       (export "thread.suspend-then-resume" (func $thread.suspend-then-resume))
-      (export "thread.yield-then-resume" (func $thread.yield-then-resume))))))
+      (export "thread.yield-then-resume" (func $thread.yield-then-resume))
+      (export "thread.yield-then-promote" (func $thread.yield-then-promote))))))
     (func (export "run") (result u32) (canon lift (core func $am "run")))
     (func (export "inner") (result u32) (canon lift (core func $am "inner")))
   )
@@ -794,7 +847,8 @@
       (global $ws (mut i32) (i32.const 0))
       (func $start (global.set $ws (call $waitable-set.new)))
       (start $start)
-      ;; parks cancellably in its event loop on a set that never gets an event
+      ;; parks in its event loop on a set that never gets an event, so only the
+      ;; delivery of a pending cancellation can wake this task
       (func (export "f") (result i32)
         (i32.or (i32.const 2 (; WAIT ;)) (i32.shl (global.get $ws) (i32.const 4))))
       (func (export "f-cb") (param i32 i32 i32) (result i32)

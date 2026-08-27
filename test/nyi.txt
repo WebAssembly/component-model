@@ -3,3 +3,4 @@
 ./validation/kebab.wast
 ./async/trap-if-sync-and-waitable-set.wast
 ./async/self-switch-traps.wast
+./binary/binary.wast
