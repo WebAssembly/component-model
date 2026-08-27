@@ -1229,7 +1229,7 @@ getting a resource's private representation value (that are introduced
 component instance that generated the resource type, thereby hiding access to a
 resource type's representation from the outside world. Because each component
 instantiation generates fresh resource types distinct from all preceding
-instances of the same component, resource types are ["generative"].
+instances of the same component, resource types are "[generative]".
 
 For example, in the following example component:
 ```wat
@@ -1374,7 +1374,7 @@ shared-nothing boundary. Traditionally, this problem is solved by defining a
 serialization format. The Component Model MVP uses roughly this same approach,
 defining a linear-memory-based [ABI] called the "Canonical ABI" which
 specifies, for any `functype`, a [corresponding](CanonicalABI.md#flattening)
-`core:functype` and [rules](CanonicalABI.md#lifting-and-lowering) for copying
+[`core:functype`] and [rules](CanonicalABI.md#lifting-and-lowering) for copying
 values into and out of linear memory. The Component Model differs from
 traditional approaches, though, in that the ABI is configurable, allowing
 multiple different memory representations of the same abstract value. In the
@@ -2434,6 +2434,8 @@ val      ::= false | true
            | (binary <core:datastring>)
 f64canon ::= <core:f64> without the `nan:0x` case.
 ```
+where [`core:i64`], [`core:f64`], [`core:stringchar`] and [`core:datastring`]
+are as defined by the Core WebAssembly text format.
 
 The validation rules for `value` require the `val` to match the `valtype`.
 
@@ -3269,8 +3271,8 @@ For some use-case-focused, worked examples, see:
 
 [`core:id`]: https://webassembly.github.io/spec/core/text/values.html#text-id
 [`core:externidx`]: https://webassembly.github.io/spec/core/text/modules.html#text-externidx
-[`core:i64`]: https://webassembly.github.io/spec/core/text/values.html#text-int
-[`core:f64`]: https://webassembly.github.io/spec/core/syntax/values.html#floating-point
+[`core:i64`]: https://webassembly.github.io/spec/core/text/values.html#integers
+[`core:f64`]: https://webassembly.github.io/spec/core/text/values.html#floating-point
 [`core:stringchar`]: https://webassembly.github.io/spec/core/text/values.html#text-string
 [`core:name`]: https://webassembly.github.io/spec/core/text/values.html#text-name
 [`core:module`]: https://webassembly.github.io/spec/core/text/modules.html#text-module
@@ -3306,7 +3308,6 @@ For some use-case-focused, worked examples, see:
 [`dictionary`]: https://webidl.spec.whatwg.org/#es-dictionary
 [`enum`]: https://webidl.spec.whatwg.org/#es-enumeration
 [`T?`]: https://webidl.spec.whatwg.org/#es-nullable-type
-[`Get`]: https://tc39.es/ecma262/#sec-get-o-p
 [Import Reflection]: https://github.com/tc39-transfer/proposal-import-reflection
 [Module Record]: https://tc39.es/ecma262/#sec-abstract-module-records
 [Module Specifier]: https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ModuleSpecifier
@@ -3333,7 +3334,6 @@ For some use-case-focused, worked examples, see:
 [Existential Types]: https://en.wikipedia.org/wiki/System_F
 [Unit]: https://en.wikipedia.org/wiki/Unit_type
 [Trampolines]: https://en.wikipedia.org/wiki/Trampoline_(computing)
-[Free Variables]: https://en.wikipedia.org/wiki/Free_variables_and_bound_variables
 
 [Generative]: https://www.researchgate.net/publication/2426300_A_Syntactic_Theory_of_Type_Generativity_and_Sharing
 [Avoidance Problem]: https://counterexamples.org/avoidance.html
@@ -3371,7 +3371,6 @@ For some use-case-focused, worked examples, see:
 [`canon_stream_new`]: CanonicalABI.md#-canon-streamfuturenew
 [`canon_stream_read`]: CanonicalABI.md#-canon-streamreadwrite
 [`canon_future_read`]: CanonicalABI.md#-canon-futurereadwrite
-[`canon_future_write`]: CanonicalABI.md#-canon-futurereadwrite
 [`canon_stream_cancel_read`]: CanonicalABI.md#-canon-streamfuturecancel-readwrite
 [`canon_stream_drop_readable`]: CanonicalABI.md#-canon-streamfuturedrop-readablewritable
 [`canon_subtask_cancel`]: CanonicalABI.md#-canon-subtaskcancel
@@ -3395,13 +3394,9 @@ For some use-case-focused, worked examples, see:
 [`canon_thread_spawn_indirect`]: CanonicalABI.md#-canon-threadspawn-indirect
 [`canon_thread_available_parallelism`]: CanonicalABI.md#-canon-threadavailable_parallelism
 [Shared-Nothing]: ../high-level/Choices.md
-[Use Cases]: ../high-level/UseCases.md
-[Host Embeddings]: ../high-level/UseCases.md#hosts-embedding-components
 
 [Concurrency Explainer]: Concurrency.md
 [Summary]: Concurrency.md#summary
-[Thread]: Concurrency.md#threads-and-tasks
-[Task]: Concurrency.md#threads-and-tasks
 [Current Thread]: Concurrency.md#current-thread-and-task
 [Current Task]: Concurrency.md#current-thread-and-task
 [Thread-Local Storage]: Concurrency.md#thread-local-storage
@@ -3422,7 +3417,6 @@ For some use-case-focused, worked examples, see:
 [Block]: Concurrency.md#blocking
 
 [Component Model Documentation]: https://component-model.bytecodealliance.org
-[`wizer`]: https://github.com/bytecodealliance/wizer
 
 [Scoping and Layering]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8
 
