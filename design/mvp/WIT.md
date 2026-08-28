@@ -1613,8 +1613,6 @@ use-names-item ::= id
                  | id 'as' id
 ```
 
-Note: Here `use-names-list?` means at least one `use-name-list` term.
-
 ## Items: type
 
 There are a number of methods of defining types in a `wit` package, and all of
