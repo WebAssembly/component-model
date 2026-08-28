@@ -240,9 +240,12 @@ Once `M1` and `M2` share linear memory and table state, `M2` can import the
 so that `M1` can call `C`'s exports via `call_indirect`. This provides `Q` the
 flexibility to put *all* its core wasm code in `M1` (using `M2` to only do
 `funcref`-plumbing), which is convenient. But this also allows `M1` to attempt
-to reenter `C` while `C` is calling an import of `M1`, which would violate
-[Component Invariant] #2. To prevent this, the Canonical ABI must place runtime
-guards in `lift` that trap if `M1` tries to recursively reenter `C`.
+to recursively reenter `C` while `C` is calling an import of `M1`. This kind of
+[recursive reentrance](Concurrency.md#reentrance) is already possible to perform
+from the host, so donut wrapping just gives parent components the same
+expressive capability. In both cases, the host/parent must be careful not to
+create circular dependencies between child component tasks that create
+deadlocks.
 
 Similarly, donut wrapping allows `Q` to both define resource types that are
 imported by `C` and consume resource types that are defined by `C`. This allows
@@ -319,7 +322,6 @@ future features of WIT and the Component Model.)
 [Binary Format]: Binary.md
 [WIT]: WIT.md
 [`external-id`]: Explainer.md#import-and-export-definitions
-[Component Invariant]: Explainer.md#component-invariants
 [ESM-integration]: Explainer.md#esm-integration
 
 [WebAssembly/tool-conventions]: https://github.com/WebAssembly/tool-conventions
