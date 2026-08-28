@@ -1,2 +1,9 @@
 # See README.md
 ./validation/max-value-size.wast
+./async/during-sync-call-no-sibling-resume.wast
+./async/during-sync-call-may-block-if-other-ready-threads.wast
+./async/during-sync-scheduling-candidates.wast
+./async/during-sync-call-exclusive-resume.wast
+./async/reentrance.wast
+./async/sync-streams.wast
+./validation/kebab.wast
