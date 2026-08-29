@@ -7,3 +7,4 @@
 ./async/reentrance.wast
 ./async/sync-streams.wast
 ./validation/kebab.wast
+./async/trap-if-sync-and-waitable-set.wast
