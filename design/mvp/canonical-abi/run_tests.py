@@ -1,6 +1,6 @@
-
 import definitions
 from definitions import *
+from functools import partial
 
 definitions.DETERMINISTIC_PROFILE = True
 
@@ -1305,161 +1305,144 @@ def test_sync_using_wait():
   lift_and_run(mk_opts(), consumer_inst, ft, core_func, on_start, on_resolve)
 
 
-class HostSource(ReadableStream):
-  remaining: list[int]
-  destroy_if_empty: bool
-  chunk: int
-  cancel_lock: Optional[threading.Lock]
-  cancelled_lock: Optional[threading.Lock]
-  pending_dst: Optional[WritableBuffer]
-  pending_on_copy: Optional[OnCopy]
-  pending_on_copy_done: Optional[OnCopyDone]
+class HostReadableBuffer(ReadableBuffer):
+  vs: list[any]
+  progress: int
 
-  def __init__(self, t, contents, chunk, destroy_if_empty = True):
+  def __init__(self, t, vs):
     self.t = t
-    self.remaining = contents
-    self.destroy_if_empty = destroy_if_empty
-    self.chunk = chunk
-    self.cancel_lock = None
-    self.cancelled_lock = None
-    self.reset_pending()
-  def reset_pending(self):
-    self.pending_dst = None
-    self.pending_on_copy = None
-    self.pending_on_copy_done = None
-
-  def closed(self):
-    return not self.remaining and self.destroy_if_empty
-
-  def drop(self):
-    self.remaining = []
-    self.destroy_if_empty = True
-    if self.pending_dst:
-      self.pending_on_copy_done(CopyResult.DROPPED)
-      self.reset_pending()
-
-  def destroy_once_empty(self):
-    self.destroy_if_empty = True
-    if not self.remaining:
-      self.drop()
-
-  def read(self, inst, dst, on_copy, on_copy_done):
-    if self.closed():
-      on_copy_done(CopyResult.DROPPED)
-    elif self.remaining:
-      self.actually_copy(dst)
-      if self.closed():
-        on_copy_done(CopyResult.DROPPED)
-      else:
-        on_copy_done(CopyResult.COMPLETED)
-    else:
-      self.pending_dst = dst
-      self.pending_on_copy = on_copy
-      self.pending_on_copy_done = on_copy_done
-
-  def actually_copy(self, dst):
-    n = min(dst.remain(), len(self.remaining), self.chunk)
-    dst.write(self.remaining[:n])
-    del self.remaining[:n]
-
-  def block_cancel(self):
-    self.cancel_lock = threading.Lock()
-    self.cancel_lock.acquire()
-    self.cancelled_lock = threading.Lock()
-    self.cancelled_lock.acquire()
-
-  def unblock_cancel(self):
-    self.cancel_lock.release()
-    self.cancelled_lock.acquire()
-
-  def cancel(self):
-    if not self.cancel_lock:
-      self.actually_cancel()
-    else:
-      def async_cancel():
-        self.cancel_lock.acquire()
-        self.actually_cancel()
-        self.cancelled_lock.release()
-      threading.Thread(target = async_cancel).start()
-
-  def actually_cancel(self):
-    self.pending_on_copy_done(CopyResult.CANCELLED)
-    self.reset_pending()
-
-  def write(self, vs):
-    assert(vs and not self.closed())
-    self.remaining += vs
-    if self.pending_dst:
-      self.actually_copy(self.pending_dst)
-      if self.pending_dst.remain():
-        self.pending_on_copy(self.reset_pending)
-      else:
-        self.pending_on_copy_done(CopyResult.COMPLETED)
-        self.reset_pending()
-
-class HostSink:
-  shared: ReadableStream
-  t: ValType
-  received: list[int]
-  chunk: int
-  write_remain: int
-  write_event: threading.Event
-  ready_to_consume: bool
-  closed: bool
-
-  def __init__(self, shared, chunk, remain = 2**64):
-    self.shared = shared
-    self.t = shared.t
-    self.received = []
-    self.chunk = chunk
-    self.write_remain = remain
-    self.write_event = threading.Event()
-    if remain:
-      self.write_event.set()
-    self.ready_to_consume = threading.Event()
-    self.closed = False
-    def read_all():
-      while True:
-        self.write_event.wait()
-        copy_event = threading.Event()
-        def on_copy(reclaim_buffer):
-          reclaim_buffer()
-          copy_event.set()
-        def on_copy_done(result):
-          if result == CopyResult.DROPPED:
-            self.closed = True
-          copy_event.set()
-        self.shared.read(None, self, on_copy, on_copy_done)
-        copy_event.wait()
-        if self.closed:
-          break
-      self.ready_to_consume.set()
-    threading.Thread(target = read_all).start()
-
-  def set_remain(self, n):
-    self.write_remain = n
-    if self.write_remain > 0:
-      self.write_event.set()
+    self.vs = vs
+    self.progress = 0
 
   def remain(self):
-    return self.write_remain
+    return len(self.vs) - self.progress
+
+  def is_zero_length(self):
+    return len(self.vs) == 0
+
+  def read(self, n):
+    assert(n <= self.remain())
+    vs = self.vs[self.progress : self.progress + n]
+    self.progress += n
+    return vs
+
+class HostWritableBuffer(WritableBuffer):
+  length: int
+  progress: int
+  received: list[any]
+
+  def __init__(self, t, length):
+    self.t = t
+    self.length = length
+    self.progress = 0
+    self.received = []
+
+  def remain(self):
+    return self.length - self.progress
+
+  def is_zero_length(self):
+    return self.length == 0
 
   def write(self, vs):
+    assert(len(vs) <= self.remain())
     self.received += vs
-    self.ready_to_consume.set()
-    self.write_remain -= len(vs)
-    if self.write_remain == 0:
-      self.write_event.clear()
+    self.progress += len(vs)
 
-  def consume(self, n):
-    while n > len(self.received):
-      if self.closed:
-        return None
-      self.ready_to_consume.clear()
-      self.ready_to_consume.wait()
-    ret = self.received[:n];
-    del self.received[:n]
-    return ret
+class HostWriter:
+  end: WritableStreamEnd
+  queue: list[any]
+  chunk: int
+  drop_when_empty: bool
+  buffer: Optional[HostReadableBuffer]
+
+  def __init__(self, t, vs = (), chunk = Buffer.MAX_LENGTH, drop_when_empty = True):
+    stream = Stream(t)
+    self.end = stream.writable_end
+    self.queue = list(vs)
+    self.chunk = chunk
+    self.drop_when_empty = drop_when_empty
+    self.buffer = None
+    self.start_copy()
+
+  def write(self, vs):
+    assert(not self.end.shared.dropped)
+    self.queue += vs
+    self.start_copy()
+
+  def end_when_empty(self):
+    self.drop_when_empty = True
+    self.start_copy()
+
+  def start_copy(self):
+    if self.buffer is not None or self.end.shared.dropped:
+      return
+    if not self.queue:
+      if self.drop_when_empty:
+        self.end.shared.drop()
+      return
+    self.buffer = HostReadableBuffer(self.end.shared.t, self.queue[:self.chunk])
+    self.end.shared.write(None, self.buffer, self.on_copy_done, self.on_partial_copy)
+
+  def on_copy_done(self, result):
+    self.finish_copy()
+
+  def on_partial_copy(self):
+    self.end.shared.reset_pending()
+    self.finish_copy()
+
+  def finish_copy(self):
+    del self.queue[:self.buffer.progress]
+    self.buffer = None
+    self.start_copy()
+
+class HostReader:
+  end: ReadableStreamEnd
+  received: list[any]
+  remain: int
+  dropped: bool
+  buffer: Optional[HostWritableBuffer]
+  on_data: Optional[Callable[[HostReader], None]]
+
+  def __init__(self, end, remain = Buffer.MAX_LENGTH, on_data = None):
+    self.end = end
+    self.received = []
+    self.remain = remain
+    self.dropped = False
+    self.buffer = None
+    self.on_data = on_data
+    self.start_copy()
+
+  def set_remain(self, remain):
+    self.remain = remain
+    self.start_copy()
+
+  def take(self):
+    received = self.received
+    self.received = []
+    return received
+
+  def start_copy(self):
+    if self.buffer is not None or self.dropped or self.remain == 0:
+      return
+    self.buffer = HostWritableBuffer(self.end.shared.t, self.remain)
+    self.end.shared.read(None, self.buffer, self.on_copy_done, self.on_partial_copy)
+
+  def on_copy_done(self, result):
+    if result == CopyResult.DROPPED:
+      self.dropped = True
+    self.drain()
+    self.buffer = None
+    self.start_copy()
+
+  def on_partial_copy(self):
+    self.drain()
+
+  def drain(self):
+    self.received += self.buffer.received
+    self.remain -= len(self.buffer.received)
+    self.buffer.received = []
+    if self.on_data:
+      self.on_data(self)
 
 def test_eager_stream_completion():
   store = Store()
@@ -1470,30 +1453,29 @@ def test_eager_stream_completion():
 
   ft = FuncType([StreamType(U8Type())], [StreamType(U8Type())])
   def host_func(on_start, on_resolve, wait_until):
-    args = on_start()
-    assert(len(args) == 1)
-    assert(isinstance(args[0], ReadableStream))
-    incoming = HostSink(args[0], chunk=4)
-    outgoing = HostSource(U8Type(), [], chunk=4, destroy_if_empty=False)
-    on_resolve([outgoing])
-    def add10():
-      while (vs := incoming.consume(4)):
-        for i in range(len(vs)):
-          vs[i] += 10
-        outgoing.write(vs)
-      outgoing.drop()
-    threading.Thread(target = add10).start()
+    [incoming_readable_end] = on_start()
+    assert(isinstance(incoming_readable_end, ReadableStreamEnd))
+    host_writer = HostWriter(U8Type(), chunk=4, drop_when_empty=False)
+    def add10(reader):
+      vs = reader.take()
+      if vs:
+        host_writer.write([v + 10 for v in vs])
+      if reader.dropped:
+        host_writer.end_when_empty()
+    HostReader(incoming_readable_end, on_data = add10)
+    on_resolve([host_writer.end.shared.readable_end])
   host_func_inst = mk_host_func(store, host_func, ft)
 
-  src_stream = HostSource(U8Type(), [1,2,3,4,5,6,7,8], chunk=4)
+  host_writer = HostWriter(U8Type(), [1,2,3,4,5,6,7,8], chunk=4)
   def on_start():
-    return [src_stream]
+    return [host_writer.end.shared.readable_end]
 
-  dst_stream = None
+  host_reader = None
   def on_resolve(results):
-    assert(len(results) == 1)
-    nonlocal dst_stream
-    dst_stream = HostSink(results[0], chunk=4)
+    [readable_end] = results
+    assert(isinstance(readable_end, ReadableStreamEnd))
+    nonlocal host_reader
+    host_reader = HostReader(readable_end)
 
   def core_func(args):
     assert(len(args) == 1)
@@ -1541,7 +1523,7 @@ def test_eager_stream_completion():
     return []
 
   lift_and_run(opts, inst, ft, core_func, on_start, on_resolve)
-  assert(dst_stream.received == [11,12,13,14,15,16,17,18])
+  assert(host_reader.received == [11,12,13,14,15,16,17,18])
 
 
 def test_async_stream_ops():
@@ -1551,44 +1533,33 @@ def test_async_stream_ops():
   opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
   sync_opts = mk_opts(memory=MemInst(mem, 'i32'), async_=False)
 
-  host_import_incoming = None
-  host_import_outgoing = None
+  host_reader = None
+  host_writer = None
   ft = FuncType([StreamType(U8Type())], [StreamType(U8Type())], async_ = True)
   def host_func(on_start, on_resolve, wait_until):
-    nonlocal host_import_incoming, host_import_outgoing
-    args = on_start()
-    assert(len(args) == 1)
-    assert(isinstance(args[0], ReadableStream))
-    host_import_incoming = HostSink(args[0], chunk=4, remain = 0)
-    host_import_outgoing = HostSource(U8Type(), [], chunk=4, destroy_if_empty=False)
-    on_resolve([host_import_outgoing])
+    nonlocal host_reader, host_writer
+    [readable_end] = on_start()
+    assert(isinstance(readable_end, ReadableStreamEnd))
+    host_reader = HostReader(readable_end, remain = 0)
+    host_writer = HostWriter(U8Type(), chunk=4, drop_when_empty=False)
+    on_resolve([host_writer.end.shared.readable_end])
     while True:
-      vs = None
-      results_ready = RacyBool(False)
-      def consume_results():
-        nonlocal vs
-        vs = host_import_incoming.consume(4)
-        results_ready.set()
-      threading.Thread(target = consume_results).start()
-      wait_until(results_ready.is_set)
-      if vs:
-        for i in range(len(vs)):
-          vs[i] += 10
-      else:
+      wait_until(lambda: host_reader.received or host_reader.dropped)
+      vs = host_reader.take()
+      if not vs:
         break
-      host_import_outgoing.write(vs)
-    host_import_outgoing.destroy_once_empty()
+      host_writer.write([v + 10 for v in vs])
   host_func_inst = mk_host_func(store, host_func, ft)
 
-  src_stream = HostSource(U8Type(), [], chunk=4, destroy_if_empty = False)
+  host_writer2 = HostWriter(U8Type(), chunk=4, drop_when_empty = False)
   def on_start():
-    return [src_stream]
+    return [host_writer2.end.shared.readable_end]
 
-  dst_stream = None
+  host_reader2 = None
   def on_resolve(results):
-    assert(len(results) == 1)
-    nonlocal dst_stream
-    dst_stream = HostSink(results[0], chunk=4, remain = 0)
+    [readable_end] = results
+    nonlocal host_reader2
+    host_reader2 = HostReader(readable_end, remain = 0)
 
   def core_func(args):
     [rsi1] = args
@@ -1598,11 +1569,10 @@ def test_async_stream_ops():
     [] = canon_task_return([StreamType(U8Type())], opts, [rsi2])
     [ret] = canon_stream_read(StreamType(U8Type()), opts, rsi1, 0, 4)
     assert(ret == definitions.BLOCKED)
-    src_stream.write([1,2,3,4])
+    host_writer2.write([1,2,3,4])
     retp = 16
     [seti] = canon_waitable_set_new()
     [] = canon_waitable_join(rsi1, seti)
-    definitions.throw_it = True
     [event] = canon_waitable_set_wait(MemInst(mem, 'i32'), seti, retp) ##
     assert(event == EventCode.STREAM_READ)
     assert(mem[retp+0] == rsi1)
@@ -1617,7 +1587,7 @@ def test_async_stream_ops():
     assert(rsi4 == 4)
     [ret] = canon_stream_write(StreamType(U8Type()), opts, wsi3, 0, 4)
     assert(ret == definitions.BLOCKED)
-    host_import_incoming.set_remain(100)
+    host_reader.set_remain(100)
     [] = canon_waitable_join(wsi3, seti)
     [event] = canon_waitable_set_wait(MemInst(mem, 'i32'), seti, retp)
     assert(event == EventCode.STREAM_WRITE)
@@ -1629,20 +1599,20 @@ def test_async_stream_ops():
     assert(n == 4 and result == CopyResult.COMPLETED)
     [ret] = canon_stream_write(StreamType(U8Type()), opts, wsi2, 0, 4)
     assert(ret == definitions.BLOCKED)
-    dst_stream.set_remain(100)
+    host_reader2.set_remain(100)
     [] = canon_waitable_join(wsi2, seti)
     [event] = canon_waitable_set_wait(MemInst(mem, 'i32'), seti, retp)
     assert(event == EventCode.STREAM_WRITE)
     assert(mem[retp+0] == wsi2)
     result,n = unpack_result(mem[retp+4])
     assert(n == 4 and result == CopyResult.COMPLETED)
-    src_stream.write([5,6,7,8])
-    src_stream.destroy_once_empty()
+    host_writer2.write([5,6,7,8])
+    host_writer2.end_when_empty()
     [ret] = canon_stream_read(StreamType(U8Type()), opts, rsi1, 0, 4)
     result,n = unpack_result(ret)
     assert(n == 4 and result == CopyResult.DROPPED)
-    [] = canon_stream_drop_readable(StreamType(U8Type()), rsi1)
     assert(mem[0:4] == b'\x05\x06\x07\x08')
+    [] = canon_stream_drop_readable(StreamType(U8Type()), rsi1)
     [ret] = canon_stream_write(StreamType(U8Type()), opts, wsi3, 0, 4)
     result,n = unpack_result(ret)
     assert(n == 4 and result == CopyResult.COMPLETED)
@@ -1656,6 +1626,7 @@ def test_async_stream_ops():
     [] = canon_waitable_join(rsi4, 0)
     result,n = unpack_result(mem[retp+4])
     assert(n == 4 and result == CopyResult.COMPLETED)
+    host_writer.end_when_empty()
     [ret] = canon_stream_read(StreamType(U8Type()), sync_opts, rsi4, 0, 4)
     assert(ret == CopyResult.DROPPED)
     [] = canon_stream_drop_readable(StreamType(U8Type()), rsi4)
@@ -1667,19 +1638,18 @@ def test_async_stream_ops():
     return []
 
   lift_and_run(opts, inst, ft, core_func, on_start, on_resolve)
-  assert(dst_stream.received == [11,12,13,14,15,16,17,18])
+  assert(host_reader2.received == [11,12,13,14,15,16,17,18])
 
 
 def test_stream_forward():
-  src_stream = HostSource(U8Type(), [1,2,3,4], chunk=4)
+  host_writer = HostWriter(U8Type(), [1,2,3,4], chunk=4)
   def on_start():
-    return [src_stream]
+    return [host_writer.end.shared.readable_end]
 
-  dst_stream = None
+  return_value = None
   def on_resolve(results):
-    assert(len(results) == 1)
-    nonlocal dst_stream
-    dst_stream = results[0]
+    nonlocal return_value
+    [return_value] = results
 
   def core_func(args):
     assert(len(args) == 1)
@@ -1691,7 +1661,7 @@ def test_stream_forward():
   inst = ComponentInstance(Store())
   ft = FuncType([StreamType(U8Type())], [StreamType(U8Type())])
   lift_and_run(opts, inst, ft, core_func, on_start, on_resolve)
-  assert(src_stream is dst_stream)
+  assert(host_writer.end.shared.readable_end is return_value)
 
 
 def test_receive_own_stream():
@@ -1704,7 +1674,7 @@ def test_receive_own_stream():
   def host_func(on_start, on_resolve, wait_until):
     args = on_start()
     assert(len(args) == 1)
-    assert(isinstance(args[0], ReadableStream))
+    assert(isinstance(args[0], ReadableStreamEnd))
     on_resolve(args)
   host_func_inst = mk_host_func(store, host_func, host_ft)
 
@@ -1739,19 +1709,19 @@ def test_host_partial_reads_writes():
   opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
   inst = ComponentInstance(store)
 
-  src = HostSource(U8Type(), [1,2,3,4], chunk=2, destroy_if_empty = False)
+  host_writer = HostWriter(U8Type(), [1,2,3,4], chunk=2, drop_when_empty = False)
   source_ft = FuncType([], [StreamType(U8Type())])
   def host_source_func(on_start, on_resolve, wait_until):
     [] = on_start()
-    on_resolve([src])
+    on_resolve([host_writer.end.shared.readable_end])
   host_source_func_inst = mk_host_func(store, host_source_func, source_ft)
 
-  dst = None
+  host_reader = None
   sink_ft = FuncType([StreamType(U8Type())], [])
   def host_sink_func(on_start, on_resolve, wait_until):
-    nonlocal dst
-    [s] = on_start()
-    dst = HostSink(s, chunk=1, remain=2)
+    nonlocal host_reader
+    [readable_end] = on_start()
+    host_reader = HostReader(readable_end, remain=2)
     on_resolve([])
   host_sink_func_inst = mk_host_func(store, host_sink_func, sink_ft)
 
@@ -1772,7 +1742,7 @@ def test_host_partial_reads_writes():
     assert(mem[0:2] == b'\x03\x04')
     [ret] = canon_stream_read(StreamType(U8Type()), opts, rsi, 0, 4)
     assert(ret == definitions.BLOCKED)
-    src.write([5,6])
+    host_writer.write([5,6])
 
     [seti] = canon_waitable_set_new()
     [] = canon_waitable_join(rsi, seti)
@@ -1795,18 +1765,18 @@ def test_host_partial_reads_writes():
     assert(n == 2 and result == CopyResult.COMPLETED)
     [ret] = canon_stream_write(StreamType(U8Type()), opts, wsi, 2, 4)
     assert(ret == definitions.BLOCKED)
-    dst.set_remain(4)
+    host_reader.set_remain(4)
     [] = canon_waitable_join(wsi, seti)
     [event] = canon_waitable_set_wait(MemInst(mem, 'i32'), seti, retp)
     assert(event == EventCode.STREAM_WRITE)
     assert(mem[retp+0] == wsi)
     result,n = unpack_result(mem[retp+4])
     assert(n == 4 and result == CopyResult.COMPLETED)
-    assert(dst.received == [1,2,3,4,5,6])
+    assert(host_reader.received == [1,2,3,4,5,6])
     [] = canon_stream_drop_writable(StreamType(U8Type()), wsi)
     [] = canon_waitable_set_drop(seti)
-    dst.set_remain(100)
-    assert(dst.consume(100) is None)
+    host_reader.set_remain(100)
+    assert(host_reader.dropped)
     return []
 
   opts2 = mk_opts()
@@ -2055,21 +2025,21 @@ def test_cancel_copy():
   lower_opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
 
   host_ft1 = FuncType([StreamType(U8Type())],[])
-  host_sink = None
+  host_reader = None
   def host_func1(on_start, on_resolve, wait_until):
-    nonlocal host_sink
-    [stream] = on_start()
-    host_sink = HostSink(stream, 2, remain = 0)
+    nonlocal host_reader
+    [readable_end] = on_start()
+    host_reader = HostReader(readable_end, remain = 0)
     on_resolve([])
   host_func1_inst = mk_host_func(store, host_func1, host_ft1)
 
   host_ft2 = FuncType([], [StreamType(U8Type())])
-  host_source = None
+  host_writer = None
   def host_func2(on_start, on_resolve, wait_until):
-    nonlocal host_source
+    nonlocal host_writer
     [] = on_start()
-    host_source = HostSource(U8Type(), [], chunk=2, destroy_if_empty = False)
-    on_resolve([host_source])
+    host_writer = HostWriter(U8Type(), chunk=2, drop_when_empty = False)
+    on_resolve([host_writer.end.shared.readable_end])
   host_func2_inst = mk_host_func(store, host_func2, host_ft2)
 
   lift_opts = mk_opts()
@@ -2083,15 +2053,14 @@ def test_cancel_copy():
     mem[0:4] = b'\x0a\x0b\x0c\x0d'
     [ret] = canon_stream_write(StreamType(U8Type()), lower_opts, wsi, 0, 4)
     assert(ret == definitions.BLOCKED)
-    host_sink.set_remain(2)
-    got = host_sink.consume(2)
-    assert(got == [0xa, 0xb])
+    host_reader.set_remain(2)
+    assert(host_reader.take() == [0xa, 0xb])
     [ret] = canon_stream_cancel_write(StreamType(U8Type()), False, wsi)
     result,n = unpack_result(ret)
     assert(n == 2 and result == CopyResult.COMPLETED)
     [] = canon_stream_drop_writable(StreamType(U8Type()), wsi)
-    host_sink.set_remain(100)
-    assert(host_sink.consume(100) is None)
+    host_reader.set_remain(100)
+    assert(host_reader.dropped)
 
     [packed] = canon_stream_new(StreamType(U8Type()))
     rsi,wsi = unpack_new_ends(packed)
@@ -2100,15 +2069,14 @@ def test_cancel_copy():
     mem[0:4] = b'\x01\x02\x03\x04'
     [ret] = canon_stream_write(StreamType(U8Type()), lower_opts, wsi, 0, 4)
     assert(ret == definitions.BLOCKED)
-    host_sink.set_remain(2)
-    got = host_sink.consume(2)
-    assert(got == [1, 2])
+    host_reader.set_remain(2)
+    assert(host_reader.take() == [1, 2])
     [ret] = canon_stream_cancel_write(StreamType(U8Type()), True, wsi)
     result,n = unpack_result(ret)
     assert(n == 2 and result == CopyResult.COMPLETED)
     [] = canon_stream_drop_writable(StreamType(U8Type()), wsi)
-    host_sink.set_remain(100)
-    assert(host_sink.consume(100) is None)
+    host_reader.set_remain(100)
+    assert(host_reader.dropped)
 
     retp = 16
     [ret] = store.lower(host_func2_inst, host_ft2, lower_opts, inst)([retp])
@@ -2126,82 +2094,28 @@ def test_cancel_copy():
     rsi = mem[retp]
     [ret] = canon_stream_read(StreamType(U8Type()), lower_opts, rsi, 0, 4)
     assert(ret == definitions.BLOCKED)
-    host_source.block_cancel()
     [ret] = canon_stream_cancel_read(StreamType(U8Type()), True, rsi)
+    result,n = unpack_result(ret)
+    assert(n == 0 and result == CopyResult.CANCELLED)
+    [] = canon_stream_drop_readable(StreamType(U8Type()), rsi)
+
+    [ret] = store.lower(host_func2_inst, host_ft2, lower_opts, inst)([retp])
+    assert(ret == Subtask.State.RETURNED)
+    rsi = mem[retp]
+    [ret] = canon_stream_read(StreamType(U8Type()), lower_opts, rsi, 0, 4)
     assert(ret == definitions.BLOCKED)
-    try:
-      canon_stream_cancel_read(StreamType(U8Type()), True, rsi)
-      assert(False)
-    except Trap:
-      pass
-    host_source.write([7,8])
-    host_source.unblock_cancel()
-    [seti] = canon_waitable_set_new()
-    [] = canon_waitable_join(rsi, seti)
-    [event] = canon_waitable_set_wait(MemInst(mem, 'i32'), seti, retp)
-    assert(event == EventCode.STREAM_READ)
-    assert(mem[retp+0] == rsi)
-    result,n = unpack_result(mem[retp+4])
-    assert(n == 2 and result == CopyResult.CANCELLED)
+    host_writer.write([7,8])
+    [ret] = canon_stream_cancel_read(StreamType(U8Type()), True, rsi)
+    result,n = unpack_result(ret)
+    assert(n == 2 and result == CopyResult.COMPLETED)
     assert(mem[0:2] == b'\x07\x08')
     [] = canon_stream_drop_readable(StreamType(U8Type()), rsi)
-    [] = canon_waitable_set_drop(seti)
 
     return []
 
   caller_ft = FuncType([], [], async_ = True)
   lift_and_run(lift_opts, inst, caller_ft, core_func, lambda:[], lambda _:())
 
-
-class HostFutureSink:
-  t: ValType
-  v: Optional[any]
-  has_v: RacyBool
-
-  def __init__(self, t):
-    self.t = t
-    self.v = None
-    self.has_v = RacyBool(False)
-
-  def remain(self):
-    return 1 if self.v is None else 0
-
-  def write(self, v):
-    assert(not self.v)
-    assert(len(v) == 1)
-    self.v = v[0]
-    self.has_v.set()
-
-class HostFutureSource(ReadableFuture):
-  v: Optional[any]
-  pending_buffer: Optional[WritableBuffer]
-  pending_on_copy_done: Optional[OnCopyDone]
-  def __init__(self, t):
-    self.t = t
-    self.v = None
-    self.reset_pending()
-  def reset_pending(self):
-    self.pending_buffer = None
-    self.pending_on_copy_done = None
-  def read(self, inst, buffer, on_copy_done):
-    if self.v:
-      buffer.write([self.v])
-      on_copy_done(CopyResult.COMPLETED)
-    else:
-      self.pending_buffer = buffer
-      self.pending_on_copy_done = on_copy_done
-  def cancel(self):
-    self.pending_on_copy_done(CopyResult.CANCELLED)
-    self.reset_pending()
-  def drop(self):
-    pass
-  def set_result(self, v):
-    if self.pending_buffer:
-      self.pending_buffer.write([v])
-      self.pending_on_copy_done(CopyResult.COMPLETED)
-      self.reset_pending()
-    else:
-      self.v = v
 
 def test_futures():
   store = Store()
@@ -2211,14 +2125,15 @@ def test_futures():
 
   host_ft1 = FuncType([FutureType(U8Type())],[FutureType(U8Type())], async_ = True)
   def host_func(on_start, on_resolve, wait_until):
-    [future] = on_start()
-    outgoing = HostFutureSource(U8Type())
-    on_resolve([outgoing])
-    incoming = HostFutureSink(U8Type())
-    future.read(None, incoming, lambda why:())
-    wait_until(incoming.has_v.is_set)
-    assert(incoming.v == 42)
-    outgoing.set_result(43)
+    [incoming_readable_end] = on_start()
+    outgoing = Future(U8Type())
+    on_resolve([outgoing.readable_end])
+    buffer = HostWritableBuffer(U8Type(), 1)
+    copied = RacyBool(False)
+    incoming_readable_end.shared.read(None, buffer, lambda result: copied.set())
+    wait_until(copied.is_set)
+    assert(buffer.received == [42])
+    outgoing.write(None, HostReadableBuffer(U8Type(), [43]), lambda result:())
   host_func_inst = mk_host_func(store, host_func, host_ft1)
 
   lift_opts = mk_opts()
