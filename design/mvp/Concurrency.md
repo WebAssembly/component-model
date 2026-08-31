@@ -577,7 +577,7 @@ or `future`. When *producing* a `stream` or `future` value as a parameter (of
 an import call) or result (of an export call), the producer can *transfer
 ownership* of a readable end that it has either been given by the outside world
 or freshly created via `{stream,future}.new` (which also return a fresh paired
-writable end that is permanently owned by the calling component instance).
+writable end).
 
 Based on this, `stream<T>` and `future<T>` values can be passed between
 functions as if they were synchronous `list<T>` and `T` values, resp. For
@@ -618,6 +618,13 @@ without requiring an explicit `future` return type. Thus, a function like
 `f2: func() -> future` would convey *two* events: first, the return of `f2`, at
 which point the caller receives the readable end of a `future` that, when
 successfully read, conveys the completion of a second event.
+
+Given the readable end of one stream/future and the writable end of another, the
+`{stream,future}.forward` built-ins can be called to efficiently forward all
+remaining values from the readable end into the writable end, avoiding any
+intermediate copies. Doing so relinquishes ownership of both handles, allowing
+the calling component instance to be eagerly torn down while the forwarding is
+in progress.
 
 The [Stream and Future State] section describes the runtime state maintained for
 streams and futures by the Canonical ABI.
@@ -1478,7 +1485,6 @@ specified, the following features are being considered for addition to complete
 the concurrency story:
 * remove the temporary trap mentioned above that occurs when a `read` and
   `write` of a stream/future happen from within the same component instance
-* zero-copy forwarding/splicing
 * allow `async` functions using the stackful ABI to be notified of
   cancellation
 * allow the `stream<char>` type to validate; make it use `string-encoding`

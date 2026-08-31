@@ -57,6 +57,7 @@ specified here.
   * [`canon future.{read,write}`](#-canon-futurereadwrite) 🔀
   * [`canon {stream,future}.cancel-{read,write}`](#-canon-streamfuturecancel-readwrite) 🔀
   * [`canon {stream,future}.drop-{readable,writable}`](#-canon-streamfuturedrop-readablewritable) 🔀
+  * [`canon {stream,future}.forward`](#-canon-streamfutureforward) ➡️
   * [`canon thread.index`](#-canon-threadindex) 🧵
   * [`canon thread.new-indirect`](#-canon-threadnew-indirect) 🧵
   * [`canon thread.resume-later`](#-canon-threadresume-later) 🧵
@@ -1658,10 +1659,9 @@ class AsyncValue:
     self.pending_inst = inst
 ```
 As shown above, `Stream`s and `Future`s store references to their readable and
-writable ends. These fields are immutable because `Readable{Stream,Future}End`
-objects are passed directly between components as the high-level value that is
-"lifted" from the `i32` index and thus there is a stable object identity for
-both ends over the lifetime of their associated `Stream` or `Future`.
+writable ends. The `Readable{Stream,Future}End` object stored in `readable_end`
+is passed directly between components as the high-level value that is "lifted"
+from the `i32` index.
 
 Stream and future read and write operations all take caller-supplied
 `{Readable,Writable}Buffer`s. Once *both* ends of a particular stream or future
@@ -1707,6 +1707,28 @@ permanently closed and thus the only valid next operation is to drop their end.
       self.dropped = True
       if self.pending_buffer:
         self.reset_and_notify_pending(CopyResult.DROPPED)
+```
+
+The readable end of a stream or future can also be "forwarded" into the writable
+end of another stream or future, achieving the same effect as copying everything
+from former into the latter (and propagating `CopyResult.DROPPED` in both
+directions) without the overhead of the intermediate copy. When this forwarding
+operation is started, the readable end of the source and the writable end of the
+destination disappear, leaving only the writable end of the source and the
+readable end of the destination to now share a single `AsyncValue`. The
+implementation of forwarding in `AsyncValue.forward_into` below arbitrarily
+selects `self` as the `AsyncValue` to share and `other` as the `AsyncValue` to
+abandon (although the reverse could have worked just as well).
+```python
+  def forward_into(self, other: AsyncValue):
+    assert(self is not other)
+    other.readable_end.shared = self
+    self.readable_end = other.readable_end
+    if other.dropped:
+      self.drop()
+    elif other.pending_buffer:
+      self.read(other.pending_inst, other.pending_buffer,
+                other.pending_on_copy_done, other.pending_on_partial_copy)
 ```
 
 Building on `AsyncValue`, `Stream` can now be defined in chunks. Stream
@@ -4566,6 +4588,53 @@ def drop(EndT, stream_or_future_t, hi):
   end.drop()
   return []
 ```
+
+
+### ➡️ `canon {stream,future}.forward`
+
+For canonical definitions:
+```wat
+(canon stream.forward $stream_t (core func $forward))
+(canon future.forward $future_t (core func $forward))
+```
+validation specifies:
+* `$forward` is given type `(func (param $ri i32) (param $wi i32))`
+* `$stream_t`/`$future_t` must be a type of the form `(stream $t?)`/`(future $t?)`
+
+Calling `$forward` removes the readable and writable ends at the given indices,
+after checking that the element types match, the ends are in the `IDLE` state,
+and the ends are not currently part of a waitable set. Then the source
+stream/future associated with the readable end is forwarded into the destination
+stream/future associated with the writable end, as defined by
+`AsyncValue.forward_into`:
+```python
+def canon_stream_forward(stream_t, ri, wi):
+  return forward_copy(ReadableStreamEnd, WritableStreamEnd, stream_t, ri, wi)
+
+def canon_future_forward(future_t, ri, wi):
+  return forward_copy(ReadableFutureEnd, WritableFutureEnd, future_t, ri, wi)
+
+def forward_copy(ReadableEndT, WritableEndT, stream_or_future_t, ri, wi):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  r = inst.handles.remove(ri)
+  trap_if(not isinstance(r, ReadableEndT))
+  trap_if(r.shared.t != stream_or_future_t.t)
+  trap_if(r.state != End.State.IDLE)
+  trap_if(r.in_waitable_set())
+  w = inst.handles.remove(wi)
+  trap_if(not isinstance(w, WritableEndT))
+  trap_if(w.shared.t != stream_or_future_t.t)
+  trap_if(w.state != End.State.IDLE)
+  trap_if(w.in_waitable_set())
+  if r.shared is not w.shared:
+    r.shared.forward_into(w.shared)
+  return []
+```
+Note that in the corner case where the readable and writable ends are associated
+with the same stream or future, there is no need to trap, since the self-loop is
+no longer reachable; instead the stream or future can be eagerly destroyed by
+the engine as-if both sides had performed a drop.
 
 
 ### 🧵 `canon thread.index`

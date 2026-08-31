@@ -1,4 +1,7 @@
 # See README.md
+./async/big-interleaving-test.wast
+./async/forward.wast
+./values/post-return.wast
 ./validation/max-value-size.wast
 ./validation/kebab.wast
 ./binary/binary.wast

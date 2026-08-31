@@ -75,6 +75,7 @@ shipped as part of a future WASI Developer Preview release:
 * 📝: the `error-context` type
 * 🔗: canonical interface names
 * 🐘: [memory64]
+* ➡️: `stream.forward` and `future.forward` built-ins
 
 
 ## Grammar
@@ -1573,6 +1574,7 @@ canon ::= ...
         | (canon stream.cancel-write <typeidx> async? (core func <id>?)) 🔀
         | (canon stream.drop-readable <typeidx> (core func <id>?)) 🔀
         | (canon stream.drop-writable <typeidx> (core func <id>?)) 🔀
+        | (canon stream.forward <typeidx> (core func <id>?)) ➡️
         | (canon future.new <typeidx> (core func <id>?)) 🔀
         | (canon future.read <typeidx> <canonopt>* (core func <id>?)) 🔀
         | (canon future.write <typeidx> <canonopt>* (core func <id>?)) 🔀
@@ -1580,6 +1582,7 @@ canon ::= ...
         | (canon future.cancel-write <typeidx> async? (core func <id>?)) 🔀
         | (canon future.drop-readable <typeidx> (core func <id>?)) 🔀
         | (canon future.drop-writable <typeidx> (core func <id>?)) 🔀
+        | (canon future.forward <typeidx> (core func <id>?)) ➡️
         | (canon thread.index (core func <id>?)) 🧵
         | (canon thread.new-indirect core-prefix(<core:typeidx>) core-prefix(<core:tableidx>) (core func <id>?)) 🧵
         | (canon thread.resume-later (core func <id>?)) 🧵
@@ -2144,6 +2147,25 @@ already been dropped.
 
 For details, see [Streams and Futures] in the concurrency explainer and
 [`canon_stream_drop_readable`] in the Canonical ABI explainer.
+
+###### ➡️ `stream.forward` and `future.forward`
+
+| Synopsis                                       |                                                                            |
+| ---------------------------------------------- | -------------------------------------------------------------------------- |
+| Approximate WIT signature for `stream.forward` | `func<stream<T?>>(r: readable-stream-end<T?>, w: writable-stream-end<T?>)` |
+| Approximate WIT signature for `future.forward` | `func<future<T?>>(r: readable-future-end<T?>, w: writable-future-end<T?>)` |
+| Canonical ABI signature                        | `[ri:i32 wi:i32] -> []`                                                    |
+
+The `{stream,future}.forward` built-ins remove the given readable and writable
+ends from the caller's handle table and logically copy everything from the
+readable end into the writable end (propagating drops in both directions), but
+do so without an intermediate copy. The call traps if either end has a
+mismatched direction or element type, is in the middle of a read or write, is a
+member of a waitable set, or has already been notified that its operation
+completed or that the other end was dropped.
+
+For details, see [Streams and Futures] in the concurrency explainer and
+[`canon_stream_forward`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.index`
 
@@ -3377,6 +3399,7 @@ For some use-case-focused, worked examples, see:
 [`canon_future_read`]: CanonicalABI.md#-canon-futurereadwrite
 [`canon_stream_cancel_read`]: CanonicalABI.md#-canon-streamfuturecancel-readwrite
 [`canon_stream_drop_readable`]: CanonicalABI.md#-canon-streamfuturedrop-readablewritable
+[`canon_stream_forward`]: CanonicalABI.md#-canon-streamfutureforward
 [`canon_subtask_cancel`]: CanonicalABI.md#-canon-subtaskcancel
 [`canon_subtask_drop`]: CanonicalABI.md#-canon-subtaskdrop
 [`canon_resource_new`]: CanonicalABI.md#canon-resourcenew
