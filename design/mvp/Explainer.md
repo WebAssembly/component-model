@@ -2004,7 +2004,7 @@ the buffer parameter is ignored.
 If the return value is a `stream-result`, then the `progress` field indicates how
 many `T` elements were read or written from the given buffer before the
 `copy-result` was reached. For example, a return value of `{progress: 4,
-result: dropped}` from a `stream<u32>.read` means that 32 bytes were copied
+result: dropped}` from a `stream<u32>.read` means that 16 bytes were copied
 into the given buffer before the writer end dropped the stream. The `cancelled`
 case can only arise as the result of a call to `stream.cancel-{read,write}`.
 
