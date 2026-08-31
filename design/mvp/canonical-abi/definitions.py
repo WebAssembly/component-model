@@ -4,9 +4,8 @@
 
 ### Boilerplate
 
-from __future__ import annotations
 from dataclasses import dataclass
-from typing import Any, Optional, Callable, TypeVar, Generic, Literal
+from typing import Optional, Callable, Literal
 from enum import Enum, IntEnum
 import math
 import struct
@@ -968,6 +967,24 @@ class End(Waitable):
              or DETERMINISTIC_PROFILE
              or random.randint(0,1))):
       self.notify(progress = 0)
+
+  def forward(src: End, dst: End):
+    if src.other is dst or src.other is None or dst.other is None:
+      src.drop()
+      dst.drop()
+    else:
+      writable_end = src.other
+      readable_end = dst.other
+      writable_end.other = readable_end
+      readable_end.other = writable_end
+      if writable_end.buffer is not None and readable_end.buffer is not None:
+        if readable_end.buffer.remain() > writable_end.buffer.remain():
+          bigger_end, smaller_end = readable_end, writable_end
+        else:
+          bigger_end, smaller_end = writable_end, readable_end
+        buffer = smaller_end.buffer
+        smaller_end.buffer = None
+        smaller_end.copy(buffer)
 
   def drop(self):
     assert(not self.copying_or_cancelling())
@@ -2499,6 +2516,30 @@ def drop(EndT, stream_or_future_t, i):
   trap_if(end.copying_or_cancelling())
   trap_if(isinstance(end, WritableFutureEnd) and end.state != End.State.DONE)
   end.drop()
+  return []
+
+### ➡️ `canon {stream,future}.forward`
+
+def canon_stream_forward(stream_t, ri, wi):
+  return forward(ReadableStreamEnd, WritableStreamEnd, stream_t, ri, wi)
+
+def canon_future_forward(future_t, ri, wi):
+  return forward(ReadableFutureEnd, WritableFutureEnd, future_t, ri, wi)
+
+def forward(ReadableEndT, WritableEndT, stream_or_future_t, ri, wi):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  readable_end = inst.handles.remove(ri)
+  trap_if(not isinstance(readable_end, ReadableEndT))
+  trap_if(readable_end.t != stream_or_future_t.t)
+  trap_if(readable_end.state != End.State.IDLE)
+  trap_if(readable_end.in_waitable_set())
+  writable_end = inst.handles.remove(wi)
+  trap_if(not isinstance(writable_end, WritableEndT))
+  trap_if(writable_end.t != stream_or_future_t.t)
+  trap_if(writable_end.state != End.State.IDLE)
+  trap_if(writable_end.in_waitable_set())
+  End.forward(readable_end, writable_end)
   return []
 
 ### 🧵 `canon thread.index`
