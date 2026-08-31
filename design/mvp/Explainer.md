@@ -2005,7 +2005,7 @@ the buffer parameter is ignored.
 If the return value is a `stream-result`, then the `progress` field indicates how
 many `T` elements were read or written from the given buffer before the
 `copy-result` was reached. For example, a return value of `{progress: 4,
-result: dropped}` from a `stream<u32>.read` means that 32 bytes were copied
+result: dropped}` from a `stream<u32>.read` means that 16 bytes were copied
 into the given buffer before the writer end dropped the stream. The `cancelled`
 case can only arise as the result of a call to `stream.cancel-{read,write}`.
 
@@ -3419,8 +3419,8 @@ For some use-case-focused, worked examples, see:
 [`canon_waitable_set_drop`]: CanonicalABI.md#-canon-waitable-setdrop
 [`canon_waitable_join`]: CanonicalABI.md#-canon-waitablejoin
 [`canon_stream_new`]: CanonicalABI.md#-canon-streamfuturenew
-[`canon_stream_read`]: CanonicalABI.md#-canon-streamreadwrite
-[`canon_future_read`]: CanonicalABI.md#-canon-futurereadwrite
+[`canon_stream_read`]: CanonicalABI.md#-canon-streamfuturereadwrite
+[`canon_future_read`]: CanonicalABI.md#-canon-streamfuturereadwrite
 [`canon_stream_cancel_read`]: CanonicalABI.md#-canon-streamfuturecancel-readwrite
 [`canon_stream_drop_readable`]: CanonicalABI.md#-canon-streamfuturedrop-readablewritable
 [`canon_subtask_cancel`]: CanonicalABI.md#-canon-subtaskcancel
