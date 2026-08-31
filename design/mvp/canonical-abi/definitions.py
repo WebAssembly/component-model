@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 from dataclasses import dataclass
-from functools import partial
 from typing import Any, Optional, Callable, TypeVar, Generic, Literal
 from enum import Enum, IntEnum
 import math
@@ -869,7 +868,7 @@ class ReadableBuffer(Buffer):
 class WritableBuffer(Buffer):
   write: Callable[[list[any]]]
 
-class BufferGuestImpl(Buffer):
+class GuestBuffer(Buffer):
   cx: LiftLowerContext
   t: ValType
   ptr: int
@@ -893,7 +892,7 @@ class BufferGuestImpl(Buffer):
   def is_zero_length(self):
     return self.length == 0
 
-class ReadableBufferGuestImpl(BufferGuestImpl, ReadableBuffer):
+class ReadableGuestBuffer(GuestBuffer, ReadableBuffer):
   def read(self, n):
     assert(n <= self.remain())
     if self.t:
@@ -904,7 +903,7 @@ class ReadableBufferGuestImpl(BufferGuestImpl, ReadableBuffer):
     self.progress += n
     return vs
 
-class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
+class WritableGuestBuffer(GuestBuffer, WritableBuffer):
   def write(self, vs):
     assert(len(vs) <= self.remain())
     if self.t:
@@ -914,56 +913,80 @@ class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
       assert(all(v == () for v in vs))
     self.progress += len(vs)
 
-### Stream State
+### Stream and Future State
+
+class End(Waitable):
+  class State(Enum):
+    IDLE = 1
+    COPYING = 2
+    CANCELLING_COPY = 3
+    DONE = 4
+
+  state: State
+  shared: Stream|Future
+
+  def __init__(self, shared):
+    Waitable.__init__(self)
+    self.state = End.State.IDLE
+    self.shared = shared
+
+  def copying(self):
+    match self.state:
+      case End.State.IDLE | End.State.DONE:
+        return False
+      case End.State.COPYING | End.State.CANCELLING_COPY:
+        return True
+
+  def drop(self):
+    trap_if(self.copying())
+    trap_if(isinstance(self, WritableFutureEnd) and self.state != End.State.DONE)
+    self.shared.drop()
+    Waitable.drop(self)
+
+class ReadableStreamEnd(End): ...
+class WritableStreamEnd(End): ...
+class ReadableFutureEnd(End): ...
+class WritableFutureEnd(End): ...
 
 class CopyResult(IntEnum):
   COMPLETED = 0
   DROPPED = 1
   CANCELLED = 2
 
-ReclaimBuffer = Callable[[], None]
-OnCopy = Callable[[ReclaimBuffer], None]
-OnCopyDone = Callable[[CopyResult], None]
-
-class SharedBase:
+class AsyncValue:
   t: ValType
-  cancel: Callable[[], None]
-  drop: Callable[[], None]
-
-class ReadableStream(SharedBase):
-  read: Callable[[ComponentInstance, WritableBuffer, OnCopy, OnCopyDone], None]
-
-class WritableStream(SharedBase):
-  write: Callable[[ComponentInstance, ReadableBuffer, OnCopy, OnCopyDone], None]
-
-class SharedStreamImpl(ReadableStream, WritableStream):
+  readable_end: End
+  writable_end: End
   dropped: bool
-  pending_inst: Optional[ComponentInstance]
   pending_buffer: Optional[Buffer]
-  pending_on_copy: Optional[OnCopy]
-  pending_on_copy_done: Optional[OnCopyDone]
+  pending_on_copy_done: Optional[Callable[[CopyResult], None]]
+  pending_on_partial_copy: Optional[Callable[[], None]]
+  pending_inst: Optional[ComponentInstance]
 
-  def __init__(self, t):
+  def __init__(self, t, readable_end, writable_end):
+    assert(readable_end.shared is self and writable_end.shared is self)
     self.t = t
+    self.readable_end = readable_end
+    self.writable_end = writable_end
     self.dropped = False
     self.reset_pending()
 
   def reset_pending(self):
     self.set_pending(None, None, None, None)
 
-  def set_pending(self, inst, buffer, on_copy, on_copy_done):
-    self.pending_inst = inst
+  def set_pending(self, inst, buffer, on_copy_done, on_partial_copy = None):
     self.pending_buffer = buffer
-    self.pending_on_copy = on_copy
     self.pending_on_copy_done = on_copy_done
+    self.pending_on_partial_copy = on_partial_copy
+    self.pending_inst = inst
+
+  def cancel(self):
+    self.reset_and_notify_pending(CopyResult.CANCELLED)
 
   def reset_and_notify_pending(self, result):
     pending_on_copy_done = self.pending_on_copy_done
     self.reset_pending()
     pending_on_copy_done(result)
-
-  def cancel(self):
-    self.reset_and_notify_pending(CopyResult.CANCELLED)
 
   def drop(self):
     if not self.dropped:
@@ -971,11 +994,15 @@ class SharedStreamImpl(ReadableStream, WritableStream):
       if self.pending_buffer:
         self.reset_and_notify_pending(CopyResult.DROPPED)
 
-  def read(self, inst, dst_buffer, on_copy, on_copy_done):
+class Stream(AsyncValue):
+  def __init__(self, t):
+    AsyncValue.__init__(self, t, ReadableStreamEnd(self), WritableStreamEnd(self))
+
+  def read(self, inst, dst_buffer, on_copy_done, on_partial_copy):
     if self.dropped:
       on_copy_done(CopyResult.DROPPED)
     elif not self.pending_buffer:
-      self.set_pending(inst, dst_buffer, on_copy, on_copy_done)
+      self.set_pending(inst, dst_buffer, on_copy_done, on_partial_copy)
     else:
       assert(self.t == dst_buffer.t == self.pending_buffer.t)
       trap_if(inst is self.pending_inst and not none_or_number_type(self.t)) # temporary
@@ -983,17 +1010,20 @@ class SharedStreamImpl(ReadableStream, WritableStream):
         if dst_buffer.remain() > 0:
           n = min(dst_buffer.remain(), self.pending_buffer.remain())
           dst_buffer.write(self.pending_buffer.read(n))
-          self.pending_on_copy(self.reset_pending)
+          if self.pending_buffer.remain() > 0:
+            self.pending_on_partial_copy()
+          else:
+            self.reset_and_notify_pending(CopyResult.COMPLETED)
         on_copy_done(CopyResult.COMPLETED)
       else:
         self.reset_and_notify_pending(CopyResult.COMPLETED)
-        self.set_pending(inst, dst_buffer, on_copy, on_copy_done)
+        self.set_pending(inst, dst_buffer, on_copy_done, on_partial_copy)
 
-  def write(self, inst, src_buffer, on_copy, on_copy_done):
+  def write(self, inst, src_buffer, on_copy_done, on_partial_copy):
     if self.dropped:
       on_copy_done(CopyResult.DROPPED)
     elif not self.pending_buffer:
-      self.set_pending(inst, src_buffer, on_copy, on_copy_done)
+      self.set_pending(inst, src_buffer, on_copy_done, on_partial_copy)
     else:
       assert(self.t == src_buffer.t == self.pending_buffer.t)
       trap_if(inst is self.pending_inst and not none_or_number_type(self.t)) # temporary
@@ -1001,99 +1031,25 @@ class SharedStreamImpl(ReadableStream, WritableStream):
         if src_buffer.remain() > 0:
           n = min(src_buffer.remain(), self.pending_buffer.remain())
           self.pending_buffer.write(src_buffer.read(n))
-          self.pending_on_copy(self.reset_pending)
+          if self.pending_buffer.remain() > 0:
+            self.pending_on_partial_copy()
+          else:
+            self.reset_and_notify_pending(CopyResult.COMPLETED)
         on_copy_done(CopyResult.COMPLETED)
       elif src_buffer.is_zero_length() and self.pending_buffer.is_zero_length():
         on_copy_done(CopyResult.COMPLETED)
       else:
         self.reset_and_notify_pending(CopyResult.COMPLETED)
-        self.set_pending(inst, src_buffer, on_copy, on_copy_done)
+        self.set_pending(inst, src_buffer, on_copy_done, on_partial_copy)
 
-def none_or_number_type(t):
-  return t is None or isinstance(t, U8Type | U16Type | U32Type | U64Type |
-                                    S8Type | S16Type | S32Type | S64Type |
-                                    F32Type | F64Type)
-
-class CopyState(Enum):
-  IDLE = 1
-  COPYING = 2
-  CANCELLING_COPY = 3
-  DONE = 4
-
-class CopyEnd(Waitable):
-  state: CopyState
-  shared: SharedBase
-
-  def __init__(self, shared):
-    Waitable.__init__(self)
-    self.state = CopyState.IDLE
-    self.shared = shared
-
-  def copying(self):
-    match self.state:
-      case CopyState.IDLE | CopyState.DONE:
-        return False
-      case CopyState.COPYING | CopyState.CANCELLING_COPY:
-        return True
-    assert(False)
-
-  def drop(self):
-    trap_if(self.copying())
-    self.shared.drop()
-    Waitable.drop(self)
-
-class ReadableStreamEnd(CopyEnd):
-  def copy(self, inst, dst, on_copy, on_copy_done):
-    self.shared.read(inst, dst, on_copy, on_copy_done)
-
-class WritableStreamEnd(CopyEnd):
-  def copy(self, inst, src, on_copy, on_copy_done):
-    self.shared.write(inst, src, on_copy, on_copy_done)
-
-### Future State
-
-class ReadableFuture(SharedBase):
-  read: Callable[[ComponentInstance, WritableBuffer, OnCopyDone], None]
-
-class WritableFuture(SharedBase):
-  write: Callable[[ComponentInstance, ReadableBuffer, OnCopyDone], None]
-
-class SharedFutureImpl(ReadableFuture, WritableFuture):
-  dropped: bool
-  pending_inst: Optional[ComponentInstance]
-  pending_buffer: Optional[Buffer]
-  pending_on_copy_done: Optional[OnCopyDone]
-
+class Future(AsyncValue):
   def __init__(self, t):
-    self.t = t
-    self.dropped = False
-    self.reset_pending()
+    AsyncValue.__init__(self, t, ReadableFutureEnd(self), WritableFutureEnd(self))
 
-  def reset_pending(self):
-    self.set_pending(None, None, None)
-
-  def set_pending(self, inst, buffer, on_copy_done):
-    self.pending_inst = inst
-    self.pending_buffer = buffer
-    self.pending_on_copy_done = on_copy_done
-
-  def reset_and_notify_pending(self, result):
-    pending_on_copy_done = self.pending_on_copy_done
-    self.reset_pending()
-    pending_on_copy_done(result)
-
-  def cancel(self):
-    self.reset_and_notify_pending(CopyResult.CANCELLED)
-
-  def drop(self):
-    if not self.dropped:
-      self.dropped = True
-      if self.pending_buffer:
-        assert(isinstance(self.pending_buffer, ReadableBuffer))
-        self.reset_and_notify_pending(CopyResult.DROPPED)
-
-  def read(self, inst, dst_buffer, on_copy_done):
-    assert(not self.dropped and dst_buffer.remain() == 1)
+  def read(self, inst, dst_buffer, on_copy_done, on_partial_copy = None):
+    assert(dst_buffer.remain() == 1)
+    assert(on_partial_copy is None)
+    assert(not self.dropped)
     if not self.pending_buffer:
       self.set_pending(inst, dst_buffer, on_copy_done)
     else:
@@ -1102,8 +1058,9 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
       self.reset_and_notify_pending(CopyResult.COMPLETED)
       on_copy_done(CopyResult.COMPLETED)
 
-  def write(self, inst, src_buffer, on_copy_done):
+  def write(self, inst, src_buffer, on_copy_done, on_partial_copy = None):
     assert(src_buffer.remain() == 1)
+    assert(on_partial_copy is None)
     if self.dropped:
       on_copy_done(CopyResult.DROPPED)
     elif not self.pending_buffer:
@@ -1114,17 +1071,10 @@ class SharedFutureImpl(ReadableFuture, WritableFuture):
       self.reset_and_notify_pending(CopyResult.COMPLETED)
       on_copy_done(CopyResult.COMPLETED)
 
-class ReadableFutureEnd(CopyEnd):
-  def copy(self, inst, dst_buffer, on_copy_done):
-    self.shared.read(inst, dst_buffer, on_copy_done)
-
-class WritableFutureEnd(CopyEnd):
-  def copy(self, inst, src_buffer, on_copy_done):
-    self.shared.write(inst, src_buffer, on_copy_done)
-
-  def drop(self):
-    trap_if(self.state != CopyState.DONE)
-    CopyEnd.drop(self)
+def none_or_number_type(t):
+  return t is None or isinstance(t, U8Type | U16Type | U32Type | U64Type |
+                                    S8Type | S16Type | S32Type | S64Type |
+                                    F32Type | F64Type)
 
 ## Despecialization
 
@@ -1471,12 +1421,13 @@ def lift_future(cx, i, t):
 
 def lift_async_value(ReadableEndT, cx, i, t):
   assert(not contains_borrow(t))
-  e = cx.inst.handles.remove(i)
-  trap_if(not isinstance(e, ReadableEndT))
-  trap_if(e.shared.t != t)
-  trap_if(e.state != CopyState.IDLE)
-  trap_if(e.in_waitable_set())
-  return e.shared
+  end = cx.inst.handles.remove(i)
+  trap_if(not isinstance(end, ReadableEndT))
+  trap_if(end.shared.t != t)
+  trap_if(end.state != End.State.IDLE)
+  trap_if(end.in_waitable_set())
+  assert(not end.has_pending_event())
+  return end
 
 ## Storing
 
@@ -1767,15 +1718,20 @@ def lower_borrow(cx, rep, t):
   h.borrow_scope.num_borrows += 1
   return cx.inst.handles.add(h)
 
-def lower_stream(cx, v, t):
-  assert(isinstance(v, ReadableStream))
-  assert(not contains_borrow(t))
-  return cx.inst.handles.add(ReadableStreamEnd(v))
+def lower_stream(cx, end, t):
+  return lower_async_value(ReadableStreamEnd, cx, end, t)
 
-def lower_future(cx, v, t):
-  assert(isinstance(v, ReadableFuture))
+def lower_future(cx, end, t):
+  return lower_async_value(ReadableFutureEnd, cx, end, t)
+
+def lower_async_value(ReadableEndT, cx, end, t):
   assert(not contains_borrow(t))
-  return cx.inst.handles.add(ReadableFutureEnd(v))
+  assert(isinstance(end, ReadableEndT))
+  assert(end.shared.t == t)
+  assert(end.state == End.State.IDLE)
+  assert(not end.in_waitable_set())
+  assert(not end.has_pending_event())
+  return cx.inst.handles.add(end)
 
 ## Flattening
 
@@ -2451,118 +2407,122 @@ def canon_subtask_drop(i):
 def canon_stream_new(stream_t):
   inst = current_instance()
   trap_if(not inst.may_leave)
-  shared = SharedStreamImpl(stream_t.t)
-  ri = inst.handles.add(ReadableStreamEnd(shared))
-  wi = inst.handles.add(WritableStreamEnd(shared))
+  stream = Stream(stream_t.t)
+  ri = inst.handles.add(stream.readable_end)
+  wi = inst.handles.add(stream.writable_end)
   return [ ri | (wi << 32) ]
 
 def canon_future_new(future_t):
   inst = current_instance()
   trap_if(not inst.may_leave)
-  shared = SharedFutureImpl(future_t.t)
-  ri = inst.handles.add(ReadableFutureEnd(shared))
-  wi = inst.handles.add(WritableFutureEnd(shared))
+  future = Future(future_t.t)
+  ri = inst.handles.add(future.readable_end)
+  wi = inst.handles.add(future.writable_end)
   return [ ri | (wi << 32) ]
 
 ### 🔀 `canon stream.{read,write}`
 
 def canon_stream_read(stream_t, opts, i, ptr, n):
-  return stream_copy(ReadableStreamEnd, WritableBufferGuestImpl, EventCode.STREAM_READ,
+  return stream_copy(ReadableStreamEnd, WritableGuestBuffer, Stream.read, EventCode.STREAM_READ,
                      stream_t, opts, i, ptr, n)
 
 def canon_stream_write(stream_t, opts, i, ptr, n):
-  return stream_copy(WritableStreamEnd, ReadableBufferGuestImpl, EventCode.STREAM_WRITE,
+  return stream_copy(WritableStreamEnd, ReadableGuestBuffer, Stream.write, EventCode.STREAM_WRITE,
                      stream_t, opts, i, ptr, n)
 
-def stream_copy(EndT, BufferT, event_code, stream_t, opts, i, ptr, n):
+def stream_copy(EndT, BufferT, copy, event_code, stream_t, opts, i, ptr, n):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  e = thread.task.inst.handles.get(i)
-  trap_if(not isinstance(e, EndT))
-  trap_if(e.shared.t != stream_t.t)
-  trap_if(e.state != CopyState.IDLE)
-  trap_if(e.in_waitable_set() and not opts.async_)
+  end = thread.task.inst.handles.get(i)
+  trap_if(not isinstance(end, EndT))
+  trap_if(end.shared.t != stream_t.t)
+  trap_if(end.state != End.State.IDLE)
+  trap_if(end.in_waitable_set() and not opts.async_)
 
   assert(not isinstance(stream_t, CharType))
   assert(not contains_borrow(stream_t))
   cx = LiftLowerContext(opts, thread.task.inst, borrow_scope = None)
   buffer = BufferT(stream_t.t, cx, ptr, n)
 
-  def stream_event(result, reclaim_buffer):
-    reclaim_buffer()
-    assert(e.copying())
+  def deliver_stream_event(result: Optional[CopyResult]):
+    assert(end.copying())
+    if result is None:
+      end.shared.reset_pending()
+      result = CopyResult.COMPLETED
+    if end.shared.dropped:
+      result = CopyResult.DROPPED
     if result == CopyResult.DROPPED:
-      e.state = CopyState.DONE
+      end.state = End.State.DONE
     else:
-      e.state = CopyState.IDLE
+      end.state = End.State.IDLE
     assert(0 <= result < 2**4)
     assert(buffer.progress <= Buffer.MAX_LENGTH < 2**28)
     packed_result = result | (buffer.progress << 4)
     return (event_code, i, packed_result)
 
-  def on_copy(reclaim_buffer):
-    e.set_pending_event(partial(stream_event, CopyResult.COMPLETED, reclaim_buffer))
-
   def on_copy_done(result):
-    e.set_pending_event(partial(stream_event, result, reclaim_buffer = lambda:()))
+    end.set_pending_event(lambda: deliver_stream_event(result))
 
-  e.state = CopyState.COPYING
-  e.copy(thread.task.inst, buffer, on_copy, on_copy_done)
+  def on_partial_copy():
+    end.set_pending_event(lambda: deliver_stream_event(result = None))
 
-  if not e.has_pending_event():
+  end.state = End.State.COPYING
+  copy(end.shared, thread.task.inst, buffer, on_copy_done, on_partial_copy)
+
+  if not end.has_pending_event():
     if not opts.async_:
-      e.wait_for_pending_event()
+      end.wait_for_pending_event()
     else:
       return [BLOCKED]
-  code,index,payload = e.get_pending_event()
+  code,index,payload = end.get_pending_event()
   assert(code == event_code and index == i and payload != BLOCKED)
   return [payload]
 
 ### 🔀 `canon future.{read,write}`
 
 def canon_future_read(future_t, opts, i, ptr):
-  return future_copy(ReadableFutureEnd, WritableBufferGuestImpl, EventCode.FUTURE_READ,
+  return future_copy(ReadableFutureEnd, WritableGuestBuffer, Future.read, EventCode.FUTURE_READ,
                      future_t, opts, i, ptr)
 
 def canon_future_write(future_t, opts, i, ptr):
-  return future_copy(WritableFutureEnd, ReadableBufferGuestImpl, EventCode.FUTURE_WRITE,
+  return future_copy(WritableFutureEnd, ReadableGuestBuffer, Future.write, EventCode.FUTURE_WRITE,
                      future_t, opts, i, ptr)
 
-def future_copy(EndT, BufferT, event_code, future_t, opts, i, ptr):
+def future_copy(EndT, BufferT, copy, event_code, future_t, opts, i, ptr):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  e = thread.task.inst.handles.get(i)
-  trap_if(not isinstance(e, EndT))
-  trap_if(e.shared.t != future_t.t)
-  trap_if(e.state != CopyState.IDLE)
-  trap_if(e.in_waitable_set() and not opts.async_)
+  end = thread.task.inst.handles.get(i)
+  trap_if(not isinstance(end, EndT))
+  trap_if(end.shared.t != future_t.t)
+  trap_if(end.state != End.State.IDLE)
+  trap_if(end.in_waitable_set() and not opts.async_)
 
   assert(not contains_borrow(future_t))
   cx = LiftLowerContext(opts, thread.task.inst, borrow_scope = None)
   buffer = BufferT(future_t.t, cx, ptr, 1)
 
-  def future_event(result):
+  def deliver_future_event(result):
     assert((buffer.remain() == 0) == (result == CopyResult.COMPLETED))
-    assert(e.copying())
+    assert(end.copying())
     if result == CopyResult.DROPPED or result == CopyResult.COMPLETED:
-      e.state = CopyState.DONE
+      end.state = End.State.DONE
     else:
-      e.state = CopyState.IDLE
+      end.state = End.State.IDLE
     return (event_code, i, result)
 
   def on_copy_done(result):
     assert(result != CopyResult.DROPPED or event_code == EventCode.FUTURE_WRITE)
-    e.set_pending_event(partial(future_event, result))
+    end.set_pending_event(lambda: deliver_future_event(result))
 
-  e.state = CopyState.COPYING
-  e.copy(thread.task.inst, buffer, on_copy_done)
+  end.state = End.State.COPYING
+  copy(end.shared, thread.task.inst, buffer, on_copy_done)
 
-  if not e.has_pending_event():
+  if not end.has_pending_event():
     if not opts.async_:
-      e.wait_for_pending_event()
+      end.wait_for_pending_event()
     else:
       return [BLOCKED]
-  code,index,payload = e.get_pending_event()
+  code,index,payload = end.get_pending_event()
   assert(code == event_code and index == i)
   return [payload]
 
@@ -2583,21 +2543,21 @@ def canon_future_cancel_write(future_t, async_, i):
 def cancel_copy(EndT, event_code, stream_or_future_t, async_, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  e = thread.task.inst.handles.get(i)
-  trap_if(not isinstance(e, EndT))
-  trap_if(e.shared.t != stream_or_future_t.t)
-  trap_if(e.state != CopyState.COPYING or e.has_sync_waiter)
-  trap_if(e.in_waitable_set() and not async_)
-  e.state = CopyState.CANCELLING_COPY
-  if not e.has_pending_event():
-    e.shared.cancel()
-    if not e.has_pending_event():
+  end = thread.task.inst.handles.get(i)
+  trap_if(not isinstance(end, EndT))
+  trap_if(end.shared.t != stream_or_future_t.t)
+  trap_if(end.state != End.State.COPYING or end.has_sync_waiter)
+  trap_if(end.in_waitable_set() and not async_)
+  end.state = End.State.CANCELLING_COPY
+  if not end.has_pending_event():
+    end.shared.cancel()
+    if not end.has_pending_event():
       if not async_:
-        e.wait_for_pending_event()
+        end.wait_for_pending_event()
       else:
         return [BLOCKED]
-  code,index,payload = e.get_pending_event()
-  assert(not e.copying() and code == event_code and index == i)
+  code,index,payload = end.get_pending_event()
+  assert(not end.copying() and code == event_code and index == i)
   return [payload]
 
 ### 🔀 `canon {stream,future}.drop-{readable,writable}`
@@ -2617,10 +2577,10 @@ def canon_future_drop_writable(future_t, hi):
 def drop(EndT, stream_or_future_t, hi):
   inst = current_instance()
   trap_if(not inst.may_leave)
-  e = inst.handles.remove(hi)
-  trap_if(not isinstance(e, EndT))
-  trap_if(e.shared.t != stream_or_future_t.t)
-  e.drop()
+  end = inst.handles.remove(hi)
+  trap_if(not isinstance(end, EndT))
+  trap_if(end.shared.t != stream_or_future_t.t)
+  end.drop()
   return []
 
 ### 🧵 `canon thread.index`
