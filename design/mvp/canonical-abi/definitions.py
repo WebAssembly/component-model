@@ -960,6 +960,17 @@ class StreamOrFuture:
       if self.pending_buffer:
         self.reset_and_notify_pending(CopyResult.DROPPED)
 
+  def forward_to(self, other):
+    assert(self is not other)
+    other.readable_end.shared = self
+    self.readable_end = other.readable_end
+    if other.dropped:
+      self.drop()
+    elif other.pending_buffer:
+      self.read(other.pending_inst, other.pending_buffer, other.pending_on_copy_done,
+                other.pending_on_partial_copy)
+      other.reset_pending()
+
 class Stream(StreamOrFuture):
   def __init__(self, t):
     StreamOrFuture.__init__(self, t, ReadableStreamEnd(self), WritableStreamEnd(self))
@@ -2569,6 +2580,31 @@ def cancel_copy(EndT, event_code, stream_or_future_t, async_, i):
   code,index,payload = end.get_pending_event()
   assert(not end.copying() and code == event_code and index == i)
   return [payload]
+
+### 🔀 `canon {stream,future}.forward`
+
+def canon_stream_forward(stream_t, ri, wi):
+  return forward_copy(ReadableStreamEnd, WritableStreamEnd, stream_t, ri, wi)
+
+def canon_future_forward(future_t, ri, wi):
+  return forward_copy(ReadableFutureEnd, WritableFutureEnd, future_t, ri, wi)
+
+def forward_copy(ReadableEndT, WritableEndT, stream_or_future_t, ri, wi):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  r = inst.handles.remove(ri)
+  trap_if(not isinstance(r, ReadableEndT))
+  trap_if(r.shared.t != stream_or_future_t.t)
+  trap_if(r.state != EndState.IDLE)
+  trap_if(r.in_waitable_set())
+  w = inst.handles.remove(wi)
+  trap_if(not isinstance(w, WritableEndT))
+  trap_if(w.shared.t != stream_or_future_t.t)
+  trap_if(w.state != EndState.IDLE)
+  trap_if(w.in_waitable_set())
+  if r.shared is not w.shared:
+    r.shared.forward_to(w.shared)
+  return []
 
 ### 🔀 `canon {stream,future}.drop-{readable,writable}`
 

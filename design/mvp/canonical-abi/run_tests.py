@@ -1664,6 +1664,158 @@ def test_stream_forward():
   assert(host_writer.end.shared.readable_end is return_value)
 
 
+def test_forward_builtins():
+  store = Store()
+  mem = bytearray(32)
+  opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
+  inst = ComponentInstance(store)
+  st = StreamType(U8Type())
+  st2 = StreamType(U32Type())
+  ft = FutureType(U8Type())
+
+  def core_func(args):
+    def new_stream(t = st):
+      [packed] = canon_stream_new(t)
+      return unpack_new_ends(packed)
+    def new_future():
+      [packed] = canon_future_new(ft)
+      return unpack_new_ends(packed)
+    def expect_trap(f):
+      try:
+        f()
+        assert(False)
+      except Trap:
+        pass
+
+    ## the trap cases of 'forward_copy'
+
+    # 'ri' isn't a readable end, isn't a readable *future* end, or has the
+    # wrong element type
+    rsi,wsi = new_stream()
+    expect_trap(lambda: canon_stream_forward(st, wsi, rsi))
+    rsi,wsi = new_stream()
+    expect_trap(lambda: canon_future_forward(ft, rsi, wsi))
+    rsi,wsi = new_stream()
+    expect_trap(lambda: canon_stream_forward(st2, rsi, wsi))
+
+    # ... and symmetrically for 'wi'
+    rsi1,_ = new_stream()
+    rsi2,_ = new_stream()
+    expect_trap(lambda: canon_stream_forward(st, rsi1, rsi2))
+    rsi,_ = new_stream()
+    _,wsi2 = new_stream(st2)
+    expect_trap(lambda: canon_stream_forward(st, rsi, wsi2))
+
+    # an end is in the middle of a copy
+    rsi,wsi = new_stream()
+    [ret] = canon_stream_read(st, opts, rsi, 0, 4)
+    assert(ret == definitions.BLOCKED)
+    expect_trap(lambda: canon_stream_forward(st, rsi, wsi))
+    rsi,wsi = new_stream()
+    [ret] = canon_stream_write(st, opts, wsi, 0, 4)
+    assert(ret == definitions.BLOCKED)
+    expect_trap(lambda: canon_stream_forward(st, rsi, wsi))
+
+    # an end is in a waitable set (using a set of its own, since the traps leave
+    # these ends out of the handle table but still joined)
+    [trap_seti] = canon_waitable_set_new()
+    rsi,wsi = new_stream()
+    [] = canon_waitable_join(rsi, trap_seti)
+    expect_trap(lambda: canon_stream_forward(st, rsi, wsi))
+    rsi,wsi = new_stream()
+    [] = canon_waitable_join(wsi, trap_seti)
+    expect_trap(lambda: canon_stream_forward(st, rsi, wsi))
+
+    ## 'ri' and 'wi' are the two ends of the same stream: nothing is forwarded,
+    ## but both handles are removed all the same
+    rsi,wsi = new_stream()
+    [] = canon_stream_forward(st, rsi, wsi)
+    expect_trap(lambda: canon_stream_read(st, opts, rsi, 0, 4))
+
+    ## forward_to: the sink is already dropped, so the source is dropped too and
+    ## the source's writer is the one told about it
+    rsi1,wsi1 = new_stream()
+    rsi2,wsi2 = new_stream()
+    [] = canon_stream_drop_readable(st, rsi2)
+    [] = canon_stream_forward(st, rsi1, wsi2)
+    [ret] = canon_stream_write(st, opts, wsi1, 0, 4)
+    result,n = unpack_result(ret)
+    assert(n == 0 and result == CopyResult.DROPPED)
+    [] = canon_stream_drop_writable(st, wsi1)
+
+    ## forward_to: neither dropped nor mid-copy, so just the pointer swap; the
+    ## sink's reader then reads what the source's writer writes
+    rsi1,wsi1 = new_stream()
+    rsi2,wsi2 = new_stream()
+    [] = canon_stream_forward(st, rsi1, wsi2)
+    mem[0:4] = b'\x01\x02\x03\x04'
+    [ret] = canon_stream_write(st, opts, wsi1, 0, 4)
+    assert(ret == definitions.BLOCKED)
+    [ret] = canon_stream_read(st, opts, rsi2, 8, 4)
+    result,n = unpack_result(ret)
+    assert(n == 4 and result == CopyResult.COMPLETED)
+    assert(mem[8:12] == b'\x01\x02\x03\x04')
+
+    ## forward_to: the sink's reader is already blocked, so its buffer is
+    ## re-issued against the source and the event it eventually gets is the
+    ## source's copy
+    rsi1,wsi1 = new_stream()
+    rsi2,wsi2 = new_stream()
+    [ret] = canon_stream_read(st, opts, rsi2, 8, 4)
+    assert(ret == definitions.BLOCKED)
+    [] = canon_stream_forward(st, rsi1, wsi2)
+    mem[0:4] = b'\x05\x06\x07\x08'
+    [ret] = canon_stream_write(st, opts, wsi1, 0, 4)
+    result,n = unpack_result(ret)
+    assert(n == 4 and result == CopyResult.COMPLETED)
+    assert(mem[8:12] == b'\x05\x06\x07\x08')
+    [seti] = canon_waitable_set_new()
+    [] = canon_waitable_join(rsi2, seti)
+    [event] = canon_waitable_set_wait(MemInst(mem, 'i32'), seti, 16)
+    assert(event == EventCode.STREAM_READ)
+    assert(mem[16] == rsi2)
+    result,n = unpack_result(mem[20])
+    assert(n == 4 and result == CopyResult.COMPLETED)
+
+    ## future.forward: the sink's reader is blocked but the source's writer
+    ## isn't, so the read is simply left pending on the source
+    rfi1,wfi1 = new_future()
+    rfi2,wfi2 = new_future()
+    [ret] = canon_future_read(ft, opts, rfi2, 8)
+    assert(ret == definitions.BLOCKED)
+    [] = canon_future_forward(ft, rfi1, wfi2)
+    mem[0] = 42
+    [ret] = canon_future_write(ft, opts, wfi1, 0)
+    assert(ret == CopyResult.COMPLETED)
+    assert(mem[8] == 42)
+
+    ## future.forward: both sides are already blocked, so the rendezvous happens
+    ## inside 'forward' itself
+    rfi1,wfi1 = new_future()
+    rfi2,wfi2 = new_future()
+    mem[0] = 43
+    [ret] = canon_future_write(ft, opts, wfi1, 0)
+    assert(ret == definitions.BLOCKED)
+    [ret] = canon_future_read(ft, opts, rfi2, 8)
+    assert(ret == definitions.BLOCKED)
+    [] = canon_future_forward(ft, rfi1, wfi2)
+    assert(mem[8] == 43)
+
+    ## future.forward: the sink is already dropped
+    rfi1,wfi1 = new_future()
+    rfi2,wfi2 = new_future()
+    [] = canon_future_drop_readable(ft, rfi2)
+    [] = canon_future_forward(ft, rfi1, wfi2)
+    [ret] = canon_future_write(ft, opts, wfi1, 0)
+    assert(ret == CopyResult.DROPPED)
+    [] = canon_future_drop_writable(ft, wfi1)
+
+    return []
+
+  caller_ft = FuncType([], [], async_ = True)
+  lift_and_run(mk_opts(), inst, caller_ft, core_func, lambda:[], lambda _:())
+
+
 def test_receive_own_stream():
   store = Store()
   inst = ComponentInstance(store)
@@ -2941,6 +3093,7 @@ test_sync_using_wait()
 test_eager_stream_completion()
 test_async_stream_ops()
 test_stream_forward()
+test_forward_builtins()
 test_receive_own_stream()
 test_host_partial_reads_writes()
 test_wasm_to_wasm_stream()
