@@ -2,3 +2,4 @@
 ./validation/max-value-size.wast
 ./validation/kebab.wast
 ./async/trap-if-sync-and-waitable-set.wast
+./async/self-switch-traps.wast
