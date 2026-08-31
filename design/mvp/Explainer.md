@@ -2431,7 +2431,9 @@ val      ::= false | true
            | (enum <labellit>)
            | none | (some <val>)
            | ok | (ok <val>) | error | (error <val>)
+           | (map <entryval>*) 🗺️
            | (binary <core:datastring>)
+entryval ::= (entry <val> <val>) 🗺️
 f64canon ::= <core:f64> without the `nan:0x` case.
 ```
 where [`core:i64`], [`core:f64`], [`core:stringchar`] and [`core:datastring`]
@@ -2479,6 +2481,17 @@ For example:
 
   (value $t bool (binary "\00"))
   (value $u string (binary "\07example"))
+
+  ;; 🔧 fixed-length list:
+  (value $v (list u8 3) (list 1 2 3))
+
+  ;; 🗺️ map:
+  (value $w (map string u16)
+    (map
+      (entry "a" 1)
+      (entry "b" 2)
+    )
+  )
 
   (type $complex
     (tuple

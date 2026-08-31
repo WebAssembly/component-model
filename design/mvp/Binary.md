@@ -472,6 +472,7 @@ val(i:<typeidx>)           ::= v:<val(type-index-space[i])>            => v
 val((record (field l t)+)) ::= v+:<val(t)>+                            => (record v+)
 val((variant (case l t?)+) ::= i:<core:u32> v?:<val(t[i])>?            => (variant l[i] v?)
 val((list t))              ::= v:vec(<val(t)>)                         => (list v)
+val((list t len))          ::= (v:<val(t)>)^len                        => (list v^len) 🔧
 val((tuple t+))            ::= v+:<val(t)>+                            => (tuple v+)
 val((flags l+))            ::= (v:<core:byte>)^N                       => (flags (l[i] for i in 0..|l+|-1 if v[floor(i / 8)] & 2^(i mod 8) > 0)) (where N = ceil(|l+| / 8))
 val((enum l+))             ::= i:<core:u32>                            => (enum l[i])
@@ -485,6 +486,8 @@ val((result (error u)))    ::= 0x00                                    => ok
                              | 0x01 v:<val(u)>                         => (error v)
 val((result t (error u)))  ::= 0x00 v:<val(t)>                         => (ok v)
                              | 0x01 v:<val(u)>                         => (error v)
+val((map k v))             ::= e*:vec(<entryval(k, v)>)                => (map e*) 🗺️
+entryval(k, v)             ::= key:<val(k)> val:<val(v)>               => (entry key val) 🗺️
 ```
 
 Notes:
