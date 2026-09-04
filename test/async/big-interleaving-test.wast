@@ -222,6 +222,31 @@
       (func (export "subtask-drop") (param $sub-slot i32)
         (call $subtask.drop (call $sub (local.get $sub-slot))))
 
+      ;; Cancel the subtask and expect the given resolved state. Since
+      ;; `subtask.cancel async` only performs a cooperative yield, whether
+      ;; cancellation of a started subtask completes eagerly or reports
+      ;; BLOCKED is nondeterministic, so on BLOCKED, wait for the subtask to
+      ;; resolve via a waitable set.
+      (func (export "subtask-cancel-await") (param $sub-slot i32) (param $expected-state i32)
+        (local $st i32) (local $ret i32) (local $ws i32)
+        (local.set $st (call $sub (local.get $sub-slot)))
+        (local.set $ret (call $subtask.cancel (local.get $st)))
+        (if (i32.eq (local.get $ret) (i32.const -1 (; BLOCKED ;)))
+          (then
+            (local.set $ws (call $waitable-set.new))
+            (call $waitable.join (local.get $st) (local.get $ws))
+            (if (i32.ne (call $waitable-set.wait (local.get $ws) (global.get $EVENTP)) (i32.const 1 (; SUBTASK ;)))
+              (then unreachable))
+            (if (i32.ne (i32.load (global.get $EVENTP)) (local.get $st))
+              (then unreachable))
+            (local.set $ret (i32.load offset=4 (global.get $EVENTP)))
+            (call $waitable.join (local.get $st) (i32.const 0))
+            (call $waitable-set.drop (local.get $ws))))
+        (if (i32.ne (local.get $ret) (local.get $expected-state))
+          (then unreachable))
+        (call $subtask.drop (local.get $st))
+        (call $task.return))
+
       (func (export "mock-bp-inc") (call $bp-inc))
       (func (export "mock-bp-dec") (call $bp-dec))
 
@@ -412,6 +437,8 @@
     (func (export "mock-bp-dec") (canon lift (core func $tm "mock-bp-dec")))
     (func (export "await-subtask") async (param "sub" u8) (param "state" u8) (canon lift
       (core func $tm "await-subtask") async (memory (core memory $memory "mem"))))
+    (func (export "subtask-cancel-await") async (param "sub" u8) (param "state" u8) (canon lift
+      (core func $tm "subtask-cancel-await") async (memory (core memory $memory "mem"))))
     (func (export "stream-new") (param "slot" u8) (canon lift (core func $tm "stream-new")))
     (func (export "testee-write") (param "handle" u8) (param "bytes" u32) (result s32) (canon lift (core func $tm "testee-write")))
     (func (export "testee-read") (param "handle" u8) (param "bytes" u32) (result s32) (canon lift (core func $tm "testee-read")))
@@ -473,7 +500,8 @@
       (case "subtask-drop" u8)
       (case "await-subtask" $sub-expect-e)
       (case "mock-bp-inc")
-      (case "mock-bp-dec")))
+      (case "mock-bp-dec")
+      (case "subtask-cancel-await" $sub-expect-e)))
     (export $command-e "command" (type $command))
     (import "call-import" (func $call-import (param "slot" u8) (result s32)))
     (import "stream-new" (func $stream-new (param "slot" u8)))
@@ -500,6 +528,7 @@
     (import "subtask-cancel" (func $subtask-cancel (param "sub" u8) (result s32)))
     (import "subtask-drop" (func $subtask-drop (param "sub" u8)))
     (import "await-subtask" (func $await-subtask async (param "sub" u8) (param "state" u8)))
+    (import "subtask-cancel-await" (func $subtask-cancel-await async (param "sub" u8) (param "state" u8)))
     (import "mock-bp-inc" (func $mock-bp-inc))
     (import "mock-bp-dec" (func $mock-bp-dec))
 
@@ -529,6 +558,7 @@
       (import "" "subtask-cancel" (func $subtask-cancel (param i32) (result i32)))
       (import "" "subtask-drop" (func $subtask-drop (param i32)))
       (import "" "await-subtask" (func $await-subtask (param i32 i32) (result i32)))
+      (import "" "subtask-cancel-await" (func $subtask-cancel-await (param i32 i32) (result i32)))
       (import "" "mock-bp-inc" (func $mock-bp-inc))
       (import "" "mock-bp-dec" (func $mock-bp-dec))
       (memory (export "mem") 1)
@@ -572,6 +602,7 @@
       (global $AWAIT_SUBTASK        i32 (i32.const 28))
       (global $MOCK_BP_INC          i32 (i32.const 29))
       (global $MOCK_BP_DEC          i32 (i32.const 30))
+      (global $SUBTASK_CANCEL_AWAIT i32 (i32.const 31))
 
       (global $last (mut i32) (i32.const 0))
       (global $VOID_OK i32 (i32.const 1337))
@@ -692,6 +723,11 @@
                 (global.set $last (call $await-subtask
                   (i32.load8_u offset=4 (local.get $insn))
                   (i32.load8_u offset=5 (local.get $insn))))))
+            (if (i32.eq (local.get $op) (global.get $SUBTASK_CANCEL_AWAIT))
+              (then
+                (global.set $last (call $subtask-cancel-await
+                  (i32.load8_u offset=4 (local.get $insn))
+                  (i32.load8_u offset=5 (local.get $insn))))))
 
             (if (i32.eq (local.get $op) (global.get $MOCK_BP_INC))
               (then
@@ -739,6 +775,7 @@
     (canon lower (func $subtask-cancel) (core func $subtask-cancel'))
     (canon lower (func $subtask-drop) (core func $subtask-drop'))
     (canon lower (func $await-subtask) async (core func $await-subtask'))
+    (canon lower (func $subtask-cancel-await) async (core func $subtask-cancel-await'))
     (canon lower (func $mock-bp-inc) (core func $mock-bp-inc'))
     (canon lower (func $mock-bp-dec) (core func $mock-bp-dec'))
     (core instance $dm (instantiate $DM (with "" (instance
@@ -767,6 +804,7 @@
       (export "subtask-cancel" (func $subtask-cancel'))
       (export "subtask-drop" (func $subtask-drop'))
       (export "await-subtask" (func $await-subtask'))
+      (export "subtask-cancel-await" (func $subtask-cancel-await'))
       (export "mock-bp-inc" (func $mock-bp-inc'))
       (export "mock-bp-dec" (func $mock-bp-dec'))))))
     (func (export "run") (param "prog" (list $command-e))
@@ -806,6 +844,7 @@
     (with "subtask-cancel" (func $testee "subtask-cancel"))
     (with "subtask-drop" (func $testee "subtask-drop"))
     (with "await-subtask" (func $testee "await-subtask"))
+    (with "subtask-cancel-await" (func $testee "subtask-cancel-await"))
     (with "mock-bp-inc" (func $testee "mock-bp-inc"))
     (with "mock-bp-dec" (func $testee "mock-bp-dec"))))
   (instance $types
@@ -1586,9 +1625,7 @@
     (list.const
       (variant.const "call-block-empty" (u8.const 0))
       (variant.const "expect-code" (s32.const 1))
-      (variant.const "subtask-cancel" (u8.const 0))
-      (variant.const "expect-code" (s32.const 4))
-      (variant.const "subtask-drop" (u8.const 0)))))
+      (variant.const "subtask-cancel-await" (record.const (field "sub" u8.const 0) (field "state" u8.const 4))))))
 
 (component instance $i $Tester)
 (assert_trap
@@ -1620,15 +1657,9 @@
       (variant.const "expect-code" (s32.const 1))
       (variant.const "call-block-empty" (u8.const 2))
       (variant.const "expect-code" (s32.const 1))
-      (variant.const "subtask-cancel" (u8.const 2))
-      (variant.const "expect-code" (s32.const 4))
-      (variant.const "subtask-cancel" (u8.const 0))
-      (variant.const "expect-code" (s32.const 4))
-      (variant.const "subtask-cancel" (u8.const 1))
-      (variant.const "expect-code" (s32.const 4))
-      (variant.const "subtask-drop" (u8.const 0))
-      (variant.const "subtask-drop" (u8.const 1))
-      (variant.const "subtask-drop" (u8.const 2)))))
+      (variant.const "subtask-cancel-await" (record.const (field "sub" u8.const 2) (field "state" u8.const 4)))
+      (variant.const "subtask-cancel-await" (record.const (field "sub" u8.const 0) (field "state" u8.const 4)))
+      (variant.const "subtask-cancel-await" (record.const (field "sub" u8.const 1) (field "state" u8.const 4))))))
 
 (assert_return
   (invoke "run"

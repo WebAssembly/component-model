@@ -1560,8 +1560,8 @@ canon ::= ...
         | (canon task.return (result <valtype>)? <canonopt>* (core func <id>?)) 🔀
         | (canon task.cancel (core func <id>?)) 🔀
         | (canon waitable-set.new (core func <id>?)) 🔀
-        | (canon waitable-set.wait cancellable? (memory core-prefix(<core:memoryidx>)) (core func <id>?)) 🔀
-        | (canon waitable-set.poll cancellable? (memory core-prefix(<core:memoryidx>)) (core func <id>?)) 🔀
+        | (canon waitable-set.wait (memory core-prefix(<core:memoryidx>)) (core func <id>?)) 🔀
+        | (canon waitable-set.poll (memory core-prefix(<core:memoryidx>)) (core func <id>?)) 🔀
         | (canon waitable-set.drop (core func <id>?)) 🔀
         | (canon waitable.join (core func <id>?)) 🔀
         | (canon subtask.cancel async? (core func <id>?)) 🔀
@@ -1583,12 +1583,12 @@ canon ::= ...
         | (canon thread.index (core func <id>?)) 🧵
         | (canon thread.new-indirect core-prefix(<core:typeidx>) core-prefix(<core:tableidx>) (core func <id>?)) 🧵
         | (canon thread.resume-later (core func <id>?)) 🧵
-        | (canon thread.suspend cancellable? (core func <id>?)) 🧵
-        | (canon thread.yield cancellable? (core func <id>?)) 🔀
-        | (canon thread.suspend-then-resume cancellable? (core func <id>?)) 🧵
-        | (canon thread.yield-then-resume cancellable? (core func <id>?)) 🧵
-        | (canon thread.suspend-then-promote cancellable? (core func <id>?)) 🧵
-        | (canon thread.yield-then-promote cancellable? (core func <id>?)) 🧵
+        | (canon thread.suspend (core func <id>?)) 🧵
+        | (canon thread.yield (core func <id>?)) 🔀
+        | (canon thread.suspend-then-resume (core func <id>?)) 🧵
+        | (canon thread.yield-then-resume (core func <id>?)) 🧵
+        | (canon thread.suspend-then-promote (core func <id>?)) 🧵
+        | (canon thread.yield-then-promote (core func <id>?)) 🧵
         | (canon error-context.new <canonopt>* (core func <id>?)) 📝
         | (canon error-context.debug-message <canonopt>* (core func <id>?)) 📝
         | (canon error-context.drop (core func <id>?)) 📝
@@ -1764,11 +1764,9 @@ For details, see [Returning] in the concurrency explainer and
 
 The `task.cancel` built-in indicates that the [current task] is now [resolved]
 and has dropped all borrowed handles lent to it during the call (trapping if
-otherwise). `task.cancel` can only be called after the `task-cancelled` event
-has been received (via `callback`, `waitable-set.{wait,poll}` or `thread.*`)
-to indicate that the supertask has requested cancellation and thus is not
-expecting a return value. Once this request is received, any of the task's
-threads can call `task.cancel` or `task.return`.
+otherwise). `task.cancel` can only be called after a request for cancellation
+has been [delivered][Cancellation]. Once this request is received, any of the
+task's threads may call `task.cancel` or `task.return`.
 
 For details, see [Cancellation] in the concurrency explainer and
 [`canon_task_cancel`] in the Canonical ABI explainer.
@@ -1792,7 +1790,7 @@ For details, see [Waitables and Waitable Sets] in the concurrency explainer and
 
 | Synopsis                   |                                                            |
 | -------------------------- | ---------------------------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?,memory>(s: waitable-set) -> event`      |
+| Approximate WIT signature  | `func<memory>(s: waitable-set) -> event`                   |
 | Canonical ABI signature    | `[s:i32 payload-addr:memory.addrtype] -> [event-code:i32]` |
 
 where `event` is defined in WIT as:
@@ -1825,18 +1823,16 @@ by `waitable-set.poll` and never returned by `waitable-set.wait`.)
 Waitable sets may be `wait`ed upon when empty, in which case the caller will
 necessarily block until another thread adds a waitable to the set.
 
-If `cancellable` is set, `waitable-set.wait` may return `task-cancelled`
-(`6`) if the caller requests [cancellation] of the [current task]. If
-`cancellable` is not set, `task-cancelled` is never returned.
-`task-cancelled` is returned at most once for a given task and thus must be
-propagated once received.
-
 A `subtask` event notifies the supertask that its subtask is now in the given
 state (the meanings of which are described by the [concurrency explainer]).
 
 The meanings of the `{stream,future}-{read,write}` events/payloads are given as
 part [`stream.read` and `stream.write`](#-streamread-and-streamwrite) and
 [`future.read` and `future.write`](#-futureread-and-futurewrite) below.
+
+Lastly, the `task-cancelled` event is never returned by `waitable-set.wait` or
+`waitable-set.poll`; it may only be delivered as an event code to an `async`
+`callback` function to indicate [cancellation].
 
 In the Canonical ABI, the `event-code` return value provides the `event`
 discriminant and the case payloads are stored as two contiguous `i32`s at the
@@ -1849,19 +1845,13 @@ For details, see [Waitables and Waitable Sets] in the concurrency explainer and
 
 | Synopsis                   |                                                            |
 | -------------------------- | ---------------------------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?,memory>(s: waitable-set) -> event`      |
+| Approximate WIT signature  | `func<memory>(s: waitable-set) -> event`                   |
 | Canonical ABI signature    | `[s:i32 payload-addr:memory.addrtype] -> [event-code:i32]` |
 
 where `event` is defined as in [`waitable-set.wait`](#-waitable-setwait).
 
 The `waitable-set.poll` built-in returns either an event from one of the
 waitables in `s` or, if there is none, the `none` `event`.
-
-If `cancellable` is set, `waitable-set.poll` may return `task-cancelled`
-(`6`) if the caller requests [cancellation] of the [current task]. If
-`cancellable` is not set, `task-cancelled` is never returned.
-`task-cancelled` is returned at most once for a given task and thus must be
-propagated once received.
 
 The Canonical ABI of `waitable-set.poll` is the same as `waitable-set.wait`
 (with the `none` case indicated by returning `0`).
@@ -1912,7 +1902,10 @@ For details, see [Waitables and Waitable Sets] in the concurrency explainer and
 | Approximate WIT signature  | `func<async?>(subtask: subtask) -> option<subtask-state>` |
 | Canonical ABI signature    | `[subtask:i32] -> [i32]`                                  |
 
-The `subtask.cancel` built-in requests [cancellation] of the indicated subtask.
+The `subtask.cancel` built-in requests [cancellation] of the indicated subtask,
+trapping if the caller was already notified of resolution, cancellation has
+already been requested, or the subtask is already in a waitable set.
+
 If the `async` is present, `none` is returned (represented as `-1` in the
 Canonical ABI) to indicate that the subtask blocked before it was [resolved].
 Otherwise, `subtask.cancel` returns the `subtask-state` that the subtask
@@ -2213,102 +2206,93 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 
 ###### 🧵 `thread.suspend`
 
-| Synopsis                   |                                |
-| -------------------------- | ------------------------------ |
-| Approximate WIT signature  | `func<cancellable?>() -> bool` |
-| Canonical ABI signature    | `[] -> [i32]`                  |
+| Synopsis                   |               |
+| -------------------------- | ------------- |
+| Approximate WIT signature  | `func()`      |
+| Canonical ABI signature    | `[] -> [i32]` |
 
 The `thread.suspend` built-in suspends the [current thread] until it is
 explicitly resumed by some other thread calling a built-in such as
-`thread.resume-later`. If `cancellable` is set, `thread.suspend` returns whether
-the current task was [cancelled] by the caller; otherwise, `thread.suspend`
-always returns `false`.
+`thread.resume-later`. The returned `i32` is always `0` and may be removed
+in a future ABI revision.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_suspend`] in the Canonical ABI explainer.
 
 ###### 🔀 `thread.yield`
 
-| Synopsis                   |                                |
-| -------------------------- | ------------------------------ |
-| Approximate WIT signature  | `func<cancellable?>() -> bool` |
-| Canonical ABI signature    | `[] -> [i32]`                  |
+| Synopsis                   |               |
+| -------------------------- | ------------- |
+| Approximate WIT signature  | `func()`      |
+| Canonical ABI signature    | `[] -> [i32]` |
 
 The `thread.yield` built-in allows the runtime to potentially switch to any
 other thread in the "ready" state, enabling a long-running computation to
 cooperatively interleave execution without specifically requesting another
-thread to be resumed (as with `thread.yield-then-resume`). If `cancellable` is
-set, `thread.yield` returns whether the current task was [cancelled] by the
-caller; otherwise, `thread.yield` always returns `false`.
+thread to be resumed (as with `thread.yield-then-resume`). The returned `i32` is
+always `0` and may be removed in a future ABI revision.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.suspend-then-resume`
 
-| Synopsis                   |                                         |
-| -------------------------- | --------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
-| Canonical ABI signature    | `[t:i32] -> [i32]`                      |
+| Synopsis                   |                    |
+| -------------------------- | ------------------ |
+| Approximate WIT signature  | `func(t: thread)`  |
+| Canonical ABI signature    | `[t:i32] -> [i32]` |
 
 The `thread.suspend-then-resume` built-in suspends the [current thread] and
 immediately resumes execution of the thread `t`, trapping if `t` is not in a
-"suspended" state, which includes if `t` is the current thread. If `cancellable`
-is set, `thread.suspend-then-resume` returns whether the current task was
-[cancelled] by the caller; otherwise, `thread.suspend-then-resume` always
-returns `false`.
+"suspended" state, which includes if `t` is the current thread. The returned
+`i32` is always `0` and may be removed in a future ABI revision.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_suspend_then_resume`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.yield-then-resume`
 
-| Synopsis                   |                                         |
-| -------------------------- | --------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
-| Canonical ABI signature    | `[t:i32] -> [i32]`                      |
+| Synopsis                   |                    |
+| -------------------------- | ------------------ |
+| Approximate WIT signature  | `func(t: thread)`  |
+| Canonical ABI signature    | `[t:i32] -> [i32]` |
 
 The `thread.yield-then-resume` built-in immediately resumes execution of the
 thread `t` (trapping if `t` is not in a "suspended" state, which includes if `t`
 is the current thread), leaving the [current thread] in a "ready" state so that
 the runtime can nondeterministically resume the current thread at some point in
-the future. If `cancellable` is set, `thread.yield-then-resume` returns whether
-the current task was [cancelled] by the caller; otherwise,
-`thread.yield-then-resume` always returns `false`.
+the future. The returned `i32` is always `0` and may be removed in a future ABI
+revision.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield_then_resume`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.suspend-then-promote`
 
-| Synopsis                   |                                         |
-| -------------------------- | --------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
-| Canonical ABI signature    | `[t:i32] -> [i32]`                      |
+| Synopsis                   |                    |
+| -------------------------- | ------------------ |
+| Approximate WIT signature  | `func(t: thread)`  |
+| Canonical ABI signature    | `[t:i32] -> [i32]` |
 
 The `thread.suspend-then-promote` built-in traps if `t` is the current thread
 and, otherwise, immediately resumes execution of the thread `t` if `t` is in a
-"ready" state, in any case leaving the current thread in a "suspended" state. If
-`cancellable` is set, `thread.suspend-then-promote` returns whether the current
-task was [cancelled] by the caller; otherwise, `thread.suspend-then-promote`
-always returns `false`.
+"ready" state, in any case leaving the current thread in a "suspended" state.
+The returned `i32` is always `0` and may be removed in a future ABI revision.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_suspend_then_promote`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.yield-then-promote`
 
-| Synopsis                   |                                         |
-| -------------------------- | --------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
-| Canonical ABI signature    | `[t:i32] -> [i32]`                      |
+| Synopsis                   |                    |
+| -------------------------- | ------------------ |
+| Approximate WIT signature  | `func(t: thread)`  |
+| Canonical ABI signature    | `[t:i32] -> [i32]` |
 
 The `thread.yield-then-promote` built-in traps if `t` is the current thread
 and, otherwise, immediately resumes execution of the thread `t` if `t` is in a
-"ready" state, in any case leaving the current thread in a "ready" state. If
-`cancellable` is set, `thread.yield-then-promote` returns whether the current
-task was [cancelled] by the caller; otherwise, `thread.yield-then-promote`
-always returns `false`.
+"ready" state, in any case leaving the current thread in a "ready" state. The
+returned `i32` is always `0` and may be removed in a future ABI revision.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield_then_promote`] in the Canonical ABI explainer.
@@ -3433,7 +3417,6 @@ For some use-case-focused, worked examples, see:
 [Returning]: Concurrency.md#returning
 [Resolved]: Concurrency.md#cancellation
 [Cancellation]: Concurrency.md#cancellation
-[Cancelled]: Concurrency.md#cancellation
 [Block]: Concurrency.md#blocking
 
 [Component Model Documentation]: https://component-model.bytecodealliance.org

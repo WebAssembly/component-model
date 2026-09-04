@@ -1,7 +1,10 @@
 ;; This test contains two components $C and $D where $D imports and calls $C.
 ;;  $D.run calls $C.f, which blocks on an empty waitable set
-;;  $D.run then subtask.cancels $C.f, which resumes $C.f which promptly resolves
-;;    without returning a value.
+;;  $D.run then subtask.cancels $C.f; the pending cancellation request is
+;;    delivered to $C.f's event loop as a TASK_CANCELLED event, whereupon $C.f
+;;    resolves without returning a value. Since `subtask.cancel async` only
+;;    performs a cooperative yield, whether $C.f is resumed before
+;;    subtask.cancel returns is nondeterministic and $D accepts both outcomes.
 (component
   (component $C
     (core module $Memory (memory (export "mem") 1))
@@ -114,8 +117,21 @@
           (then unreachable))
         (local.set $subtask (i32.shr_u (local.get $ret) (i32.const 4)))
 
-        ;; cancel 'f'; it should complete without blocking
+        ;; cancel 'f'; this may complete eagerly or report BLOCKED, in which
+        ;; case waiting on 'f' must produce CANCELLED_BEFORE_RETURNED
         (local.set $ret (call $subtask.cancel (local.get $subtask)))
+        (if (i32.eq (i32.const -1 (; BLOCKED ;)) (local.get $ret))
+          (then
+            (local.set $ws (call $waitable-set.new))
+            (call $waitable.join (local.get $subtask) (local.get $ws))
+            (local.set $retp2 (i32.const 8))
+            (local.set $event_code (call $waitable-set.wait (local.get $ws) (local.get $retp2)))
+            (if (i32.ne (i32.const 1 (; SUBTASK ;)) (local.get $event_code))
+              (then unreachable))
+            (if (i32.ne (local.get $subtask) (i32.load (local.get $retp2)))
+              (then unreachable))
+            (local.set $ret (i32.load offset=4 (local.get $retp2)))
+            (call $waitable.join (local.get $subtask) (i32.const 0))))
         (if (i32.ne (i32.const 4 (; CANCELLED_BEFORE_RETURNED ;)) (local.get $ret))
           (then unreachable))
 

@@ -1,10 +1,10 @@
 ;; This test exercises how a component instance's "exclusive" lock interacts
 ;; with the delivery of cancellation requests.
 ;;
-;; A `callback`-lifted task waiting in its event loop is only cancellable while
-;; the exclusive lock is free, since delivering cancellation resumes the task,
-;; which re-enters core wasm. Cancellation requested while the lock is held by
-;; another task therefore cannot be delivered immediately and is remembered as
+;; A pending cancellation request is delivered to a `callback`-lifted task
+;; waiting in its event loop only while the exclusive lock is free, since
+;; delivering the TASK_CANCELLED event resumes the task, which re-enters core
+;; wasm. While the lock is held by another task, the request therefore stays
 ;; pending. It must then be delivered as soon as the lock frees, even if the
 ;; waiting task's own readiness condition is never met.
 (component

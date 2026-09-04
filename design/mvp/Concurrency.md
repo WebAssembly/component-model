@@ -790,37 +790,37 @@ cancelled-before-started and cancelled-before-returned. A subtask in one of
 these terminal states is said to be **resolved**. A resolved subtask has always
 dropped all the borrowed handles that it was lent during the call.
 
-Cancellation is *cooperative*, delivering the request for cancellation to one
-of the subtask's threads and then allowing the subtask to continue executing
-for an arbitrary amount of time (calling imports, performing I/O and everything
-else) until the subtask decides to call [`task.cancel`] to confirm the
-cancellation or, for whatever reason, call `task.return` as-if there had been
-no cancellation. `task.cancel` enforces the same "all borrowed handles dropped"
-rule as `task.return`, so that once a subtask is resolved, the caller knows its
-lent handles have been returned. If the subtask was waiting to start due to
-backpressure, the subtask is immediately aborted without running the callee at
-all.
+Cancellation is *cooperative*, delivering a *request* for cancellation and then
+allowing the subtask to continue executing for an arbitrary amount of time
+(calling imports, performing I/O and everything else) until the subtask decides
+to call [`task.cancel`] to confirm the cancellation or, for whatever reason,
+call `task.return` as-if there had been no cancellation. `task.cancel` enforces
+the same "all borrowed handles dropped" rule as `task.return`, so that once a
+subtask is resolved, the caller knows its lent handles have been returned. If
+the subtask was waiting to start due to backpressure, the subtask is immediately
+aborted without running the callee at all.
 
-When `subtask.cancel` is called, it will attempt to immediately resume one of
-the subtask's threads which is in a cancellable state, passing it a sentinel
-"cancelled" value. A thread is in a "cancellable" state if it calls one of the
-[blocking](#blocking) built-ins with the `cancellable` immediate set (indicating
-that the caller expects and propagates cancellation appropriately) or, if using
-a `callback`, returns to the event loop and no other thread is holding the
-"exclusive" lock. If a subtask has no cancellable threads, no thread is resumed
-and the request for cancellation is remembered in the task state, to be
-delivered at the next cancellable opportunity. In the worst case, though, a
-component may *never* wait cancellably and thus cancellation may be silently
-ignored.
+When `subtask.cancel` is called, it first records a "pending cancellation
+request" on the callee's task. If the callee's task was waiting to start due to
+[backpressure](#backpressure), `subtask.cancel` returns "cancelled before
+started" immediately. Otherwise, `subtask.cancel` performs a nonblocking,
+cooperative `thread.yield` that allows the host to nondeterministically schedule
+any cooperative threads it wants in the hopes of delivering the cancellation
+request to the callee. Currently, cancellation requests can only be delivered
+to `async` functions using the stackless `callback` ABI. In this case, a pending
+cancellation request is delivered as a "task cancelled" event to the `callback`
+function, following the standard run-to-completion rules mentioned above. In
+the [future](#TODO), other cancellation delivery mechanisms will be added for
+the `async` functions using the stackful ABI.
 
 `subtask.cancel` can be called synchronously or asynchronously. If called
-synchronously, `subtask.cancel` blocks until the subtask reaches a resolved
-state and returns which state was reached. If called asynchronously, then if a
-cancellable subtask thread is resumed *and* the subtask reaches a resolved
-state before blocking for whatever reason `subtask.cancel` will return
-which state was reached. Otherwise, `subtask.cancel` will return a "blocked"
-sentinel value and the caller must [wait](#waitables-and-waitable-sets) via
-waitable set until the subtask reaches a resolved state.
+synchronously, `subtask.cancel` will block until the subtask has resolved (i.e.,
+the subtask returns a value or calls `task.cancel`), returning whether the
+callee "returned" or "cancelled before returning". If called *asynchronously*
+and the callee has *still* not resolved after the host decides the cooperative
+yield has completed, `subtask.cancel` will return "blocked" instead and the
+caller must [wait](#waitables-and-waitable-sets) via waitable set until the
+subtask reaches a resolved state.
 
 The Component Model does not provide a mechanism to force prompt termination of
 threads as this can lead to leaks and corrupt state in a still-live component
@@ -869,16 +869,14 @@ defined by the Component Model:
 * If multiple tasks are blocked by backpressure and the backpressure is
   disabled, the order in which these pending tasks start, along with how
   they interleave with new tasks, is nondeterministic.
-* If a task containing multiple threads is cancelled, the choice of which
-  thread receives the request for cancellation is nondeterministic.
+* When `subtask.cancel` is called for a task that has started (i.e., passed the
+  backpressure gate), the host may nondeterministically resume as many or as few
+  threads as it wants before `subtask.cancel` returns.
 
 Despite the above, the following scenarios do behave deterministically:
 * If a component `a` asynchronously calls the export of another component `b`,
   control flow deterministically transfers to `b` and then back to `a` when
   `b` returns or blocks.
-* If a component `a` asynchronously cancels a subtask in another component `b`,
-  control flow deterministically transfers to `b` and then back to `a` when `b`
-  resolves or blocks.
 * If a component `a` asynchronously cancels a subtask in another component `b`
   that was blocked before starting due to backpressure, cancellation completes
   deterministically and immediately.
@@ -1481,6 +1479,8 @@ the concurrency story:
 * remove the temporary trap mentioned above that occurs when a `read` and
   `write` of a stream/future happen from within the same component instance
 * zero-copy forwarding/splicing
+* allow `async` functions using the stackful ABI to be notified of
+  cancellation
 * allow the `stream<char>` type to validate; make it use `string-encoding`
   and not split code points
 * add built-ins providing guest code more control over its containing

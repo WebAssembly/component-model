@@ -1084,18 +1084,18 @@
   "\1b\04"                                    ;; 0x1b future.drop-writable
   "\1f"                                       ;; 0x1f waitable-set.new
   "\20\00\00"                                 ;; 0x20 waitable-set.wait (memory 0)
-  "\21\01\00"                                 ;; 0x21 waitable-set.poll cancellable (memory 0)
+  "\21\00\00"                                 ;; 0x21 waitable-set.poll (memory 0)
   "\22"                                       ;; 0x22 waitable-set.drop
   "\23"                                       ;; 0x23 waitable.join
   "\26"                                       ;; 0x26 thread.index
   "\27\00\00"                                 ;; 0x27 thread.new-indirect (core type 0) (table 0)
   "\28"                                       ;; 0x28 thread.resume-later
   "\29\00"                                    ;; 0x29 thread.suspend
-  "\0c\01"                                    ;; 0x0c thread.yield cancellable
+  "\0c\00"                                    ;; 0x0c thread.yield
   "\2a\00"                                    ;; 0x2a thread.suspend-then-resume
   "\2b\00"                                    ;; 0x2b thread.yield-then-resume
   "\2c\00"                                    ;; 0x2c thread.suspend-then-promote
-  "\2d\01"                                    ;; 0x2d thread.yield-then-promote cancellable
+  "\2d\00"                                    ;; 0x2d thread.yield-then-promote
 )
 
 (assert_malformed
@@ -1180,6 +1180,106 @@
     "\20\02\00"                               ;; waitable-set.wait with flag 0x02
   )
   "invalid boolean value"
+)
+
+;; the 'cancellable' immediate was removed; the vestigial byte must be 0x00
+(assert_malformed
+  (component binary
+    "\00asm" "\0d\00\01\00"                     ;; preamble
+    "\01\16"                                    ;; core module section (22 bytes)
+    "\00asm" "\01\00\00\00"                     ;; core module preamble
+    "\05\03\01\00\01"                           ;; memory section: 1 memory
+    "\07\07\01"                                 ;; export section, 1 export
+    "\03mem"                                    ;; name "mem"
+    "\02\00"                                    ;; memory 0
+    "\02\04"                                    ;; core instance section (4 bytes)
+    "\01"                                       ;; 1 core instance
+    "\00\00\00"                                 ;; instantiate module 0, 0 args
+    "\06\09"                                    ;; alias section (9 bytes)
+    "\01"                                       ;; 1 alias
+    "\00\02\01\00"                              ;; core memory
+    "\03mem"                                    ;; name "mem"
+    "\08\04"                                    ;; canon section (4 bytes)
+    "\01"                                       ;; 1 canon
+    "\20\01\00"                                 ;; 0x20 waitable-set.wait, reserved byte 0x01, (memory 0)
+  )
+  "non-zero reserved byte"
+)
+(assert_malformed
+  (component binary
+    "\00asm" "\0d\00\01\00"                     ;; preamble
+    "\01\16"                                    ;; core module section (22 bytes)
+    "\00asm" "\01\00\00\00"                     ;; core module preamble
+    "\05\03\01\00\01"                           ;; memory section: 1 memory
+    "\07\07\01"                                 ;; export section, 1 export
+    "\03mem"                                    ;; name "mem"
+    "\02\00"                                    ;; memory 0
+    "\02\04"                                    ;; core instance section (4 bytes)
+    "\01"                                       ;; 1 core instance
+    "\00\00\00"                                 ;; instantiate module 0, 0 args
+    "\06\09"                                    ;; alias section (9 bytes)
+    "\01"                                       ;; 1 alias
+    "\00\02\01\00"                              ;; core memory
+    "\03mem"                                    ;; name "mem"
+    "\08\04"                                    ;; canon section (4 bytes)
+    "\01"                                       ;; 1 canon
+    "\21\01\00"                                 ;; 0x21 waitable-set.poll, reserved byte 0x01, (memory 0)
+  )
+  "non-zero reserved byte"
+)
+(assert_malformed
+  (component binary
+    "\00asm" "\0d\00\01\00"                   ;; preamble
+    "\08\03"                                  ;; canon section (3 bytes)
+    "\01"                                     ;; 1 canon
+    "\29\01"                                  ;; 0x29 thread.suspend, reserved byte 0x01
+  )
+  "non-zero reserved byte"
+)
+(assert_malformed
+  (component binary
+    "\00asm" "\0d\00\01\00"                   ;; preamble
+    "\08\03"                                  ;; canon section (3 bytes)
+    "\01"                                     ;; 1 canon
+    "\0c\01"                                  ;; 0x0c thread.yield, reserved byte 0x01
+  )
+  "non-zero reserved byte"
+)
+(assert_malformed
+  (component binary
+    "\00asm" "\0d\00\01\00"                   ;; preamble
+    "\08\03"                                  ;; canon section (3 bytes)
+    "\01"                                     ;; 1 canon
+    "\2a\01"                                  ;; 0x2a thread.suspend-then-resume, reserved byte 0x01
+  )
+  "non-zero reserved byte"
+)
+(assert_malformed
+  (component binary
+    "\00asm" "\0d\00\01\00"                   ;; preamble
+    "\08\03"                                  ;; canon section (3 bytes)
+    "\01"                                     ;; 1 canon
+    "\2b\01"                                  ;; 0x2b thread.yield-then-resume, reserved byte 0x01
+  )
+  "non-zero reserved byte"
+)
+(assert_malformed
+  (component binary
+    "\00asm" "\0d\00\01\00"                   ;; preamble
+    "\08\03"                                  ;; canon section (3 bytes)
+    "\01"                                     ;; 1 canon
+    "\2c\01"                                  ;; 0x2c thread.suspend-then-promote, reserved byte 0x01
+  )
+  "non-zero reserved byte"
+)
+(assert_malformed
+  (component binary
+    "\00asm" "\0d\00\01\00"                   ;; preamble
+    "\08\03"                                  ;; canon section (3 bytes)
+    "\01"                                     ;; 1 canon
+    "\2d\01"                                  ;; 0x2d thread.yield-then-promote, reserved byte 0x01
+  )
+  "non-zero reserved byte"
 )
 
 ;; import section (id 10) and export section (id 11)
