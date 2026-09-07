@@ -577,7 +577,7 @@ or `future`. When *producing* a `stream` or `future` value as a parameter (of
 an import call) or result (of an export call), the producer can *transfer
 ownership* of a readable end that it has either been given by the outside world
 or freshly created via `{stream,future}.new` (which also return a fresh paired
-writable end that is permanently owned by the calling component instance).
+writable end).
 
 Based on this, `stream<T>` and `future<T>` values can be passed between
 functions as if they were synchronous `list<T>` and `T` values, resp. For
@@ -600,8 +600,8 @@ and writable ends of streams and futures can then be
 progress signals *completion* of a read or write (i.e., the bytes have already
 been copied into the buffer). Additionally, *readiness* (to perform a read or
 write in the future) can be queried and signalled by performing a `0`-length
-read or write (see the [Stream State] section in the Canonical ABI explainer
-for details).
+read or write (see the [Stream and Future State] section in the Canonical ABI
+explainer for details).
 
 As a temporary limitation, if a `read` and `write` for a single stream or
 future occur from within the same component and the element type is a
@@ -619,8 +619,15 @@ without requiring an explicit `future` return type. Thus, a function like
 which point the caller receives the readable end of a `future` that, when
 successfully read, conveys the completion of a second event.
 
-The [Stream State] and [Future State] sections describe the runtime state
-maintained for streams and futures by the Canonical ABI.
+Given the readable end of one stream/future and the writable end of another, the
+`{stream,future}.forward` built-ins can be called to efficiently forward all
+remaining values from the readable end into the writable end, avoiding any
+intermediate copies. Doing so relinquishes ownership of both handles, allowing
+the calling component instance to be eagerly torn down while the forwarding is
+in progress.
+
+The [Stream and Future State] section describes the runtime state maintained for
+streams and futures by the Canonical ABI.
 
 ### Stream Readiness
 
@@ -1478,7 +1485,6 @@ specified, the following features are being considered for addition to complete
 the concurrency story:
 * remove the temporary trap mentioned above that occurs when a `read` and
   `write` of a stream/future happen from within the same component instance
-* zero-copy forwarding/splicing
 * allow `async` functions using the stackful ABI to be notified of
   cancellation
 * allow the `stream<char>` type to validate; make it use `string-encoding`
@@ -1574,8 +1580,7 @@ the concurrency story:
 [`ComponentInstance`]: CanonicalABI.md#component-instances
 [`Thread`]: CanonicalABI.md#threads
 [`Task`]: CanonicalABI.md#tasks
-[Stream State]: CanonicalABI.md#stream-state
-[Future State]: CanonicalABI.md#future-state
+[Stream and Future State]: CanonicalABI.md#stream-and-future-state
 
 [Binary Format]: Binary.md
 [WIT]: WIT.md

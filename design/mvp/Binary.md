@@ -316,6 +316,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x12 t:<typeidx> async?:<async?>                    => (canon stream.cancel-write t async? (core func)) 🔀
            | 0x13 t:<typeidx>                                    => (canon stream.drop-readable t (core func)) 🔀
            | 0x14 t:<typeidx>                                    => (canon stream.drop-writable t (core func)) 🔀
+           | 0x2e t:<typeidx>                                    => (canon stream.forward t (core func)) ➡️
            | 0x15 t:<typeidx>                                    => (canon future.new t (core func)) 🔀
            | 0x16 t:<typeidx> opts:<opts>                        => (canon future.read t opts (core func)) 🔀
            | 0x17 t:<typeidx> opts:<opts>                        => (canon future.write t opts (core func)) 🔀
@@ -323,6 +324,7 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x19 t:<typeidx> async?:<async?>                    => (canon future.cancel-write t async? (core func)) 🔀
            | 0x1a t:<typeidx>                                    => (canon future.drop-readable t (core func)) 🔀
            | 0x1b t:<typeidx>                                    => (canon future.drop-writable t (core func)) 🔀
+           | 0x2f t:<typeidx>                                    => (canon future.forward t (core func)) ➡️
            | 0x1c opts:<opts>                                    => (canon error-context.new opts (core func)) 📝
            | 0x1d opts:<opts>                                    => (canon error-context.debug-message opts (core func)) 📝
            | 0x1e                                                => (canon error-context.drop (core func)) 📝

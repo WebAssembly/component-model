@@ -158,6 +158,26 @@
         (if (i32.ne (i32.const 1) (local.get $sr))
           (then unreachable))
 
+        ;; same as above, but with a 4-byte buffer that $C's write fills
+        ;; exactly, so the read has already fully completed by the time $C
+        ;; drops. Cancelling still shows "4+dropped", not "4+completed",
+        ;; because the stream is dropped when the event is delivered.
+        (local.set $ret (call $stream.read (local.get $sr) (i32.const 8) (i32.const 4)))
+        (if (i32.ne (i32.const -1 (; BLOCKED;)) (local.get $ret))
+          (then unreachable))
+        (call $write4-and-drop)
+        (local.set $ret (call $stream.cancel-read (local.get $sr)))
+        (if (i32.ne (i32.const 0x41 (; DROPPED=1 | (4<<4) ;)) (local.get $ret))
+          (then unreachable))
+        (if (i32.ne (i32.const 0xabcd) (i32.load (i32.const 8)))
+          (then unreachable))
+        (call $stream.drop-readable (local.get $sr))
+
+        ;; get a new $sr
+        (local.set $sr (call $start-stream))
+        (if (i32.ne (i32.const 1) (local.get $sr))
+          (then unreachable))
+
         ;; start outstanding write in $C, read 4 of it, then call back into $C
         ;; which will cancel and see 4 written.
         (call $start-blocking-write)

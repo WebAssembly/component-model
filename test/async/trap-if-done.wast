@@ -77,7 +77,9 @@
         (call $stream.write (global.get $writable-end) (i32.const 16) (i32.const 1))
       )
       (func $acknowledge-stream-write (export "acknowledge-stream-write")
-        ;; confirm we got a STREAM_WRITE $writable-end COMPLETED event
+        ;; confirm we got a STREAM_WRITE $writable-end event; the write is
+        ;; reported as DROPPED, not COMPLETED, because the readable end was
+        ;; dropped before we observed the event
         (local $ret i32)
         (local.set $ret (call $waitable-set.wait (global.get $ws) (i32.const 0)))
         (if (i32.ne (i32.const 3 (; STREAM_WRITE ;)) (local.get $ret))
@@ -318,7 +320,8 @@
         ;; then drop our readable end
         (call $stream.drop-readable (local.get $sr))
 
-        ;; let $C see that it's stream.write COMPLETED and wrote 1 elem
+        ;; let $C observe its write: because we dropped in the meantime, the
+        ;; fully-copied write is reported as DROPPED with its 1 elem of progress
         (call $acknowledge-stream-write)
 
         ;; now calling stream.write again in $C will trap
@@ -379,6 +382,50 @@
         ))
         unreachable
       )
+      (func $trap-after-stream-writer-dropped-after-write (export "trap-after-stream-writer-dropped-after-write") (param $bool i32) (result i32)
+        (local $ret i32) (local $ws i32)
+        (local $sr i32)
+        (local.set $sr (call $start-stream))
+
+        ;; start a read on our end first which will block; the 1-elem buffer is
+        ;; exactly filled by $C's write below, so both copies complete
+        (local.set $ret (call $stream.read (local.get $sr) (i32.const 16) (i32.const 1)))
+        (if (i32.ne (i32.const -1 (; BLOCKED ;)) (local.get $ret))
+          (then unreachable))
+
+        ;; $C's write rendezvouses with our read and fills our buffer completely
+        (local.set $ret (call $stream-write))
+        (if (i32.ne (i32.const 0x10 (; COMPLETED=0 | (1<<4) ;)) (local.get $ret))
+          (then unreachable))
+        (if (i32.ne (i32.const 42) (i32.load8_u (i32.const 16)))
+          (then unreachable))
+
+        ;; drop the writable end before we've observed our own event
+        (call $stream-drop-writable)
+
+        ;; even though the read already copied everything it asked for, it is
+        ;; reported as DROPPED (keeping its progress) because the stream is
+        ;; dropped by the time the event is delivered
+        (local.set $ws (call $waitable-set.new))
+        (call $waitable.join (local.get $sr) (local.get $ws))
+        (local.set $ret (call $waitable-set.wait (local.get $ws) (i32.const 0)))
+        (if (i32.ne (i32.const 2 (; STREAM_READ ;)) (local.get $ret))
+          (then unreachable))
+        (if (i32.ne (local.get $sr) (i32.load (i32.const 0)))
+          (then unreachable))
+        (if (i32.ne (i32.const 0x11 (; DROPPED=1 | (1<<4) ;)) (i32.load (i32.const 4)))
+          (then unreachable))
+
+        ;; ... and so the readable end is now done
+        (if (i32.eqz (local.get $bool)) (then
+          ;; calling stream.read again should then trap
+          (drop (call $stream.read (local.get $sr) (i32.const 16) (i32.const 1)))
+        ) (else
+          ;; lifting the stream by returning it should also trap
+          (return (local.get $sr))
+        ))
+        unreachable
+      )
     )
     (type $FT (future u8))
     (type $ST (stream u8))
@@ -428,6 +475,7 @@
     (func (export "trap-after-stream-reader-async-dropped") async (canon lift (core func $core "trap-after-stream-reader-async-dropped")))
     (func (export "trap-after-stream-writer-eager-dropped") async (param "bool" bool) (result $ST) (canon lift (core func $core "trap-after-stream-writer-eager-dropped")))
     (func (export "trap-after-stream-writer-async-dropped") async (param "bool" bool) (result $ST) (canon lift (core func $core "trap-after-stream-writer-async-dropped")))
+    (func (export "trap-after-stream-writer-dropped-after-write") async (param "bool" bool) (result $ST) (canon lift (core func $core "trap-after-stream-writer-dropped-after-write")))
   )
   (instance $c (instantiate $C))
   (instance $d (instantiate $D (with "c" (instance $c))))
@@ -440,6 +488,7 @@
   (func (export "trap-after-stream-reader-async-dropped") (alias export $d "trap-after-stream-reader-async-dropped"))
   (func (export "trap-after-stream-writer-eager-dropped") (alias export $d "trap-after-stream-writer-eager-dropped"))
   (func (export "trap-after-stream-writer-async-dropped") (alias export $d "trap-after-stream-writer-async-dropped"))
+  (func (export "trap-after-stream-writer-dropped-after-write") (alias export $d "trap-after-stream-writer-dropped-after-write"))
 )
 
 (component instance $i1 $Tester)
@@ -468,3 +517,7 @@
 (assert_trap (invoke "trap-after-stream-writer-async-dropped" (bool.const false)) "cannot read from stream after being notified that the writable end dropped")
 (component instance $i9.2 $Tester)
 (assert_trap (invoke "trap-after-stream-writer-async-dropped" (bool.const true)) "cannot lift stream after being notified that the writable end dropped")
+(component instance $i10.1 $Tester)
+(assert_trap (invoke "trap-after-stream-writer-dropped-after-write" (bool.const false)) "cannot read from stream after being notified that the writable end dropped")
+(component instance $i10.2 $Tester)
+(assert_trap (invoke "trap-after-stream-writer-dropped-after-write" (bool.const true)) "cannot lift stream after being notified that the writable end dropped")

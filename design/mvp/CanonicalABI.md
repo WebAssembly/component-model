@@ -22,8 +22,7 @@ specified here.
   * [Waitable State](#waitable-state)
   * [Subtask State](#subtask-state)
   * [Buffer State](#buffer-state)
-  * [Stream State](#stream-state)
-  * [Future State](#future-state)
+  * [Stream and Future State](#stream-and-future-state)
 * [Despecialization](#despecialization)
 * [Type Predicates](#type-predicates)
 * [Alignment](#alignment)
@@ -58,6 +57,7 @@ specified here.
   * [`canon future.{read,write}`](#-canon-futurereadwrite) 🔀
   * [`canon {stream,future}.cancel-{read,write}`](#-canon-streamfuturecancel-readwrite) 🔀
   * [`canon {stream,future}.drop-{readable,writable}`](#-canon-streamfuturedrop-readablewritable) 🔀
+  * [`canon {stream,future}.forward`](#-canon-streamfutureforward) ➡️
   * [`canon thread.index`](#-canon-threadindex) 🧵
   * [`canon thread.new-indirect`](#-canon-threadnew-indirect) 🧵
   * [`canon thread.resume-later`](#-canon-threadresume-later) 🧵
@@ -1477,7 +1477,6 @@ class Buffer:
   MAX_LENGTH = 2**28 - 1
   t: ValType
   remain: Callable[[], int]
-  is_zero_length: Callable[[], bool]
 
 class ReadableBuffer(Buffer):
   read: Callable[[int], list[any]]
@@ -1498,12 +1497,12 @@ memory over time).
 
 The `ReadableBuffer` and `WritableBuffer` abstract classes may either be
 implemented by the host or by another wasm component. In the latter case, these
-abstract classes are implemented by the concrete `ReadableBufferGuestImpl` and
-`WritableBufferGuestImpl` classes which eagerly check alignment and range
-when the buffer is constructed so that `read` and `write` are infallible
-operations (modulo traps):
+abstract classes are implemented by the concrete `ReadableGuestBuffer` and
+`WritableGuestBuffer` classes which eagerly check alignment and range when the
+buffer is constructed so that `read` and `write` are infallible operations
+(modulo traps):
 ```python
-class BufferGuestImpl(Buffer):
+class GuestBuffer(Buffer):
   cx: LiftLowerContext
   t: ValType
   ptr: int
@@ -1524,10 +1523,7 @@ class BufferGuestImpl(Buffer):
   def remain(self):
     return self.length - self.progress
 
-  def is_zero_length(self):
-    return self.length == 0
-
-class ReadableBufferGuestImpl(BufferGuestImpl, ReadableBuffer):
+class ReadableGuestBuffer(GuestBuffer, ReadableBuffer):
   def read(self, n):
     assert(n <= self.remain())
     if self.t:
@@ -1538,7 +1534,7 @@ class ReadableBufferGuestImpl(BufferGuestImpl, ReadableBuffer):
     self.progress += n
     return vs
 
-class WritableBufferGuestImpl(BufferGuestImpl, WritableBuffer):
+class WritableGuestBuffer(GuestBuffer, WritableBuffer):
   def write(self, vs):
     assert(len(vs) <= self.remain())
     if self.t:
@@ -1559,22 +1555,64 @@ that do all the heavy lifting are shared with function parameter/result lifting
 and lowering and defined below.
 
 
-### Stream State
+### Stream and Future State
 
-Values of `stream` type are represented in the Canonical ABI as `i32` indices
-into the current component instance's `handles` table referring to either the
-[readable or writable end] of a stream. Reading from the readable end of a
-stream is achieved by calling `stream.read` and supplying a `WritableBuffer`.
-Conversely, writing to the writable end of a stream is achieved by calling
-`stream.write` and supplying a `ReadableBuffer`. The runtime waits until both
-a readable and writable buffer have been supplied and then performs a direct
-copy between the two buffers. This rendezvous-based design avoids the need
-for an intermediate buffer and copy (unlike, e.g., a Unix pipe; a Unix pipe
-would instead be implemented as a resource type owning the buffer memory and
-*two* streams; on going in and one coming out).
+`stream` and `future` types used in function parameters and results are
+represented in the Canonical ABI as `i32` indices into the component instance's
+`handles` table that refer to the *readable* [end] of a stream or future.
+*Writable* ends are never passed across component boundaries and are instead
+added directly to the `handles` table, along with a paired readable end, via the
+`{stream,future}.new` built-ins. Stream and future readable and writable ends
+are represented by the following 4 concrete classes (kept distinct for
+`isinstance` type-testing purposes) which share a common `End` base class. `End`
+itself derives `Waitable` which means that stream and future ends can be added
+to waitable sets and waited on via `waitable-set.wait` or `callback` event loop.
+```python
+class End(Waitable):
+  class State(Enum):
+    IDLE = 1
+    COPYING = 2
+    CANCELLING_COPY = 3
+    DONE = 4
 
-The result of a `{stream,future}.{read,write}` is communicated to the wasm
-guest via a `CopyResult` code:
+  state: State
+  shared: Stream|Future
+
+  def __init__(self, shared):
+    Waitable.__init__(self)
+    self.state = End.State.IDLE
+    self.shared = shared
+
+  def copying(self):
+    match self.state:
+      case End.State.IDLE | End.State.DONE:
+        return False
+      case End.State.COPYING | End.State.CANCELLING_COPY:
+        return True
+
+  def drop(self):
+    trap_if(self.copying())
+    trap_if(isinstance(self, WritableFutureEnd) and self.state != End.State.DONE)
+    self.shared.drop()
+    Waitable.drop(self)
+
+class ReadableStreamEnd(End): ...
+class WritableStreamEnd(End): ...
+class ReadableFutureEnd(End): ...
+class WritableFutureEnd(End): ...
+```
+Each `End` maintains its own independent `state` that reflects what *that end*
+is currently doing or has done and is used to enforce that the end follows the
+ABI rules. In particular, ends cannot be dropped while copying. Additionally,
+the writable end of a future cannot be dropped before having written a value (or
+having been notified that the readable end of the future has been dropped).
+
+Additionally, readable and writable ends store a reference to a `Stream` or
+`Future` object that is shared with the other end in the `End.shared` field.
+This shared `Stream` or `Future` object's mutable state is used to synchronize
+the passing of values from the writable end to the readable end and then
+communicate the result of this operation to each respective end via a
+`CopyResult` code:
 ```python
 class CopyResult(IntEnum):
   COMPLETED = 0
@@ -1584,142 +1622,150 @@ class CopyResult(IntEnum):
 The `DROPPED` code indicates that the *other* end has since been dropped and
 thus no more reads/writes are possible. The `CANCELLED` code is only possible
 after *this* end has performed a `{stream,future}.{read,write}` followed by a
-`{stream,future}.cancel-{read,write}`; `CANCELLED` notifies the wasm code
-that the cancellation finished and so ownership of the memory buffer has been
+`{stream,future}.cancel-{read,write}`; `CANCELLED` notifies the wasm code that
+the cancellation finished and so ownership of the memory buffer has been
 returned to the wasm code. Lastly, `COMPLETED` indicates that the copy is done
-and neither `DROPPED` nor `CANCELLED` apply.
+and neither `DROPPED` nor `CANCELLED` apply. For streams, the `CopyResult`
+code is returned in a packed `i32` along with the number of values copied.
 
-As with functions and buffers, native host code can be on either side of a
-stream. Thus, streams are defined in terms of abstract interfaces that can be
-implemented and consumed by wasm or host code (with all {wasm,host} pairings
-being possible and well-defined). Since a `stream` in a function parameter or
-result type always represents the transfer of the *readable* end of a stream,
-only the `ReadableStream` interface can be implemented by either wasm or the
-host; the `WritableStream` interface is always written to by wasm via a
-writable stream end created by `stream.new`.
+Both `Stream` and `Future`, defined next, inherit from a common `AsyncValue`
+base class that factors out some common fields and definitions:
 ```python
-ReclaimBuffer = Callable[[], None]
-OnCopy = Callable[[ReclaimBuffer], None]
-OnCopyDone = Callable[[CopyResult], None]
-
-class SharedBase:
+class AsyncValue:
   t: ValType
-  cancel: Callable[[], None]
-  drop: Callable[[], None]
-
-class ReadableStream(SharedBase):
-  read: Callable[[ComponentInstance, WritableBuffer, OnCopy, OnCopyDone], None]
-
-class WritableStream(SharedBase):
-  write: Callable[[ComponentInstance, ReadableBuffer, OnCopy, OnCopyDone], None]
-```
-The key operations in these interfaces are `read` and `write` which work as
-follows:
-* `read` never blocks and returns its values by either synchronously or
-  asynchronously writing to the given `WritableBuffer` and then calling the
-  given `OnCopy*` callbacks to notify the caller of progress.
-* Symmetrically, `write` never blocks and takes the value to be written
-  from the given `ReadableBuffer`, calling the given `OnCopy*` callbacks to
-  notify the caller of progress.
-* `OnCopyDone` is called to indicate that the `read` or `write` is finished
-  copying and that the caller has regained ownership of the buffer.
-* `OnCopy` is called to indicate a copy has been made to or from the buffer.
-  However, there may be further copies made in the future, so the caller has
-  *not* regained ownership of the buffer.
-* The `ReclaimBuffer` callback passed to `OnCopy` allows the caller of `read` or
-  `write` to immediately regain ownership of the buffer once the first copy has
-  completed.
-* `cancel` is non-blocking, but does **not** guarantee that ownership of
-  the buffer has been returned; `cancel` only lets the caller *request* that
-  one of the `OnCopy*` callbacks be called ASAP (which may or may not happen
-  during `cancel`).
-* The client may not call `read`, `write` or `drop` while there is a previous
-  `read` or `write` in progress.
-
-The `OnCopy*` callbacks are a spec-internal detail used to specify the allowed
-concurrent behaviors of `stream.{read,write}` and not exposed directly to core
-wasm code. Specifically, the point of the `OnCopy*` callbacks is to specify that
-*multiple* reads or writes are allowed into the same `Buffer` up until the point
-where either the buffer is full or the calling core wasm code receives a
-`STREAM_READ` or `STREAM_WRITE` progress event (in which case `ReclaimBuffer` is
-called). This reduces the number of context-switches required by the spec,
-particularly when streaming between two components.
-
-The `SharedStreamImpl` class implements both `ReadableStream` and
-`WritableStream` for streams created by wasm (via `stream.new`) and tracks the
-common state shared by both the readable and writable ends of streams (defined
-below).
-
-Introducing `SharedStreamImpl` in chunks, starting with the fields and initialization:
-```python
-class SharedStreamImpl(ReadableStream, WritableStream):
+  readable_end: End
+  writable_end: End
   dropped: bool
-  pending_inst: Optional[ComponentInstance]
   pending_buffer: Optional[Buffer]
-  pending_on_copy: Optional[OnCopy]
-  pending_on_copy_done: Optional[OnCopyDone]
+  pending_on_copy_done: Optional[Callable[[CopyResult], None]]
+  pending_on_partial_copy: Optional[Callable[[], None]]
+  pending_inst: Optional[ComponentInstance]
 
-  def __init__(self, t):
+  def __init__(self, t, readable_end, writable_end):
+    assert(readable_end.shared is self and writable_end.shared is self)
     self.t = t
+    self.readable_end = readable_end
+    self.writable_end = writable_end
     self.dropped = False
     self.reset_pending()
 
   def reset_pending(self):
     self.set_pending(None, None, None, None)
 
-  def set_pending(self, inst, buffer, on_copy, on_copy_done):
-    self.pending_inst = inst
+  def set_pending(self, inst, buffer, on_copy_done, on_partial_copy = None):
     self.pending_buffer = buffer
-    self.pending_on_copy = on_copy
     self.pending_on_copy_done = on_copy_done
+    self.pending_on_partial_copy = on_partial_copy
+    self.pending_inst = inst
 ```
-If set, the `pending_*` fields record the `Buffer` and `OnCopy*` callbacks of a
-`read` or `write` that is waiting to rendezvous with a complementary `write` or
-`read`. Dropping the readable or writable end of a stream or cancelling a
-`read` or `write` notifies any pending `read` or `write` via its `OnCopyDone`
-callback:
+As shown above, `Stream`s and `Future`s store references to their readable and
+writable ends. The `Readable{Stream,Future}End` object stored in `readable_end`
+is passed directly between components as the high-level value that is "lifted"
+from the `i32` index.
+
+Stream and future read and write operations all take caller-supplied
+`{Readable,Writable}Buffer`s. Once *both* ends of a particular stream or future
+have provided their corresponding `Buffer`, the host is able to do a direct copy
+from the writer's `ReadableBuffer` into the reader's `WritableBuffer`. To enable
+this rendezvous, `AsyncValue` has 4 optional `pending_*` fields that, when set,
+store the relevant information about the reader or writer end that showed up
+first and is waiting to rendezvous. In particular:
+* `pending_buffer`: holds the pending end's caller-supplied buffer mentioned
+  above.
+* `pending_on_copy_done`: a callback used to notify the pending end that the
+  operation has completed, what happened, and that ownership of the
+  caller-supplied buffer has been returned.
+* `pending_on_partial_copy`: a callback used to notify a pending *stream* reader
+  or writer that some elements have been copied, but there is still buffer space
+  remaining and so the buffer is kept pending for more copies.
+* `pending_inst`: the component instance of the pending end
+
+A pending copy can be cancelled by `{stream,future}.cancel-{read,write}` which
+clears the pending state and immediately calls the pending end's `on_copy_done`
+callback. As a special host privilege not modelled here, hosts are allowed to
+make cancellation block (which may be necessary to efficiently use various
+completion-based [OS][OIO] [APIs][io_uring]). In the future, guest components
+will be given similar expressive capability, which would be modelled by *not*
+calling `pending_on_copy_done` immediately.
 ```python
+  def cancel(self):
+    self.reset_and_notify_pending(CopyResult.CANCELLED)
+
   def reset_and_notify_pending(self, result):
     pending_on_copy_done = self.pending_on_copy_done
     self.reset_pending()
     pending_on_copy_done(result)
+```
 
-  def cancel(self):
-    self.reset_and_notify_pending(CopyResult.CANCELLED)
-
+When an end is dropped by calling `{stream,future}.drop-{readable,writable}`,
+`End.drop` (defined above) calls `AsyncValue.drop` here which records this fact
+for future reference and then notifies any pending end that the other side is
+permanently closed and thus the only valid next operation is to drop their end.
+```python
   def drop(self):
     if not self.dropped:
       self.dropped = True
       if self.pending_buffer:
         self.reset_and_notify_pending(CopyResult.DROPPED)
 ```
-While the abstract `ReadableStream` and `WritableStream` interfaces *allow*
-`cancel` to return without having returned ownership of the buffer (which, in
-general, is necessary for [various][OIO] [host][io_uring] APIs), when *wasm* is
-implementing the stream, `cancel` always returns ownership of the buffer
-immediately.
 
-Note that `cancel` and `drop` notify in opposite directions:
-* `cancel` *must* be called on a readable or writable end with an operation
-  pending, and thus `cancel` notifies the same end that called it.
-* `drop` *must not* be called on a readable or writable end with an operation
-  pending, and thus `drop` notifies the opposite end.
-
-The `read` method implements `ReadableStream.read` and is called by either
-`stream.read` or the host, depending on who is passed the readable end of the
-stream. If the reader is first to rendezvous, then all the parameters are
-stored in the `pending_*` fields, requiring the reader to wait for the writer
-to rendezvous. If the writer was first to rendezvous, then there is already a
-pending `ReadableBuffer` to read from, and so the reader copies as much as it
-can (which may be less than a full buffer's worth) and eagerly completes the
-copy without blocking. In the final special case where the pending writer has a
-zero-length buffer, the writer is notified, but the reader remains blocked:
+The readable end of a stream or future can also be "forwarded" into the writable
+end of another stream or future, achieving the same effect as copying everything
+from former into the latter (and propagating `CopyResult.DROPPED` in both
+directions) without the overhead of the intermediate copy. When this forwarding
+operation is started, the readable end of the source and the writable end of the
+destination disappear, leaving only the writable end of the source and the
+readable end of the destination to now share a single `AsyncValue`. The
+implementation of forwarding in `AsyncValue.forward_into` below arbitrarily
+selects `self` as the `AsyncValue` to share and `other` as the `AsyncValue` to
+abandon (although the reverse could have worked just as well).
 ```python
-  def read(self, inst, dst_buffer, on_copy, on_copy_done):
+  def forward_into(self, other: AsyncValue):
+    assert(self is not other)
+    other.readable_end.shared = self
+    self.readable_end = other.readable_end
+    if other.dropped:
+      self.drop()
+    elif other.pending_buffer:
+      self.read(other.pending_inst, other.pending_buffer,
+                other.pending_on_copy_done, other.pending_on_partial_copy)
+```
+
+Building on `AsyncValue`, `Stream` can now be defined in chunks. Stream
+construction eagerly creates the readable and writable ends, which are not yet
+stored in any component instance's `handles` table. When a `Stream` is
+constructed by the `stream.new` built-in, both ends are eagerly added to the
+`handles` table. However, a `Stream` can also be constructed directly by the
+host which can then pass the stream's `readable_end` into a guest (via export
+parameter or import result), leaving the host with the `writable_end` to write
+into. Hosts must preserve the exclusive ownership semantics of stream ends by
+never using a `readable_end` that is stored in a guest `handles` table.
+```python
+class Stream(AsyncValue):
+  def __init__(self, t):
+    AsyncValue.__init__(self, t, ReadableStreamEnd(self), WritableStreamEnd(self))
+```
+
+The `Stream.read` method is called either by the `stream.read` built-in or the
+host, depending on who owns the readable end. If the writable end has since been
+dropped, the read completes immediately with `DROPPED`. If not and there is no
+pending writer, the reader's parameters are stored in the `pending_*` fields and
+the reader must wait for one of its `on*` callbacks to be called to learn of
+progress. Otherwise, if there is already a pending writer, the reader
+immediately copies as much as it can from the writer's buffer and the `read`
+completes synchronously without blocking. But in the special case where the
+pending write has a zero-length buffer, the writer is notified and the reader
+becomes pending. Note that, for both reads and writes, if, after a copy, the
+pending buffer is not yet exhausted, the `on_partial_copy` callback is called
+(instead of `on_copy_done`) and the buffer is left pending; this allows multiple
+copies to be serviced from the same large buffer without requiring a context
+switch between each one.
+```python
+  def read(self, inst, dst_buffer, on_copy_done, on_partial_copy):
     if self.dropped:
       on_copy_done(CopyResult.DROPPED)
     elif not self.pending_buffer:
-      self.set_pending(inst, dst_buffer, on_copy, on_copy_done)
+      self.set_pending(inst, dst_buffer, on_copy_done, on_partial_copy)
     else:
       assert(self.t == dst_buffer.t == self.pending_buffer.t)
       trap_if(inst is self.pending_inst and not none_or_number_type(self.t)) # temporary
@@ -1727,11 +1773,14 @@ zero-length buffer, the writer is notified, but the reader remains blocked:
         if dst_buffer.remain() > 0:
           n = min(dst_buffer.remain(), self.pending_buffer.remain())
           dst_buffer.write(self.pending_buffer.read(n))
-          self.pending_on_copy(self.reset_pending)
+          if self.pending_buffer.remain() > 0:
+            self.pending_on_partial_copy()
+          else:
+            self.reset_and_notify_pending(CopyResult.COMPLETED)
         on_copy_done(CopyResult.COMPLETED)
       else:
         self.reset_and_notify_pending(CopyResult.COMPLETED)
-        self.set_pending(inst, dst_buffer, on_copy, on_copy_done)
+        self.set_pending(inst, dst_buffer, on_copy_done, on_partial_copy)
 ```
 Currently, there is a trap when both the `read` and `write` come from the same
 component instance and there is a non-empty, non-number element type. This trap
@@ -1741,19 +1790,16 @@ and must be handled carefully. Future improvements to the Canonical ABI ([lazy
 lowering]) can greatly simplify this interleaving and be more practical to
 implement.
 
-The `write` method implements `WritableStream.write` and is called by the
-`stream.write` built-in (noting that the host cannot be passed the writable end
-of a stream but may instead *implement* the `ReadableStream` interface and pass
-the readable end into a component). The steps for `write` are the same as
-`read` except for when a zero-length `write` rendezvous with a zero-length
-`read`, in which case the `write` eagerly completes, leaving the `read`
-pending:
+The `Stream.write` method is called either by the `stream.write` built-in or the
+host, depending on who owns the writable end. The steps for `write` are the same
+as `read` except for when a zero-length `write` rendezvous with a zero-length
+`read`, in which case the `write` eagerly completes, leaving the `read` pending:
 ```python
-  def write(self, inst, src_buffer, on_copy, on_copy_done):
+  def write(self, inst, src_buffer, on_copy_done, on_partial_copy):
     if self.dropped:
       on_copy_done(CopyResult.DROPPED)
     elif not self.pending_buffer:
-      self.set_pending(inst, src_buffer, on_copy, on_copy_done)
+      self.set_pending(inst, src_buffer, on_copy_done, on_partial_copy)
     else:
       assert(self.t == src_buffer.t == self.pending_buffer.t)
       trap_if(inst is self.pending_inst and not none_or_number_type(self.t)) # temporary
@@ -1761,13 +1807,16 @@ pending:
         if src_buffer.remain() > 0:
           n = min(src_buffer.remain(), self.pending_buffer.remain())
           self.pending_buffer.write(src_buffer.read(n))
-          self.pending_on_copy(self.reset_pending)
+          if self.pending_buffer.remain() > 0:
+            self.pending_on_partial_copy()
+          else:
+            self.reset_and_notify_pending(CopyResult.COMPLETED)
         on_copy_done(CopyResult.COMPLETED)
-      elif src_buffer.is_zero_length() and self.pending_buffer.is_zero_length():
+      elif src_buffer.remain() == 0:
         on_copy_done(CopyResult.COMPLETED)
       else:
         self.reset_and_notify_pending(CopyResult.COMPLETED)
-        self.set_pending(inst, src_buffer, on_copy, on_copy_done)
+        self.set_pending(inst, src_buffer, on_copy_done, on_partial_copy)
 ```
 Putting together the behavior of zero-length `read` and `write` above, we can
 see that, when *both* the reader and writer are zero-length, regardless of who
@@ -1779,137 +1828,19 @@ notifying the reader end and allowing it to rendezvous with a non-zero-length
 `read` and make progress. See the [stream readiness] section in the async
 explainer for more background on purpose of zero-length reads and writes.
 
-The `none_or_number_type` predicate used above includes both the integer and
-floating point number types:
+The `Future.read` and `Future.write` methods work like the stream methods, but
+simplified based on the fact that all reads and writes are of length 1, at most
+1 value can be copied in total, and the writable end is not allowed to drop
+before writing its 1 value (asserted here, enforced in `End.drop` above):
 ```python
-def none_or_number_type(t):
-  return t is None or isinstance(t, U8Type | U16Type | U32Type | U64Type |
-                                    S8Type | S16Type | S32Type | S64Type |
-                                    F32Type | F64Type)
-```
-
-The two ends of a stream are stored as separate elements in the component
-instance `handles` table and each end has a separate `CopyState` that reflects
-what *that end* is currently doing or has done. This `state` field is factored
-out into the `CopyEnd` class that is derived below. The two ends also share some
-state which is referenced by the `shared` field and either points to a
-`SharedStreamImpl` (for component-created streams) or something host-defined for
-(host-created streams).
-```python
-class CopyState(Enum):
-  IDLE = 1
-  COPYING = 2
-  CANCELLING_COPY = 3
-  DONE = 4
-
-class CopyEnd(Waitable):
-  state: CopyState
-  shared: SharedBase
-
-  def __init__(self, shared):
-    Waitable.__init__(self)
-    self.state = CopyState.IDLE
-    self.shared = shared
-
-  def copying(self):
-    match self.state:
-      case CopyState.IDLE | CopyState.DONE:
-        return False
-      case CopyState.COPYING | CopyState.CANCELLING_COPY:
-        return True
-    assert(False)
-
-  def drop(self):
-    trap_if(self.copying())
-    self.shared.drop()
-    Waitable.drop(self)
-
-class ReadableStreamEnd(CopyEnd):
-  def copy(self, inst, dst, on_copy, on_copy_done):
-    self.shared.read(inst, dst, on_copy, on_copy_done)
-
-class WritableStreamEnd(CopyEnd):
-  def copy(self, inst, src, on_copy, on_copy_done):
-    self.shared.write(inst, src, on_copy, on_copy_done)
-```
-As shown in `drop`, attempting to drop a readable or writable end while a copy
-is in progress or in the process of being cancelled traps. This means that
-client code must take care to wait for these operations to finish (potentially
-cancelling them via `stream.cancel-{read,write}`) before dropping.
-
-The polymorphic `copy` method dispatches to either `ReadableStream.read` or
-`WritableStream.write` and allows the implementations of `stream.{read,write}`
-to share a single definition (in `stream_copy` below).
-
-
-### Future State
-
-Futures are similar to streams, except that instead of passing 0..N values,
-exactly one value is passed from the writer end to the reader end unless the
-reader end is explicitly dropped first.
-
-Futures are defined in terms of abstract `ReadableFuture` and `WritableFuture`
-interfaces:
-```python
-class ReadableFuture(SharedBase):
-  read: Callable[[ComponentInstance, WritableBuffer, OnCopyDone], None]
-
-class WritableFuture(SharedBase):
-  write: Callable[[ComponentInstance, ReadableBuffer, OnCopyDone], None]
-```
-These interfaces work like `ReadableStream` and `WritableStream` except that
-there is no `OnCopy` callback passed to `read` or `write` to report partial
-progress (since at most 1 value is copied) and the given `Buffer` must have
-`remain() == 1`.
-
-Introducing `SharedFutureImpl` in chunks, the first part is exactly
-symmetric to `SharedStreamImpl` in how initialization and cancellation work:
-```python
-class SharedFutureImpl(ReadableFuture, WritableFuture):
-  dropped: bool
-  pending_inst: Optional[ComponentInstance]
-  pending_buffer: Optional[Buffer]
-  pending_on_copy_done: Optional[OnCopyDone]
-
+class Future(AsyncValue):
   def __init__(self, t):
-    self.t = t
-    self.dropped = False
-    self.reset_pending()
+    AsyncValue.__init__(self, t, ReadableFutureEnd(self), WritableFutureEnd(self))
 
-  def reset_pending(self):
-    self.set_pending(None, None, None)
-
-  def set_pending(self, inst, buffer, on_copy_done):
-    self.pending_inst = inst
-    self.pending_buffer = buffer
-    self.pending_on_copy_done = on_copy_done
-
-  def reset_and_notify_pending(self, result):
-    pending_on_copy_done = self.pending_on_copy_done
-    self.reset_pending()
-    pending_on_copy_done(result)
-
-  def cancel(self):
-    self.reset_and_notify_pending(CopyResult.CANCELLED)
-```
-Dropping works the same in futures as in streams, except that a future
-writable end cannot be dropped without having written a value. This is guarded
-by `WritableFutureEnd.drop` so it can be asserted here:
-```python
-  def drop(self):
-    if not self.dropped:
-      self.dropped = True
-      if self.pending_buffer:
-        assert(isinstance(self.pending_buffer, ReadableBuffer))
-        self.reset_and_notify_pending(CopyResult.DROPPED)
-```
-Lastly, `read` and `write` work mostly like streams, but simplified based on
-the fact that we're copying at most 1 value. The only asymmetric difference is
-that, as mentioned above, only the writable end can observe that the readable
-end was dropped before receiving a value.
-```python
-  def read(self, inst, dst_buffer, on_copy_done):
-    assert(not self.dropped and dst_buffer.remain() == 1)
+  def read(self, inst, dst_buffer, on_copy_done, on_partial_copy = None):
+    assert(dst_buffer.remain() == 1)
+    assert(on_partial_copy is None)
+    assert(not self.dropped)
     if not self.pending_buffer:
       self.set_pending(inst, dst_buffer, on_copy_done)
     else:
@@ -1918,8 +1849,9 @@ end was dropped before receiving a value.
       self.reset_and_notify_pending(CopyResult.COMPLETED)
       on_copy_done(CopyResult.COMPLETED)
 
-  def write(self, inst, src_buffer, on_copy_done):
+  def write(self, inst, src_buffer, on_copy_done, on_partial_copy = None):
     assert(src_buffer.remain() == 1)
+    assert(on_partial_copy is None)
     if self.dropped:
       on_copy_done(CopyResult.DROPPED)
     elif not self.pending_buffer:
@@ -1930,29 +1862,14 @@ end was dropped before receiving a value.
       self.reset_and_notify_pending(CopyResult.COMPLETED)
       on_copy_done(CopyResult.COMPLETED)
 ```
-As with streams, the `# temporary` limitation shown above is that a future
+As described above for streams, the `# temporary` limitation is that a future
 cannot be read and written from the same component instance when it has a
-non-empty, non-number value type.
-
-Lastly, the `{Readable,Writable}FutureEnd` classes are mostly symmetric with
-`{Readable,Writable}StreamEnd`, defining a polymorphic `copy` method that
-dispatches to either `ReadableFuture.read` or `WritableFuture.write`, which
-allows the implementation of `future.{read,write}` to share a single
-definition (in `future_copy` below). The only difference is that
-`WritableFutureEnd.drop` traps if the writer hasn't successfully written a value
-or been notified of the reader dropping their end:
+non-empty, non-number value type:
 ```python
-class ReadableFutureEnd(CopyEnd):
-  def copy(self, inst, dst_buffer, on_copy_done):
-    self.shared.read(inst, dst_buffer, on_copy_done)
-
-class WritableFutureEnd(CopyEnd):
-  def copy(self, inst, src_buffer, on_copy_done):
-    self.shared.write(inst, src_buffer, on_copy_done)
-
-  def drop(self):
-    trap_if(self.state != CopyState.DONE)
-    CopyEnd.drop(self)
+def none_or_number_type(t):
+  return t is None or isinstance(t, U8Type | U16Type | U32Type | U64Type |
+                                    S8Type | S16Type | S32Type | S64Type |
+                                    F32Type | F64Type)
 ```
 
 
@@ -2461,12 +2378,13 @@ def lift_future(cx, i, t):
 
 def lift_async_value(ReadableEndT, cx, i, t):
   assert(not contains_borrow(t))
-  e = cx.inst.handles.remove(i)
-  trap_if(not isinstance(e, ReadableEndT))
-  trap_if(e.shared.t != t)
-  trap_if(e.state != CopyState.IDLE)
-  trap_if(e.in_waitable_set())
-  return e.shared
+  end = cx.inst.handles.remove(i)
+  trap_if(not isinstance(end, ReadableEndT))
+  trap_if(end.shared.t != t)
+  trap_if(end.state != End.State.IDLE)
+  trap_if(end.in_waitable_set())
+  assert(not end.has_pending_event())
+  return end
 ```
 
 
@@ -2887,19 +2805,24 @@ type, the only thing the borrowed handle is good for is calling
 `resource.rep`, so lowering might as well avoid the overhead of creating an
 intermediate borrow handle.
 
-Lowering a `stream` or `future` is entirely symmetric and simply adds a new
-readable end to the current component instance's `handles` table, passing the
-index of the new element to core wasm:
+Lowering a `stream` or `future` simply adds the given readable end to the
+current component instance's `handles` table, passing the newly-allocated index
+to core wasm:
 ```python
-def lower_stream(cx, v, t):
-  assert(isinstance(v, ReadableStream))
-  assert(not contains_borrow(t))
-  return cx.inst.handles.add(ReadableStreamEnd(v))
+def lower_stream(cx, end, t):
+  return lower_async_value(ReadableStreamEnd, cx, end, t)
 
-def lower_future(cx, v, t):
-  assert(isinstance(v, ReadableFuture))
+def lower_future(cx, end, t):
+  return lower_async_value(ReadableFutureEnd, cx, end, t)
+
+def lower_async_value(ReadableEndT, cx, end, t):
   assert(not contains_borrow(t))
-  return cx.inst.handles.add(ReadableFutureEnd(v))
+  assert(isinstance(end, ReadableEndT))
+  assert(end.shared.t == t)
+  assert(end.state == End.State.IDLE)
+  assert(not end.in_waitable_set())
+  assert(not end.has_pending_event())
+  return cx.inst.handles.add(end)
 ```
 
 
@@ -4309,17 +4232,17 @@ above).
 def canon_stream_new(stream_t):
   inst = current_instance()
   trap_if(not inst.may_leave)
-  shared = SharedStreamImpl(stream_t.t)
-  ri = inst.handles.add(ReadableStreamEnd(shared))
-  wi = inst.handles.add(WritableStreamEnd(shared))
+  stream = Stream(stream_t.t)
+  ri = inst.handles.add(stream.readable_end)
+  wi = inst.handles.add(stream.writable_end)
   return [ ri | (wi << 32) ]
 
 def canon_future_new(future_t):
   inst = current_instance()
   trap_if(not inst.may_leave)
-  shared = SharedFutureImpl(future_t.t)
-  ri = inst.handles.add(ReadableFutureEnd(shared))
-  wi = inst.handles.add(WritableFutureEnd(shared))
+  future = Future(future_t.t)
+  ri = inst.handles.add(future.readable_end)
+  wi = inst.handles.add(future.writable_end)
   return [ ri | (wi << 32) ]
 ```
 
@@ -4347,11 +4270,11 @@ The implementation of these built-ins funnels down to a single `stream_copy`
 function that is parameterized by the direction of the copy:
 ```python
 def canon_stream_read(stream_t, opts, i, ptr, n):
-  return stream_copy(ReadableStreamEnd, WritableBufferGuestImpl, EventCode.STREAM_READ,
+  return stream_copy(Stream.read, ReadableStreamEnd, WritableGuestBuffer, EventCode.STREAM_READ,
                      stream_t, opts, i, ptr, n)
 
 def canon_stream_write(stream_t, opts, i, ptr, n):
-  return stream_copy(WritableStreamEnd, ReadableBufferGuestImpl, EventCode.STREAM_WRITE,
+  return stream_copy(Stream.write, WritableStreamEnd, ReadableGuestBuffer, EventCode.STREAM_WRITE,
                      stream_t, opts, i, ptr, n)
 ```
 
@@ -4362,14 +4285,14 @@ pipelined reads or writes.) There is also a trap if attempting to synchronously
 read or write from a stream that is already being asynchronously waited on via
 waitable set.
 ```python
-def stream_copy(EndT, BufferT, event_code, stream_t, opts, i, ptr, n):
+def stream_copy(copy, EndT, BufferT, event_code, stream_t, opts, i, ptr, n):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  e = thread.task.inst.handles.get(i)
-  trap_if(not isinstance(e, EndT))
-  trap_if(e.shared.t != stream_t.t)
-  trap_if(e.state != CopyState.IDLE)
-  trap_if(e.in_waitable_set() and not opts.async_)
+  end = thread.task.inst.handles.get(i)
+  trap_if(not isinstance(end, EndT))
+  trap_if(end.shared.t != stream_t.t)
+  trap_if(end.state != End.State.IDLE)
+  trap_if(end.in_waitable_set() and not opts.async_)
 ```
 
 Then a readable or writable buffer is created which (in `Buffer`'s constructor)
@@ -4386,58 +4309,66 @@ according to the `string-encoding`.)
   buffer = BufferT(stream_t.t, cx, ptr, n)
 ```
 
-Next, the `copy` method of `{Readable,Writable}{Stream,Future}End` is called to
-perform the actual read/write. The `on_copy*` callbacks passed to `copy` bind
-and store a `stream_event` closure on the readable/writable end (via the
-inherited `Waitable.set_pending_event`) which will be called right before the
-event is delivered to core wasm. `stream_event` first calls `reclaim_buffer` to
-regain ownership of `buffer` and prevent any further partial reads/writes.
-Thus, up until event delivery, the other end of the stream is free to
-repeatedly read/write from/to `buffer`, ideally filling it up and minimizing
-context switches. Next, the stream's `state` is updated based on the result
-being delivered to core wasm so that, once a stream end has been notified that
-the other end dropped, calling anything other than `stream.drop-*` traps.
-Lastly, `stream_event` packs the `CopyResult` and number of elements copied up
-until this point into a single `i32` or `i64`-sized payload for core wasm. The
-size is determined by the `addrtype` coming from the [`memtype`] of the
-`memory` immediate. Note that even though the number of elements copied is
-packed into an `addrtype`, the maximum length of the buffer is fixed at `2^28 - 1`
-independently of the `addrtype`.
+Next, `copy` is called to actually call `Stream.read` or `Stream.write`. These
+operations never block and instead asynchronously deliver progress via the
+`on_*` callbacks that are passed in. Both `on_*` callbacks set a pending event
+on `end` (which is a `Waitable`). When this event is scheduled to be delivered
+to core wasm, a few semantic actions are performed:
+* If the event is being delivered for a *partial* read or write, ownership of
+  the buffer is reclaimed for the component so that no further reads or writes
+  into the same buffer may occur.
+* If the other end was dropped any time before the event is delivered, this is
+  communicated via `CopyResult.DROPPED` and this `end`'s `state` is changed to
+  `DONE` so that the only valid thing left to do with this `end` is to drop it.
+* If the other end did *not* drop, this `end`'s state is reset to `IDLE` so that
+  future reads/writes/transfers are allowed.
+* In any case, however many elements were copied to/from the buffer
+  (`buffer.progress`) is packed alongside the `CopyResult` code in the result.
+
+Note that `Stream.{read,write}` may call `on_partial_copy` 0..N times and may
+also call `on_copy_done` after `on_partial_copy`. In such cases,
+`Waitable.set_pending_event` will simply overwrite any previous `pending_event`
+so that `stream_event` is only ever called-and-delivered once for a single call
+to `stream.{read,write}`.
 ```python
-  def stream_event(result, reclaim_buffer):
-    reclaim_buffer()
-    assert(e.copying())
+  def stream_event(result: Optional[CopyResult]):
+    assert(end.copying())
+    if result is None:
+      end.shared.reset_pending()
+      result = CopyResult.COMPLETED
+    if end.shared.dropped:
+      result = CopyResult.DROPPED
     if result == CopyResult.DROPPED:
-      e.state = CopyState.DONE
+      end.state = End.State.DONE
     else:
-      e.state = CopyState.IDLE
+      end.state = End.State.IDLE
     assert(0 <= result < 2**4)
     assert(buffer.progress <= Buffer.MAX_LENGTH < 2**28)
     packed_result = result | (buffer.progress << 4)
     return (event_code, i, packed_result)
 
-  def on_copy(reclaim_buffer):
-    e.set_pending_event(partial(stream_event, CopyResult.COMPLETED, reclaim_buffer))
-
   def on_copy_done(result):
-    e.set_pending_event(partial(stream_event, result, reclaim_buffer = lambda:()))
+    end.set_pending_event(lambda: stream_event(result))
 
-  e.state = CopyState.COPYING
-  e.copy(thread.task.inst, buffer, on_copy, on_copy_done)
+  def on_partial_copy():
+    end.set_pending_event(lambda: stream_event(result = None))
+
+  end.state = End.State.COPYING
+  copy(end.shared, thread.task.inst, buffer, on_copy_done, on_partial_copy)
 ```
 
-When this `copy` makes progress, a `stream_event` is set on the stream end's
-`Waitable` base object. If `stream.{read,write}` is called synchronously, the
-call suspends the current thread until an event is set, so that the event can
-be returned. Otherwise, asynchronous calls deliver the event if it was produced
-synchronously and return `BLOCKED` if not:
+After the `copy` operation is initiated, if `stream.{read,write}` is called
+synchronously, the call blocks until there is an event indicating that something
+happened and then the event payload is returned directly. Otherwise, the call
+returns the `BLOCKED` code and the caller must use a waitable set to wait for
+the result.
 ```python
-  if not e.has_pending_event():
+  if not end.has_pending_event():
     if not opts.async_:
-      e.wait_for_pending_event()
+      end.wait_for_pending_event()
     else:
       return [BLOCKED]
-  code,index,payload = e.get_pending_event()
+  code,index,payload = end.get_pending_event()
   assert(code == event_code and index == i and payload != BLOCKED)
   return [payload]
 ```
@@ -4466,11 +4397,11 @@ The implementation of these built-ins funnels down to a single `future_copy`
 function that is parameterized by the direction of the copy:
 ```python
 def canon_future_read(future_t, opts, i, ptr):
-  return future_copy(ReadableFutureEnd, WritableBufferGuestImpl, EventCode.FUTURE_READ,
+  return future_copy(Future.read, ReadableFutureEnd, WritableGuestBuffer, EventCode.FUTURE_READ,
                      future_t, opts, i, ptr)
 
 def canon_future_write(future_t, opts, i, ptr):
-  return future_copy(WritableFutureEnd, ReadableBufferGuestImpl, EventCode.FUTURE_WRITE,
+  return future_copy(Future.write, WritableFutureEnd, ReadableGuestBuffer, EventCode.FUTURE_WRITE,
                      future_t, opts, i, ptr)
 ```
 
@@ -4478,14 +4409,14 @@ Introducing the `future_copy` function in chunks, `future_copy` starts with the
 same set of guards on the element `i` as `stream_copy`, except checking for a
 *future* end instead of a *stream* end:
 ```python
-def future_copy(EndT, BufferT, event_code, future_t, opts, i, ptr):
+def future_copy(copy, EndT, BufferT, event_code, future_t, opts, i, ptr):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  e = thread.task.inst.handles.get(i)
-  trap_if(not isinstance(e, EndT))
-  trap_if(e.shared.t != future_t.t)
-  trap_if(e.state != CopyState.IDLE)
-  trap_if(e.in_waitable_set() and not opts.async_)
+  end = thread.task.inst.handles.get(i)
+  trap_if(not isinstance(end, EndT))
+  trap_if(end.shared.t != future_t.t)
+  trap_if(end.state != End.State.IDLE)
+  trap_if(end.in_waitable_set() and not opts.async_)
 ```
 
 Next, a readable or writable buffer is created, as with streams, except that the
@@ -4497,43 +4428,44 @@ buffer length is fixed to `1` and there is no validation-time prohibition on
   buffer = BufferT(future_t.t, cx, ptr, 1)
 ```
 
-Next, the `copy` method of `{Readable,Writable}FutureEnd.copy` is called to
-perform the actual read/write. Other than the simplifications allowed by the
-absence of repeated partial copies, the main difference in the following code
-from the stream code is that `future_event` transitions the end to the `DONE`
-state (in which the only valid operation is to call `future.drop-*`) on
-*either* the `DROPPED` and `COMPLETED` results. This ensures that futures are
-read/written at most once and futures are only passed to other components in a
-state where they are ready to be read/written. Another important difference is
-that, since the buffer length is always implied by the `CopyResult`, the number
-of elements copied is not packed in the high 28 bits; they're always zero.
+Next, `copy` is called to actually call `Future.read` or `Future.write`. Other
+than the simplifications allowed by the absence of partial reads/writes, the
+main difference between the future version and the stream version is that,
+after successfully copying 1 value, `future_event` automatically transitions the
+`end` to the `DONE` state and delivers the `CopyResult.COMPLETED` code, without
+concern for whether the other end has called `future.drop-{readable,writable}`.
+This ensures that futures are read/written at most once and that futures are
+only passed to other components in a ready-to-read state. Another important
+difference is that, since the buffer length is always implied by the
+`CopyResult`, the number of elements copied is not packed into the high 28 bits;
+the high 28 bits are always zero.
 ```python
   def future_event(result):
     assert((buffer.remain() == 0) == (result == CopyResult.COMPLETED))
-    assert(e.copying())
+    assert(end.copying())
     if result == CopyResult.DROPPED or result == CopyResult.COMPLETED:
-      e.state = CopyState.DONE
+      end.state = End.State.DONE
     else:
-      e.state = CopyState.IDLE
+      end.state = End.State.IDLE
     return (event_code, i, result)
 
   def on_copy_done(result):
     assert(result != CopyResult.DROPPED or event_code == EventCode.FUTURE_WRITE)
-    e.set_pending_event(partial(future_event, result))
+    end.set_pending_event(lambda: future_event(result))
 
-  e.state = CopyState.COPYING
-  e.copy(thread.task.inst, buffer, on_copy_done)
+  end.state = End.State.COPYING
+  copy(end.shared, thread.task.inst, buffer, on_copy_done)
 ```
 
 The end of `future_copy` is the exact same as `stream_copy`: waiting if called
 synchronously and returning either the progress made or `BLOCKED`.
 ```python
-  if not e.has_pending_event():
+  if not end.has_pending_event():
     if not opts.async_:
-      e.wait_for_pending_event()
+      end.wait_for_pending_event()
     else:
       return [BLOCKED]
-  code,index,payload = e.get_pending_event()
+  code,index,payload = end.get_pending_event()
   assert(code == event_code and index == i)
   return [payload]
 ```
@@ -4571,21 +4503,21 @@ def canon_future_cancel_write(future_t, async_, i):
 def cancel_copy(EndT, event_code, stream_or_future_t, async_, i):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
-  e = thread.task.inst.handles.get(i)
-  trap_if(not isinstance(e, EndT))
-  trap_if(e.shared.t != stream_or_future_t.t)
-  trap_if(e.state != CopyState.COPYING or e.has_sync_waiter)
-  trap_if(e.in_waitable_set() and not async_)
-  e.state = CopyState.CANCELLING_COPY
-  if not e.has_pending_event():
-    e.shared.cancel()
-    if not e.has_pending_event():
+  end = thread.task.inst.handles.get(i)
+  trap_if(not isinstance(end, EndT))
+  trap_if(end.shared.t != stream_or_future_t.t)
+  trap_if(end.state != End.State.COPYING or end.has_sync_waiter)
+  trap_if(end.in_waitable_set() and not async_)
+  end.state = End.State.CANCELLING_COPY
+  if not end.has_pending_event():
+    end.shared.cancel()
+    if not end.has_pending_event():
       if not async_:
-        e.wait_for_pending_event()
+        end.wait_for_pending_event()
       else:
         return [BLOCKED]
-  code,index,payload = e.get_pending_event()
-  assert(not e.copying() and code == event_code and index == i)
+  code,index,payload = end.get_pending_event()
+  assert(not end.copying() and code == event_code and index == i)
   return [payload]
 ```
 Cancellation traps if there is not currently an async copy in progress (sync
@@ -4595,12 +4527,12 @@ allowed). There is also a trap if attempting to synchronously cancel a stream
 operation when the stream end is already being asynchronously waited on by a
 waitable set.
 
-The *first* check for `e.has_pending_event()` catches the case where the copy has
-already racily finished, in which case we must *not* call `cancel()`. Calling
-`cancel()` may, but is not required to, recursively call one of the `on_*`
-callbacks (passed by `canon_{stream,future}_{read,write}` above) which will set
-a pending event that is caught by the *second* check for
-`e.has_pending_event()`.
+The *first* check for `end.has_pending_event()` catches the case where the copy
+has already racily finished, in which case we must *not* call `cancel()`.
+Calling `cancel()` may, but is not required to, recursively call one of the
+`on_*` callbacks (passed by `canon_{stream,future}_{read,write}` above) which
+will set a pending event that is caught by the *second* check for
+`end.has_pending_event()`.
 
 If the copy hasn't been cancelled, the synchronous case suspends the thread to
 wait for one of the `on_*` callbacks to eventually be called (which will set
@@ -4650,12 +4582,59 @@ def canon_future_drop_writable(future_t, hi):
 def drop(EndT, stream_or_future_t, hi):
   inst = current_instance()
   trap_if(not inst.may_leave)
-  e = inst.handles.remove(hi)
-  trap_if(not isinstance(e, EndT))
-  trap_if(e.shared.t != stream_or_future_t.t)
-  e.drop()
+  end = inst.handles.remove(hi)
+  trap_if(not isinstance(end, EndT))
+  trap_if(end.shared.t != stream_or_future_t.t)
+  end.drop()
   return []
 ```
+
+
+### ➡️ `canon {stream,future}.forward`
+
+For canonical definitions:
+```wat
+(canon stream.forward $stream_t (core func $forward))
+(canon future.forward $future_t (core func $forward))
+```
+validation specifies:
+* `$forward` is given type `(func (param $ri i32) (param $wi i32))`
+* `$stream_t`/`$future_t` must be a type of the form `(stream $t?)`/`(future $t?)`
+
+Calling `$forward` removes the readable and writable ends at the given indices,
+after checking that the element types match, the ends are in the `IDLE` state,
+and the ends are not currently part of a waitable set. Then the source
+stream/future associated with the readable end is forwarded into the destination
+stream/future associated with the writable end, as defined by
+`AsyncValue.forward_into`:
+```python
+def canon_stream_forward(stream_t, ri, wi):
+  return forward_copy(ReadableStreamEnd, WritableStreamEnd, stream_t, ri, wi)
+
+def canon_future_forward(future_t, ri, wi):
+  return forward_copy(ReadableFutureEnd, WritableFutureEnd, future_t, ri, wi)
+
+def forward_copy(ReadableEndT, WritableEndT, stream_or_future_t, ri, wi):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  r = inst.handles.remove(ri)
+  trap_if(not isinstance(r, ReadableEndT))
+  trap_if(r.shared.t != stream_or_future_t.t)
+  trap_if(r.state != End.State.IDLE)
+  trap_if(r.in_waitable_set())
+  w = inst.handles.remove(wi)
+  trap_if(not isinstance(w, WritableEndT))
+  trap_if(w.shared.t != stream_or_future_t.t)
+  trap_if(w.state != End.State.IDLE)
+  trap_if(w.in_waitable_set())
+  if r.shared is not w.shared:
+    r.shared.forward_into(w.shared)
+  return []
+```
+Note that in the corner case where the readable and writable ends are associated
+with the same stream or future, there is no need to trap, since the self-loop is
+no longer reachable; instead the stream or future can be eagerly destroyed by
+the engine as-if both sides had performed a drop.
 
 
 ### 🧵 `canon thread.index`
@@ -5118,8 +5097,8 @@ def canon_thread_available_parallelism():
 [Blocked]: Concurrency.md#blocking
 [Waiting On External I/O And Yielding]: Concurrency.md#blocking
 [Subtasks]: Concurrency.md#subtasks-and-supertasks
+[End]: Concurrency.md#streams-and-futures
 [Readable and Writable Ends]: Concurrency.md#streams-and-futures
-[Readable or Writable End]: Concurrency.md#streams-and-futures
 [Thread-Local Storage]: Concurrency.md#thread-local-storage
 [Cancellation]: Concurrency.md#cancellation
 [Subtask State Machine]: Concurrency.md#cancellation
