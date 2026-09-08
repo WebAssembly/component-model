@@ -3373,8 +3373,8 @@ For some use-case-focused, worked examples, see:
 [`canon_waitable_set_drop`]: CanonicalABI.md#-canon-waitable-setdrop
 [`canon_waitable_join`]: CanonicalABI.md#-canon-waitablejoin
 [`canon_stream_new`]: CanonicalABI.md#-canon-streamfuturenew
-[`canon_stream_read`]: CanonicalABI.md#-canon-streamreadwrite
-[`canon_future_read`]: CanonicalABI.md#-canon-futurereadwrite
+[`canon_stream_read`]: CanonicalABI.md#-canon-streamfuturereadwrite
+[`canon_future_read`]: CanonicalABI.md#-canon-futurefuturereadwrite
 [`canon_stream_cancel_read`]: CanonicalABI.md#-canon-streamfuturecancel-readwrite
 [`canon_stream_drop_readable`]: CanonicalABI.md#-canon-streamfuturedrop-readablewritable
 [`canon_subtask_cancel`]: CanonicalABI.md#-canon-subtaskcancel
