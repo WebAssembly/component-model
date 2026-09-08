@@ -2,3 +2,5 @@
 ./validation/max-value-size.wast
 ./validation/kebab.wast
 ./binary/binary.wast
+./async/thread-set-task.wast
+./values/post-return.wast

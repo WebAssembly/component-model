@@ -190,7 +190,7 @@ class FutureType(ValType):
 
 class ComponentInstance:
   store: Store
-  handles: Table[ResourceHandle | Waitable | WaitableSet | ErrorContext]
+  handles: Table[ResourceHandle | Waitable | WaitableSet | ErrorContext | Task]
   threads: Table[Thread]
   may_leave: bool
   backpressure: int
@@ -401,7 +401,6 @@ class Task:
   state: State
   num_borrows: int
   waiting_to_enter: Optional[Thread]
-  threads: list[Thread]
 
   def __init__(self, ft, opts, inst, on_start, on_resolve):
     self.ft = ft
@@ -412,7 +411,6 @@ class Task:
     self.state = Task.State.INITIAL
     self.num_borrows = 0
     self.waiting_to_enter = None
-    self.threads = []
 
   def needs_exclusive(self):
     assert(self.ft.async_)
@@ -436,29 +434,14 @@ class Task:
       if self.needs_exclusive():
         assert(self.inst.exclusive_thread is None)
         self.inst.exclusive_thread = current_thread()
-    self.register_thread(current_thread())
+    current_thread().index = self.inst.threads.add(current_thread())
     return True
 
-  def register_thread(self, thread):
-    assert(thread not in self.threads and thread.task is self)
-    self.threads.append(thread)
-    assert(thread.index is None)
-    thread.index = self.inst.threads.add(thread)
-
   def exit_implicit_thread(self):
-    self.unregister_thread(current_thread())
+    self.inst.threads.remove(current_thread().index)
     if self.ft.async_ and self.needs_exclusive():
       assert(self.inst.exclusive_thread is current_thread())
       self.inst.exclusive_thread = None
-
-  def unregister_thread(self, thread):
-    assert(thread in self.threads and thread.task is self)
-    self.threads.remove(thread)
-    if len(self.threads) == 0:
-      trap_if(self.state != Task.State.RESOLVED)
-      assert(self.num_borrows == 0)
-    assert(thread.index is not None)
-    self.inst.threads.remove(thread.index)
 
   def request_cancellation(self):
     if self.state == Task.State.INITIAL:
@@ -2107,6 +2090,7 @@ def canon_lift(callee, ft, opts, inst, on_start, on_resolve) -> OnCancel:
     if not opts.async_:
       flat_results = call_and_trap_on_throw(callee, flat_args)
       assert(types_match_values(flat_ft.results, flat_results))
+      trap_if(thread.task is not task)
       result = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_type())
       task.return_(result)
       if opts.post_return is not None:
@@ -2640,16 +2624,17 @@ class CoreFuncRef:
 
 def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], fi, c):
   task = current_task()
+  inst = task.inst
   trap_if(not task.inst.may_leave)
   f = ftbl.get(fi)
   assert(ft == CoreFuncType(['i32'], []) or ft == CoreFuncType(['i64'], []))
   trap_if(f.t != ft)
   def thread_func():
     [] = call_and_trap_on_throw(f.callee, [c])
-    task.unregister_thread(new_thread)
+    inst.threads.remove(new_thread.index)
   new_thread = Thread(task, thread_func)
   assert(new_thread.suspended())
-  task.register_thread(new_thread)
+  new_thread.index = inst.threads.add(new_thread)
   return [new_thread.index]
 
 ### 🧵 `canon thread.resume-later`
@@ -2720,6 +2705,33 @@ def canon_thread_yield_then_promote(i):
   other_thread = thread.task.inst.threads.get(i)
   thread.yield_then_promote(other_thread)
   return [0]
+
+### 🧵 `canon thread.get-task`
+
+def canon_thread_get_task():
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  taski = thread.task.inst.handles.add(thread.task)
+  return [taski]
+
+### 🧵 `canon thread.set-task`
+
+def canon_thread_set_task(taski):
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  new_task = thread.task.inst.handles.get(taski)
+  trap_if(not isinstance(new_task, Task))
+  thread.task = new_task
+  return []
+
+### 🧵 `canon task.drop`
+
+def canon_task_drop(taski):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  task = inst.handles.remove(taski)
+  trap_if(not isinstance(task, Task))
+  return []
 
 ### 📝 `canon error-context.new`
 

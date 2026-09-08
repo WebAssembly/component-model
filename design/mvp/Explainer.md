@@ -1589,6 +1589,9 @@ canon ::= ...
         | (canon thread.yield-then-resume (core func <id>?)) 🧵
         | (canon thread.suspend-then-promote (core func <id>?)) 🧵
         | (canon thread.yield-then-promote (core func <id>?)) 🧵
+        | (canon thread.get-task (core func <id>?)) 🧵
+        | (canon thread.set-task (core func <id>?)) 🧵
+        | (canon task.drop (core func <id>?)) 🧵
         | (canon error-context.new <canonopt>* (core func <id>?)) 📝
         | (canon error-context.debug-message <canonopt>* (core func <id>?)) 📝
         | (canon error-context.drop (core func <id>?)) 📝
@@ -2296,6 +2299,43 @@ returned `i32` is always `0` and may be removed in a future ABI revision.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield_then_promote`] in the Canonical ABI explainer.
+
+###### 🧵 `thread.get-task`
+
+| Synopsis                   |                  |
+| -------------------------- | ---------------- |
+| Approximate WIT signature  | `func() -> task` |
+| Canonical ABI signature    | `[] -> [i32]`    |
+
+TODO
+
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_thread_get_task`] in the Canonical ABI explainer.
+
+###### 🧵 `thread.set-task`
+
+| Synopsis                   |                 |
+| -------------------------- | --------------- |
+| Approximate WIT signature  | `func(t: task)` |
+| Canonical ABI signature    | `[t:i32] -> []` |
+
+TODO
+
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_thread_set_task`] in the Canonical ABI explainer.
+
+###### 🧵 `task.drop`
+
+| Synopsis                   |                 |
+| -------------------------- | --------------- |
+| Approximate WIT signature  | `func(t: task)` |
+| Canonical ABI signature    | `[t:i32] -> []` |
+
+TODO
+
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_task_drop`] in the Canonical ABI explainer.
+
 
 ###### 🧵② `thread.spawn-ref`
 
@@ -3394,6 +3434,9 @@ For some use-case-focused, worked examples, see:
 [`canon_thread_yield_then_resume`]: CanonicalABI.md#-canon-threadyield-then-resume
 [`canon_thread_suspend_then_promote`]: CanonicalABI.md#-canon-threadsuspend-then-promote
 [`canon_thread_yield_then_promote`]: CanonicalABI.md#-canon-threadyield-then-promote
+[`canon_thread_get_task`]: CanonicalABI.md#-canon-threadget-task
+[`canon_thread_set_task`]: CanonicalABI.md#-canon-threadset-task
+[`canon_task_drop`]: CanonicalABI.md#-canon-taskdrop
 [`canon_thread_spawn_ref`]: CanonicalABI.md#-canon-threadspawn-ref
 [`canon_thread_spawn_indirect`]: CanonicalABI.md#-canon-threadspawn-indirect
 [`canon_thread_available_parallelism`]: CanonicalABI.md#-canon-threadavailable_parallelism
