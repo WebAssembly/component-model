@@ -608,7 +608,7 @@ class Task:
   on_resolve: OnResolve
   state: State
   num_borrows: int
-  implicit_thread: Optional[Thread]
+  waiting_to_enter: Optional[Thread]
   threads: list[Thread]
 
   def __init__(self, ft, opts, inst, on_start, on_resolve):
@@ -619,22 +619,22 @@ class Task:
     self.on_resolve = on_resolve
     self.state = Task.State.INITIAL
     self.num_borrows = 0
-    self.implicit_thread = None
+    self.waiting_to_enter = None
     self.threads = []
 ```
 
 The `Task.needs_exclusive` predicate returns whether this task's implicit thread
-(`Task.implicit_thread`) has *not* opted in to multiple concurrent linear memory
-shadow stacks (via "stackful" lift) and thus, according to [Component Invariant]
-#2, requires serialization with all the other implicit threads in the component
-instance that have similarly not opted in. This question only applies to
-`async`-typed functions, since synchronous functions can't block and thus can
-always execute in a LIFO fashion using a single linear memory shadow stack. When
+has *not* opted in to multiple concurrent linear memory shadow stacks (via
+"stackful" lift) and thus, according to [Component Invariant] #2, requires
+serialization with all the other implicit threads in the component instance that
+have similarly not opted in. This question only applies to `async`-typed
+functions, since synchronous functions can't block and thus can always execute
+in a LIFO fashion using a single linear memory shadow stack. When
 `needs_exclusive` is true, core wasm execution is gated on acquiring the
 `ComponentInstance.exclusive_thread` lock. Due to cooperativity, the
 `exclusive_thread` "lock" is simply a mutable field holding either `None`, when
-unlocked, or, when locked, a reference to the `Task.implicit_thread` currently
-holding the lock.
+unlocked, or, when locked, a reference to the implicit thread currently holding
+the lock.
 ```python
   def needs_exclusive(self):
     assert(self.ft.async_)
@@ -667,22 +667,23 @@ exports.
 ```python
   def enter_implicit_thread(self):
     assert(self.state == Task.State.INITIAL)
-    self.implicit_thread = current_thread()
     if self.ft.async_:
       def has_backpressure():
         return (self.inst.backpressure > 0 or
                 (self.needs_exclusive() and self.inst.exclusive_thread is not None))
       if has_backpressure() or self.inst.num_waiting_to_enter > 0:
+        self.waiting_to_enter = current_thread()
         self.inst.num_waiting_to_enter += 1
-        self.implicit_thread.wait_until(lambda: not has_backpressure())
+        current_thread().wait_until(lambda: not has_backpressure())
         self.inst.num_waiting_to_enter -= 1
+        self.waiting_to_enter = None
         if self.deliver_pending_cancel():
           self.cancel()
           return False
       if self.needs_exclusive():
         assert(self.inst.exclusive_thread is None)
-        self.inst.exclusive_thread = self.implicit_thread
-    self.register_thread(self.implicit_thread)
+        self.inst.exclusive_thread = current_thread()
+    self.register_thread(current_thread())
     return True
 
   def register_thread(self, thread):
@@ -715,10 +716,9 @@ traps if the task's last thread is unregistered and the task has not yet
 returned a value to its caller.
 ```python
   def exit_implicit_thread(self):
-    assert(current_thread() is self.implicit_thread)
-    self.unregister_thread(self.implicit_thread)
+    self.unregister_thread(current_thread())
     if self.ft.async_ and self.needs_exclusive():
-      assert(self.inst.exclusive_thread is self.implicit_thread)
+      assert(self.inst.exclusive_thread is current_thread())
       self.inst.exclusive_thread = None
 
   def unregister_thread(self, thread):
@@ -742,7 +742,7 @@ request is stored in the task state so that it can be picked up from the
   def request_cancellation(self):
     if self.state == Task.State.INITIAL:
       self.state = Task.State.PENDING_CANCEL
-      self.implicit_thread.resume()
+      self.waiting_to_enter.resume()
       assert(self.state == Task.State.RESOLVED)
     else:
       assert(self.state == Task.State.STARTED)
@@ -3508,7 +3508,7 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
       if thread.task.deliver_pending_cancel():
         event = (EventCode.TASK_CANCELLED, 0, 0)
       else:
-        assert(inst.exclusive_thread is task.implicit_thread)
+        assert(inst.exclusive_thread is thread)
         inst.exclusive_thread = None
         match code:
           case CallbackCode.YIELD:
@@ -3524,7 +3524,7 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
           case _:
             trap()
         assert(inst.exclusive_thread is None)
-        inst.exclusive_thread = task.implicit_thread
+        inst.exclusive_thread = thread
       event_code, p1, p2 = event
       [packed] = call_and_trap_on_throw(opts.callback, [event_code, p1, p2])
       code,si = unpack_callback_result(packed)
