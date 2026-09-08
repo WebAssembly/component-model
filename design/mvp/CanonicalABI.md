@@ -67,6 +67,9 @@ specified here.
   * [`canon thread.yield-then-resume`](#-canon-threadyield-then-resume) 🧵
   * [`canon thread.suspend-then-promote`](#-canon-threadsuspend-then-promote) 🧵
   * [`canon thread.yield-then-promote`](#-canon-threadyield-then-promote) 🧵
+  * [`canon thread.get-task`](#-canon-threadget-task) 🧵
+  * [`canon thread.set-task`](#-canon-threadset-task) 🧵
+  * [`canon task.drop`](#-canon-taskdrop) 🧵
   * [`canon error-context.new`](#-canon-error-contextnew) 📝
   * [`canon error-context.debug-message`](#-canon-error-contextdebug-message) 📝
   * [`canon error-context.drop`](#-canon-error-contextdrop) 📝
@@ -121,7 +124,7 @@ into the `handles` or `threads` fields of `ComponentInstance`.
 ```python
 class ComponentInstance:
   store: Store
-  handles: Table[ResourceHandle | Waitable | WaitableSet | ErrorContext]
+  handles: Table[ResourceHandle | Waitable | WaitableSet | ErrorContext | Task]
   threads: Table[Thread]
   may_leave: bool
   backpressure: int
@@ -3425,10 +3428,12 @@ are lifted according to `lift_flat_values` above, the optional `post-return`
 function (specified as a `canonopt` immediate of `canon lift`) is called,
 passing the same core wasm results as parameters so that the `post-return`
 function can free any associated allocations.
+TODO: copy from set-task-old (and also alll the other stuff in Concurrency.md)
 ```python
     if not opts.async_:
       flat_results = call_and_trap_on_throw(callee, flat_args)
       assert(types_match_values(flat_ft.results, flat_results))
+      trap_if(thread.task is not task)
       result = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_type())
       task.return_(result)
       if opts.post_return is not None:
@@ -4673,17 +4678,17 @@ class CoreFuncRef:
   callee: Callable[[list[CoreValType]], list[CoreValType]]
 
 def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], fi, c):
-  task = current_task()
-  trap_if(not task.inst.may_leave)
+  inst = current_instance()
+  trap_if(not inst.may_leave)
   f = ftbl.get(fi)
   assert(ft == CoreFuncType(['i32'], []) or ft == CoreFuncType(['i64'], []))
   trap_if(f.t != ft)
   def thread_func():
     [] = call_and_trap_on_throw(f.callee, [c])
-    task.inst.threads.remove(new_thread.index)
-  new_thread = Thread(task, thread_func)
+    inst.threads.remove(new_thread.index)
+  new_thread = Thread(current_task(), thread_func)
   assert(new_thread.suspended())
-  new_thread.index = task.inst.threads.add(new_thread)
+  new_thread.index = inst.threads.add(new_thread)
   return [new_thread.index]
 ```
 The newly-created thread starts out in a "suspended" state and so, to
@@ -4859,6 +4864,66 @@ def canon_thread_yield_then_promote(i):
   other_thread = thread.task.inst.threads.get(i)
   thread.yield_then_promote(other_thread)
   return [0]
+```
+
+
+###### 🧵 `canon thread.get-task`
+
+For a canonical definition:
+```wat
+(canon thread.get-task (core func $thread.get-task))
+```
+validation specifies:
+* `$thread.get-task` is given type `(func (result i32))`
+
+Calling `$thread.get-task` invokes the following function which TODO
+```python
+def canon_thread_get_task():
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  taski = thread.task.inst.handles.add(thread.task)
+  return [taski]
+```
+
+
+###### 🧵 `canon thread.set-task`
+
+For a canonical definition:
+```wat
+(canon thread.set-task (core func $thread.set-task))
+```
+validation specifies:
+* `$thread.set-task` is given type `(func (param i32))`
+
+Calling `$thread.set-task` invokes the following function which TODO
+```python
+def canon_thread_set_task(taski):
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  new_task = thread.task.inst.handles.get(taski)
+  trap_if(not isinstance(new_task, Task))
+  thread.task = new_task
+  return []
+```
+
+
+###### 🧵 `canon task.drop`
+
+For a canonical definition:
+```wat
+(canon thread.drop (core func $task.drop))
+```
+validation specifies:
+* `$thread.drop` is given type `(func (param i32))`
+
+Calling `$task.drop` invokes the following function which TODO
+```python
+def canon_task_drop(taski):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  task = inst.handles.remove(taski)
+  trap_if(not isinstance(task, Task))
+  return []
 ```
 
 

@@ -1047,8 +1047,8 @@
   "\03\05"                                    ;; core type section (5 bytes)
   "\01"                                       ;; 1 core type
   "\60\01\7f\00"                              ;; core functype (i32)->()
-  "\08\93\01"                                 ;; canon section (147 bytes)
-  "\2f"                                       ;; 47 canons
+  "\08\96\01"                                 ;; canon section (150 bytes)
+  "\32"                                       ;; 50 canons
   "\00\00\00\00\00"                           ;; lift core func 0 (f), no opts, type 0
   "\00\00\01\03\00\03\00\04\05\01"            ;; lift core func 1 (g), utf8 + (memory 0) + (realloc 5), type 1
   "\00\00\02\02\06\07\03\02"                  ;; lift core func 2 (run), async + (callback 3), type 2
@@ -1096,6 +1096,9 @@
   "\2b\00"                                    ;; 0x2b thread.yield-then-resume
   "\2c\00"                                    ;; 0x2c thread.suspend-then-promote
   "\2d\00"                                    ;; 0x2d thread.yield-then-promote
+  "\30"                                       ;; 0x30 thread.get-task
+  "\31"                                       ;; 0x31 thread.set-task
+  "\32"                                       ;; 0x32 task.drop
 )
 
 (assert_malformed

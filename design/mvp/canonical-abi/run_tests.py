@@ -512,6 +512,21 @@ def test_cross_component_realloc():
       fail("thread.index must trap during realloc")
     except Trap:
       pass
+    try:
+      canon_thread_get_task()
+      fail("thread.get-task must trap during realloc")
+    except Trap:
+      pass
+    try:
+      canon_thread_set_task(0)
+      fail("thread.set-task must trap during realloc")
+    except Trap:
+      pass
+    try:
+      canon_task_drop(0)
+      fail("task.drop must trap during realloc")
+    except Trap:
+      pass
     return consumer_heap.realloc(args)
 
   consumer_opts = mk_opts(MemInst(consumer_heap.memory, 'i32'), realloc = core_consumer_realloc)
@@ -3013,6 +3028,80 @@ def test_sync_threads():
   assert(result == 42)
   assert(other_result == 43)
 
+def test_thread_set_task():
+  store = Store()
+  inst = ComponentInstance(store)
+  opts = mk_opts(async_ = True)
+
+  ftbl = Table()
+  ft = CoreFuncType(['i32'],[])
+
+  t1i = None
+  bi = None
+  b_taski = None
+
+  def thread_func1(args):
+    assert(args == [201])
+    task_a = current_task()
+    assert(task_a.state == Task.State.RESOLVED)
+    assert(canon_thread_index() == [t1i])
+
+    [a_taski] = canon_thread_get_task()
+    [a_taski2] = canon_thread_get_task()
+    assert(a_taski != a_taski2)
+    [] = canon_thread_set_task(a_taski2)
+    [] = canon_task_drop(a_taski2)
+
+    [] = canon_thread_set_task(b_taski)
+    task_b = current_task()
+    assert(task_b is not task_a)
+    [] = canon_task_return([U8Type()], opts, [55])
+
+    [] = canon_thread_set_task(a_taski)
+    assert(current_task() is task_a)
+    [] = canon_task_drop(a_taski)
+
+    [] = canon_thread_set_task(b_taski)
+    assert(current_task() is task_b)
+    [] = canon_task_drop(b_taski)
+    [] = canon_thread_resume_later(bi)
+    return []
+  fi1 = ftbl.add(CoreFuncRef(ft, thread_func1))
+
+  def core_func_a(args):
+    assert(not args)
+    nonlocal t1i
+    [t1i] = canon_thread_new_indirect(ft, ftbl, fi1, 201)
+    [] = canon_thread_resume_later(t1i)
+    [] = canon_task_return([U8Type()], opts, [11])
+    return []
+
+  def core_func_b(args):
+    assert(not args)
+    nonlocal bi, b_taski
+    [bi] = canon_thread_index()
+    [b_taski] = canon_thread_get_task()
+    assert(canon_thread_suspend() == [0])
+    return []
+
+  a_result = None
+  def on_resolve_a(v):
+    nonlocal a_result
+    [a_result] = v
+
+  b_result = None
+  def on_resolve_b(v):
+    nonlocal b_result
+    [b_result] = v
+
+  caller_ft = FuncType([], [U8Type()], async_ = True)
+  _ = store.invoke(store.lift(core_func_a, caller_ft, opts, inst), lambda:[], on_resolve_a)
+  _ = store.invoke(store.lift(core_func_b, caller_ft, opts, inst), lambda:[], on_resolve_b)
+  while store.waiting:
+    store.tick()
+  assert(a_result == 11)
+  assert(b_result == 55)
+
 test_roundtrips()
 test_cross_component_realloc()
 test_handles()
@@ -3040,5 +3129,6 @@ test_self_copy(F64Type())
 test_async_flat_params()
 test_threads()
 test_sync_threads()
+test_thread_set_task()
 
 print("All tests passed")
