@@ -1,3 +1,4 @@
 # See README.md
 ./validation/kebab.wast
+./async/idle-drop.wast
 ./binary/binary.wast

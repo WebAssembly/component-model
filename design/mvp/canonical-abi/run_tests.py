@@ -1673,6 +1673,15 @@ def test_stream_forward():
   lift_and_run(opts, inst, ft, core_func, on_start, on_resolve)
   assert(host_writer.readable_end is return_value)
 
+  # A stream whose writable end has already been dropped but the readable end
+  # has not yet received the event can still be lowered into and lifted out of
+  # the component; whoever finally reads it sees DROPPED.
+  host_writer = HostWriter(U8Type(), [])
+  lift_and_run(opts, inst, ft, core_func, on_start, on_resolve)
+  assert(host_writer.readable_end is return_value)
+  host_reader = HostReader(return_value)
+  assert(host_reader.dropped and host_reader.take() == [])
+
 
 def test_receive_own_stream():
   store = Store()
@@ -2248,6 +2257,66 @@ def test_future_drop_readable_with_pending_write():
     [] = canon_waitable_join(wfi, 0)
     [] = canon_waitable_set_drop(seti)
     [] = canon_future_drop_writable(future_t, wfi)
+    return []
+
+  caller_ft = FuncType([], [], async_ = True)
+  lift_and_run(opts, inst, caller_ft, core_func, lambda:[], lambda _:())
+
+
+def test_stream_drop_both_ends_while_idle():
+  store = Store()
+  inst = ComponentInstance(store)
+  mem = bytearray(24)
+  opts = mk_opts(memory=MemInst(mem, 'i32'), async_ = True)
+  stream_t = StreamType(U8Type())
+  future_t = FutureType(U8Type())
+
+  def core_func(args):
+    assert(len(args) == 0)
+    [] = canon_task_return([], opts, [])
+    [packed] = canon_stream_new(stream_t)
+    rsi,wsi = unpack_new_ends(packed)
+    [] = canon_stream_drop_writable(stream_t, wsi)
+    [] = canon_stream_drop_readable(stream_t, rsi)
+
+    # Dropping one end notifies the other end even when it has no read or write
+    # in flight: the DROPPED event is delivered (once) through the waitable set,
+    # after which the end is done and further reads trap.
+    retp = 8
+    [seti] = canon_waitable_set_new()
+    [packed] = canon_stream_new(stream_t)
+    rsi,wsi = unpack_new_ends(packed)
+    [] = canon_waitable_join(rsi, seti)
+    [] = canon_stream_drop_writable(stream_t, wsi)
+    [event] = canon_waitable_set_poll(MemInst(mem, 'i32'), seti, retp)
+    assert(event == EventCode.STREAM_READ)
+    assert(mem[retp+0] == rsi)
+    result,n = unpack_result(mem[retp+4])
+    assert(n == 0 and result == CopyResult.DROPPED)
+    [event] = canon_waitable_set_poll(MemInst(mem, 'i32'), seti, retp)
+    assert(event == EventCode.NONE)
+    trapped = False
+    try:
+      canon_stream_read(stream_t, opts, rsi, 0, 4)
+    except Trap:
+      trapped = True
+    assert(trapped)
+    [] = canon_waitable_join(rsi, 0)
+    [] = canon_stream_drop_readable(stream_t, rsi)
+
+    # Same for the writable end of a future (using wait instead of poll); once
+    # notified, the writable end may be dropped without having written.
+    [packed] = canon_future_new(future_t)
+    rfi,wfi = unpack_new_ends(packed)
+    [] = canon_waitable_join(wfi, seti)
+    [] = canon_future_drop_readable(future_t, rfi)
+    [event] = canon_waitable_set_wait(MemInst(mem, 'i32'), seti, retp)
+    assert(event == EventCode.FUTURE_WRITE)
+    assert(mem[retp+0] == wfi)
+    assert(mem[retp+4] == CopyResult.DROPPED)
+    [] = canon_waitable_join(wfi, 0)
+    [] = canon_future_drop_writable(future_t, wfi)
+    [] = canon_waitable_set_drop(seti)
     return []
 
   caller_ft = FuncType([], [], async_ = True)
@@ -2982,6 +3051,7 @@ test_wasm_to_wasm_stream_empty()
 test_cancel_copy()
 test_futures()
 test_future_drop_readable_with_pending_write()
+test_stream_drop_both_ends_while_idle()
 test_cancel_subtask()
 test_self_copy(None)
 test_self_copy(U8Type())
