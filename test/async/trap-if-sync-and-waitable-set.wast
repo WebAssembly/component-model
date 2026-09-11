@@ -1,5 +1,10 @@
 ;; Tests the trap conditions associated with mixing synchronous and
-;; asynchronous waiting on the same waitable.
+;; asynchronous waiting on the same waitable. For streams and futures, only
+;; the synchronous forms of {read,write,cancel-read,cancel-write} trap when
+;; the waitable is in a waitable set. For subtask.cancel, *both* the sync and
+;; async forms trap: even the async form waits on the subtask (claiming it and
+;; consuming its resolution event), which a waitable set could otherwise
+;; "steal".
 (component definition $Tester
   (component $C
     (core module $CM
@@ -37,6 +42,7 @@
       (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
       (import "" "waitable.join" (func $waitable.join (param i32 i32)))
       (import "" "subtask.cancel-sync" (func $subtask.cancel-sync (param i32) (result i32)))
+      (import "" "subtask.cancel-async" (func $subtask.cancel-async (param i32) (result i32)))
       (import "" "future.new" (func $future.new (result i64)))
       (import "" "future.read-sync" (func $future.read-sync (param i32 i32) (result i32)))
       (import "" "future.write-sync" (func $future.write-sync (param i32 i32) (result i32)))
@@ -184,7 +190,7 @@
         unreachable
       )
 
-      (func (export "sync-subtask-cancel-when-in-set")
+      (func (export "subtask-cancel-sync-when-in-set")
         (local $ret i32) (local $sub i32)
         (local.set $ret (call $blocks-forever (i32.const 0)))
         (if (i32.ne (i32.const 1 (; STARTED ;)) (i32.and (local.get $ret) (i32.const 0xf)))
@@ -192,6 +198,16 @@
         (local.set $sub (i32.shr_u (local.get $ret) (i32.const 4)))
         (call $waitable.join (local.get $sub) (call $waitable-set.new))
         (drop (call $subtask.cancel-sync (local.get $sub)))
+        unreachable
+      )
+      (func (export "subtask-cancel-async-when-in-set")
+        (local $ret i32) (local $sub i32)
+        (local.set $ret (call $blocks-forever (i32.const 0)))
+        (if (i32.ne (i32.const 1 (; STARTED ;)) (i32.and (local.get $ret) (i32.const 0xf)))
+          (then unreachable))
+        (local.set $sub (i32.shr_u (local.get $ret) (i32.const 4)))
+        (call $waitable.join (local.get $sub) (call $waitable-set.new))
+        (drop (call $subtask.cancel-async (local.get $sub)))
         unreachable
       )
     )
@@ -204,6 +220,7 @@
     (core func $waitable-set.new (canon waitable-set.new))
     (core func $waitable.join (canon waitable.join))
     (core func $subtask.cancel-sync (canon subtask.cancel))
+    (core func $subtask.cancel-async (canon subtask.cancel async))
     (type $future (future))
     (type $stream (stream u8))
     (core func $future.new (canon future.new $future))
@@ -229,6 +246,7 @@
         (export "waitable-set.new" (func $waitable-set.new))
         (export "waitable.join" (func $waitable.join))
         (export "subtask.cancel-sync" (func $subtask.cancel-sync))
+        (export "subtask.cancel-async" (func $subtask.cancel-async))
         (export "future.new" (func $future.new))
         (export "future.read-sync" (func $future.read-sync))
         (export "future.write-sync" (func $future.write-sync))
@@ -259,7 +277,8 @@
     (func (export "sync-future-cancel-write-when-in-set") async (canon lift (core func $m "sync-future-cancel-write-when-in-set")))
     (func (export "sync-stream-cancel-read-when-in-set") async (canon lift (core func $m "sync-stream-cancel-read-when-in-set")))
     (func (export "sync-stream-cancel-write-when-in-set") async (canon lift (core func $m "sync-stream-cancel-write-when-in-set")))
-    (func (export "sync-subtask-cancel-when-in-set") async (canon lift (core func $m "sync-subtask-cancel-when-in-set")))
+    (func (export "subtask-cancel-sync-when-in-set") async (canon lift (core func $m "subtask-cancel-sync-when-in-set")))
+    (func (export "subtask-cancel-async-when-in-set") async (canon lift (core func $m "subtask-cancel-async-when-in-set")))
   )
   (instance $main (instantiate $Main (with "c" (instance $c))))
   (func (export "join-during-sync-future-read") (alias export $main "join-during-sync-future-read"))
@@ -274,7 +293,8 @@
   (func (export "sync-future-cancel-write-when-in-set") (alias export $main "sync-future-cancel-write-when-in-set"))
   (func (export "sync-stream-cancel-read-when-in-set") (alias export $main "sync-stream-cancel-read-when-in-set"))
   (func (export "sync-stream-cancel-write-when-in-set") (alias export $main "sync-stream-cancel-write-when-in-set"))
-  (func (export "sync-subtask-cancel-when-in-set") (alias export $main "sync-subtask-cancel-when-in-set"))
+  (func (export "subtask-cancel-sync-when-in-set") (alias export $main "subtask-cancel-sync-when-in-set"))
+  (func (export "subtask-cancel-async-when-in-set") (alias export $main "subtask-cancel-async-when-in-set"))
 )
 
 (component instance $i $Tester)
@@ -302,4 +322,6 @@
 (component instance $i $Tester)
 (assert_trap (invoke "sync-stream-cancel-write-when-in-set") "waitable cannot be used synchronously while added to a waitable set")
 (component instance $i $Tester)
-(assert_trap (invoke "sync-subtask-cancel-when-in-set") "waitable cannot be used synchronously while added to a waitable set")
+(assert_trap (invoke "subtask-cancel-sync-when-in-set") "waitable cannot be used synchronously while added to a waitable set")
+(component instance $i $Tester)
+(assert_trap (invoke "subtask-cancel-async-when-in-set") "waitable cannot be used synchronously while added to a waitable set")

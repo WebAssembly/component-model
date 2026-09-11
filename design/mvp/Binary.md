@@ -287,6 +287,9 @@ Notes:
   `none` case of an optional immediate.)
 * 🔧 for fixed-sized lists the length of the list must be larger than 0 to pass
   validation.
+* Validation requires that, for every `defvaltype` `t`, `elem_size(t, 'i64')` is
+  less than 2<sup>28</sup>, as defined by the
+  [Canonical ABI](CanonicalABI.md#element-size).
 
 
 ## Canonical Definitions
@@ -324,26 +327,24 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x1d opts:<opts>                                    => (canon error-context.debug-message opts (core func)) 📝
            | 0x1e                                                => (canon error-context.drop (core func)) 📝
            | 0x1f                                                => (canon waitable-set.new (core func)) 🔀
-           | 0x20 cancel?:<cancel?> m:<core:memoryidx>           => (canon waitable-set.wait cancel? (memory m) (core func)) 🔀
-           | 0x21 cancel?:<cancel?> m:<core:memoryidx>           => (canon waitable-set.poll cancel? (memory m) (core func)) 🔀
+           | 0x20 0x00 m:<core:memoryidx>                        => (canon waitable-set.wait (memory m) (core func)) 🔀
+           | 0x21 0x00 m:<core:memoryidx>                        => (canon waitable-set.poll (memory m) (core func)) 🔀
            | 0x22                                                => (canon waitable-set.drop (core func)) 🔀
            | 0x23                                                => (canon waitable.join (core func)) 🔀
            | 0x26                                                => (canon thread.index (core func)) 🧵
            | 0x27 ft:<core:typeidx> tbl:<core:tableidx>          => (canon thread.new-indirect ft tbl (core func)) 🧵
            | 0x28                                                => (canon thread.resume-later (core func)) 🧵
-           | 0x29 cancel?:<cancel?>                              => (canon thread.suspend cancel? (core func)) 🧵
-           | 0x0c cancel?:<cancel?>                              => (canon thread.yield cancel? (core func)) 🔀
-           | 0x2a cancel?:<cancel?>                              => (canon thread.suspend-then-resume cancel? (core func)) 🧵
-           | 0x2b cancel?:<cancel?>                              => (canon thread.yield-then-resume cancel? (core func)) 🧵
-           | 0x2c cancel?:<cancel?>                              => (canon thread.suspend-then-promote cancel? (core func)) 🧵
-           | 0x2d cancel?:<cancel?>                              => (canon thread.yield-then-promote cancel? (core func)) 🧵
+           | 0x29 0x00                                           => (canon thread.suspend (core func)) 🧵
+           | 0x0c 0x00                                           => (canon thread.yield (core func)) 🔀
+           | 0x2a 0x00                                           => (canon thread.suspend-then-resume (core func)) 🧵
+           | 0x2b 0x00                                           => (canon thread.yield-then-resume (core func)) 🧵
+           | 0x2c 0x00                                           => (canon thread.suspend-then-promote (core func)) 🧵
+           | 0x2d 0x00                                           => (canon thread.yield-then-promote (core func)) 🧵
            | 0x40 shared?:<sh?> ft:<core:typeidx>                => (canon thread.spawn-ref shared? ft (core func)) 🧵②
            | 0x41 shared?:<sh?> ft:<core:typeidx> tbl:<core:tableidx> => (canon thread.spawn-indirect shared? ft tbl (core func)) 🧵②
            | 0x42 shared?:<sh?>                                  => (canon thread.available-parallelism shared? (core func)) 🧵②
 async?   ::= 0x00                                                =>
            | 0x01                                                => async
-cancel?  ::= 0x00                                                =>
-           | 0x01                                                => cancellable
 sh?      ::= 0x00                                                =>
            | 0x01                                                => shared 🧵②
 opts     ::= opt*:vec(<canonopt>)                                => opt*
@@ -490,6 +491,7 @@ val(i:<typeidx>)           ::= v:<val(type-index-space[i])>            => v
 val((record (field l t)+)) ::= v+:<val(t)>+                            => (record v+)
 val((variant (case l t?)+) ::= i:<core:u32> v?:<val(t[i])>?            => (variant l[i] v?)
 val((list t))              ::= v:vec(<val(t)>)                         => (list v)
+val((list t len))          ::= (v:<val(t)>)^len                        => (list v^len) 🔧
 val((tuple t+))            ::= v+:<val(t)>+                            => (tuple v+)
 val((flags l+))            ::= (v:<core:byte>)^N                       => (flags (l[i] for i in 0..|l+|-1 if v[floor(i / 8)] & 2^(i mod 8) > 0)) (where N = ceil(|l+| / 8))
 val((enum l+))             ::= i:<core:u32>                            => (enum l[i])
@@ -503,6 +505,8 @@ val((result (error u)))    ::= 0x00                                    => ok
                              | 0x01 v:<val(u)>                         => (error v)
 val((result t (error u)))  ::= 0x00 v:<val(t)>                         => (ok v)
                              | 0x01 v:<val(u)>                         => (error v)
+val((map k v))             ::= e*:vec(<entryval(k, v)>)                => (map e*) 🗺️
+entryval(k, v)             ::= key:<val(k)> val:<val(v)>               => (entry key val) 🗺️
 ```
 
 Notes:
@@ -557,6 +561,8 @@ named once.
 * The two `list` type codes should be merged into one with an optional immediate
   and similarly for `func`.
 * The redundant `0x00` and `0x01` opcodes of `nameattributes` will be merged.
+* The vestigial `0x00` in `thread.*` and `waitable-set.*` built-ins may be
+  removed.
 * Most built-ins should have a `<canonopt>*` immediate instead of an ad hoc
   subset of `canonopt`s.
 * Add optional `shared` immediate to all canonical definitions (explicitly or

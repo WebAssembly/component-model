@@ -1,9 +1,9 @@
-;; While a non-async-typed export call is in progress, the runtime must only
-;; ever resume threads of that call's own component instance (which is necessary
-;; to prevent accidental and unexpected reentrance). To test this behavior, the
-;; following test creates a bunch of ready-but-excluded threads which sit in a
-;; sibling instance and must not be resumed when a sync call in the primary
-;; component instance blocks.
+;; While a non-async-typed export call is in progress, the runtime only ever
+;; resumes threads of that call's own component instance; ready threads of
+;; *other* component instances run only once control returns to the top-level
+;; event loop. To test this behavior, the following test creates a bunch of
+;; ready-but-excluded threads which sit in a sibling instance and must not be
+;; resumed when a sync call in the primary component instance blocks.
 ;;
 ;; In particular:
 ;;   1. "setup" spawns thread X inside $Inner (X belongs to a resolved
@@ -212,4 +212,4 @@
   (func (export "sync-block") (alias export $inner "sync-block"))
 )
 (assert_return (invoke "arm"))
-(assert_trap (invoke "sync-block") "deadlock detected: event loop cannot make further progress")
+(assert_trap (invoke "sync-block") "cannot block a synchronous task before returning")

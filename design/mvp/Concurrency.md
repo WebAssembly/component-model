@@ -22,7 +22,7 @@ gated by the 🔀 (async) and 🧵 (threading) emojis.
   * [Borrows](#borrows)
   * [Cancellation](#cancellation)
   * [Nondeterminism](#nondeterminism)
-  * [Asynchronous Recursion](#asynchronous-recursion)
+  * [Reentrance](#reentrance)
 * [Interaction with the start function](#interaction-with-the-start-function)
 * [Async ABI](#async-abi)
   * [Async Import ABI](#async-import-abi)
@@ -58,9 +58,8 @@ use cases are added, refining the Component Model's high-level
 * Allow runtimes to maintain meaningful cross-language call stacks (for the
   benefit of debugging, logging, tracing and profiling).
 * Consider backpressure and cancellation as part of the design.
-* Allow non-reentrant synchronous and event-loop-driven core wasm code that
-  assumes a single global linear memory stack to not have to worry about
-  additional reentrancy.
+* Provide optional run-to-completion semantics for async code as described
+  by [Component Invariant] #2.
 
 
 ## Summary
@@ -202,11 +201,8 @@ Note that because functions without `async` in their type are not allowed to
 block, non-`async` functions do not attempt to acquire the "exclusive" lock;
 they just barge in. Components exporting a mix of `async` and non-`async`
 functions (which again mostly only arises in the more advanced virtualization
-scenarios) must therefore take care to handle the "barge-in" case gracefully.
-Because this nested non-`async` call will complete synchronously without
-blocking, this behavior does not break [Component Invariant] #3: a single
-global shadow stack can still be (re)used in a LIFO manner, much like a
-traditional signal handler.
+scenarios) must therefore take care to handle the "barge-in" case gracefully
+by, for example, allocating a fresh linear memory shadow stack.
 
 Lastly, WIT is extended with two new type constructors—`future<T>` and
 `stream<T>`—to allow new WIT interfaces to explicitly represent concurrency in
@@ -506,10 +502,11 @@ There are several ways for a task to potentially "block":
 Since Component Model concurrency is [specified in terms of] the Core WebAssembly
 [stack-switching] proposal, each of the above represents a point where the
 [current thread](#current-thread-and-task) may suspend with the `$block` effect.
-Each of these points also serves as a **cooperative yield point** where
-[Component Invariant] #2 allows reentrance. However, just because the current
-thread *suspends* doesn't mean that the *task* has officially "blocked": what
-happens next depends on the state of the task and the declared function type:
+Each of these points also serves as a **cooperative yield point** where the host
+may nondeterministically switch to another thread. However, just because the
+current thread *suspends* doesn't mean that the *task* has officially "blocked":
+what happens next depends on the state of the task and the declared function
+type:
 
 If the task has already [returned](#returning) a value to the caller, then
 control flow returns to the caller and, from the caller's perspective, the call
@@ -703,15 +700,14 @@ instead of a boolean flag, unrelated pieces of code can report backpressure for
 distinct limited resources without prior coordination.
 
 In addition to *explicit* backpressure set by wasm code, there is also an
-*implicit* source of backpressure to ensure [Component Invariant] #3 and protect
-non-reentrant core wasm code. In particular, when an `async`-typed export is
-lifted with the sync ABI or the stackless async ABI, a component-instance-wide
-lock is implicitly acquired every time core wasm is executed. By returning to
-the event loop after every event (instead of once at the end of the task),
-stackless async exports release the lock between every event, allowing a higher
-degree of concurrency than synchronous exports. Stackful async exports ignore
-the lock entirely and thus achieve the highest degree of (cooperative)
-concurrency.
+*implicit* source of backpressure to ensure [Component Invariant] #2. In
+particular, when an `async`-typed export is lifted with the sync ABI or the
+stackless async ABI, a component-instance-wide lock is implicitly acquired every
+time core wasm is executed. By returning to the event loop after every event
+(instead of once at the end of the task), stackless async exports release the
+lock between every event, allowing a higher degree of concurrency than
+synchronous exports. Stackful async exports ignore the lock entirely and thus
+achieve the highest degree of (cooperative) concurrency.
 
 Since non-`async` functions are not allowed to block (including due to
 backpressure) and also don't pile up like `async` functions, non-`async`
@@ -794,36 +790,37 @@ cancelled-before-started and cancelled-before-returned. A subtask in one of
 these terminal states is said to be **resolved**. A resolved subtask has always
 dropped all the borrowed handles that it was lent during the call.
 
-Cancellation is *cooperative*, delivering the request for cancellation to one
-of the subtask's threads and then allowing the subtask to continue executing
-for an arbitrary amount of time (calling imports, performing I/O and everything
-else) until the subtask decides to call [`task.cancel`] to confirm the
-cancellation or, for whatever reason, call `task.return` as-if there had been
-no cancellation. `task.cancel` enforces the same "all borrowed handles dropped"
-rule as `task.return`, so that once a subtask is resolved, the caller knows its
-lent handles have been returned. If the subtask was waiting to start due to
-backpressure, the subtask is immediately aborted without running the callee at
-all.
+Cancellation is *cooperative*, delivering a *request* for cancellation and then
+allowing the subtask to continue executing for an arbitrary amount of time
+(calling imports, performing I/O and everything else) until the subtask decides
+to call [`task.cancel`] to confirm the cancellation or, for whatever reason,
+call `task.return` as-if there had been no cancellation. `task.cancel` enforces
+the same "all borrowed handles dropped" rule as `task.return`, so that once a
+subtask is resolved, the caller knows its lent handles have been returned. If
+the subtask was waiting to start due to backpressure, the subtask is immediately
+aborted without running the callee at all.
 
-When `subtask.cancel` is called, it will attempt to immediately resume one of
-the subtask's threads which is in a cancellable state, passing it a sentinel
-"cancelled" value. A thread is in a "cancellable" state if it calls one of the
-[blocking](#blocking) built-ins with the `cancellable` immediate set (indicating
-that the caller expects and propagates cancellation appropriately) or, if using
-a `callback`, returns to the event loop (which always waits cancellably). If a
-subtask has no cancellable threads, no thread is resumed and the request for
-cancellation is remembered in the task state, to be delivered immediately at
-the next cancellable wait. In the worst case, though, a component may never
-wait cancellably and thus cancellation may be silently ignored.
+When `subtask.cancel` is called, it first records a "pending cancellation
+request" on the callee's task. If the callee's task was waiting to start due to
+[backpressure](#backpressure), `subtask.cancel` returns "cancelled before
+started" immediately. Otherwise, `subtask.cancel` performs a nonblocking,
+cooperative `thread.yield` that allows the host to nondeterministically schedule
+any cooperative threads it wants in the hopes of delivering the cancellation
+request to the callee. Currently, cancellation requests can only be delivered
+to `async` functions using the stackless `callback` ABI. In this case, a pending
+cancellation request is delivered as a "task cancelled" event to the `callback`
+function, following the standard run-to-completion rules mentioned above. In
+the [future](#TODO), other cancellation delivery mechanisms will be added for
+the `async` functions using the stackful ABI.
 
 `subtask.cancel` can be called synchronously or asynchronously. If called
-synchronously, `subtask.cancel` blocks until the subtask reaches a resolved
-state and returns which state was reached. If called asynchronously, then if a
-cancellable subtask thread is resumed *and* the subtask reaches a resolved
-state before blocking for whatever reason `subtask.cancel` will return
-which state was reached. Otherwise, `subtask.cancel` will return a "blocked"
-sentinel value and the caller must [wait](#waitables-and-waitable-sets) via
-waitable set until the subtask reaches a resolved state.
+synchronously, `subtask.cancel` will block until the subtask has resolved (i.e.,
+the subtask returns a value or calls `task.cancel`), returning whether the
+callee "returned" or "cancelled before returning". If called *asynchronously*
+and the callee has *still* not resolved after the host decides the cooperative
+yield has completed, `subtask.cancel` will return "blocked" instead and the
+caller must [wait](#waitables-and-waitable-sets) via waitable set until the
+subtask reaches a resolved state.
 
 The Component Model does not provide a mechanism to force prompt termination of
 threads as this can lead to leaks and corrupt state in a still-live component
@@ -872,16 +869,14 @@ defined by the Component Model:
 * If multiple tasks are blocked by backpressure and the backpressure is
   disabled, the order in which these pending tasks start, along with how
   they interleave with new tasks, is nondeterministic.
-* If a task containing multiple threads is cancelled, the choice of which
-  thread receives the request for cancellation is nondeterministic.
+* When `subtask.cancel` is called for a task that has started (i.e., passed the
+  backpressure gate), the host may nondeterministically resume as many or as few
+  threads as it wants before `subtask.cancel` returns.
 
 Despite the above, the following scenarios do behave deterministically:
 * If a component `a` asynchronously calls the export of another component `b`,
   control flow deterministically transfers to `b` and then back to `a` when
   `b` returns or blocks.
-* If a component `a` asynchronously cancels a subtask in another component `b`,
-  control flow deterministically transfers to `b` and then back to `a` when `b`
-  resolves or blocks.
 * If a component `a` asynchronously cancels a subtask in another component `b`
   that was blocked before starting due to backpressure, cancellation completes
   deterministically and immediately.
@@ -890,105 +885,88 @@ Despite the above, the following scenarios do behave deterministically:
   (modulo any nondeterministic execution that determines the ordering in which
   the operations are performed).
 
-### Asynchronous Recursion
+### Reentrance
 
-Even without concurrency support, it is possible to reenter a component instance
-by recursively calling the component's export from a function called by the
-component's import. For example, given a component importing `imp` and exporting
-`exp`, using the [JS API], JS code could write:
+In general, whenever a component calls an imported function, the component must
+assume that before the import call returns, the callee may **reenter** the
+caller's component instance by recursively calling an exported function. For
+example, if `component.wasm` has type:
+```wat
+(component
+  (import "imp" (func))
+  (export "exp" (func))
+)
+```
+using the [JS API], reentrance is possible via:
 ```js
-import source component from './component.wasm';
-var instance;
 function imp() {
   instance.exports.exp();
 }
-instance = WebAssembly.instantiate(component, { imp });
-instance.exports.exp(); // exp ~~> imp ~~> exp
+var { instance } = await WebAssembly.instantiateStreaming(fetch('component.wasm'), { imp });
+instance.exports.exp();
 ```
-To relieve generic bindings generators and component authors from having to
-conservatively assume that *every* import call might reenter in this manner,
-the Component Model has [Component Invariant] #2. This is enforced by the
-[Canonical ABI](CanonicalABI.md#embedding) using strategically placed traps and
-boolean flags on component instances.
+Pure component-to-component reentrance is also possible via [donut wrapping],
+using `call_indirect` and the parent's mutable function table to close the loop.
 
-With native concurrency support, what we'd naturally expect is that if our
-component imports `imp` and exports `exp` as `async` functions, then the
-following JS code could run the two `exp` calls concurrently, as if they were JS
-`async` functions:
+If `component.wasm` is changed to have type:
+```wat
+(component
+  (import "imp" (func async))
+  (export "exp" (func async))
+)
+```
+the same kind of recursion is possible if the above JS code is modified to use
+`async`/`await`:
 ```js
-import source component from './component.wasm';
 async function imp() {
-  await ... some Web API I/O
+  await instance.exports.exp();
 }
-instance = WebAssembly.instantiate(component, { imp });
-await Promise.all([
+var { instance } = await WebAssembly.instantiateStreaming(fetch('component.wasm'), { imp });
+await instance.exports.exp();
+```
+However, this call will deadlock if `component.wasm` implements `exp` using the
+sync or stackless async ABI and calls `imp` synchronously. This is due to the
+[automatic backpressure](#backpressure) mentioned above that is necessary to
+preserve the run-to-completion semantics of [Component Invariant] #2. However,
+if `imp` is called asynchronously and `exp` doesn't wait for the result, there
+is no deadlock (the outer task completes, backpressure is disabled, and the
+inner task can start). Alternatively, if `exp` is implemented using the
+*stackful* async ABI, there is no automatic backpressure and it's up to the
+guest to handle the recursion without deadlock (as with the preceding
+synchronous case). Consequently, a host or parent component must be careful to
+only perform recursive reentrance on components when explicitly supported by the
+component's documented API.
+
+Setting aside recursive reentrance, with concurrency support, a new kind of
+*non-recursive* reentrance is also possible where a call to `exp`
+[blocks](#blocking) and the caller reenters the callee with a second call
+to `exp` that runs concurrently with the first. From JS code this looks like:
+```js
+async function imp() {
+  await ... some I/O ...
+}
+var { instance } = await WebAssembly.instantiateStreaming(fetch('component.wasm'), { imp });
+let results = await Promise.all([
   instance.exports.exp(),
   instance.exports.exp()
 ]);
 ```
-In particular, if `exp` transitively awaits `imp`, then when `imp` blocks (via
-`await`), control flow returns to the top-level JS script with `instance` in a
-reenterable state, so that `exp` can be concurrently invoked a second time.
-
-However, this also means that if we slightly change our original recursive
-example to use `async` and then `await` before attempting to reenter `instance`,
-there is no trap. The first `await` in `imp` returns to top-level, leaving
-`instance` in a reenterable state, so when `imp` is later resumed from the event
-loop, it is allowed to reenter `exp`.
-```js
-import source component from './component.wasm';
-var instance;
-async function imp() {
-  await Promise.resolve();
-  await instance.exports.exp();
-}
-instance = WebAssembly.instantiate(component, { imp });
-await instance.exports.exp(); // exp ~~> imp ~~> exp
-```
-The hazard with this example is that if the outer call to `exp` internally grabs
-and holds a lock while awaiting the call to `imp`, and if the recursive call to
-`exp` waits to acquire the same lock, there will be a deadlock. In the preceding
-`async` example, since there is no circular dependency between the two calls to
-`exp`, the second call can simply wait for the first to release any lock it
-holds.
-
-A concrete example of this hazard is the implicit per-component-instance lock
-taken and released by [backpressure](#backpressure). E.g., if `component` lifts
-`exp` synchronously (which triggers implicit backpressure while a call to `exp`
-is running), the recursive call to `exp` will immediately deadlock.
-
-Unfortunately, it's not possible to reliably discriminate the two cases so that
-the second example traps (as it did in the synchronous case) while the first
-example succeeds. Given the Component Model's well-defined [async call
-stack](#subtasks-and-supertasks), it might seem possible to tell the cases apart
-by checking whether `instance` is already *on the call stack* when attempting to
-enter `exp`. However, this doesn't work for two reasons:
-
-First, to properly detect asynchronous recursion, the host embedding would have
-to maintain something analogous to the Component Model's async call stack, which
-some hosts (including, currently, browsers) simply do not have a well-defined
-way to do.
-
-Second, the async call stack is neither necessary nor sufficient to catch these
-kinds of asynchronous recursive deadlocks. The async call stack tracks the
-*causality* leading up to a call, which is useful for debugging, tracing,
-profiling, etc., but the async call stack doesn't imply that every call on the
-stack is blocking on the result of the next call in the chain (unlike with a
-synchronous call stack, which does imply this). Moreover, the async call stack
-can arbitrarily reset through indirect forms of asynchronous calls (e.g., host
-APIs with callbacks like, in a browser, `setTimeout`), so the absence of
-recursion on the async call stack does not guarantee the absence of a circular
-asynchronous dependency.
-
-Thus, the Canonical ABI rules don't attempt to distinguish the different kinds
-of asynchronous reentrance. It is thus the responsibility of component clients
-to avoid async recursion. Fortunately, in component-to-component compositions,
-this kind of recursion is only possible when doing advanced higher-order linking
-(aka [donut wrapping]). And unlike [Component Invariant] #2, which directly
-impacts bindings generators, async recursion only arises when there's
-[blocking](#blocking) and so it's already necessary to support (non-recursive)
+Unlike recursive reentrance, this non-recursive reentrance is expected to be
+commonplace and enabling it is one of the primary goals of having native
+concurrency support in the Component Model. Moreover, because the two `exp`
+tasks above are *siblings* in the [async call stack](#subtasks-and-supertasks),
+there shouldn't be any deadlock hazards unless there is implicit synchronization
+between the siblings (e.g., through their shared linear memory). Thus, while
+reentrance is possible both with and without `async`, `async` "dials up" the
+expected degree of reentrance but also "dials down" the hazards associated with
 reentrance.
 
+Since recursive reentrance is hazardous while non-recursive reentrance is far
+less so, a reasonable question is whether there could be some form of opt-in at
+the component and WIT level (enforced by traps in the ABI). Unfortunately, due
+to the dynamism of task dependency and the open-ended nature of host embeddings,
+there is no reliable way to eagerly distinguish the two cases without
+introducing significant false positives and negatives.
 
 ## Interaction with the start function
 
@@ -1501,6 +1479,8 @@ the concurrency story:
 * remove the temporary trap mentioned above that occurs when a `read` and
   `write` of a stream/future happen from within the same component instance
 * zero-copy forwarding/splicing
+* allow `async` functions using the stackful ABI to be notified of
+  cancellation
 * allow the `stream<char>` type to validate; make it use `string-encoding`
   and not split code points
 * add built-ins providing guest code more control over its containing

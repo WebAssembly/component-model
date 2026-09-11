@@ -663,6 +663,11 @@ where bind-id(X) parses '(' sort <id>? Y ')' when X parses '(' sort Y ')'
 Because there is nothing in this type grammar analogous to the [gc] proposal's
 [`rectype`], none of these types are recursive.
 
+To prevent integer overflow in obscure corner cases, as an extra validation
+requirement, `defvaltype`s may not be equal or greater than 2<sup>28</sup> bytes
+when serialized into linear memory according to the `i64` ABI definition of
+[Element Size](CanonicalABI.md#element-size).
+
 #### Fundamental value types
 
 The value types in `valtype` can be broken into two categories: *fundamental*
@@ -1225,7 +1230,7 @@ getting a resource's private representation value (that are introduced
 component instance that generated the resource type, thereby hiding access to a
 resource type's representation from the outside world. Because each component
 instantiation generates fresh resource types distinct from all preceding
-instances of the same component, resource types are ["generative"].
+instances of the same component, resource types are "[generative]".
 
 For example, in the following example component:
 ```wat
@@ -1370,7 +1375,7 @@ shared-nothing boundary. Traditionally, this problem is solved by defining a
 serialization format. The Component Model MVP uses roughly this same approach,
 defining a linear-memory-based [ABI] called the "Canonical ABI" which
 specifies, for any `functype`, a [corresponding](CanonicalABI.md#flattening)
-`core:functype` and [rules](CanonicalABI.md#lifting-and-lowering) for copying
+[`core:functype`] and [rules](CanonicalABI.md#lifting-and-lowering) for copying
 values into and out of linear memory. The Component Model differs from
 traditional approaches, though, in that the ABI is configurable, allowing
 multiple different memory representations of the same abstract value. In the
@@ -1556,8 +1561,8 @@ canon ::= ...
         | (canon task.return (result <valtype>)? <canonopt>* (core func <id>?)) 🔀
         | (canon task.cancel (core func <id>?)) 🔀
         | (canon waitable-set.new (core func <id>?)) 🔀
-        | (canon waitable-set.wait cancellable? (memory core-prefix(<core:memoryidx>)) (core func <id>?)) 🔀
-        | (canon waitable-set.poll cancellable? (memory core-prefix(<core:memoryidx>)) (core func <id>?)) 🔀
+        | (canon waitable-set.wait (memory core-prefix(<core:memoryidx>)) (core func <id>?)) 🔀
+        | (canon waitable-set.poll (memory core-prefix(<core:memoryidx>)) (core func <id>?)) 🔀
         | (canon waitable-set.drop (core func <id>?)) 🔀
         | (canon waitable.join (core func <id>?)) 🔀
         | (canon subtask.cancel async? (core func <id>?)) 🔀
@@ -1579,12 +1584,12 @@ canon ::= ...
         | (canon thread.index (core func <id>?)) 🧵
         | (canon thread.new-indirect core-prefix(<core:typeidx>) core-prefix(<core:tableidx>) (core func <id>?)) 🧵
         | (canon thread.resume-later (core func <id>?)) 🧵
-        | (canon thread.suspend cancellable? (core func <id>?)) 🧵
-        | (canon thread.yield cancellable? (core func <id>?)) 🔀
-        | (canon thread.suspend-then-resume cancellable? (core func <id>?)) 🧵
-        | (canon thread.yield-then-resume cancellable? (core func <id>?)) 🧵
-        | (canon thread.suspend-then-promote cancellable? (core func <id>?)) 🧵
-        | (canon thread.yield-then-promote cancellable? (core func <id>?)) 🧵
+        | (canon thread.suspend (core func <id>?)) 🧵
+        | (canon thread.yield (core func <id>?)) 🔀
+        | (canon thread.suspend-then-resume (core func <id>?)) 🧵
+        | (canon thread.yield-then-resume (core func <id>?)) 🧵
+        | (canon thread.suspend-then-promote (core func <id>?)) 🧵
+        | (canon thread.yield-then-promote (core func <id>?)) 🧵
         | (canon error-context.new <canonopt>* (core func <id>?)) 📝
         | (canon error-context.debug-message <canonopt>* (core func <id>?)) 📝
         | (canon error-context.drop (core func <id>?)) 📝
@@ -1760,11 +1765,9 @@ For details, see [Returning] in the concurrency explainer and
 
 The `task.cancel` built-in indicates that the [current task] is now [resolved]
 and has dropped all borrowed handles lent to it during the call (trapping if
-otherwise). `task.cancel` can only be called after the `task-cancelled` event
-has been received (via `callback`, `waitable-set.{wait,poll}` or `thread.*`)
-to indicate that the supertask has requested cancellation and thus is not
-expecting a return value. Once this request is received, any of the task's
-threads can call `task.cancel` or `task.return`.
+otherwise). `task.cancel` can only be called after a request for cancellation
+has been [delivered][Cancellation]. Once this request is received, any of the
+task's threads may call `task.cancel` or `task.return`.
 
 For details, see [Cancellation] in the concurrency explainer and
 [`canon_task_cancel`] in the Canonical ABI explainer.
@@ -1788,7 +1791,7 @@ For details, see [Waitables and Waitable Sets] in the concurrency explainer and
 
 | Synopsis                   |                                                            |
 | -------------------------- | ---------------------------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?,memory>(s: waitable-set) -> event`      |
+| Approximate WIT signature  | `func<memory>(s: waitable-set) -> event`                   |
 | Canonical ABI signature    | `[s:i32 payload-addr:memory.addrtype] -> [event-code:i32]` |
 
 where `event` is defined in WIT as:
@@ -1821,18 +1824,16 @@ by `waitable-set.poll` and never returned by `waitable-set.wait`.)
 Waitable sets may be `wait`ed upon when empty, in which case the caller will
 necessarily block until another thread adds a waitable to the set.
 
-If `cancellable` is set, `waitable-set.wait` may return `task-cancelled`
-(`6`) if the caller requests [cancellation] of the [current task]. If
-`cancellable` is not set, `task-cancelled` is never returned.
-`task-cancelled` is returned at most once for a given task and thus must be
-propagated once received.
-
 A `subtask` event notifies the supertask that its subtask is now in the given
 state (the meanings of which are described by the [concurrency explainer]).
 
 The meanings of the `{stream,future}-{read,write}` events/payloads are given as
 part [`stream.read` and `stream.write`](#-streamread-and-streamwrite) and
 [`future.read` and `future.write`](#-futureread-and-futurewrite) below.
+
+Lastly, the `task-cancelled` event is never returned by `waitable-set.wait` or
+`waitable-set.poll`; it may only be delivered as an event code to an `async`
+`callback` function to indicate [cancellation].
 
 In the Canonical ABI, the `event-code` return value provides the `event`
 discriminant and the case payloads are stored as two contiguous `i32`s at the
@@ -1845,19 +1846,13 @@ For details, see [Waitables and Waitable Sets] in the concurrency explainer and
 
 | Synopsis                   |                                                            |
 | -------------------------- | ---------------------------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?,memory>(s: waitable-set) -> event`      |
+| Approximate WIT signature  | `func<memory>(s: waitable-set) -> event`                   |
 | Canonical ABI signature    | `[s:i32 payload-addr:memory.addrtype] -> [event-code:i32]` |
 
 where `event` is defined as in [`waitable-set.wait`](#-waitable-setwait).
 
 The `waitable-set.poll` built-in returns either an event from one of the
 waitables in `s` or, if there is none, the `none` `event`.
-
-If `cancellable` is set, `waitable-set.poll` may return `task-cancelled`
-(`6`) if the caller requests [cancellation] of the [current task]. If
-`cancellable` is not set, `task-cancelled` is never returned.
-`task-cancelled` is returned at most once for a given task and thus must be
-propagated once received.
 
 The Canonical ABI of `waitable-set.poll` is the same as `waitable-set.wait`
 (with the `none` case indicated by returning `0`).
@@ -1908,8 +1903,11 @@ For details, see [Waitables and Waitable Sets] in the concurrency explainer and
 | Approximate WIT signature  | `func<async?>(subtask: subtask) -> option<subtask-state>` |
 | Canonical ABI signature    | `[subtask:i32] -> [i32]`                                  |
 
-The `subtask.cancel` built-in requests [cancellation] of the indicated subtask.
-If the `async` is present, `none` is returned (reprented as `-1` in the
+The `subtask.cancel` built-in requests [cancellation] of the indicated subtask,
+trapping if the caller was already notified of resolution, cancellation has
+already been requested, or the subtask is already in a waitable set.
+
+If the `async` is present, `none` is returned (represented as `-1` in the
 Canonical ABI) to indicate that the subtask blocked before it was [resolved].
 Otherwise, `subtask.cancel` returns the `subtask-state` that the subtask
 resolved to (which is one of `returned`, `cancelled-before-started` or
@@ -2200,106 +2198,102 @@ For details, see [Thread Built-ins] in the concurrency explainer and
 | Canonical ABI signature    | `[t:i32] -> []`   |
 
 The `thread.resume-later` built-in changes the state of thread `t` from
-"suspended" to "ready" (trapping if `t` is not in a "suspended" state) so that
-the runtime can nondeterministically resume `t` at some point in the future.
+"suspended" to "ready" (trapping if `t` is not in a "suspended" state, including
+if `t` is the current thread) so that the runtime can nondeterministically
+resume `t` at some point in the future.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_resume_later`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.suspend`
 
-| Synopsis                   |                                |
-| -------------------------- | ------------------------------ |
-| Approximate WIT signature  | `func<cancellable?>() -> bool` |
-| Canonical ABI signature    | `[] -> [i32]`                  |
+| Synopsis                   |               |
+| -------------------------- | ------------- |
+| Approximate WIT signature  | `func()`      |
+| Canonical ABI signature    | `[] -> [i32]` |
 
 The `thread.suspend` built-in suspends the [current thread] until it is
 explicitly resumed by some other thread calling a built-in such as
-`thread.resume-later`. If `cancellable` is set, `thread.suspend` returns whether
-the current task was [cancelled] by the caller; otherwise, `thread.suspend`
-always returns `false`.
+`thread.resume-later`. The returned `i32` is always `0` and may be removed
+in a future ABI revision.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_suspend`] in the Canonical ABI explainer.
 
 ###### 🔀 `thread.yield`
 
-| Synopsis                   |                                |
-| -------------------------- | ------------------------------ |
-| Approximate WIT signature  | `func<cancellable?>() -> bool` |
-| Canonical ABI signature    | `[] -> [i32]`                  |
+| Synopsis                   |               |
+| -------------------------- | ------------- |
+| Approximate WIT signature  | `func()`      |
+| Canonical ABI signature    | `[] -> [i32]` |
 
 The `thread.yield` built-in allows the runtime to potentially switch to any
 other thread in the "ready" state, enabling a long-running computation to
 cooperatively interleave execution without specifically requesting another
-thread to be resumed (as with `thread.yield-then-resume`). If `cancellable` is
-set, `thread.yield` returns whether the current task was [cancelled] by the
-caller; otherwise, `thread.yield` always returns `false`.
+thread to be resumed (as with `thread.yield-then-resume`). The returned `i32` is
+always `0` and may be removed in a future ABI revision.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.suspend-then-resume`
 
-| Synopsis                   |                                         |
-| -------------------------- | --------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
-| Canonical ABI signature    | `[t:i32] -> [i32]`                      |
+| Synopsis                   |                    |
+| -------------------------- | ------------------ |
+| Approximate WIT signature  | `func(t: thread)`  |
+| Canonical ABI signature    | `[t:i32] -> [i32]` |
 
 The `thread.suspend-then-resume` built-in suspends the [current thread] and
 immediately resumes execution of the thread `t`, trapping if `t` is not in a
-"suspended" state. If `cancellable` is set, `thread.suspend-then-resume` returns
-whether the current task was [cancelled] by the caller; otherwise,
-`thread.suspend-then-resume` always returns `false`.
+"suspended" state, which includes if `t` is the current thread. The returned
+`i32` is always `0` and may be removed in a future ABI revision.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_suspend_then_resume`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.yield-then-resume`
 
-| Synopsis                   |                                         |
-| -------------------------- | --------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
-| Canonical ABI signature    | `[t:i32] -> [i32]`                      |
+| Synopsis                   |                    |
+| -------------------------- | ------------------ |
+| Approximate WIT signature  | `func(t: thread)`  |
+| Canonical ABI signature    | `[t:i32] -> [i32]` |
 
 The `thread.yield-then-resume` built-in immediately resumes execution of the
-thread `t` (trapping if `t` is not in a "suspended" state), leaving the [current
-thread] in a "ready" state so that the runtime can nondeterministically resume
-the current thread at some point in the future. If `cancellable` is set,
-`thread.yield-then-resume` returns whether the current task was [cancelled] by
-the caller; otherwise, `thread.yield-then-resume` always returns `false`.
+thread `t` (trapping if `t` is not in a "suspended" state, which includes if `t`
+is the current thread), leaving the [current thread] in a "ready" state so that
+the runtime can nondeterministically resume the current thread at some point in
+the future. The returned `i32` is always `0` and may be removed in a future ABI
+revision.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield_then_resume`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.suspend-then-promote`
 
-| Synopsis                   |                                         |
-| -------------------------- | --------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
-| Canonical ABI signature    | `[t:i32] -> [i32]`                      |
+| Synopsis                   |                    |
+| -------------------------- | ------------------ |
+| Approximate WIT signature  | `func(t: thread)`  |
+| Canonical ABI signature    | `[t:i32] -> [i32]` |
 
-The `thread.suspend-then-promote` built-in immediately resumes execution of the
-thread `t` if `t` is in a "ready" state, in any case leaving the current thread
-in a "suspended" state. If `cancellable` is set, `thread.suspend-then-promote`
-returns whether the current task was [cancelled] by the caller; otherwise,
-`thread.suspend-then-promote` always returns `false`.
+The `thread.suspend-then-promote` built-in traps if `t` is the current thread
+and, otherwise, immediately resumes execution of the thread `t` if `t` is in a
+"ready" state, in any case leaving the current thread in a "suspended" state.
+The returned `i32` is always `0` and may be removed in a future ABI revision.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_suspend_then_promote`] in the Canonical ABI explainer.
 
 ###### 🧵 `thread.yield-then-promote`
 
-| Synopsis                   |                                         |
-| -------------------------- | --------------------------------------- |
-| Approximate WIT signature  | `func<cancellable?>(t: thread) -> bool` |
-| Canonical ABI signature    | `[t:i32] -> [i32]`                      |
+| Synopsis                   |                    |
+| -------------------------- | ------------------ |
+| Approximate WIT signature  | `func(t: thread)`  |
+| Canonical ABI signature    | `[t:i32] -> [i32]` |
 
-The `thread.yield-then-promote` built-in immediately resumes execution of the
-thread `t` if `t` is in a "ready" state, in any case leaving the current thread
-in a "ready" state. If `cancellable` is set, `thread.yield-then-promote` returns
-whether the current task was [cancelled] by the caller; otherwise,
-`thread.yield-then-promote` always returns `false`.
+The `thread.yield-then-promote` built-in traps if `t` is the current thread
+and, otherwise, immediately resumes execution of the thread `t` if `t` is in a
+"ready" state, in any case leaving the current thread in a "ready" state. The
+returned `i32` is always `0` and may be removed in a future ABI revision.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield_then_promote`] in the Canonical ABI explainer.
@@ -2427,9 +2421,13 @@ val      ::= false | true
            | (enum <labellit>)
            | none | (some <val>)
            | ok | (ok <val>) | error | (error <val>)
+           | (map <entryval>*) 🗺️
            | (binary <core:datastring>)
+entryval ::= (entry <val> <val>) 🗺️
 f64canon ::= <core:f64> without the `nan:0x` case.
 ```
+where [`core:i64`], [`core:f64`], [`core:stringchar`] and [`core:datastring`]
+are as defined by the Core WebAssembly text format.
 
 The validation rules for `value` require the `val` to match the `valtype`.
 
@@ -2473,6 +2471,17 @@ For example:
 
   (value $t bool (binary "\00"))
   (value $u string (binary "\07example"))
+
+  ;; 🔧 fixed-length list:
+  (value $v (list u8 3) (list 1 2 3))
+
+  ;; 🗺️ map:
+  (value $w (map string u16)
+    (map
+      (entry "a" 1)
+      (entry "b" 2)
+    )
+  )
 
   (type $complex
     (tuple
@@ -2843,7 +2852,8 @@ To determine whether two names (defined as sequences of [Unicode Scalar
 Values]) are **strongly-unique**:
 
 1. Canonicalize each name:
-    1. Lowercase all the `acronym`s (uppercase letters) in the name.
+    1. Remove all hyphens and lowercase all the `acronym`s (uppercase letters) in
+        the name.
     2. If the name is `[...]*l.l` for any annotations `[...]*` and some `label`
         `l`, replace the name with `l` (e.g. `[method]foo.foo` becomes `foo`).
     3. Strip all `[...]` annotations from the name besides `[constructor]`
@@ -2864,7 +2874,8 @@ but attempting to add *any* of the following names would be a validation error:
 
 * `foo`, `FOO`, `[method]foo.foo`, 📡 `[get]foo`, 📡 `[method][get]foo.foo`,
   📡 `[static][set]foo.FOO` (conflicts with `foo`)
-* `foo-BAR`, `[static]foo-BAR.FOO-bar` (conflicts with `foo-bar`)
+* `foo-BAR`, `foobar`, `foob-ar`, `[static]foobar.FOOBAR`,
+  `[static]foo-BAR.FOO-bar` (conflicts with `foo-bar`)
 * `[constructor]FOO` (conflicts with `[constructor]foo`)
 * `[method]foo.BAR`, `[static]foo.bar` (conflicts with `[method]foo.bar`)
 * `[method]foo.baz` (conflicts with `[static]foo.baz`)
@@ -2925,15 +2936,23 @@ type checking already required).
 
 Any `valid semver` (as used in WIT) can be canonicalized by splitting it into
 two parts - the `canonversion` prefix and the remaining `semversuffix`. Using
-the `<major>.<minor>.<patch>` syntax of [Semantic Versioning 2.0], the split
-point is chosen as follows:
+the `<major>.<minor>.<patch>(-<pre>)(+<build>)` syntax of [Semantic Versioning
+2.0], the split point is chosen as follows:
 
-- if `major` > 0, split immediately after `major`
+- build metadata, if present, is always part of the `semversuffix`
+  - `0.0.1+sha.5114f85` &rarr; `0.0.1` / `+sha.5114f85`
+- if the version has a pre-release label, then the version itself is not split
+  - `0.0.1-alpha` &rarr; `0.0.1-alpha` / nothing
+  - `0.0.1-alpha+sha.5114f85` &rarr; `0.0.1-alpha` / `+sha.5114f85`
+- otherwise if `major` > 0, split immediately after `major`
   - `1.2.3` &rarr; `1` / `.2.3`
+  - `1.2.3+sha.5114f85` &rarr; `1` / `.2.3+sha.5114f85`
 - otherwise if `minor` > 0, split immediately after `minor`
-  - `0.2.6-rc.1` &rarr; `0.2` / `.6-rc.1`
-- otherwise, split immediately after `patch`
-  - `0.0.1-alpha` &rarr; `0.0.1` / `-alpha`
+  - `0.2.6` &rarr; `0.2` / `.6`
+  - `0.2.6+sha.5114f85` &rarr; `0.2` / `.6+sha.5114f85`
+- otherwise, the version is already canonical
+  - `0.0.1` &rarr; `0.0.1`
+  - `0.0.1+sha.5114f85` &rarr; `0.0.1` / `+sha.5114f85`
 
 When a version is canonicalized, any `semversuffix` that was split off of the
 version should be preserved in the `versionsuffix` field of any resulting
@@ -3051,21 +3070,15 @@ In particular, the Component Model maintains the following invariants:
    after a trap, it's no longer possible to observe the internal state of a
    component instance.
 
-2. Components can only be reentered (via component export or thread resumption)
-   when they explicitly [block] or call a [donut wrapped] child component. Calls
-   to non-`async` functions do *not* count as "blocking" nor do non-blocking
-   (`async`-lowered) calls to `async` functions. Thus, bindings generators and
-   component authors do not need to always safely handle reentrance at all
-   import call sites. (In the [future](Concurrency.md#TODO), support for
-   first-class functions (as parameter and result values) would loosen this
-   restriction in an explicit opt-in manner.)
-
-3. To ease adoption, unless a component opts in (via "stackful" lift 🚟 or
-   cooperative threads 🧵), all core wasm execution inside a component instance
-   is locally serialized (via automatic backpressure applied at export calls) so
-   that producer toolchains can continue to use a single global linear memory
-   shadow stack that is pushed and popped in LIFO order.
-
+2. When components implement `async` functions using the 0.3.0 sync or
+   async-callback ABIs, core wasm execution is "run to completion" within the
+   scope of a single component instance: the runtime automatically exerts
+   backpressure to prevent there from being multiple core wasm stacks live at
+   the same time. Multiple stacks may, however, be live across *multiple*
+   component instances, or within a *single* component instance if the component
+   uses the "stackful" async ABI 🚟, cooperative thread built-ins 🧵, or exposes
+   synchronously-typed functions (since non-`async` functions cannot exert
+   backpressure when called).
 
 ## JavaScript Embedding
 
@@ -3308,8 +3321,8 @@ For some use-case-focused, worked examples, see:
 
 [`core:id`]: https://webassembly.github.io/spec/core/text/values.html#text-id
 [`core:externidx`]: https://webassembly.github.io/spec/core/text/modules.html#text-externidx
-[`core:i64`]: https://webassembly.github.io/spec/core/text/values.html#text-int
-[`core:f64`]: https://webassembly.github.io/spec/core/syntax/values.html#floating-point
+[`core:i64`]: https://webassembly.github.io/spec/core/text/values.html#integers
+[`core:f64`]: https://webassembly.github.io/spec/core/text/values.html#floating-point
 [`core:stringchar`]: https://webassembly.github.io/spec/core/text/values.html#text-string
 [`core:name`]: https://webassembly.github.io/spec/core/text/values.html#text-name
 [`core:module`]: https://webassembly.github.io/spec/core/text/modules.html#text-module
@@ -3345,7 +3358,6 @@ For some use-case-focused, worked examples, see:
 [`dictionary`]: https://webidl.spec.whatwg.org/#es-dictionary
 [`enum`]: https://webidl.spec.whatwg.org/#es-enumeration
 [`T?`]: https://webidl.spec.whatwg.org/#es-nullable-type
-[`Get`]: https://tc39.es/ecma262/#sec-get-o-p
 [Import Reflection]: https://github.com/tc39-transfer/proposal-import-reflection
 [Module Record]: https://tc39.es/ecma262/#sec-abstract-module-records
 [Module Specifier]: https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ModuleSpecifier
@@ -3372,7 +3384,6 @@ For some use-case-focused, worked examples, see:
 [Existential Types]: https://en.wikipedia.org/wiki/System_F
 [Unit]: https://en.wikipedia.org/wiki/Unit_type
 [Trampolines]: https://en.wikipedia.org/wiki/Trampoline_(computing)
-[Free Variables]: https://en.wikipedia.org/wiki/Free_variables_and_bound_variables
 
 [Generative]: https://www.researchgate.net/publication/2426300_A_Syntactic_Theory_of_Type_Generativity_and_Sharing
 [Avoidance Problem]: https://counterexamples.org/avoidance.html
@@ -3410,7 +3421,6 @@ For some use-case-focused, worked examples, see:
 [`canon_stream_new`]: CanonicalABI.md#-canon-streamfuturenew
 [`canon_stream_read`]: CanonicalABI.md#-canon-streamreadwrite
 [`canon_future_read`]: CanonicalABI.md#-canon-futurereadwrite
-[`canon_future_write`]: CanonicalABI.md#-canon-futurereadwrite
 [`canon_stream_cancel_read`]: CanonicalABI.md#-canon-streamfuturecancel-readwrite
 [`canon_stream_drop_readable`]: CanonicalABI.md#-canon-streamfuturedrop-readablewritable
 [`canon_subtask_cancel`]: CanonicalABI.md#-canon-subtaskcancel
@@ -3434,13 +3444,9 @@ For some use-case-focused, worked examples, see:
 [`canon_thread_spawn_indirect`]: CanonicalABI.md#-canon-threadspawn-indirect
 [`canon_thread_available_parallelism`]: CanonicalABI.md#-canon-threadavailable_parallelism
 [Shared-Nothing]: ../high-level/Choices.md
-[Use Cases]: ../high-level/UseCases.md
-[Host Embeddings]: ../high-level/UseCases.md#hosts-embedding-components
 
 [Concurrency Explainer]: Concurrency.md
 [Summary]: Concurrency.md#summary
-[Thread]: Concurrency.md#threads-and-tasks
-[Task]: Concurrency.md#threads-and-tasks
 [Current Thread]: Concurrency.md#current-thread-and-task
 [Current Task]: Concurrency.md#current-thread-and-task
 [Thread-Local Storage]: Concurrency.md#thread-local-storage
@@ -3457,11 +3463,9 @@ For some use-case-focused, worked examples, see:
 [Returning]: Concurrency.md#returning
 [Resolved]: Concurrency.md#cancellation
 [Cancellation]: Concurrency.md#cancellation
-[Cancelled]: Concurrency.md#cancellation
 [Block]: Concurrency.md#blocking
 
 [Component Model Documentation]: https://component-model.bytecodealliance.org
-[`wizer`]: https://github.com/bytecodealliance/wizer
 
 [Scoping and Layering]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8
 
