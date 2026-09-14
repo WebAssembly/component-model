@@ -1265,7 +1265,6 @@ class Waitable:
       wset.elems.append(self)
 
   def drop(self):
-    assert(not self.has_pending_event())
     assert(not self.has_sync_waiter)
     self.join(None)
 ```
@@ -1624,7 +1623,7 @@ buffer of length `1`, the second half of case `3` and cases `4` and `5` do not
 apply to futures. Enumerating the cases in the order that they are handled in
 the code below:
 1. The other end was racily dropped before this end could be notified, in which
-   case the call immediately completes, reporting `DROPPED` and nothing copied.
+   case `End.drop` already left a pending event and so there's nothing to do.
 2. The other end has not currently provided a buffer, in which case this end
    must block until the other end shows up with a buffer.
 3. Both this and the other end have provided buffers that can copy at least 1
@@ -1646,7 +1645,7 @@ the code below:
     assert(self.buffer is None)
     self.state = End.State.COPYING
     if self.other is None:
-      self.notify(progress = 0)
+      assert(self.has_pending_event())
     elif self.other.buffer is None:
       self.buffer = buffer
     elif buffer.remain() > 0 and self.other.buffer.remain() > 0:
@@ -1699,14 +1698,15 @@ cancellation. In the future, guest components may be given the same capability.
 
 The `End.drop` method is called by `{stream,future}.drop-{readable,writable}` to
 update the `other` end's state and possibly set a pending notification for the
-other end, if doing so wouldn't clobber an already-pending notification.
+other end, if the other end isn't already `DONE` and doing so wouldn't clobber
+an already-pending notification.
 ```python
   def drop(self):
     assert(not self.copying_or_cancelling())
     if self.other is not None:
       assert(self is self.other.other)
       self.other.other = None
-      if self.other.copying_or_cancelling() and not self.other.has_pending_event():
+      if self.other.state != End.State.DONE and not self.other.has_pending_event():
         self.other.notify(progress = 0)
       self.other = None
     Waitable.drop(self)

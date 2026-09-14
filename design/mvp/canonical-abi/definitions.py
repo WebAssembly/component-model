@@ -742,7 +742,6 @@ class Waitable:
       wset.elems.append(self)
 
   def drop(self):
-    assert(not self.has_pending_event())
     assert(not self.has_sync_waiter)
     self.join(None)
 
@@ -940,7 +939,7 @@ class End(Waitable):
     assert(self.buffer is None)
     self.state = End.State.COPYING
     if self.other is None:
-      self.notify(progress = 0)
+      assert(self.has_pending_event())
     elif self.other.buffer is None:
       self.buffer = buffer
     elif buffer.remain() > 0 and self.other.buffer.remain() > 0:
@@ -975,7 +974,7 @@ class End(Waitable):
     if self.other is not None:
       assert(self is self.other.other)
       self.other.other = None
-      if self.other.copying_or_cancelling() and not self.other.has_pending_event():
+      if self.other.state != End.State.DONE and not self.other.has_pending_event():
         self.other.notify(progress = 0)
       self.other = None
     Waitable.drop(self)
