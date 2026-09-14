@@ -1593,6 +1593,9 @@ canon ::= ...
         | (canon thread.yield-then-resume (core func <id>?)) 🧵
         | (canon thread.suspend-then-promote (core func <id>?)) 🧵
         | (canon thread.yield-then-promote (core func <id>?)) 🧵
+        | (canon thread.set-task (core func <id>?)) 🧵
+        | (canon thread.get-task (core func <id>?)) 🧵
+        | (canon task.drop (core func <id>?)) 🧵
         | (canon error-context.new <canonopt>* (core func <id>?)) 📝
         | (canon error-context.debug-message <canonopt>* (core func <id>?)) 📝
         | (canon error-context.drop (core func <id>?)) 📝
@@ -1748,7 +1751,7 @@ For details, see [Backpressure] in the concurrency explainer and
 | Canonical ABI signature    | `[lower(FuncT.results)*] -> []`         |
 
 The `task.return` built-in takes as parameters the result values of the
-[current task]. One of `task.return` or `task.cancel` must be called exactly
+[current task]. One of `task.return` or `task.cancel` must be called at most
 once from any of a task's threads.
 
 The `canon task.return` definition takes component-level return type and the
@@ -2319,6 +2322,60 @@ returned `i32` is always `0` and may be removed in a future ABI revision.
 
 For details, see [Thread Built-ins] in the concurrency explainer and
 [`canon_thread_yield_then_promote`] in the Canonical ABI explainer.
+
+###### 🧵 `thread.set-task`
+
+| Synopsis                   |                 |
+| -------------------------- | --------------- |
+| Approximate WIT signature  | `func(t: task)` |
+| Canonical ABI signature    | `[t:i32] -> []` |
+
+The `thread.set-task` built-in allows the [current thread] to set its containing
+task to the given operand, which immediately changes the [current task].
+Built-ins like `task.return` and `task.cancel` are defined in terms of "the
+current task", and thus `thread.set-task` allows a thread to return a value for
+a task other than the task that initially spawned the thread.
+
+Tasks form an [async call stack] that is consulted for debugging, observability,
+and host import-to-export call attribution. Thus, changing the current task
+allows a guest's concurrency runtime to control what async call stack to
+associate with the current wasm execution.
+
+The `i32` index passed to `thread.set-task` must be a task handle which can
+currently only be retrieved by calling `thread.get-task`.
+
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_thread_set_task`] in the Canonical ABI explainer.
+
+###### 🧵 `thread.get-task`
+
+| Synopsis                   |                  |
+| -------------------------- | ---------------- |
+| Approximate WIT signature  | `func() -> task` |
+| Canonical ABI signature    | `[] -> [i32]`    |
+
+The `thread.get-task` built-in returns a handle referring to the [current task]
+(which is the containing task of the [current thread]). This handle is currently
+only used as an argument in `thread.set-task`. Each call to `thread.get-task`
+returns a fresh handle which must be released by `task.drop` to avoid a handle
+table leak.
+
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_thread_get_task`] in the Canonical ABI explainer.
+
+###### 🧵 `task.drop`
+
+| Synopsis                   |                 |
+| -------------------------- | --------------- |
+| Approximate WIT signature  | `func(t: task)` |
+| Canonical ABI signature    | `[t:i32] -> []` |
+
+The `task.drop` built-in drops a handle allocated by `thread.get-task`. The
+state of the underlying task is not modified nor is the task destroyed, as it
+may have other active referents.
+
+For details, see [Thread Built-ins] in the concurrency explainer and
+[`canon_task_drop`] in the Canonical ABI explainer.
 
 ###### 🧵② `thread.spawn-ref`
 
@@ -3474,6 +3531,9 @@ For some use-case-focused, worked examples, see:
 [`canon_thread_yield_then_resume`]: CanonicalABI.md#-canon-threadyield-then-resume
 [`canon_thread_suspend_then_promote`]: CanonicalABI.md#-canon-threadsuspend-then-promote
 [`canon_thread_yield_then_promote`]: CanonicalABI.md#-canon-threadyield-then-promote
+[`canon_thread_get_task`]: CanonicalABI.md#-canon-threadget-task
+[`canon_thread_set_task`]: CanonicalABI.md#-canon-threadset-task
+[`canon_task_drop`]: CanonicalABI.md#-canon-taskdrop
 [`canon_thread_spawn_ref`]: CanonicalABI.md#-canon-threadspawn-ref
 [`canon_thread_spawn_indirect`]: CanonicalABI.md#-canon-threadspawn-indirect
 [`canon_thread_available_parallelism`]: CanonicalABI.md#-canon-threadavailable_parallelism
@@ -3483,6 +3543,7 @@ For some use-case-focused, worked examples, see:
 [Summary]: Concurrency.md#summary
 [Current Thread]: Concurrency.md#current-thread-and-task
 [Current Task]: Concurrency.md#current-thread-and-task
+[Async Call Stack]: Concurrency.md#subtasks-and-supertasks
 [Thread-Local Storage]: Concurrency.md#thread-local-storage
 [Subtask]: Concurrency.md#subtasks-and-supertasks
 [Stream or Future]: Concurrency.md#streams-and-futures
