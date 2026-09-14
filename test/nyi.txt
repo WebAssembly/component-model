@@ -1,4 +1,3 @@
 # See README.md
-./validation/max-value-size.wast
 ./validation/kebab.wast
 ./binary/binary.wast
