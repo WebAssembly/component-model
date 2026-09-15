@@ -444,20 +444,23 @@ Notes:
   unless the name is also annotated with `[method]`, in which case `self` must
   be the only parameter (subject to the `[method]` validation rules above).
 * 📡 Validation of `[get]` names requires that the function have a result type.
+  If the result type is `(result $V? (error $E)?)`, then it must have an inner
+  value type (and may or may not have an error type).
+* 📡 A getter's *property type* is its result type, except that if the result
+  type is `(result $V (error $E)?)`, the property type is `$V`. (In other
+  words, the property type "unwraps" the result type.)
+* 📡 If a name with `[set]` is defined as an import or export within a
+  particular scope, it must be preceded by a corresponding `[get]` in the same
+  scope. That is, there must already be an import or export respectively in the
+  same scope where the entire name is identical (*before* canonicalization),
+  except that the `[set]` annotation is replaced with `[get]`.
 * 📡 Validation of `[set]` names requires that the function have exactly one
   parameter, unless the name is also annotated with `[method]`, in which case
   there must be two parameters, the first of which is `self` (subject to the
-  `[method]` validation rules above).
+  `[method]` validation rules above). The type of this parameter must match the
+  corresponding getter's *property type*.
 * 📡 Validation of `[set]` names requires that the function have either no
-  result type or a result type of `(result (error $E)?)`.
-* 📡 If a name with `[set]` is defined as an import or export within a
-  particular scope, the equivalent name with `[get]` must have already been
-  defined as an import or export respectively in that same scope—that is, all
-  labels must be equal (before canonicalization), and all annotations must be
-  the same except that `[set]` is replaced with `[get]`, and the `[get]`
-  import/export must precede the `[set]` import/export. For example,
-  `[set]prop` requires `[get]prop`, and `[method][set]foo.bar` requires
-  `[method][get]foo.bar`.
+  result type or a result type of `(result (error $E)?)` (with no value type).
 * 🔀/📡 Functions with `[get]` or `[set]` names must not be `async`.
 * 🔗 Validation requires that `versionsuffix` is preceded by an `interfaceversion`
   matching `canonversion` and that the concatenation of the `canonversion` and
