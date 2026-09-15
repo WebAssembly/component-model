@@ -236,3 +236,135 @@
   (func (export "run") (alias export $d "run"))
 )
 (assert_return (invoke "run") (u32.const 42))
+
+;; Test where the writer has a pending buffer that is drained by several reads
+;; and then the readable end is dropped (before the writer has observed its event).
+(component definition $Tester
+  (core module $Memory (memory (export "mem") 1))
+  (core instance $memory (instantiate $Memory))
+  (core module $M
+    (import "" "mem" (memory 1))
+    (import "" "waitable.join" (func $waitable.join (param i32 i32)))
+    (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
+    (import "" "waitable-set.poll" (func $waitable-set.poll (param i32 i32) (result i32)))
+    (import "" "stream.new" (func $stream.new (result i64)))
+    (import "" "stream.read" (func $stream.read (param i32 i32 i32) (result i32)))
+    (import "" "stream.write" (func $stream.write (param i32 i32 i32) (result i32)))
+    (import "" "stream.drop-readable" (func $stream.drop-readable (param i32)))
+
+    (global $ws (mut i32) (i32.const 0))
+    (global $rx (mut i32) (i32.const 0))
+    (global $tx (mut i32) (i32.const 0))
+
+    (func $start
+      (global.set $ws (call $waitable-set.new))
+    )
+    (start $start)
+
+    (func $expect-event (param $code i32) (param $index i32) (param $payload i32)
+      (if (i32.ne (call $waitable-set.poll (global.get $ws) (i32.const 0)) (local.get $code))
+        (then unreachable))
+      (if (i32.ne (i32.load (i32.const 0)) (local.get $index))
+        (then unreachable))
+      (if (i32.ne (i32.load (i32.const 4)) (local.get $payload))
+        (then unreachable))
+    )
+    (func $expect-no-event
+      (if (i32.ne (call $waitable-set.poll (global.get $ws) (i32.const 0))
+                  (i32.const 0 (; NONE ;)))
+        (then unreachable))
+    )
+    ;; Create a stream and block a 4-byte write on it, with the writable end in
+    ;; the waitable set so that its completion is observable.
+    (func $blocked-write (param $n i32)
+      (local $ret64 i64)
+      (local.set $ret64 (call $stream.new))
+      (global.set $rx (i32.wrap_i64 (local.get $ret64)))
+      (global.set $tx (i32.wrap_i64 (i64.shr_u (local.get $ret64) (i64.const 32))))
+      (call $waitable.join (global.get $tx) (global.get $ws))
+      (i32.store (i32.const 64) (i32.const 0x04030201))
+      (if (i32.ne (call $stream.write (global.get $tx) (i32.const 64) (local.get $n))
+                  (i32.const -1 (; BLOCKED ;)))
+        (then unreachable))
+    )
+
+    ;; A blocked 3-byte write is drained by a 1-byte then a 2-byte read. The
+    ;; reads see the bytes in order, and the writer gets one event carrying the
+    ;; total progress, not one event per read.
+    (func (export "writer-buffer-pending") (result i32)
+      (call $blocked-write (i32.const 3))
+      (if (i32.ne (call $stream.read (global.get $rx) (i32.const 128) (i32.const 1))
+                  (i32.const 0x10 (; COMPLETED=0 | (1<<4) ;)))
+        (then unreachable))
+      ;; NB: the writer is not polled in between -- observing its event would
+      ;; detach its buffer and the second read would have nothing to drain.
+      (if (i32.ne (call $stream.read (global.get $rx) (i32.const 129) (i32.const 2))
+                  (i32.const 0x20 (; COMPLETED=0 | (2<<4) ;)))
+        (then unreachable))
+      (call $expect-event (i32.const 3 (; STREAM_WRITE ;)) (global.get $tx)
+                          (i32.const 0x30 (; COMPLETED=0 | (3<<4) ;)))
+      (call $expect-no-event)
+      ;; bytes 1,2,3 landed contiguously and in order
+      (if (i32.ne (i32.load (i32.const 128)) (i32.const 0x00030201))
+        (then unreachable))
+      (i32.const 42)
+    )
+
+    ;; If the readable end is dropped before the writer observes its event, the
+    ;; pending COMPLETED is folded into a DROPPED carrying the same progress:
+    ;; the writer learns both that its bytes were copied and that the stream is
+    ;; over, in one event.
+    (func (export "drop-folds-into-full-progress") (result i32)
+      (call $blocked-write (i32.const 4))
+      (if (i32.ne (call $stream.read (global.get $rx) (i32.const 128) (i32.const 4))
+                  (i32.const 0x40 (; COMPLETED=0 | (4<<4) ;)))
+        (then unreachable))
+      (call $stream.drop-readable (global.get $rx))
+      (call $expect-event (i32.const 3 (; STREAM_WRITE ;)) (global.get $tx)
+                          (i32.const 0x41 (; DROPPED=1 | (4<<4) ;)))
+      (call $expect-no-event)
+      (i32.const 42)
+    )
+
+    ;; Same, with the write only partially drained: the folded event reports
+    ;; the partial progress.
+    (func (export "drop-folds-into-partial-progress") (result i32)
+      (call $blocked-write (i32.const 4))
+      (if (i32.ne (call $stream.read (global.get $rx) (i32.const 128) (i32.const 2))
+                  (i32.const 0x20 (; COMPLETED=0 | (2<<4) ;)))
+        (then unreachable))
+      (call $stream.drop-readable (global.get $rx))
+      (call $expect-event (i32.const 3 (; STREAM_WRITE ;)) (global.get $tx)
+                          (i32.const 0x21 (; DROPPED=1 | (2<<4) ;)))
+      (call $expect-no-event)
+      (i32.const 42)
+    )
+  )
+  (type $ST (stream u8))
+  (canon waitable.join (core func $waitable.join))
+  (canon waitable-set.new (core func $waitable-set.new))
+  (canon waitable-set.poll (memory (core memory $memory "mem")) (core func $waitable-set.poll))
+  (canon stream.new $ST (core func $stream.new))
+  (canon stream.read $ST async (memory (core memory $memory "mem")) (core func $stream.read))
+  (canon stream.write $ST async (memory (core memory $memory "mem")) (core func $stream.write))
+  (canon stream.drop-readable $ST (core func $stream.drop-readable))
+  (core instance $m (instantiate $M (with "" (instance
+    (export "mem" (memory $memory "mem"))
+    (export "waitable.join" (func $waitable.join))
+    (export "waitable-set.new" (func $waitable-set.new))
+    (export "waitable-set.poll" (func $waitable-set.poll))
+    (export "stream.new" (func $stream.new))
+    (export "stream.read" (func $stream.read))
+    (export "stream.write" (func $stream.write))
+    (export "stream.drop-readable" (func $stream.drop-readable))
+  ))))
+  (func (export "writer-buffer-pending") (result u32) (canon lift (core func $m "writer-buffer-pending")))
+  (func (export "drop-folds-into-full-progress") (result u32) (canon lift (core func $m "drop-folds-into-full-progress")))
+  (func (export "drop-folds-into-partial-progress") (result u32) (canon lift (core func $m "drop-folds-into-partial-progress")))
+)
+(component instance $i $Tester)
+(assert_return (invoke "writer-buffer-pending") (u32.const 42))
+(component instance $i $Tester)
+(assert_return (invoke "drop-folds-into-full-progress") (u32.const 42))
+(component instance $i $Tester)
+(assert_return (invoke "drop-folds-into-partial-progress") (u32.const 42))
