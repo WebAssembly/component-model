@@ -711,10 +711,11 @@ achieve the highest degree of (cooperative) concurrency.
 
 Since non-`async` functions are not allowed to block (including due to
 backpressure) and also don't pile up like `async` functions, non-`async`
-functions ignore backpressure (explicit and implicit) entirely. If a
-component exports a mix of `async` and non-`async` functions, code generation
-must therefore be prepared to handle non-`async` functions executing at
-any cooperative yield point, even in the middle of a `callback`.
+functions ignore backpressure (explicit and implicit) entirely. If a component
+exports a mix of `async` and non-`async` functions, code generation must
+therefore be prepared to handle non-`async` functions executing at any core wasm
+import call to a `canon` definition (with the exception of select non-reentrant
+built-ins like `resource.rep`).
 
 Once a task is allowed to start according to these backpressure rules, its
 arguments are lowered into the callee's linear memory and the task is in
@@ -796,31 +797,31 @@ allowing the subtask to continue executing for an arbitrary amount of time
 to call [`task.cancel`] to confirm the cancellation or, for whatever reason,
 call `task.return` as-if there had been no cancellation. `task.cancel` enforces
 the same "all borrowed handles dropped" rule as `task.return`, so that once a
-subtask is resolved, the caller knows its lent handles have been returned. If
-the subtask was waiting to start due to backpressure, the subtask is immediately
-aborted without running the callee at all.
+subtask is resolved, the caller knows its lent handles have been returned.
 
-When `subtask.cancel` is called, it first records a "pending cancellation
-request" on the callee's task. If the callee's task was waiting to start due to
-[backpressure](#backpressure), `subtask.cancel` returns "cancelled before
-started" immediately. Otherwise, `subtask.cancel` performs a nonblocking,
-cooperative `thread.yield` that allows the host to nondeterministically schedule
-any cooperative threads it wants in the hopes of delivering the cancellation
-request to the callee. Currently, cancellation requests can only be delivered
-to `async` functions using the stackless `callback` ABI. In this case, a pending
-cancellation request is delivered as a "task cancelled" event to the `callback`
-function, following the standard run-to-completion rules mentioned above. In
-the [future](#TODO), other cancellation delivery mechanisms will be added for
-the `async` functions using the stackful ABI.
+If the subtask was waiting to start due to [backpressure](#backpressure), the
+subtask is immediately aborted without running the callee at all, returning
+cancelled-before-started. Otherwise, `subtask.cancel` records the "pending
+cancellation request" in the subtask and attempts to resume execution in the
+subtask's component instance in the hopes that the subtask will quickly resolve
+itself. However, if there are no ready threads or, if there are, at least one
+thread is resumed and then blocks or exits without having resolved the subtask,
+the host is free to declare that cancellation has blocked. In this case,
+asynchronous calls to `subtask.cancel` will immediately return a "blocked" code
+and the caller must wait for progress using a waitable set. Synchronous calls to
+`subtask.cancel` simply block until the subtask is resolved.
 
-`subtask.cancel` can be called synchronously or asynchronously. If called
-synchronously, `subtask.cancel` will block until the subtask has resolved (i.e.,
-the subtask returns a value or calls `task.cancel`), returning whether the
-callee "returned" or "cancelled before returning". If called *asynchronously*
-and the callee has *still* not resolved after the host decides the cooperative
-yield has completed, `subtask.cancel` will return "blocked" instead and the
-caller must [wait](#waitables-and-waitable-sets) via waitable set until the
-subtask reaches a resolved state.
+The ready threads resumed by cancellation can be ready for all the normal
+reasons described above (yielding, I/O progress, etc). However, implicit threads
+using the `callback` ABI will *additionally* become ready due to the pending
+cancellation request itself (as long as the run-to-completion rules mentioned
+above are satisfied). If resumed, the `callback` will be passed a "task
+cancelled" event code to indicate that cancellation has been requested and that
+`task.cancel` may be called (instead of `task.return`). In the [future](#TODO),
+before the stackful ABI is released, other cancellation delivery mechanisms will
+be added so that threads waiting via `waitable-set.wait` can also become ready
+and receive "task cancelled". Until then, `waitable-set.wait` will never return
+"task cancelled".
 
 The Component Model does not provide a mechanism to force prompt termination of
 threads as this can lead to leaks and corrupt state in a still-live component
@@ -870,8 +871,9 @@ defined by the Component Model:
   disabled, the order in which these pending tasks start, along with how
   they interleave with new tasks, is nondeterministic.
 * When `subtask.cancel` is called for a task that has started (i.e., passed the
-  backpressure gate), the host may nondeterministically resume as many or as few
-  threads as it wants before `subtask.cancel` returns.
+  backpressure gate), the choice of which ready thread to resume (if there are
+  multiple) and how many times to resume (if the first resumption blocks without
+  resolving the subtask) is nondeterministic.
 
 Despite the above, the following scenarios do behave deterministically:
 * If a component `a` asynchronously calls the export of another component `b`,

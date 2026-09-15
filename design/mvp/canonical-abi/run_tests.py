@@ -2518,28 +2518,19 @@ def test_cancel_subtask():
 
     caller_heap.memory[0] = 13
     [ret] = canon_subtask_cancel(True, subi2)
-    if ret == definitions.BLOCKED:
-      canon_waitable_join(subi2, seti)
-      [ret] = canon_waitable_set_wait(caller_mem, seti, retp)
-      assert(ret == EventCode.SUBTASK)
-      assert(caller_heap.memory[retp+0] == subi2)
-      assert(caller_heap.memory[retp+4] == Subtask.State.CANCELLED_BEFORE_RETURNED)
-    else:
-      assert(ret == Subtask.State.CANCELLED_BEFORE_RETURNED)
+    assert(ret == Subtask.State.CANCELLED_BEFORE_RETURNED)
     assert(caller_heap.memory[0] == 13)
     [] = canon_subtask_drop(subi2)
 
     caller_heap.memory[0] = 13
     [ret] = canon_subtask_cancel(True, subi3)
-    if ret == definitions.BLOCKED:
-      assert(caller_heap.memory[0] == 13)
-      [] = canon_waitable_join(subi3, seti)
-      [ret] = canon_waitable_set_wait(caller_mem, seti, retp)
-      assert(ret == EventCode.SUBTASK)
-      assert(caller_heap.memory[retp+0] == subi3)
-      assert(caller_heap.memory[retp+4] == Subtask.State.RETURNED)
-    else:
-      assert(ret == Subtask.State.RETURNED)
+    assert(ret == definitions.BLOCKED)
+    assert(caller_heap.memory[0] == 13)
+    [] = canon_waitable_join(subi3, seti)
+    [ret] = canon_waitable_set_wait(caller_mem, seti, retp)
+    assert(ret == EventCode.SUBTASK)
+    assert(caller_heap.memory[retp+0] == subi3)
+    assert(caller_heap.memory[retp+4] == Subtask.State.RETURNED)
     assert(caller_heap.memory[0] == 43)
     [] = canon_subtask_drop(subi3)
 
@@ -2551,15 +2542,13 @@ def test_cancel_subtask():
 
     caller_heap.memory[0] = 13
     [ret] = canon_subtask_cancel(True, subi4)
+    assert(ret == definitions.BLOCKED)
     assert(caller_heap.memory[0] == 13)
-    if ret == definitions.BLOCKED:
-      [] = canon_waitable_join(subi4, seti)
-      [ret] = canon_waitable_set_wait(caller_mem, seti, retp)
-      assert(ret == EventCode.SUBTASK)
-      assert(caller_heap.memory[retp+0] == subi4)
-      assert(caller_heap.memory[retp+4] == Subtask.State.CANCELLED_BEFORE_RETURNED)
-    else:
-      assert(ret == Subtask.State.CANCELLED_BEFORE_RETURNED)
+    [] = canon_waitable_join(subi4, seti)
+    [ret] = canon_waitable_set_wait(caller_mem, seti, retp)
+    assert(ret == EventCode.SUBTASK)
+    assert(caller_heap.memory[retp+0] == subi4)
+    assert(caller_heap.memory[retp+4] == Subtask.State.CANCELLED_BEFORE_RETURNED)
     [] = canon_subtask_drop(subi4)
 
     caller_heap.memory[0] = 13
@@ -2587,14 +2576,7 @@ def test_cancel_subtask():
     state,subi = unpack_result(ret)
     assert(state == Subtask.State.STARTED)
     [ret] = canon_subtask_cancel(True, subi)
-    if ret == definitions.BLOCKED:
-      canon_waitable_join(subi, seti)
-      [ret] = canon_waitable_set_wait(caller_mem, seti, retp)
-      assert(ret == EventCode.SUBTASK)
-      assert(caller_heap.memory[retp+0] == subi)
-      assert(caller_heap.memory[retp+4] == Subtask.State.CANCELLED_BEFORE_RETURNED)
-    else:
-      assert(ret == Subtask.State.CANCELLED_BEFORE_RETURNED)
+    assert(ret == Subtask.State.CANCELLED_BEFORE_RETURNED)
     assert(caller_heap.memory[0] == 13)
     [] = canon_subtask_drop(subi)
 
@@ -2613,15 +2595,13 @@ def test_cancel_subtask():
       state,subi_hog = unpack_result(ret)
       assert(state == Subtask.State.STARTED)
       [ret] = canon_subtask_cancel(True, subi)
-      if ret == definitions.BLOCKED:
-        assert(caller_heap.memory[0] == 13)
-        [] = canon_waitable_join(subi, seti)
-        [ret] = canon_waitable_set_wait(caller_mem, seti, retp)
-        assert(ret == EventCode.SUBTASK)
-        assert(caller_heap.memory[retp+0] == subi)
-        assert(caller_heap.memory[retp+4] == cancelled_state)
-      else:
-        assert(ret == cancelled_state)
+      assert(ret == definitions.BLOCKED)
+      assert(caller_heap.memory[0] == 13)
+      [] = canon_waitable_join(subi, seti)
+      [ret] = canon_waitable_set_wait(caller_mem, seti, retp)
+      assert(ret == EventCode.SUBTASK)
+      assert(caller_heap.memory[retp+0] == subi)
+      assert(caller_heap.memory[retp+4] == cancelled_state)
       assert(caller_heap.memory[0] == expected)
       assert(caller_heap.memory[4] == 45)
       [] = canon_subtask_drop(subi)

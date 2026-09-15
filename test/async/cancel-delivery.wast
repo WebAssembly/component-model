@@ -14,11 +14,12 @@
 ;;     pending cancellation (they never return TASK_CANCELLED), which must
 ;;     survive until the task returns to its event loop
 ;;
-;; Component $D calls each function and cancels it. Since `subtask.cancel
-;; async` only performs a cooperative yield, whether the cancellation of
-;; yield-until-cancel completes eagerly or reports BLOCKED is nondeterministic
-;; and $D accepts both. While a task is blocked in its initial core function it
-;; cannot be cancelled, so those cancellations deterministically report
+;; Component $D calls each function and cancels it. `subtask.cancel async`
+;; resumes the cancelled task directly, but the host is also allowed (not
+;; required) to keep resuming ready threads, so yield-until-cancel may or may
+;; not get far enough to resolve before the built-in returns and $D accepts
+;; both outcomes. While a task is blocked in its initial core function it
+;; cannot be cancelled at all, so those cancellations deterministically report
 ;; BLOCKED.
 (component
   (component $C
@@ -171,8 +172,9 @@
           (then unreachable))
         (local.set $subtask (i32.shr_u (local.get $ret) (i32.const 4)))
 
-        ;; cancel; the callee needs two more turns of its event loop to
-        ;; resolve, so this may or may not complete eagerly
+        ;; cancel; the callee is resumed to receive TASK_CANCELLED, but it
+        ;; needs one more turn of its event loop to resolve, which the host may
+        ;; or may not give it before returning from the built-in
         (local.set $ret (call $subtask.cancel (local.get $subtask)))
         (if (i32.eq (local.get $ret) (i32.const -1 (; BLOCKED ;)))
           (then (call $await-cancelled (local.get $subtask)))
@@ -274,5 +276,126 @@
     (with "pending-survives" (func $c "pending-survives"))
   ))
   (func (export "run") (alias export $d "run"))
+)
+(assert_return (invoke "run") (u32.const 42))
+
+;; subtask.cancel only resumes ready threads. A stackful (non-callback) task
+;; parked in 'waitable-set.wait' that contains no ready waitable is not ready
+;; and cannot return TASK_CANCELLED.
+(component
+  (component $C
+    (core module $Memory (memory (export "mem") 1))
+    (core instance $memory (instantiate $Memory))
+    (core module $CM
+      (import "" "mem" (memory 1))
+      (import "" "task.return" (func $task.return (param i32)))
+      (import "" "future.read" (func $future.read (param i32 i32) (result i32)))
+      (import "" "waitable.join" (func $waitable.join (param i32 i32)))
+      (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
+      (import "" "waitable-set.wait" (func $waitable-set.wait (param i32 i32) (result i32)))
+      (global $futr (mut i32) (i32.const 0))
+      (func (export "stash-fut") (param $f i32)
+        (global.set $futr (local.get $f)))
+      (func (export "stackful")
+        (local $ws i32)
+        (if (i32.ne (call $future.read (global.get $futr) (i32.const 0))
+                    (i32.const -1 (; BLOCKED ;)))
+          (then unreachable))
+        (local.set $ws (call $waitable-set.new))
+        (call $waitable.join (global.get $futr) (local.get $ws))
+        ;; Parked here, this task is not cancellable: only a FUTURE_READ can
+        ;; wake it, never a TASK_CANCELLED.
+        (if (i32.ne (call $waitable-set.wait (local.get $ws) (i32.const 8))
+                    (i32.const 4 (; FUTURE_READ ;)))
+          (then unreachable))
+        (call $task.return (i32.const 42)))
+    )
+    (type $FT (future))
+    (canon task.return (result u32) (core func $task.return))
+    (canon future.read $FT async (memory (core memory $memory "mem")) (core func $future.read))
+    (canon waitable.join (core func $waitable.join))
+    (canon waitable-set.new (core func $waitable-set.new))
+    (canon waitable-set.wait (memory (core memory $memory "mem")) (core func $waitable-set.wait))
+    (core instance $cm (instantiate $CM (with "" (instance
+      (export "mem" (memory $memory "mem"))
+      (export "task.return" (func $task.return))
+      (export "future.read" (func $future.read))
+      (export "waitable.join" (func $waitable.join))
+      (export "waitable-set.new" (func $waitable-set.new))
+      (export "waitable-set.wait" (func $waitable-set.wait))))))
+    (func (export "stash-fut") (param "fut" $FT) (canon lift (core func $cm "stash-fut")))
+    (func (export "stackful") async (result u32) (canon lift (core func $cm "stackful") async))
+  )
+  (instance $c (instantiate $C))
+  (core module $Memory (memory (export "mem") 1))
+  (core instance $memory (instantiate $Memory))
+  (type $FT (future))
+  (canon future.new $FT (core func $future.new))
+  (canon future.write $FT (memory (core memory $memory "mem")) (core func $future.write))
+  (canon lower (func $c "stash-fut") (core func $stash-fut'))
+  (canon lower (func $c "stackful") async (memory (core memory $memory "mem")) (core func $stackful'))
+  (canon subtask.cancel async (core func $subtask.cancel-async))
+  (canon subtask.drop (core func $subtask.drop))
+  (canon waitable.join (core func $waitable.join))
+  (canon waitable-set.new (core func $waitable-set.new))
+  (canon waitable-set.wait (memory (core memory $memory "mem")) (core func $waitable-set.wait))
+
+  (core module $Main
+    (import "" "mem" (memory 1))
+    (import "" "future.new" (func $future.new (result i64)))
+    (import "" "future.write" (func $future.write (param i32 i32) (result i32)))
+    (import "" "stash-fut" (func $stash-fut (param i32)))
+    (import "" "stackful" (func $stackful (param i32) (result i32)))
+    (import "" "subtask.cancel-async" (func $subtask.cancel-async (param i32) (result i32)))
+    (import "" "subtask.drop" (func $subtask.drop (param i32)))
+    (import "" "waitable.join" (func $waitable.join (param i32 i32)))
+    (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
+    (import "" "waitable-set.wait" (func $waitable-set.wait (param i32 i32) (result i32)))
+    (func (export "run") (result i32)
+      (local $ret64 i64) (local $futr i32) (local $futw i32)
+      (local $packed i32) (local $sub i32) (local $ws i32)
+      (local.set $ret64 (call $future.new))
+      (local.set $futr (i32.wrap_i64 (local.get $ret64)))
+      (local.set $futw (i32.wrap_i64 (i64.shr_u (local.get $ret64) (i64.const 32))))
+      (call $stash-fut (local.get $futr))
+      (local.set $packed (call $stackful (i32.const 24)))
+      (if (i32.ne (i32.and (local.get $packed) (i32.const 0xf)) (i32.const 1 (; STARTED ;)))
+        (then unreachable))
+      (local.set $sub (i32.shr_u (local.get $packed) (i32.const 4)))
+      ;; no ready thread to resume, so the request is only recorded
+      (if (i32.ne (call $subtask.cancel-async (local.get $sub))
+                  (i32.const -1 (; BLOCKED ;)))
+        (then unreachable))
+      ;; unblock the stackful task; it never sees the cancellation
+      (if (i32.ne (call $future.write (local.get $futw) (i32.const 16))
+                  (i32.const 0 (; COMPLETED ;)))
+        (then unreachable))
+      (local.set $ws (call $waitable-set.new))
+      (call $waitable.join (local.get $sub) (local.get $ws))
+      (if (i32.ne (call $waitable-set.wait (local.get $ws) (i32.const 0))
+                  (i32.const 1 (; SUBTASK ;)))
+        (then unreachable))
+      (if (i32.ne (i32.load (i32.const 0)) (local.get $sub))
+        (then unreachable))
+      (if (i32.ne (i32.load (i32.const 4)) (i32.const 2 (; RETURNED ;)))
+        (then unreachable))
+      (if (i32.ne (i32.load (i32.const 24)) (i32.const 42))
+        (then unreachable))
+      (call $waitable.join (local.get $sub) (i32.const 0))
+      (call $subtask.drop (local.get $sub))
+      (i32.const 42))
+  )
+  (core instance $main (instantiate $Main (with "" (instance
+    (export "mem" (memory $memory "mem"))
+    (export "future.new" (func $future.new))
+    (export "future.write" (func $future.write))
+    (export "stash-fut" (func $stash-fut'))
+    (export "stackful" (func $stackful'))
+    (export "subtask.cancel-async" (func $subtask.cancel-async))
+    (export "subtask.drop" (func $subtask.drop))
+    (export "waitable.join" (func $waitable.join))
+    (export "waitable-set.new" (func $waitable-set.new))
+    (export "waitable-set.wait" (func $waitable-set.wait))))))
+  (func (export "run") async (result u32) (canon lift (core func $main "run")))
 )
 (assert_return (invoke "run") (u32.const 42))
