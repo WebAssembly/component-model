@@ -1579,11 +1579,11 @@ explainer](Concurrency.md#summary).
 
 📡 As syntactic sugar, functions can be declared as *getters* or *setters* by
 replacing the `func` keyword with `get` or `set`. Such functions cannot be
-async and have additional restrictions on their parameters and results. A `get`
-function must have no parameters and must return a value. A `set` function
-must have exactly one parameter and must not return a value unless that value
-is of type `result<_, error?>`. Every setter must have a corresponding getter
-with the same name. For example, the following definitions:
+async and have additional restrictions on their parameters and results as
+defined in [Binary.md](Binary.md#import-and-export-definitions). Each setter
+must have a corresponding getter with the same name (not just equal under
+[strong uniqueness](Explainer.md#name-uniqueness)), though in WIT the getter
+and setter may appear in any order. For example, the following definitions:
 
 ```wit
 foo: func(x: u32);
@@ -1799,12 +1799,11 @@ explicitly-written return type which must be of the form `result<r, ...>` where
 written return type and are given the implicit return type `r`.
 
 📡 A resource statement can also contain any number of *getters* and
-*setters*, which may or may not be static. Non-static getters and setters also
-implicitly take a `self` parameter. Getters take no parameters (besides the
-implicit `self` parameter) and must return a value. Setters take exactly one
-parameter (besides the implicit `self` parameter) and must not return a value
-unless that value is of type `result<_, error?>`. Every setter must have a
-corresponding getter with the same name and same static-ness.
+*setters*, which may or may not be static. Every setter must have a
+corresponding getter with the same name (not just equal under [strong
+uniqueness](Explainer.md#name-uniqueness)) and same static-ness, though the two
+may appear in any order. The parameter and return types of getters and setters
+have extra restrictions defined in [Binary.md](Binary.md#import-and-export-definitions).
 
 For example, the following resource definitions:
 
@@ -1816,7 +1815,7 @@ resource blob {
     merge: static func(lhs: borrow<blob>, rhs: borrow<blob>) -> blob;
     position: get() -> u64; // 📡
     position: set(value: u64); // 📡
-    max-size: static get() -> u64; // 📡
+    max-size: static get() -> result<u64>; // 📡
     max-size: static set(value: u64) -> result<_, string>; // 📡
 }
 resource blob2 {
@@ -1824,7 +1823,7 @@ resource blob2 {
 }
 ```
 
-desugar into:
+will desugar into:
 
 ```wit
 resource blob;
