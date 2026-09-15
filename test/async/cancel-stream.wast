@@ -158,6 +158,26 @@
         (if (i32.ne (i32.const 1) (local.get $sr))
           (then unreachable))
 
+        ;; same as above, but with a 4-byte buffer that $C's write fills
+        ;; exactly, so the read has already fully completed by the time $C
+        ;; drops. Cancelling still shows "4+dropped", not "4+completed",
+        ;; because the stream is dropped when the event is delivered.
+        (local.set $ret (call $stream.read (local.get $sr) (i32.const 8) (i32.const 4)))
+        (if (i32.ne (i32.const -1 (; BLOCKED;)) (local.get $ret))
+          (then unreachable))
+        (call $write4-and-drop)
+        (local.set $ret (call $stream.cancel-read (local.get $sr)))
+        (if (i32.ne (i32.const 0x41 (; DROPPED=1 | (4<<4) ;)) (local.get $ret))
+          (then unreachable))
+        (if (i32.ne (i32.const 0xabcd) (i32.load (i32.const 8)))
+          (then unreachable))
+        (call $stream.drop-readable (local.get $sr))
+
+        ;; get a new $sr
+        (local.set $sr (call $start-stream))
+        (if (i32.ne (i32.const 1) (local.get $sr))
+          (then unreachable))
+
         ;; start outstanding write in $C, read 4 of it, then call back into $C
         ;; which will cancel and see 4 written.
         (call $start-blocking-write)
@@ -200,3 +220,176 @@
   (func (export "run") (alias export $d "run"))
 )
 (assert_return (invoke "run") (u32.const 42))
+
+;; The cases above cancel reads/writes that are still genuinely in flight.
+;; $Tester below covers cancelling an operation whose completion has already
+;; happened but has not yet been observed.
+(component definition $Tester
+  (core module $Memory (memory (export "mem") 1))
+  (core instance $memory (instantiate $Memory))
+  (core module $M
+    (import "" "mem" (memory 1))
+    (import "" "stream.new" (func $stream.new (result i64)))
+    (import "" "stream.read" (func $stream.read (param i32 i32 i32) (result i32)))
+    (import "" "stream.write" (func $stream.write (param i32 i32 i32) (result i32)))
+    (import "" "stream.cancel-read" (func $stream.cancel-read (param i32) (result i32)))
+    (import "" "stream.cancel-write" (func $stream.cancel-write (param i32) (result i32)))
+    (import "" "stream.drop-readable" (func $stream.drop-readable (param i32)))
+    (import "" "stream.drop-writable" (func $stream.drop-writable (param i32)))
+
+    (global $rx (mut i32) (i32.const 0))
+    (global $tx (mut i32) (i32.const 0))
+    (func $new-stream
+      (local $r i64)
+      (local.set $r (call $stream.new))
+      (global.set $rx (i32.wrap_i64 (local.get $r)))
+      (global.set $tx (i32.wrap_i64 (i64.shr_u (local.get $r) (i64.const 32)))))
+
+    ;; A 2-byte write is fully drained by a 2-byte read, so the writer's copy is
+    ;; finished and its buffer released, but the writer has not observed the
+    ;; event yet. Cancelling now reports CANCELLED with the full progress, and
+    ;; leaves the writable end IDLE and reusable.
+    (func (export "cancel-write-after-completion") (result i32)
+      (call $new-stream)
+      (if (i32.ne (call $stream.write (global.get $tx) (i32.const 64) (i32.const 2))
+                  (i32.const -1 (; BLOCKED ;)))
+        (then unreachable))
+      (if (i32.ne (call $stream.read (global.get $rx) (i32.const 128) (i32.const 2))
+                  (i32.const 0x20 (; COMPLETED=0 | (2<<4) ;)))
+        (then unreachable))
+      (if (i32.ne (call $stream.cancel-write (global.get $tx))
+                  (i32.const 0x22 (; CANCELLED=2 | (2<<4) ;)))
+        (then unreachable))
+      ;; the end is IDLE again: a fresh write blocks, and cancelling that one
+      ;; reports a plain CANCELLED with no progress
+      (if (i32.ne (call $stream.write (global.get $tx) (i32.const 64) (i32.const 1))
+                  (i32.const -1 (; BLOCKED ;)))
+        (then unreachable))
+      (if (i32.ne (call $stream.cancel-write (global.get $tx))
+                  (i32.const 0x2 (; CANCELLED=2 | (0<<4) ;)))
+        (then unreachable))
+      (i32.const 42)
+    )
+    ;; The converse case:
+    (func (export "cancel-read-after-completion") (result i32)
+      (call $new-stream)
+      (if (i32.ne (call $stream.read (global.get $rx) (i32.const 128) (i32.const 2))
+                  (i32.const -1 (; BLOCKED ;)))
+        (then unreachable))
+      (if (i32.ne (call $stream.write (global.get $tx) (i32.const 64) (i32.const 2))
+                  (i32.const 0x20 (; COMPLETED=0 | (2<<4) ;)))
+        (then unreachable))
+      (if (i32.ne (call $stream.cancel-read (global.get $rx))
+                  (i32.const 0x22 (; CANCELLED=2 | (2<<4) ;)))
+        (then unreachable))
+      ;; the end is IDLE again: a fresh read blocks, and cancelling that one
+      ;; reports a plain CANCELLED with no progress
+      (if (i32.ne (call $stream.read (global.get $rx) (i32.const 128) (i32.const 1))
+                  (i32.const -1 (; BLOCKED ;)))
+        (then unreachable))
+      (if (i32.ne (call $stream.cancel-read (global.get $rx))
+                  (i32.const 0x2 (; CANCELLED=2 | (0<<4) ;)))
+        (then unreachable))
+      (i32.const 42)
+    )
+
+    ;; Zero-length ops complete by signalling readiness rather than by copying,
+    ;; and that completion is reported the same way: a blocked zero-length write
+    ;; is completed by the zero-length read arriving, and cancelling it
+    ;; afterwards reports CANCELLED with no progress.
+    (func (export "cancel-write-after-zero-length-completion") (result i32)
+      (call $new-stream)
+      (if (i32.ne (call $stream.write (global.get $tx) (i32.const 64) (i32.const 0))
+                  (i32.const -1 (; BLOCKED ;)))
+        (then unreachable))
+      ;; the reader learns the writer is ready and blocks in turn
+      (if (i32.ne (call $stream.read (global.get $rx) (i32.const 128) (i32.const 0))
+                  (i32.const -1 (; BLOCKED ;)))
+        (then unreachable))
+      (if (i32.ne (call $stream.cancel-write (global.get $tx))
+                  (i32.const 0x2 (; CANCELLED=2 | (0<<4) ;)))
+        (then unreachable))
+      (i32.const 42)
+    )
+    (func (export "cancel-read-after-zero-length-completion") (result i32)
+      (call $new-stream)
+      (if (i32.ne (call $stream.read (global.get $rx) (i32.const 128) (i32.const 0))
+                  (i32.const -1 (; BLOCKED ;)))
+        (then unreachable))
+      (if (i32.ne (call $stream.write (global.get $tx) (i32.const 64) (i32.const 1))
+                  (i32.const -1 (; BLOCKED ;)))
+        (then unreachable))
+      (if (i32.ne (call $stream.cancel-read (global.get $rx))
+                  (i32.const 0x2 (; CANCELLED=2 | (0<<4) ;)))
+        (then unreachable))
+      (i32.const 42)
+    )
+
+    ;; A drop that lands before the event is observed wins over the cancel: the
+    ;; writer is told DROPPED, still carrying the 1 byte that was copied. The
+    ;; end is then done and may be dropped.
+    (func (export "cancel-write-after-partial-then-drop") (result i32)
+      (call $new-stream)
+      (if (i32.ne (call $stream.write (global.get $tx) (i32.const 64) (i32.const 2))
+                  (i32.const -1 (; BLOCKED ;)))
+        (then unreachable))
+      (if (i32.ne (call $stream.read (global.get $rx) (i32.const 128) (i32.const 1))
+                  (i32.const 0x10 (; COMPLETED=0 | (1<<4) ;)))
+        (then unreachable))
+      (call $stream.drop-readable (global.get $rx))
+      (if (i32.ne (call $stream.cancel-write (global.get $tx))
+                  (i32.const 0x11 (; DROPPED=1 | (1<<4) ;)))
+        (then unreachable))
+      (call $stream.drop-writable (global.get $tx))
+      (i32.const 42)
+    )
+    (func (export "cancel-write-after-drop") (result i32)
+      (call $new-stream)
+      (if (i32.ne (call $stream.write (global.get $tx) (i32.const 64) (i32.const 2))
+                  (i32.const -1 (; BLOCKED ;)))
+        (then unreachable))
+      (call $stream.drop-readable (global.get $rx))
+      (if (i32.ne (call $stream.cancel-write (global.get $tx))
+                  (i32.const 0x01 (; DROPPED=1 | (0<<4) ;)))
+        (then unreachable))
+      (call $stream.drop-writable (global.get $tx))
+      (i32.const 42)
+    )
+  )
+  (type $ST (stream u8))
+  (canon stream.new $ST (core func $stream.new))
+  (canon stream.read $ST async (memory (core memory $memory "mem")) (core func $stream.read))
+  (canon stream.write $ST async (memory (core memory $memory "mem")) (core func $stream.write))
+  (canon stream.cancel-read $ST async (core func $stream.cancel-read))
+  (canon stream.cancel-write $ST async (core func $stream.cancel-write))
+  (canon stream.drop-readable $ST (core func $stream.drop-readable))
+  (canon stream.drop-writable $ST (core func $stream.drop-writable))
+  (core instance $m (instantiate $M (with "" (instance
+    (export "mem" (memory $memory "mem"))
+    (export "stream.new" (func $stream.new))
+    (export "stream.read" (func $stream.read))
+    (export "stream.write" (func $stream.write))
+    (export "stream.cancel-read" (func $stream.cancel-read))
+    (export "stream.cancel-write" (func $stream.cancel-write))
+    (export "stream.drop-readable" (func $stream.drop-readable))
+    (export "stream.drop-writable" (func $stream.drop-writable))
+  ))))
+  (func (export "cancel-write-after-completion") (result u32) (canon lift (core func $m "cancel-write-after-completion")))
+  (func (export "cancel-read-after-completion") (result u32) (canon lift (core func $m "cancel-read-after-completion")))
+  (func (export "cancel-write-after-zero-length-completion") (result u32) (canon lift (core func $m "cancel-write-after-zero-length-completion")))
+  (func (export "cancel-read-after-zero-length-completion") (result u32) (canon lift (core func $m "cancel-read-after-zero-length-completion")))
+  (func (export "cancel-write-after-partial-then-drop") (result u32) (canon lift (core func $m "cancel-write-after-partial-then-drop")))
+  (func (export "cancel-write-after-drop") (result u32) (canon lift (core func $m "cancel-write-after-drop")))
+)
+(component instance $i $Tester)
+(assert_return (invoke "cancel-write-after-completion") (u32.const 42))
+(component instance $i $Tester)
+(assert_return (invoke "cancel-read-after-completion") (u32.const 42))
+(component instance $i $Tester)
+(assert_return (invoke "cancel-write-after-zero-length-completion") (u32.const 42))
+(component instance $i $Tester)
+(assert_return (invoke "cancel-read-after-zero-length-completion") (u32.const 42))
+(component instance $i $Tester)
+(assert_return (invoke "cancel-write-after-partial-then-drop") (u32.const 42))
+(component instance $i $Tester)
+(assert_return (invoke "cancel-write-after-drop") (u32.const 42))
