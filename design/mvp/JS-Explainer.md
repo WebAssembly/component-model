@@ -186,9 +186,51 @@ const { instance } = await WebAssembly.instantiate(bytes, { element: Element });
 instance.exports.find(document.body, "h1");  // "page-title" or null
 ```
 
-`Element` covers the type and both methods. The type import checks for `@@isWasmResourceOf`, and the methods are read off `Element.prototype` under their camelCase names, which is where JS finds them too.
+`Element` covers the type and both methods. The type import brand checks against `Element`, which for a WebIDL interface object means the same `implements` check JS gets, and the methods are read off `Element.prototype` under their camelCase names, which is where JS finds them too.
 
 Because `find` takes a `borrow` of the *imported* type, JS keeps passing raw elements. Passing anything else fails the same brand check and is a `TypeError`, and `option<string>` comes back as `null`.
+
+### Importing a web API
+
+The example above still needs someone to write `{ element: Element }`. A component can skip that and take its imports straight from the global scope by importing `wasm:js/global`:
+
+```wat
+(component
+  (import "wasm:js/global" (instance $g
+    (export "element" (type $element (sub resource)))
+    (export "[method]element.get-attribute" (func
+      (param "self" (borrow $element)) (param "name" string)
+      (result (option string))))
+    (export "btoa" (func (param "data" string) (result string)))
+  ))
+  (alias export $g "element" (type $el))
+  (export "encode-id" (func (param "el" (borrow $el)) (result (option string))))
+)
+```
+
+```js
+const c = new WebAssembly.Component(bytes, { builtins: ["js/global"] });
+const { exports } = new WebAssembly.ComponentInstance(c);
+
+exports.encodeId(document.body);
+```
+
+Every field of the instance is read off the global under its JS name, so `element` finds `Element`, `[method]element.get-attribute` finds `Element.prototype.getAttribute`, and `btoa` finds the global function. That is all `wasm:js/global` does. The web API bindings come from the same rules as any other JS import, which is why the JS-API needs no per-API knowledge and why goals #3b and #3c keep holding: the component sees whatever the page sees, polyfills included, and an API that grows a method needs no new binding. Goal #3a is the one that does not follow, because a missing name is a link error and a component has nothing to feature test with.
+
+The lookups happen once, when the imports are read, so this costs nothing per call.
+
+Names that are not constructors work too. A singleton like `document` is a value import of `own<document>`, which needs the component model's value imports feature, and `console`, which has no constructor to brand check against, is a nested instance import that reads `log` off the `console` object.
+
+Importing `wasm:js/global` grants the component everything the page can do, which is why it is opt-in through the same `builtins` compile option core modules use. With ESM the lever is the import map, which can point `wasm:js/global` at a JS module instead:
+
+```html
+<script type="module">
+  import { encodeId } from "./page.wasm";
+  encodeId(document.body);
+</script>
+```
+
+What is missing is described in [the reference](./JS-Reference.md#what-the-global-object-cannot-express-yet). The short version: no properties, so `element.textContent` is not expressible; no way to hand a component function to `addEventListener`; and no way to feature test an API before importing it.
 
 ### Exporting a resource
 
@@ -217,8 +259,6 @@ c.increment();  // 2
 ```
 
 Type names are PascalCase, so `counter` is `Counter`. `new` runs the component's `constructor`, methods live on `Counter.prototype`, and `Symbol.dispose` drops the handle. Dropping is what runs the component's destructor, so a `Counter` nobody disposes is dropped when it is collected, through a `FinalizationRegistry`.
-
-A `borrow` the component hands out is different: it is only valid for the duration of the call it appeared in, and using it afterwards is a `TypeError`.
 
 ### Loading with ESM
 
@@ -261,4 +301,4 @@ Conversions in are looser than conversions out, in the same places WebIDL's are.
 
 - `future`, `stream` and `error-context` have no binding yet, and neither do async start functions or top-level await.
 
-Everything else we know is open is collected in the reference's [open questions](./JS-Reference.md#open-questions).
+Everything else we know is open is collected in the reference's [follow ups](./JS-Reference.md#follow-ups).
