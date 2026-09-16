@@ -126,11 +126,10 @@ We define `PascalCase(label)` and `CamelCase(label)` below.
 | `a1-2-3` | `A123` | `a123` |
 
 `LabelOf`(|name|), where |name| is a `plainname`, returns the label that names the definition in JS:
-1. If |name| is `[method]r.n` or `[static]r.n`:
+1. Let |stripped| be |name| with every `[...]` annotation removed.
+1. If |stripped| is `r.n`:
     1. Return `n`.
-1. If |name| is `[constructor]r`:
-    1. Return `r`.
-1. Return |name|.
+1. Return |stripped|.
 
 `Fragments`(|label|):
 1. Return the List of Strings produced by splitting |label| on occurrences of U+002D (-). The hyphens themselves are discarded.
@@ -506,19 +505,25 @@ To `create a guest resource class` given a component instance |componentInstance
 1. Let |tagged| be the `[constructor]`, `[method]` and `[static]` function exports in |componentInstance|'s scope that target |resourceType|.
 1. If |tagged| has a `[constructor]` export |c|:
     1. Set |constructor|.[[ConstructorFunc]] to |c|.Func.
-1. For each `[method]` export |m| of |tagged|:
-    1. If `JSName`(|m|) is "constructor":
+1. For each `[method]` or `[static]` export |e| of |tagged|, in declaration order:
+    1. If |e| is tagged `[method]`:
+        1. Let |target| be |prototype|.
+        1. Let |reserved| be "constructor".
+    1. Else if |e| is tagged `[static]`:
+        1. Let |target| be |constructor|
+        1. Let |reserved| be "prototype".
+    1. If `JSName`(|e|) is |reserved|:
         1. Throw a `TypeError`.
-    1. Let |func| be `create a JS function for a component function` given |m|.Func, `JSName`(|m|) and |m|'s tag.
-    1. Perform `DefinePropertyOrThrow`(|constructor|'s `"prototype"`, `JSName`(|m|), PropertyDescriptor { [[Value]]: |func|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
-1. For each `[static]` export |s| of |tagged|:
-    1. If `JSName`(|s|) is "prototype":
-        1. Throw a `TypeError`.
-    1. Let |func| be `create a JS function for a component function` given |s|.Func, `JSName`(|s|) and |s|'s tag.
-    1. Perform `DefinePropertyOrThrow`(|constructor|, `JSName`(|s|), PropertyDescriptor { [[Value]]: |func|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
+    1. If |e| is tagged `[get]` or `[set]`:
+        1. Perform `define an accessor for a component function` given |target|, |e| and **false**.
+    1. Else:
+        1. Let |func| be `create a JS function for a component function` given |e|.Func, `JSName`(|e|) and |e|'s tag.
+        1. Perform `DefinePropertyOrThrow`(|target|, `JSName`(|e|), PropertyDescriptor { [[Value]]: |func|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Return |constructor|.
 
 A method named `constructor` and a static named `prototype` are rejected because they would unexpectedly change JS class semantics.
+
+`[get]` and `[set]` exports become the two halves of one accessor property, on `prototype` when tagged `[method]` and on the class itself when tagged `[static]`. Validation requires a `[set]` to be preceded in the same scope by the `[get]` it pairs with, so the getter is always defined first and the setter only fills in the accessor's [[Set]] field.
 
 #### Guest resource instances
 
@@ -641,35 +646,47 @@ To `read a scope of imports` given a list of import declarations |importDecls|, 
 1. Let |definitions| be a new empty list.
 1. For each |importDecl| of |importDecls|, in declaration order:
     1. Let |name| be `JSSpecifier`(|importDecl|).
+    1. Let |staticReceiver| be **undefined**.
     1. Let |builtin| be `resolve a builtin specifier` given |name| and |enabledBuiltins|.
     1. If |builtin| is not **empty**:
         1. Let |importValue| be |builtin|.
     1. Else:
-        1. If |importDecl|.Sort is **func** and |importDecl|.Name is tagged `[constructor]<R>`, `[method]<R>.<name>` or `[static]<R>.<name>`:
+        1. If |importDecl|.Sort is **func** and |importDecl|.Name is tagged `[constructor]<R>`, `[method]([get]|[set])?<R>.<name>` or `[static]([get]|[set])?<R>.<name>`:
             1. Let |abstractTypeKey| be the *abstract type key* of |R|.
             1. Assert: |hostResourceTypes|[|abstractTypeKey|] exists. (Validation requires that declaration to precede this one in the same scope)
             1. Let |constructorFunction| be |hostResourceTypes|[|abstractTypeKey|].[[ConstructorObject]].
             1. If the tag is `[constructor]`:
                 1. Let |importValue| be |constructorFunction|.
-            1. Else if the tag is `[static]`:
-                1. Let |importValue| be ? `Get`(|constructorFunction|, |name|).
-            1. Else:
-                1. Let |prototype| be ? `Get`(|constructorFunction|, "prototype").
-                1. If `Type`(|prototype|) is not Object:
-                    1. Throw a `WebAssembly.LinkError`.
-                1. Let |importValue| be ? `Get`(|prototype|, |name|).
+            1. Else if the tag is `[method]` or `[static]`:
+                1. If the tag is `[static]`:
+                    1. Let |lookupTarget| be |constructorFunction|.
+                    1. Set |staticReceiver| to |lookupTarget|.
+                1. Else:
+                    1. Let |lookupTarget| to ? `Get`(|constructorFunction|, "prototype").
+                    1. If `Type`(|lookupTarget|) is not Object:
+                        1. Throw a `WebAssembly.LinkError`.
+
+                1. If |importDecl|.Name is also tagged `[get]` or `[set]`:
+                    1. Let |importValue| be ? `find an accessor` given |lookupTarget|, |name| and that annotation.
+                1. Else:
+                    1. Let |importValue| be ? `Get`(|lookupTarget|, |name|).
         1. Else:
             1. If `Type`(|importsObject|) is not Object:
                 1. Throw a `TypeError`.
-            1. Let |importValue| be ? `Get`(|importsObject|, |name|).
-    1. Let |resolved| be ? `read an import` given |importDecl|, |importValue| and |hostResourceTypes|.
+
+            1. If |importDecl|.Sort is **func** and |importDecl|.Name is tagged `[get]<name>` or `[set]<name>`:
+                1. Set |staticReceiver| to |importsObject|.
+                1. Let |importValue| be ? `find an accessor` given |importsObject|, |name| and that annotation.
+            1. Else:
+                1. Let |importValue| be ? `Get`(|importsObject|, |name|).
+    1. Let |resolved| be ? `read an import` given |importDecl|, |importValue|, |staticReceiver| and |hostResourceTypes|.
     1. Append |resolved| to |definitions|.
 1. Return |definitions|.
 
-To `read an import` given |importDecl|, |importValue| and |hostResourceTypes|:
+To `read an import` given |importDecl|, |importValue|, |staticReceiver| and |hostResourceTypes|:
 1. Match |importDecl|.Sort:
     1. **core module**: return ? `read the core module import` given |importDecl|.ModuleType and |importValue|.
-    1. **func**: return ? `read the function import` given |importDecl|.FuncType, |importValue|, |importDecl|.Name's tag and |hostResourceTypes|.
+    1. **func**: return ? `read the function import` given |importDecl|.FuncType, |importValue|, |importDecl|.Name's tag and |staticReceiver|.
     1. **type**: return ? `read the type import` given |importDecl|, |importValue|, and |hostResourceTypes|.
     1. **value**: return ? `read the value import` given |importDecl|.ValType and |importValue|.
     1. **instance**: return ? `read the instance import` given |importDecl|.InstanceType, |importValue| and |hostResourceTypes|.
@@ -707,19 +724,34 @@ To `read the type import` given |importDecl|, |importValue|, and |hostResourceTy
 1. Set |hostResourceTypes|[|abstractTypeKey|] to |hostResourceType|.
 1. Return |resourceType|.
 
-To `read the function import` given |componentFuncType|, |importValue|, |importNameTag| and |hostResourceTypes|:
+To `find an accessor` given an object |target|, a property key |key| and |kind|, which is either `[get]` or `[set]`:
+1. Let |object| be |target|.
+1. Repeat, while |object| is not **null**:
+    1. Let |desc| be ? |object|.[[GetOwnProperty]](|key|).
+    1. If |desc| is not **undefined**:
+        1. If `IsAccessorDescriptor`(|desc|) is **false**:
+            1. Return **undefined**.
+        1. If |kind| is `[get]`, return |desc|.[[Get]].
+        1. Return |desc|.[[Set]].
+    1. Set |object| to ? |object|.[[GetPrototypeOf]]().
+1. Return **undefined**.
+
+The walk stops at the first own property it finds, as an ordinary property access does. A data property that shadows an accessor further up the chain therefore resolves to **undefined** and becomes a `LinkError`.
+
+To `read the function import` given |componentFuncType|, |importValue|, |importNameTag| and |staticReceiver|:
 1. If `IsCallable`(|importValue|) is **false**:
     1. Throw a `WebAssembly.LinkError`.
 1. If |importNameTag| is `[constructor]<R>` and `IsConstructor`(|importValue|) is **false**:
     1. Throw a `WebAssembly.LinkError`.
 1. Let |callable| be |importValue|.
-1. Let |paramTypes| be |componentFuncType|.Params.
-1. Let |resultType| be |componentFuncType|.Result.
+
 1. Let |callKind|, |receiverRule| and |paramOffset| be determined by |importNameTag|:
     1. `[constructor]<R>`: `Construct`, no receiver, offset 0.
-    1. `[method]<R>.<name>`: `Call`, receiver is component argument 0 (the `borrow<R>` self), offset 1.
-    1. `[static]<R>.<name>`: `Call`, receiver is |hostResourceTypes|[the *abstract type key* of `R`].[[ConstructorObject]], offset 0.
-    1. otherwise: `Call`, receiver is **undefined**, offset 0.
+    1. `[method]`-tagged: `Call`, receiver is component argument 0 (the `borrow<R>` self), offset 1.
+    1. `[static]`-tagged: `Call`, receiver is |staticReceiver|, offset 0.
+    1. no-tag: `Call`, receiver is |staticReceiver|, offset 0.
+1. Let |paramTypes| be |componentFuncType|.Params.
+1. Let |resultType| be |componentFuncType|.Result.
 1. If |resultType| is a `result`:
     1. Let |okType| be its `ok` payload type, or **empty** if it has none.
     1. Let |errorType| be its `error` payload type, or **empty** if it has none.
@@ -797,8 +829,10 @@ Exported resource types become [guest resource classes](#guest-resource-classes)
 - `[constructor]<R>`: the function becomes `R`'s constructor behaviour. Names are strongly-unique, so there can only be one.
 - `[method]<R>.<name>`: the function becomes a method named `JSName`(|export|) on `R.prototype`.
 - `[static]<R>.<name>`: the function becomes a static method named `JSName`(|export|) on `R`.
+- `[method][get]<R>.<name>` and `[method][set]<R>.<name>`: the functions become the getter and setter of an accessor property named `JSName`(|export|) on `R.prototype`.
+- `[static][get]<R>.<name>` and `[static][set]<R>.<name>`: the same, but on `R`.
 
-All other exported component definitions are given JS definitions named `JSName`(|export|) on the exports object.
+A `[get]` or `[set]` export that is not attached to a resource type becomes an accessor property on the exports object itself. All other exported component definitions are given JS definitions named `JSName`(|export|) on the exports object.
 
 To `create guest resource classes` given a component instance |componentInstance|:
 1. Let |guestResourceClasses| be an empty map from [abstract type key](#abstract-and-transparent-types) to [guest resource class](#guest-resource-classes).
@@ -818,7 +852,10 @@ To `create guest resource classes` given a component instance |componentInstance
 To `create the exports object` given a |componentInstance|:
 1. Let |exportsObject| be `OrdinaryObjectCreate`(**null**).
 1. For each |export| of |componentInstance|.Exports, in declaration order:
-    1. If |export|.Name is tagged `[constructor]<R>`, `[method]<R>.<name>` or `[static]<R>.<name>`:
+    1. If |export|.Name is tagged `[constructor]<R>`, `[method]<R>.<name>` or `[static]<R>.<name>`, with or without a `[get]` or `[set]` annotation:
+        1. Continue.
+    1. If |export|.Name is tagged `[get]<name>` or `[set]<name>`:
+        1. Perform `define an accessor for a component function` given |exportsObject|, |export| and **true**.
         1. Continue.
     1. Let |key| be `JSName`(|export|).
     1. Match |export|.Sort:
@@ -840,7 +877,7 @@ To `create the exports object` given a |componentInstance|:
 1. Return |exportsObject|.
 
 To `create a JS function for a component function` given |componentFunc|, |name| and |exportNameTag|:
-1. Let |paramOffset| be 1 if |exportNameTag| is `[method]<R>.<name>`, else 0.
+1. Let |paramOffset| be 1 if |exportNameTag| is tagged `[method]`, else 0.
 1. If |componentFunc|.Result is a `result`:
     1. Let |okType| be its `ok` payload type, or **empty** if it has none.
 1. Else:
@@ -851,12 +888,22 @@ To `create a JS function for a component function` given |componentFunc|, |name|
         1. Return **undefined**.
     1. Return `ToJSValue`(|componentResult|, |okType|).
 
-A `[method]` export takes its **this** value as the component function's first parameter, which validation guarantees is the `borrow<R>` self, mirroring how `read the function import` maps component argument 0 onto a JS receiver. A `[static]` export ignores its **this** value.
+To `define an accessor for a component function` given an object |target|, a function export |export| and a Boolean |enumerable|:
+1. Let |key| be `JSName`(|export|).
+1. Let |prefix| be "get " if |export|.Name is tagged `[get]`, and "set " otherwise.
+1. Let |name| be the string-concatenation of |prefix| and |key|.
+1. Let |func| be `create a JS function for a component function` given |export|.Func, |name|, and |export|'s tag.
+1. If |export|.Name is tagged `[get]`:
+    1. Perform `DefinePropertyOrThrow`(|target|, |key|, PropertyDescriptor { [[Get]]: |func|, [[Set]]: **undefined**, [[Enumerable]]: |enumerable|, [[Configurable]]: **true** }).
+1. Else:
+    1. Perform `DefinePropertyOrThrow`(|target|, |key|, PropertyDescriptor { [[Set]]: |func| }).
+
+The `[set]` case defines a partial descriptor, so it only replaces the [[Set]] field of the func property the matching `[get]` export already defined. The `"get "`/`"set "` prefix on the function name follows how JS names accessor functions.
 
 To `invoke a component function` given |componentFunc|, |exportNameTag|, |thisValue| and a List of JS values |args|:
 1. Let |paramTypes| be |componentFunc|.Params.
 1. Let |resultType| be |componentFunc|.Result.
-1. Let |paramOffset| be 1 if |exportNameTag| is `[method]<R>.<name>`, else 0.
+1. Let |paramOffset| be 1 if |exportNameTag| is tagged `[method]`, else 0.
 1. If |resultType| is a `result`:
     1. Let |okType| be its `ok` payload type, or **empty** if it has none.
     1. Let |errorType| be its `error` payload type, or **empty** if it has none.
@@ -922,7 +969,7 @@ A component's exports become the bindings of its module namespace object. There 
 1. How to support class inheritance and casting?
 1. Do we support a reference equality protocol? `ToJSValue` creates a fresh resource instance per lift, so two `borrow`s of one component-defined resource are two JS objects that do not compare equal. Reps are opaque and reusable after a drop, so an identity map would need careful invalidation.
 1. Do we let a JS constructor supply its own brand check?
-1. How to import/export properties with getters/setters?
+1. Should a `[get]`/`[set]` import fall back to a `Get`/`Set` on the target when the property is not an accessor? That would let data properties, `Proxy` traps and module namespace bindings satisfy a property import.
 1. How does a component feature test an import?
 1. How does a component pass one of its own functions to a JS callback, e.g. `add-event-listener`?
 1. What is the precise timing of `Get`/`Set` during lifting/lowering if a wasm trap happens.
