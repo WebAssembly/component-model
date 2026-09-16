@@ -2773,7 +2773,7 @@ the native JavaScript bindings could look.
 
 To restrict the set of cases that bindings generators need to consider, these
 annotations trigger additional type-validation rules (listed in detail in
-[Binary.md](Binary.md)):
+[Binary.md](Binary.md#import-and-export-definitions)):
 * A `[constructor]` import or export named `R` must be a function whose result
   type is `(own $R)` or `(result (own $R) (error <valtype>)?)`, where `$R` is
   the index of the resource type named `R`.
@@ -2783,10 +2783,11 @@ annotations trigger additional type-validation rules (listed in detail in
 * A `[static]` import or export named `R.foo` must be a function, and `R` must
   be the name of a resource type.
 * 📡 A `[get]` import or export must have no parameters (besides the required
-  `self` parameter from `[method]`), and must have a result type.
-* 📡 A `[set]` import or export must have exactly one parameter (besides the
-  required `self` parameter from `[method]`), and must have either no result
-  type or a result type of `(result (error <valtype>)?)`.
+  `self` parameter from `[method]`), and must return a value.
+* 📡 A `[set]` import or export must be preceded by a matching `[get]` import
+  or export, must have exactly one parameter (besides the required `self`
+  parameter from `[method]`) whose type matches the getter's return type, and
+  must return either nothing or `(result (error <valtype>)?)`.
 
 The `valid semver` production is as defined by the [Semantic Versioning 2.0]
 spec and is meant to be interpreted according to that specification. The use of
