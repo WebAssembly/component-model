@@ -1914,8 +1914,8 @@ resolved to (which is one of `returned`, `cancelled-before-started` or
 `cancelled-before-returned`).
 
 The `async` immediate is gated on 🚝. Without `async`, the `none` case is not
-possible and `subtask.cancel` synchronously waits until the callee is
-resolved.
+possible and `subtask.cancel` synchronously waits, if necessary, until the
+callee is resolved.
 
 For details, see [Cancellation] in the concurrency explainer and
 [`canon_subtask_cancel`] in the Canonical ABI explainer.

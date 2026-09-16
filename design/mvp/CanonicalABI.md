@@ -584,7 +584,8 @@ time before or after the callee returns. If the callee returns and the
 `OnResolve` callback has *not* yet been called, the caller may invoke the
 returned `OnCancel` callback *at most once* to cooperatively request that the
 callee "hurry up" and call `OnResolve` (possibly, but not necessarily, passing
-`None` and/or skipping the call to `OnStart`).
+`None` and/or skipping the call to `OnStart`). The `OnCancel` may transitively
+execute arbitrary guest code but must not block.
 
 When `FuncInst` is implemented by wasm guest code (as opposed to the host), each
 call creates a `Task` object to track the state of the call and ensure that the
@@ -730,12 +731,20 @@ returned a value to its caller.
 ```
 
 The `Task.request_cancellation` method implements the `OnCancel` callback
-described above that allows a caller to indicate that they are no longer
+described above and allows a task's caller to indicate that they are no longer
 interested in the return value. If a task's implicit thread is waiting to start
 (in `Task.enter_implicit_thread`, defined above) due to backpressure, then it is
-immediately cancelled without running any guest code. Otherwise, the pending
-request is stored in the task state so that it can be picked up from the
-`async callback` event loop via `Task.deliver_pending_cancel`.
+immediately cancelled without running any guest code. Otherwise, if any of the
+threads in the callee's component instance are ready to run, one is resumed
+(chosen nondeterministically if there are multiple). Furthermore, the host may
+nondeterministically continue resuming ready threads in the callee's component
+instance until either the subtask resolves or the host declares that
+cancellation has blocked. Note that setting `Task.state` to `PENDING_CANCEL`
+makes any implicit `callback` thread contained by the task that is waiting in
+its event loop `ready` (as long as the component instance's `exclusive_thread`
+lock is not held by some other implicit thread). Thus, in the best case,
+`subtask.cancel` directly calls the subtask's `callback` function, passing
+`TASK_CANCELLED`.
 ```python
   def request_cancellation(self):
     if self.state == Task.State.INITIAL:
@@ -745,7 +754,18 @@ request is stored in the task state so that it can be picked up from the
     else:
       assert(self.state == Task.State.STARTED)
       self.state = Task.State.PENDING_CANCEL
+      while self.state != Task.State.RESOLVED:
+        candidates = { t for t in self.inst.threads if t.ready() }
+        if candidates:
+          random.choice(list(candidates)).resume()
+        if not candidates or DETERMINISTIC_PROFILE or random.randint(0,1):
+          break
+```
 
+If the pending cancellation request is not delivered to the subtask during
+`Task.request_cancellation`, it may still be delivered in the future to a
+`callback` via `Task.deliver_pending_cancel`:
+```python
   def has_pending_cancel(self):
     return self.state == Task.State.PENDING_CANCEL
 
@@ -4089,24 +4109,8 @@ validation specifies:
 * `$f` is given type `(func (param i32) (result i32))`
 * 🚝 - `async` is allowed (otherwise it must be absent)
 
-Calling `$f` sends a request to a nondeterministically-chosen thread of the
-subtask at the given index to cancel the subtask ASAP. This request is
-cooperative and the subtask may take arbitrarily long to receive and confirm
-the request. If the subtask doesn't immediately confirm the cancellation
-request, `subtask.cancel` returns `BLOCKED` and the caller must wait for a
-`SUBTASK` progress update using `waitable-set` methods as usual.
-
-When cancellation is confirmed the supertask will receive the final state of
-the subtask which is one of:
-* `RETURNED`, if the subtask successfully returned a value via `task.return`;
-* `CANCELLED_BEFORE_STARTED`, if the subtask was cancelled before receiving its
-  arguments (and thus no `own` handles were transferred); or
-* `CANCELLED_BEFORE_RETURNED`, if the subtask called `task.cancel` instead of
-  `task.return`.
-
-This state is either returned by `subtask.cancel`, if the subtask resolved
-without blocking, or, if `subtask.cancel` returns `BLOCKED`, then as part of
-the event payload of a future `SUBTASK` event.
+Calling `$f` invokes the following function which cooperatively requests
+cancellation of the given subtask:
 ```python
 BLOCKED = 0xffff_ffff
 
@@ -4122,11 +4126,8 @@ def canon_subtask_cancel(async_, i):
     subtask.cancellation_requested = True
     subtask.has_sync_waiter = True
     subtask.on_cancel()
-    if not subtask.resolved():
-      if not async_:
-        thread.wait_until(subtask.resolved)
-      else:
-        thread.yield_()
+    if not async_ and not subtask.resolved():
+      thread.wait_until(subtask.resolved)
     subtask.has_sync_waiter = False
     if not subtask.resolved():
       return [BLOCKED]
@@ -4148,26 +4149,28 @@ trapping on entry to `subtask.cancel`.
 
 Otherwise, if the subtask is *not* already resolved, the subtask's `OnCancel`
 callback is called to officially request cancellation. If the callee is another
-component, `OnCancel` is implemented by `Task.request_cancellation` which, as
-defined above, will immediately resolve a task that is blocked waiting to enter
-due to backpressure. Otherwise, the second `if not subtask.resolved()` handles
-the general case where core wasm code needs to run in the callee to receive and
-explicitly resolve the task (by calling `task.cancel` or `task.return`).
+component, `OnCancel` is implemented by `Task.request_cancellation` (defined
+above), which may execute arbitrary guest code in the callee before returning,
+but may not block.
 
-If `subtask.cancel` is called synchronously, the call blocks until the subtask
-resolves. If `subtask.cancel` is called asynchronously, rather than *blocking*,
-`Thread.yield_` is called to allow the host to nondeterministically schedule
-whatever thread it heuristically chooses in the hopes that a subtask thread will
-get to execute and quickly resolve the subtask, allowing `subtask.cancel` to
-complete eagerly. Otherwise, `subtask.cancel` returns `BLOCKED` (`-1`) and the
-caller must wait for a `SUBTASK` event using a waitable set.
+If the subtask is *not* eagerly resolved before `OnCancel` returns and
+`subtask.cancel` is called with the `async` immediate, then `subtask.cancel`
+immediately returns the sentinel `BLOCKED` (`-1`) value. Otherwise, if called
+without `async`, `subtask.cancel` blocks until the subtask *is* resolved. Once
+the subtask is resolved, the return value is the subtask's final `State` value
+which is one of:
+* `RETURNED`, if the subtask successfully returned a value via `task.return`;
+* `CANCELLED_BEFORE_STARTED`, if the subtask was cancelled before receiving its
+  arguments (and thus no `own` handles were transferred); or
+* `CANCELLED_BEFORE_RETURNED`, if the subtask called `task.cancel` instead of
+  `task.return`.
 
 Lastly, a subtle race condition guarded by the above code is that during the
-calls to `on_cancel`, `yield_` and `wait_until`, arbitrary code may run which
-can reenter the caller's component instance. By setting `has_sync_waiter` to
-true for the duration of these calls, `subtask.cancel` prevents other threads in
-the same component instance from "stealing" an event or otherwise invalidating
-the conditions guarded at the beginning of `subtask.cancel`.
+calls to `on_cancel` and `wait_until`, arbitrary code may run which can reenter
+the caller's component instance. By setting `has_sync_waiter` to true for the
+duration of these calls, `subtask.cancel` prevents other threads in the same
+component instance from "stealing" an event or otherwise invalidating the
+conditions guarded at the beginning of `subtask.cancel`.
 
 
 ### 🔀 `canon subtask.drop`

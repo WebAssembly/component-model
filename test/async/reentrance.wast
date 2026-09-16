@@ -434,19 +434,13 @@
 ;; "reenter", which reenters the root instance to cancel the parked subtask.
 ;; "reenter" is not async-typed, so it doesn't take $Callee's exclusive lock
 ;; and thus doesn't keep "park" from being resumed to receive the
-;; cancellation. Whether "park" is resumed before 'subtask.cancel async'
-;; returns is nondeterministic, though, so the cancellation is either already
-;; delivered when the built-in returns or the built-in reports BLOCKED and
-;; "run" waits for the resolution on a waitable set. Either way the subtask
-;; ends up CANCELLED_BEFORE_RETURNED.
+;; cancellation. 'subtask.cancel' therefore resumes "park"'s thread directly,
+;; delivering TASK_CANCELLED so that "park" resolves before the built-in
+;; returns. The cancellation thus completes eagerly, reporting
+;; CANCELLED_BEFORE_RETURNED rather than BLOCKED.
 (component
-  (core module $Memory (memory (export "mem") 1))
-  (core instance $memory (instantiate $Memory))
   (canon subtask.cancel async (core func $subtask.cancel-async))
   (canon subtask.drop (core func $subtask.drop))
-  (canon waitable.join (core func $waitable.join))
-  (canon waitable-set.new (core func $waitable-set.new))
-  (canon waitable-set.wait (memory (core memory $memory "mem")) (core func $waitable-set.wait))
 
   ;; Called by $Callee.reenter, and thus reached while $Callee is on the
   ;; stack, to cancel the subtask of $Callee.park started by "run" below.
@@ -499,49 +493,28 @@
   (canon lower (func $c "reenter") (core func $reenter'))
 
   (core module $Main
-    (import "" "mem" (memory 1))
     (import "" "park" (func $park (result i32)))
     (import "" "reenter" (func $reenter (result i32)))
     (import "" "parked-subtask" (global $parked-subtask (mut i32)))
     (import "" "subtask.drop" (func $subtask.drop (param i32)))
-    (import "" "waitable.join" (func $waitable.join (param i32 i32)))
-    (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
-    (import "" "waitable-set.wait" (func $waitable-set.wait (param i32 i32) (result i32)))
     (func (export "run") (result i32)
-      (local $packed i32) (local $state i32) (local $waiters i32)
+      (local $packed i32) (local $state i32)
       (local.set $packed (call $park))
       (if (i32.ne (i32.and (local.get $packed) (i32.const 0xf)) (i32.const 1 (; STARTED ;)))
         (then unreachable))
       (global.set $parked-subtask (i32.shr_u (local.get $packed) (i32.const 4)))
       ;; reentrantly cancel the parked subtask from inside $Callee
       (local.set $state (call $reenter))
-      (if (i32.eq (local.get $state) (i32.const -1 (; BLOCKED ;)))
-        (then
-          ;; the request was only recorded; wait for $Callee's event loop to
-          ;; deliver it and resolve the subtask
-          (local.set $waiters (call $waitable-set.new))
-          (call $waitable.join (global.get $parked-subtask) (local.get $waiters))
-          (if (i32.ne (call $waitable-set.wait (local.get $waiters) (i32.const 0))
-                      (i32.const 1 (; SUBTASK ;)))
-            (then unreachable))
-          (if (i32.ne (i32.load (i32.const 0)) (global.get $parked-subtask))
-            (then unreachable))
-          (local.set $state (i32.load (i32.const 4)))
-          (call $waitable.join (global.get $parked-subtask) (i32.const 0))))
       (if (i32.ne (local.get $state) (i32.const 4 (; CANCELLED_BEFORE_RETURNED ;)))
         (then unreachable))
       (call $subtask.drop (global.get $parked-subtask))
       (i32.const 42))
   )
   (core instance $main (instantiate $Main (with "" (instance
-    (export "mem" (memory $memory "mem"))
     (export "park" (func $park'))
     (export "reenter" (func $reenter'))
     (export "parked-subtask" (global $canceller "parked-subtask"))
-    (export "subtask.drop" (func $subtask.drop))
-    (export "waitable.join" (func $waitable.join))
-    (export "waitable-set.new" (func $waitable-set.new))
-    (export "waitable-set.wait" (func $waitable-set.wait))))))
+    (export "subtask.drop" (func $subtask.drop))))))
   ;; async-typed (but sync-ABI-lifted) so that "run" may block
   (func (export "run") async (result u32) (canon lift (core func $main "run")))
 )

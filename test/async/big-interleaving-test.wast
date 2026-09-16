@@ -222,26 +222,14 @@
       (func (export "subtask-drop") (param $sub-slot i32)
         (call $subtask.drop (call $sub (local.get $sub-slot))))
 
-      ;; Cancel the subtask and expect the given resolved state. Since
-      ;; `subtask.cancel async` only performs a cooperative yield, whether
-      ;; cancellation of a started subtask completes eagerly or reports
-      ;; BLOCKED is nondeterministic, so on BLOCKED, wait for the subtask to
-      ;; resolve via a waitable set.
+      ;; Cancel the subtask and expect the given resolved state. 'subtask.cancel'
+      ;; resumes the cancelled task directly and each subtask cancelled here
+      ;; resolves upon receiving TASK_CANCELLED, so the cancellation completes
+      ;; eagerly rather than reporting BLOCKED.
       (func (export "subtask-cancel-await") (param $sub-slot i32) (param $expected-state i32)
-        (local $st i32) (local $ret i32) (local $ws i32)
+        (local $st i32) (local $ret i32)
         (local.set $st (call $sub (local.get $sub-slot)))
         (local.set $ret (call $subtask.cancel (local.get $st)))
-        (if (i32.eq (local.get $ret) (i32.const -1 (; BLOCKED ;)))
-          (then
-            (local.set $ws (call $waitable-set.new))
-            (call $waitable.join (local.get $st) (local.get $ws))
-            (if (i32.ne (call $waitable-set.wait (local.get $ws) (global.get $EVENTP)) (i32.const 1 (; SUBTASK ;)))
-              (then unreachable))
-            (if (i32.ne (i32.load (global.get $EVENTP)) (local.get $st))
-              (then unreachable))
-            (local.set $ret (i32.load offset=4 (global.get $EVENTP)))
-            (call $waitable.join (local.get $st) (i32.const 0))
-            (call $waitable-set.drop (local.get $ws))))
         (if (i32.ne (local.get $ret) (local.get $expected-state))
           (then unreachable))
         (call $subtask.drop (local.get $st))

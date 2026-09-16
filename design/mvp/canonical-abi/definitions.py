@@ -467,6 +467,12 @@ class Task:
     else:
       assert(self.state == Task.State.STARTED)
       self.state = Task.State.PENDING_CANCEL
+      while self.state != Task.State.RESOLVED:
+        candidates = { t for t in self.inst.threads if t.ready() }
+        if candidates:
+          random.choice(list(candidates)).resume()
+        if not candidates or DETERMINISTIC_PROFILE or random.randint(0,1):
+          break
 
   def has_pending_cancel(self):
     return self.state == Task.State.PENDING_CANCEL
@@ -2367,11 +2373,8 @@ def canon_subtask_cancel(async_, i):
     subtask.cancellation_requested = True
     subtask.has_sync_waiter = True
     subtask.on_cancel()
-    if not subtask.resolved():
-      if not async_:
-        thread.wait_until(subtask.resolved)
-      else:
-        thread.yield_()
+    if not async_ and not subtask.resolved():
+      thread.wait_until(subtask.resolved)
     subtask.has_sync_waiter = False
     if not subtask.resolved():
       return [BLOCKED]
