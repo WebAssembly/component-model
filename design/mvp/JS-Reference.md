@@ -9,10 +9,10 @@ This is the in-depth reference for the WebAssembly Component JS-API. See the [ex
 1. Components can import and use most web and JS APIs
 2. Components can export an API usable by JS
 3. Components interact with the web platform in similar ways to JS:
-  a. Components can feature test whether APIs are present
-  b. Components work whether they are importing a web API, or a JS polyfill, or a component polyfill
-  c. Components are tolerant of web API evolution
-  d. Component misuse of a web API results in failure at that call-site, not a link time error
+    1. Components can feature test whether APIs are present
+    1. Components work whether they are importing a web API, or a JS polyfill, or a component polyfill
+    1. Components are tolerant of web API evolution
+    1. Component misuse of a web API results in failure at that call-site, not a link time error
 4. Components have improved performance when calling web APIs compared to today
 
 ## Non-goals
@@ -952,9 +952,9 @@ Which binding of the resolved module the component receives depends on the impor
 
 | Import type | JS equivalent | Value |
 |---|---|---|
-| bare type, function, value | `import v from "JSSpecifier(|decl|)"` | the [default export](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ImportedDefaultBinding) |
-| instance | `import { a, b } from "JSSpecifier(|decl|)"` | one [named import](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-NamedImports) per untagged export of the instance type, named `JSName` of that export |
-| core module, component | `import source M from "JSSpecifier(|decl|)"` | the module source, as a `Module` or `Component` |
+| bare type, function, value | `import v from "JSSpecifier(decl)"` | the [default export](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ImportedDefaultBinding) |
+| instance | `import { a, b } from "JSSpecifier(decl)"` | one [named import](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-NamedImports) per untagged export of the instance type, named `JSName` of that export |
+| core module, component | `import source M from "JSSpecifier(decl)"` | the module source, as a `Module` or `Component` |
 
 Reading the imports snapshots the resolved values, and so components cannot participate in cycles. This matches how core modules work today with ESM-integration.
 
