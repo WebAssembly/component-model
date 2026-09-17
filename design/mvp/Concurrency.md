@@ -802,26 +802,22 @@ subtask is resolved, the caller knows its lent handles have been returned.
 If the subtask was waiting to start due to [backpressure](#backpressure), the
 subtask is immediately aborted without running the callee at all, returning
 cancelled-before-started. Otherwise, `subtask.cancel` records the "pending
-cancellation request" in the subtask and attempts to resume execution in the
-subtask's component instance in the hopes that the subtask will quickly resolve
-itself. However, if there are no ready threads or, if there are, at least one
-thread is resumed and then blocks or exits without having resolved the subtask,
-the host is free to declare that cancellation has blocked. In this case,
-asynchronous calls to `subtask.cancel` will immediately return a "blocked" code
-and the caller must wait for progress using a waitable set. Synchronous calls to
-`subtask.cancel` simply block until the subtask is resolved.
+cancellation request" in the subtask and attempts to resume execution of a
+cancellable thread of the subtask in the hopes that the subtask will quickly
+resolve itself. However, if no cancellable thread can be resumed (e.g., because
+another thread holds the component instance's exclusive lock), or if the resumed
+thread blocks or exits without having resolved the subtask, cancellation blocks.
+In this case, asynchronous calls to `subtask.cancel` will immediately return a
+"blocked" code and the caller must wait for progress using a waitable set.
+Synchronous calls to `subtask.cancel` simply block until the subtask is
+resolved.
 
-The ready threads resumed by cancellation can be ready for all the normal
-reasons described above (yielding, I/O progress, etc). However, implicit threads
-using the `callback` ABI will *additionally* become ready due to the pending
-cancellation request itself (as long as the run-to-completion rules mentioned
-above are satisfied). If resumed, the `callback` will be passed a "task
-cancelled" event code to indicate that cancellation has been requested and that
-`task.cancel` may be called (instead of `task.return`). In the [future](#TODO),
-before the stackful ABI is released, other cancellation delivery mechanisms will
-be added so that threads waiting via `waitable-set.wait` can also become ready
-and receive "task cancelled". Until then, `waitable-set.wait` will never return
-"task cancelled".
+Currently, only threads that use the `callback` ABI and have returned to their
+event loop are cancellable, with the cancellation reported as a special "task
+cancelled" event. In the [future](#TODO), before the stackful ABI is released,
+other cancellation delivery mechanisms will be added so that threads waiting via
+`waitable-set.wait` can also become ready and receive "task cancelled". Until
+then, `waitable-set.wait` will never return "task cancelled".
 
 The Component Model does not provide a mechanism to force prompt termination of
 threads as this can lead to leaks and corrupt state in a still-live component
@@ -870,15 +866,15 @@ defined by the Component Model:
 * If multiple tasks are blocked by backpressure and the backpressure is
   disabled, the order in which these pending tasks start, along with how
   they interleave with new tasks, is nondeterministic.
-* When `subtask.cancel` is called for a task that has started (i.e., passed the
-  backpressure gate), the choice of which ready thread to resume (if there are
-  multiple) and how many times to resume (if the first resumption blocks without
-  resolving the subtask) is nondeterministic.
 
 Despite the above, the following scenarios do behave deterministically:
 * If a component `a` asynchronously calls the export of another component `b`,
   control flow deterministically transfers to `b` and then back to `a` when
   `b` returns or blocks.
+* If a component `a` asynchronously cancels a subtask in another component `b`
+  that has a cancellable thread that can be resumed, control flow
+  deterministically transfers to `b` and then back to `a` when `b` resolves or
+  blocks.
 * If a component `a` asynchronously cancels a subtask in another component `b`
   that was blocked before starting due to backpressure, cancellation completes
   deterministically and immediately.
