@@ -1,3 +1,4 @@
 # See README.md
 ./validation/kebab.wast
 ./binary/binary.wast
+./async/cancel-not-delivered.wast
