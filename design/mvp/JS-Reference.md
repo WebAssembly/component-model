@@ -125,11 +125,19 @@ We define `PascalCase(label)` and `CamelCase(label)` below.
 | `URL` | `URL` | `url` |
 | `a1-2-3` | `A123` | `a123` |
 
+Every `plainname` matches exactly one of the four patterns below, and no `interfacename` matches any of them. The algorithms in this document dispatch on these patterns and read their named captures. `<label>` stands for the [`label`](Explainer.md#import-and-export-definitions) production, i.e. `([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(-([0-9a-z]+|[0-9A-Z]+))*`.
+
+| Pattern | Regex | Example |
+|---|---|---|
+| *Plain* | `^(?<name><label>)$` | `query-selector` |
+| *Property* | `^\[(?<accessor>get\|set)\](?<name><label>)$` | `[get]inner-HTML` |
+| *Constructor* | `^\[constructor\](?<resource><label>)$` | `[constructor]element` |
+| *Member* | `^\[(?<scope>method\|static)\](?:\[(?<accessor>get\|set)\])?(?<resource><label>)\.(?<name><label>)$` | `[method][set]element.inner-HTML` |
+
 `LabelOf`(|name|), where |name| is a `plainname`, returns the label that names the definition in JS:
-1. Let |stripped| be |name| with every `[...]` annotation removed.
-1. If |stripped| is `r.n`:
-    1. Return `n`.
-1. Return |stripped|.
+1. If |name| matches *Constructor*:
+    1. Return the `resource` capture.
+1. Return the `name` capture.
 
 `Fragments`(|label|):
 1. Return the List of Strings produced by splitting |label| on occurrences of U+002D (-). The hyphens themselves are discarded.
@@ -496,34 +504,37 @@ To `create a guest resource class` given a component instance |componentInstance
 1. Set |constructor|'s [[Construct]] behaviour, given JS arguments |args| and |newTarget|, to perform:
     1. If |constructor|.[[ConstructorFunc]] is **empty**:
         1. Throw a `TypeError`.
-    1. Let |rep| be ? `invoke a component function` given |constructor|.[[ConstructorFunc]], `[constructor]`, **undefined** and |args|.
+    1. Let |rep| be ? `invoke a component function` given |constructor|.[[ConstructorFunc]], **false**, **undefined** and |args|.
     1. Return ? `create a guest resource instance` given |constructor|, |rep|, **true** and |newTarget|.
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.dispose%`, PropertyDescriptor { [[Value]]: a built-in function that performs `drop a guest resource instance` given its **this** value, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.toStringTag%`, PropertyDescriptor { [[Value]]: |name|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, "constructor", PropertyDescriptor { [[Value]]: |constructor|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|constructor|, "prototype", PropertyDescriptor { [[Value]]: |prototype|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **false** }).
-1. Let |tagged| be the `[constructor]`, `[method]` and `[static]` function exports in |componentInstance|'s scope that target |resourceType|.
-1. If |tagged| has a `[constructor]` export |c|:
+1. Let |members| be the function exports in |componentInstance|'s scope whose names match *Constructor* or *Member* with a `resource` capture naming |resourceType|.
+1. If some |c| of |members| matches *Constructor*:
+    1. Assert: there is only one by validation rules.
     1. Set |constructor|.[[ConstructorFunc]] to |c|.Func.
-1. For each `[method]` or `[static]` export |e| of |tagged|, in declaration order:
-    1. If |e| is tagged `[method]`:
+1. For each |e| of |members| matching *Member*, in declaration order:
+    1. If |e|.Name's `scope` capture is "method":
         1. Let |target| be |prototype|.
         1. Let |reserved| be "constructor".
-    1. Else if |e| is tagged `[static]`:
+        1. Let |takesSelf| be **true**.
+    1. Else:
         1. Let |target| be |constructor|
         1. Let |reserved| be "prototype".
+        1. Let |takesSelf| be **false**.
     1. If `JSName`(|e|) is |reserved|:
         1. Throw a `TypeError`.
-    1. If |e| is tagged `[get]` or `[set]`:
+    1. If |e|.Name has an `accessor` capture:
         1. Perform `define an accessor for a component function` given |target|, |e| and **false**.
     1. Else:
-        1. Let |func| be `create a JS function for a component function` given |e|.Func, `JSName`(|e|) and |e|'s tag.
+        1. Let |func| be `create a JS function for a component function` given |e|.Func, `JSName`(|e|) and |takesSelf|.
         1. Perform `DefinePropertyOrThrow`(|target|, `JSName`(|e|), PropertyDescriptor { [[Value]]: |func|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Return |constructor|.
 
 A method named `constructor` and a static named `prototype` are rejected because they would unexpectedly change JS class semantics.
 
-`[get]` and `[set]` exports become the two halves of one accessor property, on `prototype` when tagged `[method]` and on the class itself when tagged `[static]`. Validation requires a `[set]` to be preceded in the same scope by the `[get]` it pairs with, so the getter is always defined first and the setter only fills in the accessor's [[Set]] field.
+*Member* exports with an `accessor` capture become the two halves of one accessor property, on `prototype` when `scope` is "method" and on the class itself when it is "static". Validation requires a `[set]` to be preceded in the same scope by the `[get]` it pairs with, so the getter is always defined first and the setter only fills in the accessor's [[Set]] field.
 
 #### Guest resource instances
 
@@ -631,7 +642,7 @@ The top-level `read the imports` algorithm walks the component's imports and res
 
 The resolved JS values are then handed to the per-sort algorithms (`read the function import`, `read the type import`, and the rest) to produce the component definitions used during instantiation.
 
-While walking, the algorithm recognizes the pattern of a resource type import accompanied by `[constructor]`, `[static]`, and `[method]` function imports tied to it. A resource type import is read first and looks for a constructor (see [resource types](#resource-types)). The tagged function imports then read from the constructor and its prototype directly. This allows the common case of importing a class to be satisfied by just passing the constructor.
+While walking, the algorithm recognizes the pattern of a resource type import accompanied by *Constructor* and *Member* function imports naming it. A resource type import is read first and looks for a constructor (see [resource types](#resource-types)). Those function imports then read from the constructor and its prototype directly. This allows the common case of importing a class to be satisfied by just passing the constructor.
 
 Passing an exported component definition to a component import via the JS-API/ESM-integration is treated as if the import were a JS value. There is no "direct linking" that bypasses going through JS semantics. This is different from core wasm, where exported functions are linked directly when imported and have stricter type checks. This is intentional to prevent the implementation detail of how a JS function was implemented from leaking. Components can still be nested and directly linked inside a single component binary.
 
@@ -651,32 +662,32 @@ To `read a scope of imports` given a list of import declarations |importDecls|, 
     1. If |builtin| is not **empty**:
         1. Let |importValue| be |builtin|.
     1. Else:
-        1. If |importDecl|.Sort is **func** and |importDecl|.Name is tagged `[constructor]<R>`, `[method]([get]|[set])?<R>.<name>` or `[static]([get]|[set])?<R>.<name>`:
-            1. Let |abstractTypeKey| be the *abstract type key* of |R|.
+        1. If |importDecl|.Sort is **func** and |importDecl|.Name matches *Constructor* or *Member*:
+            1. Let |abstractTypeKey| be the *abstract type key* of the type import named by the `resource` capture.
             1. Assert: |hostResourceTypes|[|abstractTypeKey|] exists. (Validation requires that declaration to precede this one in the same scope)
             1. Let |constructorFunction| be |hostResourceTypes|[|abstractTypeKey|].[[ConstructorObject]].
-            1. If the tag is `[constructor]`:
+            1. If |importDecl|.Name matches *Constructor*:
                 1. Let |importValue| be |constructorFunction|.
-            1. Else if the tag is `[method]` or `[static]`:
-                1. If the tag is `[static]`:
+            1. Else:
+                1. If the `scope` capture is "static":
                     1. Let |lookupTarget| be |constructorFunction|.
                     1. Set |staticReceiver| to |lookupTarget|.
                 1. Else:
-                    1. Let |lookupTarget| to ? `Get`(|constructorFunction|, "prototype").
+                    1. Let |lookupTarget| be ? `Get`(|constructorFunction|, "prototype").
                     1. If `Type`(|lookupTarget|) is not Object:
                         1. Throw a `WebAssembly.LinkError`.
 
-                1. If |importDecl|.Name is also tagged `[get]` or `[set]`:
-                    1. Let |importValue| be ? `find an accessor` given |lookupTarget|, |name| and that annotation.
+                1. If |importDecl|.Name has an `accessor` capture:
+                    1. Let |importValue| be ? `find an accessor` given |lookupTarget|, |name| and that capture.
                 1. Else:
                     1. Let |importValue| be ? `Get`(|lookupTarget|, |name|).
         1. Else:
             1. If `Type`(|importsObject|) is not Object:
                 1. Throw a `TypeError`.
 
-            1. If |importDecl|.Sort is **func** and |importDecl|.Name is tagged `[get]<name>` or `[set]<name>`:
+            1. If |importDecl|.Sort is **func** and |importDecl|.Name matches *Property*:
                 1. Set |staticReceiver| to |importsObject|.
-                1. Let |importValue| be ? `find an accessor` given |importsObject|, |name| and that annotation.
+                1. Let |importValue| be ? `find an accessor` given |importsObject|, |name| and the `accessor` capture.
             1. Else:
                 1. Let |importValue| be ? `Get`(|importsObject|, |name|).
     1. Let |resolved| be ? `read an import` given |importDecl|, |importValue|, |staticReceiver| and |hostResourceTypes|.
@@ -686,7 +697,7 @@ To `read a scope of imports` given a list of import declarations |importDecls|, 
 To `read an import` given |importDecl|, |importValue|, |staticReceiver| and |hostResourceTypes|:
 1. Match |importDecl|.Sort:
     1. **core module**: return ? `read the core module import` given |importDecl|.ModuleType and |importValue|.
-    1. **func**: return ? `read the function import` given |importDecl|.FuncType, |importValue|, |importDecl|.Name's tag and |staticReceiver|.
+    1. **func**: return ? `read the function import` given |importDecl|.FuncType, |importValue|, |importDecl|.Name and |staticReceiver|.
     1. **type**: return ? `read the type import` given |importDecl|, |importValue|, and |hostResourceTypes|.
     1. **value**: return ? `read the value import` given |importDecl|.ValType and |importValue|.
     1. **instance**: return ? `read the instance import` given |importDecl|.InstanceType, |importValue| and |hostResourceTypes|.
@@ -724,32 +735,31 @@ To `read the type import` given |importDecl|, |importValue|, and |hostResourceTy
 1. Set |hostResourceTypes|[|abstractTypeKey|] to |hostResourceType|.
 1. Return |resourceType|.
 
-To `find an accessor` given an object |target|, a property key |key| and |kind|, which is either `[get]` or `[set]`:
+To `find an accessor` given an object |target|, a property key |key| and |kind|, which is either "get" or "set":
 1. Let |object| be |target|.
 1. Repeat, while |object| is not **null**:
     1. Let |desc| be ? |object|.[[GetOwnProperty]](|key|).
     1. If |desc| is not **undefined**:
         1. If `IsAccessorDescriptor`(|desc|) is **false**:
             1. Return **undefined**.
-        1. If |kind| is `[get]`, return |desc|.[[Get]].
+        1. If |kind| is "get", return |desc|.[[Get]].
         1. Return |desc|.[[Set]].
     1. Set |object| to ? |object|.[[GetPrototypeOf]]().
 1. Return **undefined**.
 
 The walk stops at the first own property it finds, as an ordinary property access does. A data property that shadows an accessor further up the chain therefore resolves to **undefined** and becomes a `LinkError`.
 
-To `read the function import` given |componentFuncType|, |importValue|, |importNameTag| and |staticReceiver|:
+To `read the function import` given |componentFuncType|, |importValue|, |importName| and |staticReceiver|:
 1. If `IsCallable`(|importValue|) is **false**:
     1. Throw a `WebAssembly.LinkError`.
-1. If |importNameTag| is `[constructor]<R>` and `IsConstructor`(|importValue|) is **false**:
+1. If |importName| matches *Constructor* and `IsConstructor`(|importValue|) is **false**:
     1. Throw a `WebAssembly.LinkError`.
 1. Let |callable| be |importValue|.
 
-1. Let |callKind|, |receiverRule| and |paramOffset| be determined by |importNameTag|:
-    1. `[constructor]<R>`: `Construct`, no receiver, offset 0.
-    1. `[method]`-tagged: `Call`, receiver is component argument 0 (the `borrow<R>` self), offset 1.
-    1. `[static]`-tagged: `Call`, receiver is |staticReceiver|, offset 0.
-    1. no-tag: `Call`, receiver is |staticReceiver|, offset 0.
+1. Let |callKind|, |receiverRule| and |paramOffset| be determined by |importName|:
+    1. *Constructor*: `Construct`, no receiver, offset 0.
+    1. *Member* with `scope` "method": `Call`, receiver is component argument 0 (the `borrow` self parameter), offset 1.
+    1. Otherwise: `Call`, receiver is |staticReceiver|, offset 0.
 1. Let |paramTypes| be |componentFuncType|.Params.
 1. Let |resultType| be |componentFuncType|.Result.
 1. If |resultType| is a `result`:
@@ -825,14 +835,13 @@ To `resolve a builtin specifier` given a String |specifier| and a set of Strings
 
 The `create the exports object` algorithm walks the component's exports and builds a fresh JS object whose properties are the exports.
 
-Exported resource types become [guest resource classes](#guest-resource-classes) named `JSName`(|export|), and tagged function exports are mapped onto them just as in `read the imports`:
-- `[constructor]<R>`: the function becomes `R`'s constructor behaviour. Names are strongly-unique, so there can only be one.
-- `[method]<R>.<name>`: the function becomes a method named `JSName`(|export|) on `R.prototype`.
-- `[static]<R>.<name>`: the function becomes a static method named `JSName`(|export|) on `R`.
-- `[method][get]<R>.<name>` and `[method][set]<R>.<name>`: the functions become the getter and setter of an accessor property named `JSName`(|export|) on `R.prototype`.
-- `[static][get]<R>.<name>` and `[static][set]<R>.<name>`: the same, but on `R`.
+Exported resource types become [guest resource classes](#guest-resource-classes) named `JSName`(|export|), and function exports matching *Constructor* or *Member* are mapped onto the class `R` named by their `resource` capture, just as in `read the imports`:
+- *Constructor*: the function becomes `R`'s constructor behaviour. Names are strongly-unique, so there can only be one.
+- *Member* with `scope` "method": the function becomes a method named `JSName`(|export|) on `R.prototype`.
+- *Member* with `scope` "static": the function becomes a static method named `JSName`(|export|) on `R`.
+- *Member* with an `accessor` capture: the "get" and "set" functions become the getter and setter of one accessor property named `JSName`(|export|), again on `R.prototype` or on `R`.
 
-A `[get]` or `[set]` export that is not attached to a resource type becomes an accessor property on the exports object itself. All other exported component definitions are given JS definitions named `JSName`(|export|) on the exports object.
+A *Property* export becomes an accessor property on the exports object itself. All other exported component definitions are given JS definitions named `JSName`(|export|) on the exports object.
 
 To `create guest resource classes` given a component instance |componentInstance|:
 1. Let |guestResourceClasses| be an empty map from [abstract type key](#abstract-and-transparent-types) to [guest resource class](#guest-resource-classes).
@@ -844,7 +853,7 @@ To `create guest resource classes` given a component instance |componentInstance
     1. If |guestResourceClasses|[|abstractTypeKey|] exists:
         1. Continue.
     1. Let |resourceType| be the component resource type |export| refers to in |componentInstance|.
-    1. Let |arity| be the parameter count of the `[constructor]` export targeting |export|, or 0 if there is none.
+    1. Let |arity| be the parameter count of the export whose name matches *Constructor* with a `resource` capture naming |export|, or 0 if there is none.
     1. Let |class| be `create a guest resource class` given |componentInstance|, |resourceType|, `JSName`(|export|) and |arity|.
     1. Set |guestResourceClasses|[|abstractTypeKey|] to |class|.
 1. Set |componentInstance|.[[GuestResourceClasses]] to |guestResourceClasses|.
@@ -852,9 +861,9 @@ To `create guest resource classes` given a component instance |componentInstance
 To `create the exports object` given a |componentInstance|:
 1. Let |exportsObject| be `OrdinaryObjectCreate`(**null**).
 1. For each |export| of |componentInstance|.Exports, in declaration order:
-    1. If |export|.Name is tagged `[constructor]<R>`, `[method]<R>.<name>` or `[static]<R>.<name>`, with or without a `[get]` or `[set]` annotation:
+    1. If |export|.Name matches *Constructor* or *Member*:
         1. Continue.
-    1. If |export|.Name is tagged `[get]<name>` or `[set]<name>`:
+    1. If |export|.Name matches *Property*:
         1. Perform `define an accessor for a component function` given |exportsObject|, |export| and **true**.
         1. Continue.
     1. Let |key| be `JSName`(|export|).
@@ -865,7 +874,7 @@ To `create the exports object` given a |componentInstance|:
             1. Let |abstractTypeKey| be the *abstract type key* of |export|.
             1. Let |value| be |componentInstance|.[[GuestResourceClasses]][|abstractTypeKey|].
         1. **func**:
-            1. Let |value| be `create a JS function for a component function` given |export|.Func, |key| and no tag.
+            1. Let |value| be `create a JS function for a component function` given |export|.Func, |key| and **false**.
         1. **value**:
             1. Let |value| be `ToJSValue`(|export|.Value, |export|.Type).
         1. **instance**:
@@ -876,34 +885,35 @@ To `create the exports object` given a |componentInstance|:
 1. Perform `SetIntegrityLevel`(|exportsObject|, "frozen").
 1. Return |exportsObject|.
 
-To `create a JS function for a component function` given |componentFunc|, |name| and |exportNameTag|:
-1. Let |paramOffset| be 1 if |exportNameTag| is tagged `[method]`, else 0.
+To `create a JS function for a component function` given |componentFunc|, |name| and |takesSelf|:
+1. Let |paramOffset| be 1 if |takesSelf| is **true**, else 0.
 1. If |componentFunc|.Result is a `result`:
     1. Let |okType| be its `ok` payload type, or **empty** if it has none.
 1. Else:
     1. Let |okType| be |componentFunc|.Result, or **empty** if |componentFunc| has no result.
 1. Return a built-in function object with name |name| and length |componentFunc|.Params.length - |paramOffset|, whose behaviour, given a **this** value |thisValue| and JS arguments |args|, performs:
-    1. Let |componentResult| be ? `invoke a component function` given |componentFunc|, |exportNameTag|, |thisValue| and |args|.
+    1. Let |componentResult| be ? `invoke a component function` given |componentFunc|, |takesSelf|, |thisValue| and |args|.
     1. If |okType| is **empty**:
         1. Return **undefined**.
     1. Return `ToJSValue`(|componentResult|, |okType|).
 
 To `define an accessor for a component function` given an object |target|, a function export |export| and a Boolean |enumerable|:
 1. Let |key| be `JSName`(|export|).
-1. Let |prefix| be "get " if |export|.Name is tagged `[get]`, and "set " otherwise.
-1. Let |name| be the string-concatenation of |prefix| and |key|.
-1. Let |func| be `create a JS function for a component function` given |export|.Func, |name|, and |export|'s tag.
-1. If |export|.Name is tagged `[get]`:
+1. Let |accessor| be the `accessor` capture of |export|.Name.
+1. Let |name| be the string-concatenation of |accessor|, " " and |key|.
+1. Let |takesSelf| be **true** if |export|.Name matches *Member* with `scope` "method", and **false** otherwise.
+1. Let |func| be `create a JS function for a component function` given |export|.Func, |name| and |takesSelf|.
+1. If |accessor| is "get":
     1. Perform `DefinePropertyOrThrow`(|target|, |key|, PropertyDescriptor { [[Get]]: |func|, [[Set]]: **undefined**, [[Enumerable]]: |enumerable|, [[Configurable]]: **true** }).
 1. Else:
     1. Perform `DefinePropertyOrThrow`(|target|, |key|, PropertyDescriptor { [[Set]]: |func| }).
 
-The `[set]` case defines a partial descriptor, so it only replaces the [[Set]] field of the func property the matching `[get]` export already defined. The `"get "`/`"set "` prefix on the function name follows how JS names accessor functions.
+The "set" case defines a partial descriptor, so it only replaces the [[Set]] field of the accessor property the matching `[get]` export already defined. The `"get "`/`"set "` prefix on the function name follows how JS names accessor functions.
 
-To `invoke a component function` given |componentFunc|, |exportNameTag|, |thisValue| and a List of JS values |args|:
+To `invoke a component function` given |componentFunc|, a Boolean |takesSelf|, |thisValue| and a List of JS values |args|:
 1. Let |paramTypes| be |componentFunc|.Params.
 1. Let |resultType| be |componentFunc|.Result.
-1. Let |paramOffset| be 1 if |exportNameTag| is tagged `[method]`, else 0.
+1. Let |paramOffset| be 1 if |takesSelf| is **true**, else 0.
 1. If |resultType| is a `result`:
     1. Let |okType| be its `ok` payload type, or **empty** if it has none.
     1. Let |errorType| be its `error` payload type, or **empty** if it has none.
@@ -953,7 +963,7 @@ Which binding of the resolved module the component receives depends on the impor
 | Import type | JS equivalent | Value |
 |---|---|---|
 | bare type, function, value | `import v from "JSSpecifier(decl)"` | the [default export](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ImportedDefaultBinding) |
-| instance | `import { a, b } from "JSSpecifier(decl)"` | one [named import](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-NamedImports) per untagged export of the instance type, named `JSName` of that export |
+| instance | `import { a, b } from "JSSpecifier(decl)"` | one [named import](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-NamedImports) per export of the instance type whose name is an `interfacename` or matches *Plain*, named `JSName` of that export |
 | core module, component | `import source M from "JSSpecifier(decl)"` | the module source, as a `Module` or `Component` |
 
 Reading the imports snapshots the resolved values, and so components cannot participate in cycles. This matches how core modules work today with ESM-integration.
