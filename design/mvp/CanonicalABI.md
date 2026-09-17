@@ -393,6 +393,7 @@ class Thread:
   task: Task
   index: Optional[int]
   storage: tuple[int,int]
+  cancellable: bool
 
   def running(self):
     return self.cont is None
@@ -422,6 +423,7 @@ state.
     self.task = task
     self.index = None
     self.storage = [0,0]
+    self.cancellable = False
     assert(self.suspended())
 ```
 
@@ -585,8 +587,8 @@ time before or after the callee returns. If the callee returns and the
 `OnResolve` callback has *not* yet been called, the caller may invoke the
 returned `OnCancel` callback *at most once* to cooperatively request that the
 callee "hurry up" and call `OnResolve` (possibly, but not necessarily, passing
-`None` and/or skipping the call to `OnStart`). The `OnCancel` may transitively
-execute arbitrary guest code but must not block.
+`None` and/or skipping the call to `OnStart`). The `OnCancel` callback may
+transitively execute arbitrary guest code but must not block.
 
 When `FuncInst` is implemented by wasm guest code (as opposed to the host), each
 call creates a `Task` object to track the state of the call and ensure that the
@@ -731,21 +733,19 @@ returned a value to its caller.
     self.inst.threads.remove(thread.index)
 ```
 
-The `Task.request_cancellation` method implements the `OnCancel` callback
-described above and allows a task's caller to indicate that they are no longer
-interested in the return value. If a task's implicit thread is waiting to start
-(in `Task.enter_implicit_thread`, defined above) due to backpressure, then it is
-immediately cancelled without running any guest code. Otherwise, if any of the
-threads in the callee's component instance are ready to run, one is resumed
-(chosen nondeterministically if there are multiple). Furthermore, the host may
-nondeterministically continue resuming ready threads in the callee's component
-instance until either the subtask resolves or the host declares that
-cancellation has blocked. Note that setting `Task.state` to `PENDING_CANCEL`
-makes any implicit `callback` thread contained by the task that is waiting in
-its event loop `ready` (as long as the component instance's `exclusive_thread`
-lock is not held by some other implicit thread). Thus, in the best case,
-`subtask.cancel` directly calls the subtask's `callback` function, passing
-`TASK_CANCELLED`.
+The `Task.request_cancellation` method implements the `OnCancel` callback that
+is called by the `subtask.cancel` built-in. If a task's implicit thread is
+waiting to start (in `Task.enter_implicit_thread`, defined above) due to
+backpressure, then it is immediately cancelled without running any guest code.
+Otherwise, if the task's implicit thread is `cancellable` and `ready`, it is
+resumed, allowing it to execute until returning or blocking. Currently, only
+`callback` threads that have returned to their event loop are `cancellable`.
+When resumed, the `callback` thread will call `Task.deliver_pending_cancel`,
+which will return `True`, leading to the `TASK_CANCELLED` event code being
+passed to the `callback` function. Ideally, the `callback` function will
+promptly call `task.cancel` (or `task.return`) to resolve the task before the
+`OnCancel` callback returns, allowing `subtask.cancel` to return without
+blocking.
 ```python
   def request_cancellation(self):
     if self.state == Task.State.INITIAL:
@@ -755,18 +755,9 @@ lock is not held by some other implicit thread). Thus, in the best case,
     else:
       assert(self.state == Task.State.STARTED)
       self.state = Task.State.PENDING_CANCEL
-      while self.state != Task.State.RESOLVED:
-        candidates = { t for t in self.inst.threads if t.ready() }
-        if candidates:
-          random.choice(list(candidates)).resume()
-        if not candidates or DETERMINISTIC_PROFILE or random.randint(0,1):
-          break
-```
+      if self.implicit_thread.cancellable and self.implicit_thread.ready():
+        self.implicit_thread.resume()
 
-If the pending cancellation request is not delivered to the subtask during
-`Task.request_cancellation`, it may still be delivered in the future to a
-`callback` via `Task.deliver_pending_cancel`:
-```python
   def has_pending_cancel(self):
     return self.state == Task.State.PENDING_CANCEL
 
@@ -3469,6 +3460,7 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
       else:
         assert(inst.exclusive_thread is task.implicit_thread)
         inst.exclusive_thread = None
+        thread.cancellable = True
         match code:
           case CallbackCode.YIELD:
             thread.wait_until(lambda: inst.exclusive_thread is None)
@@ -3483,6 +3475,7 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
           case _:
             trap()
         assert(inst.exclusive_thread is None)
+        thread.cancellable = False
         inst.exclusive_thread = task.implicit_thread
       event_code, p1, p2 = event
       [packed] = call_and_trap_on_throw(opts.callback, [event_code, p1, p2])
@@ -3510,7 +3503,9 @@ in either case.
 
 Another important property of the event loop as defined above is that it
 delivers pending cancellation requests as soon as possible: before waiting,
-after waiting, and in `wait_from_callback`, *while* waiting.
+after waiting, and while waiting. In particular, setting `Thread.cancellable`
+for the duration of the wait allows `subtask.cancel` to synchronously deliver a
+`TASK_CANCELLED` event.
 
 The end of `canon_lift` creates a new task/thread pair for the call and then
 calls `Thread.resume` on the new thread to synchronously transfer control flow

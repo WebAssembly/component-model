@@ -1,4 +1,6 @@
 # See README.md
+./async/cancel-delivery.wast
+./async/cancel-targeted-resume.wast
 ./validation/kebab.wast
 ./binary/binary.wast
 ./values/post-return.wast
