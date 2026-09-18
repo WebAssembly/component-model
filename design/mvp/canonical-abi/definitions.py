@@ -283,6 +283,7 @@ class Thread:
   task: Task
   index: Optional[int]
   storage: tuple[int,int]
+  cancellable: bool
 
   def running(self):
     return self.cont is None
@@ -306,6 +307,7 @@ class Thread:
     self.task = task
     self.index = None
     self.storage = [0,0]
+    self.cancellable = False
     assert(self.suspended())
 
   def start_waiting(self, ready_func):
@@ -467,12 +469,8 @@ class Task:
     else:
       assert(self.state == Task.State.STARTED)
       self.state = Task.State.PENDING_CANCEL
-      while self.state != Task.State.RESOLVED:
-        candidates = { t for t in self.inst.threads if t.ready() }
-        if candidates:
-          random.choice(list(candidates)).resume()
-        if not candidates or DETERMINISTIC_PROFILE or random.randint(0,1):
-          break
+      if self.implicit_thread.cancellable and self.implicit_thread.ready():
+        self.implicit_thread.resume()
 
   def has_pending_cancel(self):
     return self.state == Task.State.PENDING_CANCEL
@@ -2081,6 +2079,7 @@ def canon_lift(callee, ft, opts, inst, on_start, on_resolve) -> OnCancel:
       else:
         assert(inst.exclusive_thread is task.implicit_thread)
         inst.exclusive_thread = None
+        thread.cancellable = True
         match code:
           case CallbackCode.YIELD:
             thread.wait_until(lambda: inst.exclusive_thread is None)
@@ -2095,6 +2094,7 @@ def canon_lift(callee, ft, opts, inst, on_start, on_resolve) -> OnCancel:
           case _:
             trap()
         assert(inst.exclusive_thread is None)
+        thread.cancellable = False
         inst.exclusive_thread = task.implicit_thread
       event_code, p1, p2 = event
       [packed] = call_and_trap_on_throw(opts.callback, [event_code, p1, p2])
