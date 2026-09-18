@@ -56,6 +56,7 @@ specified here.
   * [`canon {stream,future}.{read,write}`](#-canon-streamfuturereadwrite) 🔀
   * [`canon {stream,future}.cancel-{read,write}`](#-canon-streamfuturecancel-readwrite) 🔀
   * [`canon {stream,future}.drop-{readable,writable}`](#-canon-streamfuturedrop-readablewritable) 🔀
+  * [`canon {stream,future}.forward`](#-canon-streamfutureforward) ➡️
   * [`canon thread.index`](#-canon-threadindex) 🧵
   * [`canon thread.new-indirect`](#-canon-threadnew-indirect) 🧵
   * [`canon thread.resume-later`](#-canon-threadresume-later) 🧵
@@ -1716,10 +1717,41 @@ cancellation. In the future, guest components may be given the same capability.
       self.notify(progress = 0)
 ```
 
-The `End.drop` method is called by `{stream,future}.drop-{readable,writable}` to
-update the `other` end's state and possibly set a pending notification for the
-other end, if the other end isn't already `DONE` and doing so wouldn't clobber
-an already-pending notification.
+The `End.forward` function is called by `{stream,future}.forward` to efficiently
+forward all the values from a given readable end into a given writable end,
+propagating `DROPPED` results in both directions. This causes the given readable
+end and writable end to disappear, leaving only the `other` writable and
+readable ends, which are now linked together directly to form a single stream or
+future. If *both* of these formerly-separate ends have pending copy operations
+with pending `buffer`s, the forwarding operation performs a synchronous copy,
+leaving at most one pending buffer (the bigger of the two) and notifying one or
+both sides of the progress made. In the corner case where a stream or future's
+readable end is forwarded to its own writable end (creating a trivial recursive
+loop), there is no trap since the whole thing simply disappears.
+```python
+  def forward(src: End, dst: End):
+    if src.other is dst or src.other is None or dst.other is None:
+      src.drop()
+      dst.drop()
+    else:
+      writable_end = src.other
+      readable_end = dst.other
+      writable_end.other = readable_end
+      readable_end.other = writable_end
+      if writable_end.buffer is not None and readable_end.buffer is not None:
+        if readable_end.buffer.remain() > writable_end.buffer.remain():
+          bigger_end, smaller_end = readable_end, writable_end
+        else:
+          bigger_end, smaller_end = writable_end, readable_end
+        buffer = smaller_end.buffer
+        smaller_end.buffer = None
+        smaller_end.copy(buffer)
+```
+
+The `End.drop` method is called by `{stream,future}.drop-{readable,writable}`
+and `End.forward` to update the `other` end's state and possibly set a pending
+notification for the other end, if the other end isn't already `DONE` and doing
+so wouldn't clobber an already-pending notification.
 ```python
   def drop(self):
     assert(not self.copying_or_cancelling())
@@ -4445,6 +4477,46 @@ def drop(EndT, stream_or_future_t, i):
   trap_if(end.copying_or_cancelling())
   trap_if(isinstance(end, WritableFutureEnd) and end.state != End.State.DONE)
   end.drop()
+  return []
+```
+
+
+### ➡️ `canon {stream,future}.forward`
+
+For canonical definitions:
+```wat
+(canon stream.forward $stream_t (core func $forward))
+(canon future.forward $future_t (core func $forward))
+```
+validation specifies:
+* `$forward` is given type `(func (param $ri i32) (param $wi i32))`
+* `$stream_t`/`$future_t` must be a type of the form `(stream $t?)`/`(future $t?)`
+
+Calling `$forward` removes the readable and writable ends at the given indices,
+after checking that all the types match, the ends are in the `IDLE` state, and
+the ends are not currently part of a waitable set. Then the readable end is
+forwarded into the writable end as defined by `End.forward` above.
+```python
+def canon_stream_forward(stream_t, ri, wi):
+  return forward(ReadableStreamEnd, WritableStreamEnd, stream_t, ri, wi)
+
+def canon_future_forward(future_t, ri, wi):
+  return forward(ReadableFutureEnd, WritableFutureEnd, future_t, ri, wi)
+
+def forward(ReadableEndT, WritableEndT, stream_or_future_t, ri, wi):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  readable_end = inst.handles.remove(ri)
+  trap_if(not isinstance(readable_end, ReadableEndT))
+  trap_if(readable_end.t != stream_or_future_t.t)
+  trap_if(readable_end.state != End.State.IDLE)
+  trap_if(readable_end.in_waitable_set())
+  writable_end = inst.handles.remove(wi)
+  trap_if(not isinstance(writable_end, WritableEndT))
+  trap_if(writable_end.t != stream_or_future_t.t)
+  trap_if(writable_end.state != End.State.IDLE)
+  trap_if(writable_end.in_waitable_set())
+  End.forward(readable_end, writable_end)
   return []
 ```
 

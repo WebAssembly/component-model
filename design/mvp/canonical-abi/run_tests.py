@@ -1651,7 +1651,7 @@ def test_async_stream_ops():
   assert(host_reader2.received == [11,12,13,14,15,16,17,18])
 
 
-def test_stream_forward():
+def test_transfer_readable_end():
   host_writer = HostWriter(U8Type(), [1,2,3,4], chunk=4)
   def on_start():
     return [host_writer.readable_end]
@@ -1681,6 +1681,97 @@ def test_stream_forward():
   assert(host_writer.readable_end is return_value)
   host_reader = HostReader(return_value)
   assert(host_reader.dropped and host_reader.take() == [])
+
+
+def test_forward():
+  store = Store()
+  mem = bytearray(32)
+  opts = mk_opts(memory=MemInst(mem, 'i32'), async_=True)
+  inst = ComponentInstance(store)
+  st = StreamType(U8Type())
+  ft = FutureType(U8Type())
+
+  def core_func(args):
+    def new_stream(t = st):
+      [packed] = canon_stream_new(t)
+      return unpack_new_ends(packed)
+    def new_future():
+      [packed] = canon_future_new(ft)
+      return unpack_new_ends(packed)
+
+    rsi,wsi = new_stream()
+    [] = canon_stream_forward(st, rsi, wsi)
+
+    rsi1,wsi1 = new_stream()
+    rsi2,wsi2 = new_stream()
+    [] = canon_stream_drop_readable(st, rsi2)
+    [] = canon_stream_forward(st, rsi1, wsi2)
+    [ret] = canon_stream_write(st, opts, wsi1, 0, 4)
+    result,n = unpack_result(ret)
+    assert(n == 0 and result == CopyResult.DROPPED)
+    [] = canon_stream_drop_writable(st, wsi1)
+
+    rsi1,wsi1 = new_stream()
+    rsi2,wsi2 = new_stream()
+    [] = canon_stream_forward(st, rsi1, wsi2)
+    mem[0:4] = b'\x01\x02\x03\x04'
+    [ret] = canon_stream_write(st, opts, wsi1, 0, 4)
+    assert(ret == definitions.BLOCKED)
+    [ret] = canon_stream_read(st, opts, rsi2, 8, 4)
+    result,n = unpack_result(ret)
+    assert(n == 4 and result == CopyResult.COMPLETED)
+    assert(mem[8:12] == b'\x01\x02\x03\x04')
+
+    rsi1,wsi1 = new_stream()
+    rsi2,wsi2 = new_stream()
+    [ret] = canon_stream_read(st, opts, rsi2, 8, 4)
+    assert(ret == definitions.BLOCKED)
+    [] = canon_stream_forward(st, rsi1, wsi2)
+    mem[0:4] = b'\x05\x06\x07\x08'
+    [ret] = canon_stream_write(st, opts, wsi1, 0, 4)
+    result,n = unpack_result(ret)
+    assert(n == 4 and result == CopyResult.COMPLETED)
+    assert(mem[8:12] == b'\x05\x06\x07\x08')
+    [seti] = canon_waitable_set_new()
+    [] = canon_waitable_join(rsi2, seti)
+    [event] = canon_waitable_set_wait(MemInst(mem, 'i32'), seti, 16)
+    assert(event == EventCode.STREAM_READ)
+    assert(mem[16] == rsi2)
+    result,n = unpack_result(mem[20])
+    assert(n == 4 and result == CopyResult.COMPLETED)
+
+    rfi1,wfi1 = new_future()
+    rfi2,wfi2 = new_future()
+    [ret] = canon_future_read(ft, opts, rfi2, 8)
+    assert(ret == definitions.BLOCKED)
+    [] = canon_future_forward(ft, rfi1, wfi2)
+    mem[0] = 42
+    [ret] = canon_future_write(ft, opts, wfi1, 0)
+    assert(ret == CopyResult.COMPLETED)
+    assert(mem[8] == 42)
+
+    rfi1,wfi1 = new_future()
+    rfi2,wfi2 = new_future()
+    mem[0] = 43
+    [ret] = canon_future_write(ft, opts, wfi1, 0)
+    assert(ret == definitions.BLOCKED)
+    [ret] = canon_future_read(ft, opts, rfi2, 8)
+    assert(ret == definitions.BLOCKED)
+    [] = canon_future_forward(ft, rfi1, wfi2)
+    assert(mem[8] == 43)
+
+    rfi1,wfi1 = new_future()
+    rfi2,wfi2 = new_future()
+    [] = canon_future_drop_readable(ft, rfi2)
+    [] = canon_future_forward(ft, rfi1, wfi2)
+    [ret] = canon_future_write(ft, opts, wfi1, 0)
+    assert(ret == CopyResult.DROPPED)
+    [] = canon_future_drop_writable(ft, wfi1)
+
+    return []
+
+  caller_ft = FuncType([], [], async_ = True)
+  lift_and_run(mk_opts(), inst, caller_ft, core_func, lambda:[], lambda _:())
 
 
 def test_receive_own_stream():
@@ -3023,7 +3114,8 @@ test_async_backpressure()
 test_sync_using_wait()
 test_eager_stream_completion()
 test_async_stream_ops()
-test_stream_forward()
+test_transfer_readable_end()
+test_forward()
 test_receive_own_stream()
 test_host_partial_reads_writes()
 test_wasm_to_wasm_stream()
