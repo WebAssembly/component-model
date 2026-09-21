@@ -470,6 +470,20 @@ def test_roundtrips():
       test_roundtrip(t, v, addr_type=addr_type)
 
 
+def test_trap_propagation():
+  store = Store()
+  inst = ComponentInstance(store)
+
+  def core_func(args):
+    trap()
+
+  try:
+    lift_and_run(mk_opts(), inst, FuncType([], []), core_func, lambda:[], lambda _:())
+    fail("expected the guest trap to propagate out of Store.invoke")
+  except Trap:
+    pass
+
+
 def test_cross_component_realloc():
   store = Store()
 
@@ -3103,6 +3117,7 @@ def test_sync_threads():
   assert(other_result == 43)
 
 test_roundtrips()
+test_trap_propagation()
 test_cross_component_realloc()
 test_handles()
 test_async_to_async()

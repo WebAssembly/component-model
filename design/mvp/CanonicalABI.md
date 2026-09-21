@@ -239,7 +239,7 @@ class Handler:
   lock: threading.Lock
   current_thread: Thread
   cont: Optional[Continuation]
-  switch_to: Optional[Thread]
+  result: Optional[Thread] | Trap
 
 thread_local_handler = threading.local()
 
@@ -254,10 +254,13 @@ def cont_new(f: Callable[[], Optional[Thread]]) -> Continuation:
   def thread_base():
     cont.lock.acquire()
     thread_local_handler.value = cont.handler
-    switch_to = f()
+    try:
+      result = f()
+    except Trap as t:
+      result = t
     handler = thread_local_handler.value
     handler.cont = None
-    handler.switch_to = switch_to
+    handler.result = result
     handler.lock.release()
   threading.Thread(target = thread_base).start()
   return cont
@@ -265,7 +268,7 @@ def cont_new(f: Callable[[], Optional[Thread]]) -> Continuation:
 `Continuation.handler` is set by `resume` right before `resume` calls
 `Continuation.lock.release()` to transfer control flow to the continuation.
 After resuming the continuation, `resume` calls `Handler.lock.acquire()` to wait
-until the continuation signals suspension or return by calling
+until the continuation signals suspension, return or trap by calling
 `Handler.lock.release()`. The `Handler` is stored in `thread_local_handler.value`
 to implement the dynamic scoping that is required for `suspend`. Because the
 thread created by `cont_new` can be suspended and resumed many times (each time
@@ -277,7 +280,8 @@ Next, `resume` is monomorphized to take a continuation of type `$ct`, the
 argument to pass to the continuation, and the `Thread` to use to implement the
 `(on $current-thread)` handler. The remaining `(on $block)`, `(on $switch-to)`
 and "returned" cases join to produce a single return value, with the `(on *)`
-cases returning a `Continuation` and the "returned" case returning `None`.
+cases returning a `Continuation` and the "returned" case returning `None`. If
+the continuation traps, the trap propagates out of `resume` to its caller.
 ```python
 def resume(cont: Continuation, current_thread: Thread) -> \
            tuple[Optional[Continuation], Optional[Thread]]:
@@ -287,7 +291,9 @@ def resume(cont: Continuation, current_thread: Thread) -> \
   cont.handler = handler
   cont.lock.release()
   handler.lock.acquire()
-  return (handler.cont, handler.switch_to)
+  if isinstance(handler.result, Trap):
+    raise handler.result
+  return (handler.cont, handler.result)
 ```
 
 Next, the `block` and `switch_to` functions implement `suspend $block` and
@@ -307,7 +313,7 @@ def suspend(switch_to: Optional[Thread]):
   cont.lock = new_already_acquired_lock()
   handler = thread_local_handler.value
   handler.cont = cont
-  handler.switch_to = switch_to
+  handler.result = switch_to
   handler.lock.release()
   cont.lock.acquire()
   thread_local_handler.value = cont.handler

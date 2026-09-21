@@ -216,7 +216,7 @@ class Handler:
   lock: threading.Lock
   current_thread: Thread
   cont: Optional[Continuation]
-  switch_to: Optional[Thread]
+  result: Optional[Thread] | Trap
 
 thread_local_handler = threading.local()
 
@@ -231,10 +231,13 @@ def cont_new(f: Callable[[], Optional[Thread]]) -> Continuation:
   def thread_base():
     cont.lock.acquire()
     thread_local_handler.value = cont.handler
-    switch_to = f()
+    try:
+      result = f()
+    except Trap as t:
+      result = t
     handler = thread_local_handler.value
     handler.cont = None
-    handler.switch_to = switch_to
+    handler.result = result
     handler.lock.release()
   threading.Thread(target = thread_base).start()
   return cont
@@ -247,7 +250,9 @@ def resume(cont: Continuation, current_thread: Thread) -> \
   cont.handler = handler
   cont.lock.release()
   handler.lock.acquire()
-  return (handler.cont, handler.switch_to)
+  if isinstance(handler.result, Trap):
+    raise handler.result
+  return (handler.cont, handler.result)
 
 def block():
   suspend(switch_to = None)
@@ -260,7 +265,7 @@ def suspend(switch_to: Optional[Thread]):
   cont.lock = new_already_acquired_lock()
   handler = thread_local_handler.value
   handler.cont = cont
-  handler.switch_to = switch_to
+  handler.result = switch_to
   handler.lock.release()
   cont.lock.acquire()
   thread_local_handler.value = cont.handler
