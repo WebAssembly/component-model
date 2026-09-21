@@ -15,13 +15,6 @@ import threading
 class Trap(BaseException): pass
 class CoreWebAssemblyException(BaseException): pass
 
-def trap():
-  raise Trap()
-
-def trap_if(cond):
-  if cond:
-    raise Trap()
-
 class Type: pass
 class ValType(Type): pass
 class ExternType(Type): pass
@@ -183,6 +176,14 @@ class FutureType(ValType):
   t: Optional[ValType]
 
 # START
+
+def trap():
+  current_instance().store.lock_down()
+  raise Trap()
+
+def trap_if(cond):
+  if cond:
+    trap()
 
 ## Component Instances
 
@@ -511,16 +512,26 @@ class Task:
 class Store:
   waiting: list[Thread]
   nesting_depth: int
+  lockdown: bool
 
   def __init__(self):
     self.waiting = []
     self.nesting_depth = 0
+    self.lockdown = False
+
+  def is_locked_down(self):
+    return self.lockdown
+
+  def lock_down(self):
+    self.lockdown = True
 
   def invoke(self, f: FuncInst, on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
+    assert(not self.lockdown)
     self.nesting_depth += 1
     request_cancellation = f(on_start, on_resolve)
     self.nesting_depth -= 1
     def on_cancel():
+      assert(not self.lockdown)
       self.nesting_depth += 1
       request_cancellation()
       self.nesting_depth -= 1
@@ -546,6 +557,7 @@ class Store:
     return core_func_inst
 
   def tick(self):
+    assert(not self.lockdown)
     assert(self.nesting_depth == 0)
     self.nesting_depth += 1
     candidates = { thread for thread in self.waiting if thread.ready() }

@@ -104,6 +104,16 @@ def unpack_new_ends(packed):
 def fail(msg):
   raise BaseException(msg)
 
+def expect_fail(f, msg = "expected a trap"):
+  store = current_instance().store
+  try:
+    f()
+  except Trap:
+    assert(store.is_locked_down())
+    store.lockdown = False
+    return
+  fail(msg)
+
 def test(t, vals_to_lift, v,
          cx = mk_cx(),
          dst_encoding = None,
@@ -112,35 +122,46 @@ def test(t, vals_to_lift, v,
   def test_name():
     return "test({},{},{}):".format(t, vals_to_lift, v)
 
-  vi = CoreValueIter(vals_to_lift)
-
-  if v is None:
+  error = None
+  def thread_func():
+    nonlocal error, cx, dst_encoding, lower_t, lower_v
     try:
+      vi = CoreValueIter(vals_to_lift)
+
+      if v is None:
+        def lift_expecting_trap():
+          got = lift_flat(cx, vi, t)
+          fail("{} expected trap, but got {}".format(test_name(), got))
+        expect_fail(lift_expecting_trap)
+        return
+
       got = lift_flat(cx, vi, t)
-      fail("{} expected trap, but got {}".format(test_name(), got))
-    except Trap:
-      return
+      assert(vi.i == len(vi.values))
+      if got != v:
+        fail("{} initial lift_flat() expected {} but got {}".format(test_name(), v, got))
 
-  got = lift_flat(cx, vi, t)
-  assert(vi.i == len(vi.values))
-  if got != v:
-    fail("{} initial lift_flat() expected {} but got {}".format(test_name(), v, got))
+      if lower_t is None:
+        lower_t = t
+      if lower_v is None:
+        lower_v = v
 
-  if lower_t is None:
-    lower_t = t
-  if lower_v is None:
-    lower_v = v
+      heap = Heap(5*len(cx.opts.memory))
+      if dst_encoding is None:
+        dst_encoding = cx.opts.string_encoding
+      cx = mk_cx(MemInst(heap.memory, cx.opts.memory.ptr_type()), dst_encoding, heap.realloc)
+      lowered_vals = lower_flat(cx, v, lower_t)
 
-  heap = Heap(5*len(cx.opts.memory))
-  if dst_encoding is None:
-    dst_encoding = cx.opts.string_encoding
-  cx = mk_cx(MemInst(heap.memory, cx.opts.memory.ptr_type()), dst_encoding, heap.realloc)
-  lowered_vals = lower_flat(cx, v, lower_t)
+      vi = CoreValueIter(lowered_vals)
+      got = lift_flat(cx, vi, lower_t)
+      if not equal_modulo_string_encoding(got, lower_v):
+        fail("{} re-lift expected {} but got {}".format(test_name(), lower_v, got))
+    except BaseException as e:
+      error = e
 
-  vi = CoreValueIter(lowered_vals)
-  got = lift_flat(cx, vi, lower_t)
-  if not equal_modulo_string_encoding(got, lower_v):
-    fail("{} re-lift expected {} but got {}".format(test_name(), lower_v, got))
+  task = Task(FuncType([],[]), CanonicalOptions(), cx.inst, lambda: [], lambda _: ())
+  Thread(task, thread_func).resume()
+  if error is not None:
+    raise error
 
 # Empty record types are not permitted yet.
 #test(RecordType([]), [], {})
@@ -477,11 +498,13 @@ def test_trap_propagation():
   def core_func(args):
     trap()
 
+  assert(not store.is_locked_down())
   try:
     lift_and_run(mk_opts(), inst, FuncType([], []), core_func, lambda:[], lambda _:())
     fail("expected the guest trap to propagate out of Store.invoke")
   except Trap:
     pass
+  assert(store.is_locked_down())
 
 
 def test_cross_component_realloc():
@@ -521,11 +544,7 @@ def test_cross_component_realloc():
     assert(canon_context_get('i32', 1) == [0])
     [] = canon_context_set('i32', 0, 0xfeed)
     assert(canon_context_get('i32', 0) == [0xfeed])
-    try:
-      canon_thread_index()
-      fail("thread.index must trap during realloc")
-    except Trap:
-      pass
+    expect_fail(canon_thread_index, "thread.index must trap during realloc")
     return consumer_heap.realloc(args)
 
   consumer_opts = mk_opts(MemInst(consumer_heap.memory, 'i32'), realloc = core_consumer_realloc)
@@ -2319,12 +2338,7 @@ def test_futures():
 
     [packed] = canon_future_new(FutureType(U8Type()))
     rfi,wfi = unpack_new_ends(packed)
-    trapped = False
-    try:
-      canon_future_drop_writable(FutureType(U8Type()), wfi)
-    except Trap:
-      trapped = True
-    assert(trapped)
+    expect_fail(lambda: canon_future_drop_writable(FutureType(U8Type()), wfi))
 
     return []
 
@@ -2400,12 +2414,7 @@ def test_stream_drop_both_ends_while_idle():
     assert(n == 0 and result == CopyResult.DROPPED)
     [event] = canon_waitable_set_poll(MemInst(mem, 'i32'), seti, retp)
     assert(event == EventCode.NONE)
-    trapped = False
-    try:
-      canon_stream_read(stream_t, opts, rsi, 0, 4)
-    except Trap:
-      trapped = True
-    assert(trapped)
+    expect_fail(lambda: canon_stream_read(stream_t, opts, rsi, 0, 4))
     [] = canon_waitable_join(rsi, 0)
     [] = canon_stream_drop_readable(stream_t, rsi)
 
@@ -2523,11 +2532,7 @@ def test_cancel_subtask():
     [x] = args
     [result] = store.lower(host_func1_inst, ft, sync_lower_opts, callee_inst)([42])
     assert(result == 43)
-    try:
-      [] = canon_task_cancel()
-      assert(False)
-    except Trap:
-      pass
+    expect_fail(canon_task_cancel)
     [si] = canon_waitable_set_new()
     [] = canon_context_set('i32', 0, si)
     return [CallbackCode.WAIT | (si << 4)]

@@ -3088,10 +3088,9 @@ In particular, the Component Model maintains the following invariants:
    also allows more-aggressive compiler optimizations (e.g., store reordering).
    This was considered early in Core WebAssembly standardization but rejected
    due to the lack of clear trapping boundary. With components, each component
-   instance is given a mutable "lockdown" state that is set upon trap and
-   implicitly checked at every execution step by component functions. Thus,
-   after a trap, it's no longer possible to observe the internal state of a
-   component instance.
+   store is given a mutable "lockdown" state that is set upon trap and checked
+   at all reentry points. Thus, after a trap, it's no longer possible to observe
+   the internal state of a component instance.
 
 2. When components implement `async` functions using the 0.3.0 sync or
    async-callback ABIs, core wasm execution is "run to completion" within the

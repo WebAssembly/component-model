@@ -89,10 +89,22 @@ boilerplate. For a complete listing of all Python definitions in a single
 executable file with a small unit test suite, see the
 [`canonical-abi`](canonical-abi/) directory.
 
-The convention followed by the Python code below is that all traps are raised
-by explicit `trap()`/`trap_if()` calls; Python `assert()` statements should
-never fire and are only included as hints to the reader. Similarly, there
-should be no uncaught Python exceptions.
+The convention followed by the Python code below is that all traps are raised by
+explicit `trap()`/`trap_if()` calls. Python `assert()` statements should never
+fire; their conditions are maintained either by the internal rules of the
+Component Model or by the host following the rules of the Embedding API.
+
+As required by [Component Invariant] #1, any trap must lock down the entire
+containing store as defined in the `Store` class below:
+```python
+def trap():
+  current_instance().store.lock_down()
+  raise Trap()
+
+def trap_if(cond):
+  if cond:
+    trap()
+```
 
 While the Python code for lifting and lowering values appears to create an
 intermediate copy when lifting linear memory into high-level Python values, a
@@ -845,26 +857,42 @@ in chunks, the `Store` constructor is analogous to Core WebAssembly
 class Store:
   waiting: list[Thread]
   nesting_depth: int
+  lockdown: bool
 
   def __init__(self):
     self.waiting = []
     self.nesting_depth = 0
+    self.lockdown = False
 ```
 The `waiting` field is populated by `Thread` methods, as defined above, and the
 `nesting_depth` field is purely a specification device used by `Store` methods
 below to define the valid host call interleavings (and, in particular, when it
 is valid to call `Store.tick`).
 
+The `Store.lockdown` flag is used to specify [Component Invariant] #1. This flag
+can be queried and set directly by the host through the Embedding API:
+```python
+  def is_locked_down(self):
+    return self.lockdown
+
+  def lock_down(self):
+    self.lockdown = True
+```
+
 The `Store.invoke` method is analogous to Core WebAssembly's [`func_invoke`] and
 takes a `FuncInst` (analogous to a Core WebAssembly [`funcinst`]) along with its
 runtime `OnStart` and `OnResolve` arguments (which are described above alongside
-their definitions).
+their definitions). The `not lockdown` assertions require the host not to start
+any new calls or cancel any existing calls (which may execute guest code) once
+the store has been locked down.
 ```python
   def invoke(self, f: FuncInst, on_start: OnStart, on_resolve: OnResolve) -> OnCancel:
+    assert(not self.lockdown)
     self.nesting_depth += 1
     request_cancellation = f(on_start, on_resolve)
     self.nesting_depth -= 1
     def on_cancel():
+      assert(not self.lockdown)
       self.nesting_depth += 1
       request_cancellation()
       self.nesting_depth -= 1
@@ -919,6 +947,7 @@ progress and the expectation is that the host heuristically interleaves calls to
 while new tasks are being started.
 ```python
   def tick(self):
+    assert(not self.lockdown)
     assert(self.nesting_depth == 0)
     self.nesting_depth += 1
     candidates = { thread for thread in self.waiting if thread.ready() }
@@ -927,10 +956,12 @@ while new tasks are being started.
       thread.resume()
     self.nesting_depth -= 1
 ```
-As shown above, `Store.nesting_depth` is greater than zero while calling
-`Store.invoke` or cancelling via the `OnCancel` callback and thus the `assert`
-prohibits the host from scheduling arbitrary store-wide cooperative threads
-until all core wasm calls on the stack have [blocked] or returned.
+The `not lockdown` assertion complements those in `Store.invoke` and prohibits
+the host from resuming concurrent tasks in a locked-down store. Since
+`Store.nesting_depth` is greater than zero while calling `Store.invoke` or
+`on_cancel`, the `nesting_depth == 0` assertion further prohibits the host from
+scheduling arbitrary cooperative threads until all active core wasm calls in the
+store have [blocked] or returned.
 
 
 ## Canonical ABI Options
