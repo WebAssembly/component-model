@@ -2431,9 +2431,9 @@ Components may define values in the value index space using following syntax:
 value    ::= (value <id>? <valtype> <val>)
 val      ::= false | true
            | <core:i64>
+           | <f32canon>
            | <f64canon>
-           | nan
-           | '<core:stringchar>'
+           | "<core:stringchar>"
            | <core:name>
            | (record <val>+)
            | (variant <labellit> <val>?)
@@ -2446,12 +2446,22 @@ val      ::= false | true
            | (map <entryval>*) 🗺️
            | (binary <core:datastring>)
 entryval ::= (entry <val> <val>) 🗺️
-f64canon ::= <core:f64> without the `nan:0x` case.
+fNcanon  ::= <core:fN> excluding the `-nan` and `nan:0x` cases
 ```
-where [`core:i64`], [`core:f64`], [`core:stringchar`] and [`core:datastring`]
-are as defined by the Core WebAssembly text format.
+where [`core:fN`], [`core:stringchar`] and [`core:datastring`] are as defined by
+the Core WebAssembly text format.
 
-The validation rules for `value` require the `val` to match the `valtype`.
+The validation rules for `value` first reject any `valtype` that transitively
+contains a type constructor that doesn't have a corresponding `val` constructor.
+Currently this rejects `own`, `borrow`, `future`, `stream` and `error-context`.
+In particular, `(option (stream u8))` is rejected, even if the `none` case has a
+`val` constructor. In the future, `val` may be extended to support more cases.
+
+Next, validation requires the given `val` to match the `valtype`. In particular:
+* `fN` only matches `fNcanon`
+* `sN` and `uN` only match `core:i64` integers that fall within their natural
+  signed range without wrapping (e.g., `(value s8 128)` and `(value u8 -1)`
+  would be rejected)
 
 The `(binary ...)` expression form provides an alternative syntax allowing the binary contents
 of the value definition to be written directly in the text format, analogous to data segments,
@@ -3345,7 +3355,7 @@ For some use-case-focused, worked examples, see:
 [`core:id`]: https://webassembly.github.io/spec/core/text/values.html#text-id
 [`core:externidx`]: https://webassembly.github.io/spec/core/text/modules.html#text-externidx
 [`core:i64`]: https://webassembly.github.io/spec/core/text/values.html#integers
-[`core:f64`]: https://webassembly.github.io/spec/core/text/values.html#floating-point
+[`core:fN`]: https://webassembly.github.io/spec/core/text/values.html#floating-point
 [`core:stringchar`]: https://webassembly.github.io/spec/core/text/values.html#text-string
 [`core:name`]: https://webassembly.github.io/spec/core/text/values.html#text-name
 [`core:module`]: https://webassembly.github.io/spec/core/text/modules.html#text-module
