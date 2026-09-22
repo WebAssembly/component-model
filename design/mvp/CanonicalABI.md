@@ -1780,10 +1780,10 @@ methods above, which is why it is pushed down into stream- and future-specific
 classes. `{Stream,Future}End.notify` both define closures that return a
 `CopyResult` code saying what happened:
 ```python
-  class CopyResult(IntEnum):
-    COMPLETED = 0
-    DROPPED = 1
-    CANCELLED = 2
+class CopyResult(IntEnum):
+  COMPLETED = 0
+  DROPPED = 1
+  CANCELLED = 2
 ```
 The `DROPPED` code indicates that the `other` end has since been dropped and
 thus no more reads/writes are possible. The `CANCELLED` code is only possible
