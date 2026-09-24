@@ -66,6 +66,9 @@ specified here.
   * [`canon thread.yield-then-resume`](#-canon-threadyield-then-resume) 🧵
   * [`canon thread.suspend-then-promote`](#-canon-threadsuspend-then-promote) 🧵
   * [`canon thread.yield-then-promote`](#-canon-threadyield-then-promote) 🧵
+  * [`canon thread.set-task`](#-canon-threadset-task) 🧵
+  * [`canon thread.get-task`](#-canon-threadget-task) 🧵
+  * [`canon task.drop`](#-canon-taskdrop) 🧵
   * [`canon error-context.new`](#-canon-error-contextnew) 📝
   * [`canon error-context.debug-message`](#-canon-error-contextdebug-message) 📝
   * [`canon error-context.drop`](#-canon-error-contextdrop) 📝
@@ -115,12 +118,12 @@ Once a `component` has been parsed/decoded and validated, it can be loaded at
 runtime by *instantiating* it to produce a *component instance*. The
 `ComponentInstance` class tracks all the spec-internal state that is used by the
 definitions below to specify the Canonical ABI. For example, all `i32` handles
-to resources, waitables, waitable sets, error contexts and threads will index
-into the `handles` or `threads` fields of `ComponentInstance`.
+to resources, waitables, waitable sets, tasks, error contexts and threads will
+index into the `handles` or `threads` fields of `ComponentInstance`.
 ```python
 class ComponentInstance:
   store: Store
-  handles: Table[ResourceHandle | Waitable | WaitableSet | ErrorContext]
+  handles: Table[ResourceHandle | Waitable | WaitableSet | Task | ErrorContext]
   threads: Table[Thread]
   may_leave: bool
   backpressure: int
@@ -609,8 +612,7 @@ class Task:
   on_resolve: OnResolve
   state: State
   num_borrows: int
-  implicit_thread: Optional[Thread]
-  threads: list[Thread]
+  waiting_to_enter: Optional[Thread]
 
   def __init__(self, ft, opts, inst, on_start, on_resolve):
     self.ft = ft
@@ -620,26 +622,18 @@ class Task:
     self.on_resolve = on_resolve
     self.state = Task.State.INITIAL
     self.num_borrows = 0
-    self.implicit_thread = None
-    self.threads = []
+    self.waiting_to_enter = None
 ```
 
 The `Task.needs_exclusive` predicate returns whether this task's implicit thread
-(`Task.implicit_thread`) has *not* opted in to multiple concurrent linear memory
-shadow stacks (via "stackful" lift) and thus, according to [Component Invariant]
-#2, requires serialization with all the other implicit threads in the component
-instance that have similarly not opted in. This question only applies to
-`async`-typed functions, since synchronous functions can't block and thus can
-always execute in a LIFO fashion using a single linear memory shadow stack. When
-`needs_exclusive` is true, core wasm execution is gated on acquiring the
-`ComponentInstance.exclusive_thread` lock. Due to cooperativity, the
-`exclusive_thread` "lock" is simply a mutable field holding either `None`, when
-unlocked, or, when locked, a reference to the `Task.implicit_thread` currently
-holding the lock.
+requires the `ComponentInstance.exclusive_thread` lock to be acquired and
+released in order to enforce [Component Invariant] #2. In particular, both
+flavors of `async`-typed functions released in 0.3.0 (sync ABI and async
+`callback` ABI) require the exclusive lock; non-`async`-typed functions and
+async non-`callback` ABI functions do not.
 ```python
   def needs_exclusive(self):
-    assert(self.ft.async_)
-    return not self.opts.async_ or self.opts.callback
+    return self.ft.async_ and (not self.opts.async_ or self.opts.callback)
 ```
 
 The `Task.enter_implicit_thread` method implements [backpressure] between when
@@ -667,30 +661,26 @@ shadow stack pointer) for components with mixed `async`- and non-`async`- typed
 exports.
 ```python
   def enter_implicit_thread(self):
+    assert(current_thread().task is self)
     assert(self.state == Task.State.INITIAL)
-    self.implicit_thread = current_thread()
     if self.ft.async_:
       def has_backpressure():
         return (self.inst.backpressure > 0 or
                 (self.needs_exclusive() and self.inst.exclusive_thread is not None))
       if has_backpressure() or self.inst.num_waiting_to_enter > 0:
+        self.waiting_to_enter = current_thread()
         self.inst.num_waiting_to_enter += 1
-        self.implicit_thread.wait_until(lambda: not has_backpressure())
+        current_thread().wait_until(lambda: not has_backpressure())
         self.inst.num_waiting_to_enter -= 1
+        self.waiting_to_enter = None
         if self.deliver_pending_cancel():
           self.cancel()
           return False
       if self.needs_exclusive():
         assert(self.inst.exclusive_thread is None)
-        self.inst.exclusive_thread = self.implicit_thread
-    self.register_thread(self.implicit_thread)
+        self.inst.exclusive_thread = current_thread()
+    current_thread().index = self.inst.threads.add(current_thread())
     return True
-
-  def register_thread(self, thread):
-    assert(thread not in self.threads and thread.task is self)
-    self.threads.append(thread)
-    assert(thread.index is None)
-    thread.index = self.inst.threads.add(thread)
 ```
 Since the order in which suspended threads are resumed is nondeterministic (see
 `Store.tick` below), once `Task.enter_implicit_thread` suspends the task's
@@ -704,58 +694,53 @@ above definition ensures the following properties:
   backpressure (i.e., disabling backpressure never unleashes an unstoppable
   thundering herd of pending tasks).
 
-Once a task's implicit thread has cleared the backpressure gate, it is added to
-the lists of threads running inside the current task and component instance by
-`Task.register_thread()` (which is also called by `thread.new-indirect`, below).
+As shown above, only once a task has cleared the backpressure gate is its
+implicit thread visibly added to the component-instance-wide `threads` table.
 
 Symmetrically, the `Task.exit_implicit_thread` method is called before a task's
 implicit thread returns to reverse the effects of `Task.enter_implicit_thread`.
-In particular, if the `exclusive_thread` lock was acquired, it is released.
-`Task.unregister_thread` (which is also called by `thread.new-indirect`, below)
-traps if the task's last thread is unregistered and the task has not yet
-returned a value to its caller.
+For `async`-lifted implicit threads, `current_thread().task` may have been
+modified by `thread.set-task` to refer to *any* task in the same component
+instance when the implicit thread exits and so the `needs_exclusive` predicate
+must take care to use the *original* task's `opts` and `ft` when deciding
+whether to release the `exclusive_thread` lock (i.e., the same values used by
+`enter_implicit_thread` when deciding whether to acquire the lock).
 ```python
-  def exit_implicit_thread(self):
-    assert(current_thread() is self.implicit_thread)
-    self.unregister_thread(self.implicit_thread)
-    if self.ft.async_ and self.needs_exclusive():
-      assert(self.inst.exclusive_thread is self.implicit_thread)
-      self.inst.exclusive_thread = None
-
-  def unregister_thread(self, thread):
-    assert(thread in self.threads and thread.task is self)
-    self.threads.remove(thread)
-    if len(self.threads) == 0:
-      trap_if(self.state != Task.State.RESOLVED)
-      assert(self.num_borrows == 0)
-    assert(thread.index is not None)
-    self.inst.threads.remove(thread.index)
+  def exit_implicit_thread(original_task):
+    assert(current_instance() is original_task.inst)
+    inst = current_instance()
+    inst.threads.remove(current_thread().index)
+    if original_task.needs_exclusive():
+      assert(inst.exclusive_thread is current_thread())
+      inst.exclusive_thread = None
 ```
 
 The `Task.request_cancellation` method implements the `OnCancel` callback that
 is called by the `subtask.cancel` built-in. If a task's implicit thread is
 waiting to start (in `Task.enter_implicit_thread`, defined above) due to
 backpressure, then it is immediately cancelled without running any guest code.
-Otherwise, if the task's implicit thread is `cancellable` and `ready`, it is
-resumed, allowing it to execute until returning or blocking. Currently, only
-`callback` threads that have returned to their event loop are `cancellable`.
-When resumed, the `callback` thread will call `Task.deliver_pending_cancel`,
-which will return `True`, leading to the `TASK_CANCELLED` event code being
-passed to the `callback` function. The `Thread.resume` call will return as soon
-as the `callback` function returns or blocks, whether or not the subtask called
+Otherwise, if the task contains one or more threads that are `cancellable` and
+`ready`, one is nondeterministically picked and resumed to allow the task to
+execute until returning or blocking. Currently, only `callback` threads that
+have returned to their event loop are `cancellable`. When resumed, the
+`callback` thread will call `Task.deliver_pending_cancel`, which will return
+`True`, leading to the `TASK_CANCELLED` event code being passed to the
+`callback` function. The `Thread.resume` call will return as soon as the
+`callback` function returns or blocks, whether or not the subtask called
 `task.{cancel,return}`, and thus the caller of `OnCancel` must handle both the
 resolved and not-resolved cases after `OnCancel` returns.
 ```python
   def request_cancellation(self):
     if self.state == Task.State.INITIAL:
       self.state = Task.State.PENDING_CANCEL
-      self.implicit_thread.resume()
+      self.waiting_to_enter.resume()
       assert(self.state == Task.State.RESOLVED)
     else:
       assert(self.state == Task.State.STARTED)
       self.state = Task.State.PENDING_CANCEL
-      if self.implicit_thread.cancellable and self.implicit_thread.ready():
-        self.implicit_thread.resume()
+      candidates = { t for t in self.inst.threads if t.task is self and t.cancellable and t.ready() }
+      if candidates:
+        random.choice(list(candidates)).resume()
 
   def has_pending_cancel(self):
     return self.state == Task.State.PENDING_CANCEL
@@ -1072,7 +1057,7 @@ that are represented in Core WebAssembly as `i32` indices into the array.
 Currently, every component instance contains two tables: a `threads` table
 containing all the component's [threads](#threads) and a `handles`
 table containing everything else ([resource handles](#resource-state),
-[waitables and waitable sets](#waitable-state) and
+[waitables and waitable sets](#waitable-state), [tasks](#tasks) and
 [error contexts](#-canon-error-contextnew)).
 ```python
 class Table:
@@ -3397,17 +3382,22 @@ their arguments were lowered or not.
     assert(types_match_values(flat_ft.params, flat_args))
 ```
 
-If the `async` `canonopt` is *not* specified, a `lift`ed function then calls
-the core wasm callee, passing the lowered arguments in core function parameters
-and receiving the return value as core function results. Once the core results
-are lifted according to `lift_flat_values` above, the optional `post-return`
-function (specified as a `canonopt` immediate of `canon lift`) is called,
-passing the same core wasm results as parameters so that the `post-return`
-function can free any associated allocations.
+If the `async` `canonopt` is *not* specified, a `lift`ed function then calls the
+core wasm callee, passing the lowered arguments in core function parameters and
+receiving the return value as core function results. Before returning, the
+thread may have called `thread.set-task` to change its task membership, but on
+return, the thread implicitly rejoins its original task. This allows sync
+implicit threads to lift their return value using the ABI options and return
+type that were statically specified in the `lift`, avoiding the additional
+dynamism of `task.return`. After returning the lifted values to the caller, the
+optional `post-return` function (specified as a `canonopt` immediate of `canon
+lift`) is called, passing the core wasm results as parameters and allowing the
+callee to free any linear memory allocations used to hold the return value.
 ```python
     if not opts.async_:
       flat_results = call_and_trap_on_throw(callee, flat_args)
       assert(types_match_values(flat_ft.results, flat_results))
+      thread.task = task
       result = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_type())
       task.return_(result)
       if opts.post_return is not None:
@@ -3424,11 +3414,11 @@ functions can always be implemented by a plain synchronous function call
 without the need for fibers which would otherwise be necessary if the
 `post-return` function performed a blocking operation.
 
-In both of the `async` cases below (with or without `callback`), the
-`task.return` built-in must be called, providing the return value as core wasm
-*parameters* to the `task.return` built-in (rather than as core function
-results as in the synchronous case). If `task.return` is *not* called by the
-time the `Task`'s last `Thread` exits, there is a trap (in `Task.unregister_thread`).
+In both of the `async` cases below (with or without `callback`), the return
+value is provided by calling the `task.return` built-in, passing the return
+value as core wasm *parameters* (rather than as core function results as in
+the synchronous case). If `task.return` never ends up being called, the
+task will never complete for the caller.
 
 In the `async` non-`callback` ("stackful async") case, there is a single call
 to the core wasm callee which must return empty core results. Waiting for async
@@ -3456,7 +3446,7 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
       if thread.task.deliver_pending_cancel():
         event = (EventCode.TASK_CANCELLED, 0, 0)
       else:
-        assert(inst.exclusive_thread is task.implicit_thread)
+        assert(inst.exclusive_thread is thread)
         inst.exclusive_thread = None
         thread.cancellable = True
         match code:
@@ -3474,7 +3464,7 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
             trap()
         assert(inst.exclusive_thread is None)
         thread.cancellable = False
-        inst.exclusive_thread = task.implicit_thread
+        inst.exclusive_thread = thread
       event_code, p1, p2 = event
       [packed] = call_and_trap_on_throw(opts.callback, [event_code, p1, p2])
       code,si = unpack_callback_result(packed)
@@ -4560,17 +4550,17 @@ class CoreFuncRef:
   callee: Callable[[list[CoreValType]], list[CoreValType]]
 
 def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], fi, c):
-  task = current_task()
-  trap_if(not task.inst.may_leave)
+  inst = current_instance()
+  trap_if(not inst.may_leave)
   f = ftbl.get(fi)
   assert(ft == CoreFuncType(['i32'], []) or ft == CoreFuncType(['i64'], []))
   trap_if(f.t != ft)
   def thread_func():
     [] = call_and_trap_on_throw(f.callee, [c])
-    task.unregister_thread(new_thread)
-  new_thread = Thread(task, thread_func)
+    inst.threads.remove(new_thread.index)
+  new_thread = Thread(current_task(), thread_func)
   assert(new_thread.suspended())
-  task.register_thread(new_thread)
+  new_thread.index = inst.threads.add(new_thread)
   return [new_thread.index]
 ```
 The newly-created thread starts out in a "suspended" state and so, to
@@ -4747,6 +4737,77 @@ def canon_thread_yield_then_promote(i):
   thread.yield_then_promote(other_thread)
   return [0]
 ```
+
+
+### 🧵 `canon thread.set-task`
+
+For a canonical definition:
+```wat
+(canon thread.set-task (core func $thread.set-task))
+```
+validation specifies:
+* `$thread.set-task` is given type `(func (param i32))`
+
+Calling `$thread.set-task` invokes the following function which sets the current
+thread's containing task to be the task referenced by the given `i32` index.
+```python
+def canon_thread_set_task(taski):
+  thread = current_thread()
+  trap_if(not thread.task.inst.may_leave)
+  new_task = thread.task.inst.handles.get(taski)
+  trap_if(not isinstance(new_task, Task))
+  thread.task = new_task
+  return []
+```
+At the moment, the only source of task indices is `thread.get-task`.
+
+
+### 🧵 `canon thread.get-task`
+
+For a canonical definition:
+```wat
+(canon thread.get-task (core func $thread.get-task))
+```
+validation specifies:
+* `$thread.get-task` is given type `(func (result i32))`
+
+Calling `$thread.get-task` invokes the following function which adds a new
+handle containing a reference to the current task to the current component
+instance's `handles` table, returning the `i32` index of the new task handle,
+which can be passed as an operand to `thread.set-task`.
+```python
+def canon_thread_get_task():
+  task = current_task()
+  trap_if(not task.inst.may_leave)
+  taski = task.inst.handles.add(task)
+  return [taski]
+```
+Note that each call to `thread.get-task` unconditionally allocates a new handle
+and thus must be paired with a call to `task.drop` to avoid leaking handles.
+
+
+### 🧵 `canon task.drop`
+
+For a canonical definition:
+```wat
+(canon task.drop (core func $task.drop))
+```
+validation specifies:
+* `$task.drop` is given type `(func (param i32))`
+
+Calling `$task.drop` invokes the following function which drops the task handle
+at the given index.
+```python
+def canon_task_drop(taski):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  task = inst.handles.remove(taski)
+  trap_if(not isinstance(task, Task))
+  return []
+```
+Note that `task.drop` only drops a *reference* to a task; it does not change the
+*state* of the task or destroy the task (which may well have other handle,
+thread and subtask referents).
 
 
 ### 📝 `canon error-context.new`

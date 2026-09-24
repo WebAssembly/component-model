@@ -4,3 +4,5 @@
 ./values/post-return.wast
 ./async/big-interleaving-test.wast
 ./async/forward.wast
+./async/cancel-not-delivered.wast
+./async/thread-set-task.wast
