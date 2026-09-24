@@ -40,7 +40,7 @@ instance.exports.greet(42);  // "hello, 42"
 instance.exports.greet();    // TypeError
 ```
 
-Passing too few arguments is a `TypeError`. Extra arguments are ignored.
+`undefined` is substituted for missing arguments, and extra arguments are ignored, just as in JS.
 
 ### Components that import a function
 

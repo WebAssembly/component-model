@@ -976,7 +976,8 @@ The "set" case defines a partial descriptor, so it only replaces the [[Set]] fie
 To `invoke a component function` given |componentFunc|, a Boolean |takesSelf|, |thisValue| and a List of JS values |args|:
 1. Let |paramTypes| be |componentFunc|.Params.
 1. Let |resultType| be |componentFunc|.Result.
-1. Let |paramOffset| be 1 if |takesSelf| is **true**, else 0.
+1. Let |formalParamsOffset| be 1 if |takesSelf| is **true**, else 0.
+1. Let |formalParamsCount| be |paramTypes|.length - |formalParamsOffset|.
 1. If |resultType| is a `result`:
     1. Let |okType| be its `ok` payload type, or **empty** if it has none.
     1. Let |errorType| be its `error` payload type, or **empty** if it has none.
@@ -984,9 +985,11 @@ To `invoke a component function` given |componentFunc|, a Boolean |takesSelf|, |
 1. Else:
     1. Let |okType| be |resultType|, or **empty** if |componentFunc| has no result.
     1. Let |throwing| be **false**.
-1. If the number of |args| is less than |paramTypes|.length - |paramOffset|:
-    1. Throw a `TypeError`.
-1. Let |instance| be the surrounding component instance.
+1. If `Length`(|args|) is less than |formalParamsCount|:
+    1. Let |missingFormalArgCount| be |formalParamsCount| - `Length`(|args|).
+    1. Let |missingFormalArgs| be a List of `undefined` repeated |missingFormalArgCount| times.
+    1. Set |args| to |args| concatenated with |missingFormalArgs|.
+1. Let |instance| be the instance of |componentFunc|.
 1. If |instance|.[[Store]].is_locked_down():
     1. Perform ? `trap` given |instance|.
 1. Let |lenders| be a new empty List.
@@ -998,9 +1001,9 @@ To `invoke a component function` given |componentFunc|, a Boolean |takesSelf|, |
     1. If the completion is abrupt and the call has entered the guest:
         1. Invoke |instance|.[[Store]].lock_down().
 1. Let |values| be a new empty List.
-1. If |paramOffset| is 1:
+1. If |formalParamsOffset| is 1:
     1. Append ? `ToComponentValue`(|thisValue|, |paramTypes|[0]) to |values|.
-1. For each i in [0, |paramTypes|.length - |paramOffset|): append ? `ToComponentValue`(|args|[i], |paramTypes|[i + |paramOffset|]) to |values|.
+1. For each i in [0, |formalParamsCount|): append ? `ToComponentValue`(|args|[i], |paramTypes|[i + |formalParamsOffset|]) to |values|.
 1. Let |componentResult| be the result of invoking |componentFunc| with |values|.
 1. If the call traps:
     1. Perform ? `trap` given |instance|.
