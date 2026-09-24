@@ -3497,7 +3497,6 @@ For some use-case-focused, worked examples, see:
 [Returning]: Concurrency.md#returning
 [Resolved]: Concurrency.md#cancellation
 [Cancellation]: Concurrency.md#cancellation
-[Block]: Concurrency.md#blocking
 
 [Component Model Documentation]: https://component-model.bytecodealliance.org
 

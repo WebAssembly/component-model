@@ -181,21 +181,18 @@ stack-switching, only that subset is implemented, which significantly simplifies
 things. In particular, the Component Model uses stack-switching in the following
 restricted manner:
 
-First, there are only three global [control tags] used with `suspend`:
+First, there are only two global [control tags] used with `suspend`:
 ```wat
-(tag $block)
-(tag $switch-to (param (ref $Thread)))
+(tag $block (param (ref null $Thread)))
 (tag $current-thread (result (ref $Thread)))
 ```
-Consequently, instead of having a single generic Python `suspend` function,
-there are `block`, `switch_to` and `current_thread` Python functions defined
-below that implement `suspend $block`, `suspend $switch-to` and `suspend
-$current-thread`, resp.
+So instead of having a single generic Python `suspend` function, there are two
+Python functions, `block` and `current_thread`, that implement `suspend $block`
+and `suspend $current-thread`, resp.
 
-The `$block` tag is used to suspend execution until some future event.
-
-The `$switch-to` tag is used to suspend and then immediately resume the given
-[thread]. (The next section will define what `Thread` is.)
+The `$block` tag is used to suspend execution until some future event, with a
+request to immediately resume the given `Thread` if non-null. (The next section
+will define what a `Thread` is.)
 
 The `$current-thread` tag is used to retrieve the [current thread], which is
 semantically stored in the `resume` handler's local state (although an
@@ -204,19 +201,18 @@ execution context (or a special Core WebAssembly `global`) so that it could be
 cheaply loaded and/or kept in register state).
 
 Second, there is only a single type of continuation passed to `resume` that
-corresponds to the merging of the `$block` and `$switch-to` tags, with `$block`
-passing a null thread reference:
+corresponds to the `$block` tag:
 ```wat
 (type $ct (cont (func (result (ref null $Thread)))))
 ```
 `$current-thread` continuations are immediately resumed and so never "escape"
 and thus do not need a first-class continuation reference.
 
-Third, every `resume` performed by the Canonical ABI always handles `$block`,
-`$switch-to` and `$current-thread` and every Canonical ABI `suspend` is, by
-construction, always scoped by a Canonical ABI `resume`. Thus, every Canonical
-ABI `suspend` unconditionally transfers control flow directly to the innermost
-enclosing Canonical ABI `resume` without a general handler/tag search.
+Third, every `resume` performed by the Canonical ABI always handles `$block` and
+`$current-thread` and every Canonical ABI `suspend` is, by construction, always
+scoped by a Canonical ABI `resume`. Thus, every Canonical ABI `suspend`
+unconditionally transfers control flow directly to the innermost enclosing
+Canonical ABI `resume` without a general handler/tag search.
 
 Given this restricted usage, specialized versions of `cont.new`, `resume` and
 `suspend` that are "monomorphized" to the above types and tags are implemented
@@ -276,12 +272,12 @@ with a new `Continuation` and `Handler`, resp.), `Handler` must be re-loaded
 from `thread_local_handler.value` after `f` returns since it may have changed
 since the initial `resume`.
 
-Next, `resume` is monomorphized to take a continuation of type `$ct`, the
-argument to pass to the continuation, and the `Thread` to use to implement the
-`(on $current-thread)` handler. The remaining `(on $block)`, `(on $switch-to)`
-and "returned" cases join to produce a single return value, with the `(on *)`
-cases returning a `Continuation` and the "returned" case returning `None`. If
-the continuation traps, the trap propagates out of `resume` to its caller.
+Next, `resume` is monomorphized to take a continuation of type `$ct` and the
+`Thread` to use to implement the `(on $current-thread)` handler. The
+`(on $block)` and "returned" cases join to produce a single return value, with
+the `(on $block)` case returning a `Continuation` and the "returned" case
+returning `None`. If the continuation traps, the trap propagates out of `resume`
+to its caller.
 ```python
 def resume(cont: Continuation, current_thread: Thread) -> \
            tuple[Optional[Continuation], Optional[Thread]]:
@@ -296,19 +292,12 @@ def resume(cont: Continuation, current_thread: Thread) -> \
   return (handler.cont, handler.result)
 ```
 
-Next, the `block` and `switch_to` functions implement `suspend $block` and
-`suspend $switch-to` in terms of a common `suspend` function. Following the
-locking scheme already established by `cont_new` and `resume`, the
-implementation passes control flow and event arguments back to the parent
-`resume` and then waits to be unblocked by a future `resume`.
+Next, the `block` function implements `suspend $block`. Following the locking
+scheme already established by `cont_new` and `resume`, the implementation passes
+control flow and event arguments back to the parent `resume` and then waits to
+be unblocked by a future `resume`.
 ```python
-def block():
-  suspend(switch_to = None)
-
-def switch_to(other: Thread):
-  suspend(switch_to = other)
-
-def suspend(switch_to: Optional[Thread]):
+def block(switch_to: Optional[Thread] = None):
   cont = Continuation()
   cont.lock = new_already_acquired_lock()
   handler = thread_local_handler.value
@@ -338,14 +327,14 @@ def current_instance() -> ComponentInstance:
   return current_task().inst
 ```
 
-Once Core WebAssembly gets stack-switching, the Component Model's `$block`,
-`$switch-to` and `$current-thread` tags would *not* be exposed to Core
-WebAssembly. Thus, an optimizing implementation would continue to be able to
-implement `block()` and `switch_to()` as a direct control flow transfer and
-`current_thread()` with implicit execution context, both without a general
-handler/tag search. In particular, this avoids the pathological O(N<sup>2</sup>)
-behavior which would otherwise arise if Component Model cooperative threads were
-used in conjunction with deeply-nested Core WebAssembly handlers.
+Once Core WebAssembly gets stack-switching, the Component Model's `$block` and
+`$current-thread` tags would *not* be exposed to Core WebAssembly. Thus, an
+optimizing implementation would continue to be able to implement `block()` as a
+direct control flow transfer and `current_thread()` with implicit execution
+context, both without a general handler/tag search. In particular, this avoids
+the pathological O(N<sup>2</sup>) behavior which would otherwise arise if
+Component Model cooperative threads were used in conjunction with deeply-nested
+Core WebAssembly handlers.
 
 Additionally, once Core WebAssembly has stack switching, any unhandled events
 that originate in Core WebAssembly would turn into traps if they reach a
@@ -383,48 +372,20 @@ following higher-level concurrency concepts:
 * [thread index]
 * [thread-local storage]
 
-Introducing the `Thread` class in chunks, a `Thread` can be in one of the
-following 3 states:
-* `running`: actively executing on the stack (thus having no continuation)
-* `suspended`: waiting to be `resume`d by another thread `running` in
-  the same component instance
-* `waiting`: waiting to be `resume`d nondeterministically by the host after
-  some condition is met, with `ready` and non-`ready` sub-states, depending on
-  whether the condition is met.
-
+The `Thread` class is introduced in chunks, starting with fields and
+initialization, which leaves the thread in a `suspended` state with a
+continuation that calls the given `thread_func`.
 ```python
 class Thread:
-  cont: Optional[Continuation]
+  cont: Optional[Continuation] | Literal['running']
   ready_func: Optional[Callable[[], bool]]
   task: Task
   index: Optional[int]
   storage: tuple[int,int]
   cancellable: bool
 
-  def running(self):
-    return self.cont is None
-
-  def suspended(self):
-    return not self.running() and self.ready_func is None
-
-  def waiting(self):
-    return not self.running() and self.ready_func is not None
-
-  def ready(self):
-    return self.waiting() and self.ready_func()
-```
-
-When a `Thread` is created, a new continuation is created for `thread_func`
-(wrapping the `thread_func` with `cont_func` to exactly match the function type
-expected by `cont_new`) and leaving the thread initially in the `suspended`
-state.
-```python
   def __init__(self, task, thread_func):
-    def cont_func():
-      assert(self.running())
-      thread_func()
-      return None
-    self.cont = cont_new(cont_func)
+    self.cont = cont_new(thread_func)
     self.ready_func = None
     self.task = task
     self.index = None
@@ -433,26 +394,58 @@ state.
     assert(self.suspended())
 ```
 
+Based on these fields, a `Thread` can be in one of the following top-level
+states and sub-states:
+* `running`: the continuation was `resume`d and has not yet `block`ed or
+  returned
+* `exited`: the continuation was `resume`d and then returned; the thread has
+  been removed from the `threads` table and is unreachable
+* `blocked`: the thread has a continuation
+  * `suspended`: the continuation can only be `resume`d explicitly by someone
+    else
+  * `waiting`: the thread has a "readiness condition" which, once met, allows
+    the runtime to `resume` the continuation
+    * `ready`: the readiness condition is currently met
+
+```python
+  def running(self):
+    return self.cont == 'running'
+
+  def exited(self):
+    return self.cont is None
+
+  def blocked(self):
+    return not (self.running() or self.exited())
+
+  def suspended(self):
+    return self.blocked() and self.ready_func is None
+
+  def waiting(self):
+    return self.blocked() and self.ready_func is not None
+
+  def ready(self):
+    return self.waiting() and self.ready_func()
+```
+
 The next two `Thread` methods are only called by `Thread` methods below to add
-and remove a thread to the `Store.waiting` list at the same time as setting and
-clearing, resp., the readiness function that `Store.tick` (defined below) will
-test repeatedly to determine when the thread is ready to be resumed.
+and remove a thread from the `Store.waiting` list at the same time as setting
+and clearing, resp., the readiness function that `Store.tick` (defined below)
+will test repeatedly to determine when the thread is ready to `resume`.
 ```python
   def start_waiting(self, ready_func):
-    assert(not self.waiting() and not self.ready_func)
+    assert(self.ready_func is None)
     self.ready_func = ready_func
     self.task.inst.store.waiting.append(self)
 
   def stop_waiting(self):
-    assert(self.waiting() and self.ready_func)
+    assert(self.waiting())
     self.ready_func = None
     self.task.inst.store.waiting.remove(self)
 ```
 
-One way to allow a newly-created thread to start executing is for core wasm to
-call the `thread.resume-later` built-in. This built-in does not immediately
-switch execution to the thread but instead transitions the thread to the `ready`
-`waiting` state, so that it can be `Thread.resume`d immediately.
+The `Thread.resume_later` method does not immediately `resume` the thread's
+continuation but instead transitions the thread to the `ready` state, allowing
+it to `resume` at some point in the future.
 ```python
   def resume_later(self):
     assert(self.suspended())
@@ -460,33 +453,31 @@ switch execution to the thread but instead transitions the thread to the `ready`
     assert(self.ready())
 ```
 
-Once it's time to execute a `suspended` or `waiting` thread, `Thread.resume` is
-called on that thread. This method transitions the thread to the `running` state
-by clearing and then `resume`ing the `Thread`'s stored continuation. If the
-`resume`d continuation suspends via `switch_to`, `Thread.resume` will `resume`
-*that* `Thread`'s continuation, and so on, repeatedly, until the continuation
-either returns or suspends with no thread to `switch_to`.
+The `Thread.resume` method is called on a `blocked` thread to `resume` the
+thread's continuation. If the resumed continuation calls `block` with a non-null
+`switch_to` argument, `Thread.resume` will `resume` *that* `Thread`'s
+continuation, and so on, repeatedly in a loop, until the continuation either
+returns or blocks with no thread to switch to.
 ```python
   def resume(self):
-    assert(not self.running())
+    assert(self.blocked())
     if self.waiting():
       self.stop_waiting()
     thread = self
     while thread is not None:
       cont = thread.cont
-      thread.cont = None
-      (thread.cont, switch_to) = resume(cont, thread)
-      thread = switch_to
+      thread.cont = 'running'
+      (thread.cont, thread) = resume(cont, thread)
+    assert(self.blocked() or self.exited())
 ```
 Note that the `while` loop shown above is effectively implementing the `switch`
 instruction of the [stack-switching] proposal since `switch` is just an
 optimization of `suspend` followed by `resume`. The non-optimized version is
-used here to simplify storing of the new `Continuation` into `Thread.cont`.
+used here to simplify the storing of the new `Continuation` into `Thread.cont`.
 However, an optimized implementation could do the direct switch.
 
-Once a thread is `Thread.resume()`ed and starts executing, it can suspend its
-execution by calling the `thread.suspend` built-in which calls `Thread.suspend`
-here which simply [blocks].
+The `Thread.suspend` method is called on a `running` thread to unconditionally
+block with no readiness condition, leaving the thread `suspended`.
 ```python
   def suspend(self):
     assert(self.running())
@@ -494,15 +485,11 @@ here which simply [blocks].
     assert(self.running())
 ```
 
-While running, a thread can also cooperatively yield execution by calling the
-`thread.yield` built-in. This calls the `Thread.yield_` method which itself
-calls the `Thread.wait_until` with a readiness condition that is already met.
-`Thread.wait_until` is also used below to define various synchronous blocking
-built-ins as well as auto-backpressure and the `async callback` event loop.
+The `Thread.wait_until` method is a utility used to define multiple blocking
+built-ins as well as auto-backpressure for `async` tasks and the `callback`
+event loop. It sets a readiness condition before calling `block`, leaving the
+thread in a `waiting` state.
 ```python
-  def yield_(self):
-    return self.wait_until(ready_func = lambda: True)
-
   def wait_until(self, ready_func):
     assert(self.running())
     if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1):
@@ -515,33 +502,37 @@ If `ready_func()` is already true on entry, the host can nondeterministically
 decide whether to switch to another thread or keep running the current one. In
 particular, when a caller makes an `async`-lowered call to a callee which
 `wait_until`s a condition that's already met (including `thread.yield`), the
-embedder can use scheduling heuristics to decide whether or not to [block] the
-current thread and return control flow back to the caller.
+embedder can use scheduling heuristics to decide whether or not to `block` the
+current thread to return control flow back to the caller.
+
+The `Thread.yield_` method allows a thread to cooperatively yield execution
+without having to block on external I/O.
+```python
+  def yield_(self):
+    return self.wait_until(ready_func = lambda: True)
+```
 
 The `Thread.suspend_then_resume` and `Thread.yield_then_resume` methods
-immediately resume execution of some `other` `suspended` thread in the same
-component instance, leaving the original thread in either a `suspended` or
-`ready` `waiting` state, resp.
+immediately `resume` some `other` `suspended` thread's continuation, leaving the
+original thread `suspended` or `ready`, resp.
 ```python
   def suspend_then_resume(self, other: Thread):
     assert(self.running() and other.suspended())
-    switch_to(other)
+    block(switch_to = other)
     assert(self.running())
 
   def yield_then_resume(self, other: Thread):
     assert(self.running() and other.suspended())
     self.start_waiting(ready_func = lambda: True)
-    switch_to(other)
+    block(switch_to = other)
     assert(self.running())
 ```
 
 Lastly, the `Thread.suspend_then_promote` and `Thread.yield_then_promote`
-methods *attempt* to immediately resume execution of some `other` thread in the
-same component instance *if* the `other` thread is in a `ready` `waiting` state.
-If so, control flow is transferred directly and the current thread is left
-`suspended` or in a `ready` `waiting` state, resp. If the `other` thread is
-*not* ready to run, then these operations fall back to plain `suspend` or
-`yield_` behavior, resp.
+methods attempt to immediately `resume` some `other` thread's continuation if
+the `other` thread is in a `ready` state. Otherwise, these methods fall back to
+a plain `Thread.suspend` or `Thread.yield_`, resp. Either way, the original
+thread is left `suspended` or `ready`, resp.
 ```python
   def suspend_then_promote(self, other: Thread):
     assert(self.running())
@@ -550,6 +541,7 @@ If so, control flow is transferred directly and the current thread is left
       self.suspend_then_resume(other)
     else:
       self.suspend()
+    assert(self.running())
 
   def yield_then_promote(self, other: Thread):
     assert(self.running())
@@ -558,6 +550,7 @@ If so, control flow is transferred directly and the current thread is left
       self.yield_then_resume(other)
     else:
       self.yield_()
+    assert(self.running())
 ```
 
 
@@ -829,9 +822,8 @@ the Embedding interface here just covers the subset that is necessary to define
 the behavior of the Canonical ABI.
 
 The Embedding interface is defined as the methods of the `Store` class, which is
-the Component Model's version of a Core WebAssembly [`store`]. Defining `Store`
-in chunks, the `Store` constructor is analogous to Core WebAssembly
-[`store_init`] and defines the initial state of the `Store`:
+the Component Model's version of a Core WebAssembly [`store`]. The `Store` class
+is introduced in chunks, starting with fields and initialization:
 ```python
 class Store:
   waiting: list[Thread]
@@ -4642,7 +4634,7 @@ validation specifies:
 * `$yield` is given type `(func (result i32))`
 
 Calling `$yield` invokes the following function which yields execution so that
-others threads can execute, leaving the current thread ready to run at some
+other threads can execute, leaving the current thread ready to run at some
 nondeterministic point in the future chosen by the embedder. This allows a
 long-running computation that is not otherwise performing I/O to avoid starving
 other threads in a cooperative setting.
@@ -4718,7 +4710,7 @@ validation specifies:
 Calling `$suspend-then-promote` invokes the following function which loads a
 thread at index `$i` from the current component instance's `threads` table,
 trapping on out-of-bounds or if the index of the current thread is passed, and
-then calls `Thread.suspend_then_resume` to resume the `other_thread` if it's
+then calls `Thread.suspend_then_promote` to resume the `other_thread` if it's
 `ready` and, in any case, leave the [current thread] suspended.
 ```python
 def canon_thread_suspend_then_promote(i):
@@ -4743,7 +4735,7 @@ validation specifies:
 Calling `$yield-then-promote` invokes the following function which loads a
 thread at index `$i` from the current component instance's `threads` table,
 trapping on out-of-bounds or if the index of the current thread is passed, and
-then calls `Thread.yield_then_resume` to resume the `other_thread` if it's
+then calls `Thread.yield_then_promote` to resume the `other_thread` if it's
 `ready` and, in any case, leave the [current thread] ready to run at some
 nondeterministic point in the future chosen by the embedder.
 ```python
@@ -4977,7 +4969,6 @@ def canon_thread_available_parallelism():
 [Thread]: Concurrency.md#threads-and-tasks
 [Current Thread]: Concurrency.md#current-thread-and-task
 [Current Task]: Concurrency.md#current-thread-and-task
-[Block]: Concurrency.md#blocking
 [Blocks]: Concurrency.md#blocking
 [Blocked]: Concurrency.md#blocking
 [Waiting On External I/O And Yielding]: Concurrency.md#blocking
@@ -4993,7 +4984,6 @@ def canon_thread_available_parallelism():
 [GC ABI Option]: https://github.com/WebAssembly/component-model/issues/525
 
 [Core WebAssembly Embedding]: https://webassembly.github.io/spec/core/appendix/embedding.html
-[`store_init`]: https://webassembly.github.io/spec/core/appendix/embedding.html#store
 [`store`]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-store
 [`module_instantiate`]: https://webassembly.github.io/spec/core/appendix/embedding.html#modules
 [`func_invoke`]: https://webassembly.github.io/spec/core/appendix/embedding.html#functions

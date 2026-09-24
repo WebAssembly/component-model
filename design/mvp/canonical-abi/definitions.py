@@ -254,13 +254,7 @@ def resume(cont: Continuation, current_thread: Thread) -> \
     raise handler.result
   return (handler.cont, handler.result)
 
-def block():
-  suspend(switch_to = None)
-
-def switch_to(other: Thread):
-  suspend(switch_to = other)
-
-def suspend(switch_to: Optional[Thread]):
+def block(switch_to: Optional[Thread] = None):
   cont = Continuation()
   cont.lock = new_already_acquired_lock()
   handler = thread_local_handler.value
@@ -282,31 +276,15 @@ def current_instance() -> ComponentInstance:
 ### Threads
 
 class Thread:
-  cont: Optional[Continuation]
+  cont: Optional[Continuation] | Literal['running']
   ready_func: Optional[Callable[[], bool]]
   task: Task
   index: Optional[int]
   storage: tuple[int,int]
   cancellable: bool
 
-  def running(self):
-    return self.cont is None
-
-  def suspended(self):
-    return not self.running() and self.ready_func is None
-
-  def waiting(self):
-    return not self.running() and self.ready_func is not None
-
-  def ready(self):
-    return self.waiting() and self.ready_func()
-
   def __init__(self, task, thread_func):
-    def cont_func():
-      assert(self.running())
-      thread_func()
-      return None
-    self.cont = cont_new(cont_func)
+    self.cont = cont_new(thread_func)
     self.ready_func = None
     self.task = task
     self.index = None
@@ -314,13 +292,31 @@ class Thread:
     self.cancellable = False
     assert(self.suspended())
 
+  def running(self):
+    return self.cont == 'running'
+
+  def exited(self):
+    return self.cont is None
+
+  def blocked(self):
+    return not (self.running() or self.exited())
+
+  def suspended(self):
+    return self.blocked() and self.ready_func is None
+
+  def waiting(self):
+    return self.blocked() and self.ready_func is not None
+
+  def ready(self):
+    return self.waiting() and self.ready_func()
+
   def start_waiting(self, ready_func):
-    assert(not self.waiting() and not self.ready_func)
+    assert(self.ready_func is None)
     self.ready_func = ready_func
     self.task.inst.store.waiting.append(self)
 
   def stop_waiting(self):
-    assert(self.waiting() and self.ready_func)
+    assert(self.waiting())
     self.ready_func = None
     self.task.inst.store.waiting.remove(self)
 
@@ -330,23 +326,20 @@ class Thread:
     assert(self.ready())
 
   def resume(self):
-    assert(not self.running())
+    assert(self.blocked())
     if self.waiting():
       self.stop_waiting()
     thread = self
     while thread is not None:
       cont = thread.cont
-      thread.cont = None
-      (thread.cont, switch_to) = resume(cont, thread)
-      thread = switch_to
+      thread.cont = 'running'
+      (thread.cont, thread) = resume(cont, thread)
+    assert(self.blocked() or self.exited())
 
   def suspend(self):
     assert(self.running())
     block()
     assert(self.running())
-
-  def yield_(self):
-    return self.wait_until(ready_func = lambda: True)
 
   def wait_until(self, ready_func):
     assert(self.running())
@@ -356,15 +349,18 @@ class Thread:
     block()
     assert(self.running())
 
+  def yield_(self):
+    return self.wait_until(ready_func = lambda: True)
+
   def suspend_then_resume(self, other: Thread):
     assert(self.running() and other.suspended())
-    switch_to(other)
+    block(switch_to = other)
     assert(self.running())
 
   def yield_then_resume(self, other: Thread):
     assert(self.running() and other.suspended())
     self.start_waiting(ready_func = lambda: True)
-    switch_to(other)
+    block(switch_to = other)
     assert(self.running())
 
   def suspend_then_promote(self, other: Thread):
@@ -374,6 +370,7 @@ class Thread:
       self.suspend_then_resume(other)
     else:
       self.suspend()
+    assert(self.running())
 
   def yield_then_promote(self, other: Thread):
     assert(self.running())
@@ -382,6 +379,7 @@ class Thread:
       self.yield_then_resume(other)
     else:
       self.yield_()
+    assert(self.running())
 
 ### Tasks
 
