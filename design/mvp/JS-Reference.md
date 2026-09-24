@@ -74,6 +74,14 @@ interface ComponentError : Error {
 
 Validation and compilation of components defer to the underlying component embedding interface. This reference adds nothing to it.
 
+## Component store
+
+A component store is defined by the [canonical ABI](./CanonicalABI.md#component-instances) and is analogous to the core wasm store. It contains a set of component instances and tasks. A store is also a unit of failure where a trap can trigger a lockdown which prevents further execution within the store.
+
+In contrast with core wasm, every component instantiated by the JS-API or ESM (i.e. 'top level') is partitioned to its own store. This means that all top-level component interaction is mediated by the JS-API. A component export imported by another component is treated the same as any other JS import. Nested components share a common store and directly link following the normal component rules.
+
+This ensures that whether an ESM is implemented as a component or with JS is an implementation detail that can change over time. This also means that a failure within a top-level component instance that triggers a lockdown affects only that component instance.
+
 ## Entry points
 
 A `Component` has the following slots:
@@ -81,10 +89,19 @@ A `Component` has the following slots:
   1. [[EnabledBuiltins]] - the enabled builtins.
 
 A `ComponentInstance` has the following slots:
+  1. [[Store]] - the component store.
   1. [[ComponentInstance]] - the component instance.
   1. [[Exports]] - the [exports object](#create-the-exports-object).
   1. [[HostResourceTypes]] - map from [abstract type key](#abstract-and-transparent-types) to [host resource type](#host-resource-types-and-values).
   1. [[GuestResourceClasses]] - map from [abstract type key](#abstract-and-transparent-types) to [guest resource class](#guest-resource-classes).
+
+To `trap` given a component instance |instance|:
+1. Invoke |instance|.[[Store]].lock_down().
+1. Throw a `WebAssembly.RuntimeError`.
+
+A trapped instance is locked down: every later call into it traps again before running any code.
+
+A call has *entered the guest* once the canonical ABI has, on the call's behalf, invoked any function of the component instance (such as `realloc`) or modified one of its handle tables. A conversion that throws after that point leaves guest state the guest never sees, so the instance is locked down as if the call had trapped, while the original exception still propagates. A conversion that throws before that point leaves the instance untouched.
 
 To `construct a Component` given |bytes| and |options|:
 1. Let |stableBytes| be a copy of the bytes held by |bytes|.
@@ -98,6 +115,7 @@ To `construct a Component` given |bytes| and |options|:
 To `construct a ComponentInstance` given a `Component` |component|, and |importsObject|:
 1. Let |enabledBuiltins| be |component|.[[EnabledBuiltins]].
 1. Let |result| be ? [`instantiate a component from an imports object`](#instantiation) given |component|.[[Component]], |importsObject|, |enabledBuiltins|.
+1. Set **this**.[[Store]] to |result|.[[Store]].
 1. Set **this**.[[ComponentInstance]] to |result|.[[ComponentInstance]].
 1. Set **this**.[[Exports]] to |result|.[[Exports]].
 1. Set **this**.[[HostResourceTypes]] to |result|.[[HostResourceTypes]].
@@ -189,7 +207,7 @@ Roundtripping from `ToJSValue` back through `ToComponentValue` is designed to be
   1. A `map` with duplicate keys keeps only the last pair per key (see [`ToJSValueMap`](#tojsvalue))
   1. Float NaNs are [canonicalized](CanonicalABI.md#loading)
 
-Every object a conversion creates belongs to the *conversion realm*: the realm of the `WebAssembly` namespace the component was instantiated through.
+Every object a conversion creates, including any error it throws, belongs to the *component realm*: the realm of the `WebAssembly` namespace the component was instantiated through.
 
 ### ToJSValue
 
@@ -245,7 +263,7 @@ Dispatch on `componentValType`:
 1. Return |object|.
 
 `ToJSValueMap(value, K, V)`:
-1. Let |map| be a new ordinary `Map` object with an empty [[MapData]] and the conversion realm's `%Map.prototype%`.
+1. Let |map| be a new ordinary `Map` object with an empty [[MapData]] and the component realm's `%Map.prototype%`.
 1. For each pair (k, v) of |value|, in order:
     1. Let |key| be `ToJSValue`(k, K).
     1. Let |mapValue| be `ToJSValue`(v, V).
@@ -260,6 +278,8 @@ A `map<K, V>` is a [specialization](Explainer.md#type-definitions) of `list<tupl
 ### ToComponentValue
 
 `ToComponentValue(jsValue, targetComponentType)` converts a JS value to a component value. It may throw if the JS value doesn't match the component value type.
+
+A component value is a specification device. An implementation lowers the JS value straight into the component's memory and handle tables, so the steps below are interleaved with the canonical ABI's lowering. A final specification would need to be more precise on the ordering of observable actions.
 
 Dispatch on `targetComponentType`:
 
@@ -320,12 +340,15 @@ A `Uint8Array` is copied directly, since that is what `ToJSValue` produces. Anyt
 1. Let |method| be ? `GetMethod`(|jsValue|, `%Symbol.iterator%`).
 1. If |method| is **undefined**:
     1. Throw a `TypeError`.
-1. Let |iteratorRecord| be ? `GetIteratorFromMethod`(|jsValue|, |method|).
-1. Let |list| be an empty component list of type `T`.
-1. Repeat:
-    1. Let |next| be ? `IteratorStepValue`(|iteratorRecord|).
-    1. If |next| is **done**, return |list|.
-    1. Set |list| to |list| with ? `ToComponentValue`(|next|, `T`) appended to the end.
+1. Let |values| be ? `IteratorToList`(? `GetIteratorFromMethod`(|jsValue|, |method|)).
+1. Let |valuesLength| be the length of |values|.
+1. Let |list| be an empty component list with length |valuesLength| of type `T`.
+1. For |i| in 0..|valuesLength|:
+    1. Let |value| be |values|[|i|].
+    1. Set |list|[|i|] to ? `ToComponentValue`(|value|, `T`).
+1. Return |list|.
+
+The iterable is consumed before any element is converted, so that the canonical ABI has the list's length before calling realloc and converting elements.
 
 `ToComponentValueRecord(jsValue, fields)`:
 1. If |jsValue| is not an Object:
@@ -389,9 +412,12 @@ To `create a resource type for host` given a host function |destructor|:
 1. Return a fresh component resource type whose representation is host-defined and whose destructor is |destructor|.
 
 To `drop a guest resource` given a resource type |resourceType| and a guest rep |rep| owned by the host:
+1. Let |instance| be the surrounding component instance.
+1. If |instance|.[[Store]].is_locked_down()
+    1. Perform ? `trap` given |instance|.
 1. Perform the effect of [`canon resource.drop`](CanonicalABI.md#canon-resourcedrop) on an owning handle holding |resourceType| and |rep|, invoking |resourceType|'s destructor. There is no handle table entry to remove, because the host was holding the rep.
 1. If that traps:
-    1. Throw a `WebAssembly.RuntimeError`.
+    1. Perform ? `trap` given |instance|.
 
 ### Abstract and transparent types
 
@@ -415,7 +441,9 @@ Imported and exported resource types are either abstract or transparently equiva
 
 Host/guest resource types below are created only for abstract types, and stored in maps on the component instance. The map is keyed by an *abstract type key*, which is an import/export declaration for an abstract type.
 
-An *abstract type key* can be found for any import/export type declaration by following `(eq R)` until you reach a `(sub resource)`.
+A type import or export *declares a resource type* if following `(eq R)` reaches a `(sub resource)`. An *abstract type key* can be found for any such declaration by following `(eq R)` until you reach that `(sub resource)`.
+
+Type declarations that do not declare a resource type, such as an exported `record`, exist only to satisfy [external visibility](Explainer.md#external-visibility-of-types) and have no JS representation. The JS-API skips them: a type import is not read from the imports object and a type export is left off the exports object.
 
 ### Host resource types (i.e. imported)
 
@@ -506,7 +534,7 @@ To `create a guest resource class` given a component instance |componentInstance
         1. Throw a `TypeError`.
     1. Let |rep| be ? `invoke a component function` given |constructor|.[[ConstructorFunc]], **false**, **undefined** and |args|.
     1. Return ? `create a guest resource instance` given |constructor|, |rep|, **true** and |newTarget|.
-1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.dispose%`, PropertyDescriptor { [[Value]]: a built-in function that performs `drop a guest resource instance` given its **this** value, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
+1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.dispose%`, PropertyDescriptor { [[Value]]: a built-in function object with name "[Symbol.dispose]" and length 0 that performs `drop a guest resource instance` given its **this** value, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.toStringTag%`, PropertyDescriptor { [[Value]]: |name|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, "constructor", PropertyDescriptor { [[Value]]: |constructor|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|constructor|, "prototype", PropertyDescriptor { [[Value]]: |prototype|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **false** }).
@@ -560,7 +588,7 @@ To `create a guest resource instance` given a resource class |class|, |rep|, |ow
 1. Set |instance|.[[Own]] to |own|.
 1. Set |instance|.[[LendCount]] to 0.
 1. If |own| is **true**:
-    1. Register |instance| in the [guest resource `FinalizationRegistry`](#guest-resource-finalizationregistry) with held value |instance| and unregister token |instance|.
+    1. Register |instance| in the [guest resource `FinalizationRegistry`](#guest-resource-finalizationregistry) with held value a record { [[ResourceClass]]: |class|, [[Rep]]: |rep| } and unregister token |instance|.
 1. Return |instance|.
 
 #### Conversions for guest resources
@@ -604,9 +632,9 @@ For a resource type `R` whose [abstract type](#abstract-and-transparent-types) i
 
 #### Guest resource FinalizationRegistry
 
-There is an unexposed "guest resource `FinalizationRegistry`" created per-Realm of the WebAssembly namespace object. The callback for it invokes `drop a guest resource instance` with the held value.
+There is an unexposed "guest resource `FinalizationRegistry`" created per-Realm of the WebAssembly namespace object. The callback for it, given a held value |record|, performs `drop a guest resource` given |record|.[[ResourceClass]].[[ResourceType]] and |record|.[[Rep]].
 
-TODO: the held value cannot be the instance itself, as registering an object with itself as the held value keeps it alive forever. The [[Rep]], [[Own]] and [[LendCount]] state needs to move into a separate record that the instance references and the registry holds.
+The held value is a record of the instance's class and rep rather than the instance itself, because registering an object with itself as the held value would keep it alive forever. The record never goes stale, because the instance is unregistered whenever its [[Rep]] is taken.
 
 To `drop a guest resource instance` given |resourceInstance|:
 1. If |resourceInstance|.[[Rep]] is **empty** or |resourceInstance|.[[Own]] is **false**:
@@ -625,12 +653,18 @@ The [[LendCount]] check can only fail on the `%Symbol.dispose%` path, because a 
 ## Instantiation
 
 To `instantiate a component` given |component|, a list of component definitions |imports|, and |hostResourceTypes|:
-1. Let |instance| be the result of instantiating |component| with |imports|.
+1. Let |store| be a new component store.
+1. Let |instance| be the result of instantiating |component| with |imports| in |store|.
 1. If instantiation traps:
     1. Throw a `WebAssembly.RuntimeError`.
 1. Perform ? `create guest resource classes` given |instance|.
 1. Let |exportsObject| be ? `create the exports object` given |instance|.
-1. Return a Record whose [[ComponentInstance]] is |instance|, [[Exports]] is |exportsObject|, [[HostResourceTypes]] is |hostResourceTypes|, and [[GuestResourceClasses]] is |instance|.[[GuestResourceClasses]].
+1. Return a Record with:
+    * [[Store]]: |store|
+    * [[ComponentInstance]]: |instance|
+    * [[Exports]]: |exportsObject|
+    * [[HostResourceTypes]]: |hostResourceTypes|
+    * [[GuestResourceClasses]]: |instance|.[[GuestResourceClasses]].
 
 To `instantiate a component from an imports object` given |component|, |importsObject|, and |enabledBuiltins|:
 1. Let |imports| and |hostResourceTypes| be ? `read the imports` given |component|, |importsObject|, and |enabledBuiltins|.
@@ -644,7 +678,7 @@ The resolved JS values are then handed to the per-sort algorithms (`read the fun
 
 While walking, the algorithm recognizes the pattern of a resource type import accompanied by *Constructor* and *Member* function imports naming it. A resource type import is read first and looks for a constructor (see [resource types](#resource-types)). Those function imports then read from the constructor and its prototype directly. This allows the common case of importing a class to be satisfied by just passing the constructor.
 
-Passing an exported component definition to a component import via the JS-API/ESM-integration is treated as if the import were a JS value. There is no "direct linking" that bypasses going through JS semantics. This is different from core wasm, where exported functions are linked directly when imported and have stricter type checks. This is intentional to prevent the implementation detail of how a JS function was implemented from leaking. Components can still be nested and directly linked inside a single component binary.
+Passing an exported component definition to a component import via the JS-API/ESM-integration is treated as if the import were a JS value. There is no "direct linking" that bypasses going through JS semantics. See [component store](#component-store) for more details.
 
 To `read the imports` given |component|, |importsObject|, and |enabledBuiltins|:
 1. Let |hostResourceTypes| be an empty map from [abstract type key](#abstract-and-transparent-types) to [host resource type record](#host-resource-types-and-values).
@@ -656,6 +690,14 @@ To `read the imports` given |component|, |importsObject|, and |enabledBuiltins|:
 To `read a scope of imports` given a list of import declarations |importDecls|, |importsObject|, |enabledBuiltins|, and |hostResourceTypes|:
 1. Let |definitions| be a new empty list.
 1. For each |importDecl| of |importDecls|, in declaration order:
+    1. If |importDecl|.Sort is **type**:
+        1. If |importDecl| does not declare a resource type:
+            1. Append the type |importDecl| declares to |definitions|.
+            1. Continue.
+        1. Let |abstractTypeKey| be the *abstract type key* of |importDecl|.
+        1. If |hostResourceTypes|[|abstractTypeKey|] exists:
+            1. Append |hostResourceTypes|[|abstractTypeKey|].[[ComponentResourceType]] to |definitions|.
+            1. Continue.
     1. Let |name| be `JSSpecifier`(|importDecl|).
     1. Let |staticReceiver| be **undefined**.
     1. Let |builtin| be `resolve a builtin specifier` given |name| and |enabledBuiltins|.
@@ -725,8 +767,7 @@ To `read the instance import` given |instanceType|, |importValue| and |hostResou
 
 To `read the type import` given |importDecl|, |importValue|, and |hostResourceTypes|:
 1. Let |abstractTypeKey| be the *abstract type key* of |importDecl|.
-1. If |hostResourceTypes|[|abstractTypeKey|] exists:
-    1. Return |hostResourceTypes|[|abstractTypeKey|].[[ComponentResourceType]].
+1. Assert: |hostResourceTypes|[|abstractTypeKey|] does not exist. (`read a scope of imports` handles transparent imports)
 1. If `IsCallable`(|importValue|) is **false**:
     1. Throw a `WebAssembly.LinkError`.
 1. Let |destructor| be a host function that, given a host resource value, releases its reference to [[JSValue]] and returns.
@@ -824,12 +865,12 @@ To `resolve a builtin specifier` given a String |specifier| and a set of Strings
 1. If |name| is not in |enabledBuiltins|:
     1. Return **empty**.
 1. If |name| is "js/global":
-    1. Return the [conversion realm](#types-and-values)'s global object.
+    1. Return the [component realm](#types-and-values)'s global object.
 1. Return **empty**.
 
 #### The global object
 
-`wasm:js/global` can be used to import JS/web APIs off of the global object. It simply resolves to the `globalThis` of the [conversion realm](#types-and-values), and then the normal [`read the imports`](#read-the-imports-object) rules can take it from there.
+`wasm:js/global` can be used to import JS/web APIs off of the global object. It simply resolves to the `globalThis` of the [component realm](#types-and-values), and then the normal [`read the imports`](#read-the-imports-object) rules can take it from there.
 
 ### Create the exports object
 
@@ -847,6 +888,8 @@ To `create guest resource classes` given a component instance |componentInstance
 1. Let |guestResourceClasses| be an empty map from [abstract type key](#abstract-and-transparent-types) to [guest resource class](#guest-resource-classes).
 1. Let |component| be |componentInstance|.[[Component]].
 1. For each type export |export| of |component|'s type, in declaration order, recursing into exported instances:
+    1. If |export| does not declare a resource type:
+        1. Continue.
     1. Let |abstractTypeKey| be the *abstract type key* of |export|.
     1. If |abstractTypeKey| is one of |component|'s type imports:
         1. Throw a `TypeError`.
@@ -871,6 +914,8 @@ To `create the exports object` given a |componentInstance|:
         1. **core module**:
             1. Let |value| be a new `Module` whose [[Module]] is |export|.Module.
         1. **type**:
+            1. If |export| does not declare a resource type:
+                1. Continue.
             1. Let |abstractTypeKey| be the *abstract type key* of |export|.
             1. Let |value| be |componentInstance|.[[GuestResourceClasses]][|abstractTypeKey|].
         1. **func**:
@@ -923,19 +968,24 @@ To `invoke a component function` given |componentFunc|, a Boolean |takesSelf|, |
     1. Let |throwing| be **false**.
 1. If the number of |args| is less than |paramTypes|.length - |paramOffset|:
     1. Throw a `TypeError`.
+1. Let |instance| be the surrounding component instance.
+1. If |instance|.[[Store]].is_locked_down():
+    1. Perform ? `trap` given |instance|.
 1. Let |lenders| be a new empty List.
 1. Let |previousLenders| be the current lender list.
 1. Set the current lender list to |lenders|.
 1. Once the remaining steps complete, either normally or abruptly, perform:
     1. Decrement the [[LendCount]] of every instance in |lenders|.
     1. Set the current lender list to |previousLenders|.
+    1. If the completion is abrupt and the call has entered the guest:
+        1. Invoke |instance|.[[Store]].lock_down().
 1. Let |values| be a new empty List.
 1. If |paramOffset| is 1:
     1. Append ? `ToComponentValue`(|thisValue|, |paramTypes|[0]) to |values|.
 1. For each i in [0, |paramTypes|.length - |paramOffset|): append ? `ToComponentValue`(|args|[i], |paramTypes|[i + |paramOffset|]) to |values|.
 1. Let |componentResult| be the result of invoking |componentFunc| with |values|.
 1. If the call traps:
-    1. Throw a `WebAssembly.RuntimeError`.
+    1. Perform ? `trap` given |instance|.
 1. If |throwing| is **true** and |componentResult| is `result.error(|e|)`:
     1. Throw `create a component error` for |e| and |errorType|.
 1. If |okType| is **empty**:
@@ -966,11 +1016,11 @@ Which binding of the resolved module the component receives depends on the impor
 | instance | `import { a, b } from "JSSpecifier(decl)"` | one [named import](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-NamedImports) per export of the instance type whose name is an `interfacename` or matches *Plain*, named `JSName` of that export |
 | core module, component | `import source M from "JSSpecifier(decl)"` | the module source, as a `Module` or `Component` |
 
-Reading the imports snapshots the resolved values, and so components cannot participate in cycles. This matches how core modules work today with ESM-integration.
+Reading the imports snapshots the resolved values, and so components cannot participate in cycles: a binding that is still uninitialized when the component is evaluated throws a `ReferenceError`. This matches how core modules work today with ESM-integration.
 
 Each resolved value is handed to [`read an import`](#read-the-imports-object) and the resulting definitions are passed to [`instantiate a component`](#instantiation).
 
-A component's exports become the bindings of its module namespace object. There is one binding per `JSName`(|export|), holding what [`create the exports object`](#create-the-exports-object) puts under that name, and no `default` binding.
+A component's exports become the bindings of its module namespace object. There is one binding per `JSName`(|export|), holding what [`create the exports object`](#create-the-exports-object) puts under that name, and no `default` binding. Exports matching *Property* have no binding, since a binding cannot be an accessor.
 
 ## Follow ups
 
@@ -982,5 +1032,4 @@ A component's exports become the bindings of its module namespace object. There 
 1. Should a `[get]`/`[set]` import fall back to a `Get`/`Set` on the target when the property is not an accessor? That would let data properties, `Proxy` traps and module namespace bindings satisfy a property import.
 1. How does a component feature test an import?
 1. How does a component pass one of its own functions to a JS callback, e.g. `add-event-listener`?
-1. What is the precise timing of `Get`/`Set` during lifting/lowering if a wasm trap happens.
 1. Top-level await, and async start functions.
