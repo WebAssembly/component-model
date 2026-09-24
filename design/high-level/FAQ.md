@@ -1,5 +1,11 @@
 # FAQ
 
+### How do WebAssembly Components relate to Web Components
+
+[Web Components](https://developer.mozilla.org/en-US/docs/Web/API/Web_components) are a collection of technologies for creating reusable DOM custom elements. WebAssembly Components are a technology for creating reusable software interfaces (not tied to a single language or UI framework). See these [slides](https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8/edit?slide=id.gced688a2b6_0_9#slide=id.gced688a2b6_0_9) for a rationale for this naming.
+
+Whenever there is a chance of ambiguity, the full WebAssembly (or Wasm) Component name should be used.
+
 ### How does WASI relate to the Component Model?
 
 [WASI] is layered on top of the Component Model, with the Component Model

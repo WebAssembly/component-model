@@ -1,6 +1,6 @@
 # WebAssembly Components JS-API Reference
 
-This is the in-depth reference for the WebAssembly Component JS-API. See the [explainer](./JS-Explainer.md) for a higher-level introduction.
+This is the in-depth reference for the WebAssembly Component JS-API. See the [component model explainer](./Explainer.md) for an in-depth explanation of WebAssembly Components (hereafter 'components'). See the [JS-API explainer](./JS-Explainer.md) for a higher-level introduction to the JS-API.
 
 **This is a draft and is not complete. Major details are unresolved, and there are bugs.**
 
@@ -13,12 +13,14 @@ This is the in-depth reference for the WebAssembly Component JS-API. See the [ex
     1. Components work whether they are importing a web API, or a JS polyfill, or a component polyfill
     1. Components are tolerant of web API evolution
     1. Component misuse of a web API results in failure at that call-site, not a link time error
-4. Components have improved performance when calling web APIs compared to today
+4. Components have better web API performance than WebAssembly modules today
 
 ## Non-goals
 
 1. Components importing every kind of web API
 1. Components exporting any kind of JS API
+
+The gaps ideally will narrow over time after a v1.0 release, but may not ever fully close.
 
 ## The WebAssembly namespace
 
@@ -47,14 +49,14 @@ dictionary WebAssemblyInstantiatedComponentSource {
 namespace WebAssembly {
     // Same as before, but now will detect if the bytes are a component or module and dispatch differently.
     boolean validate([AllowResizable] AllowSharedBufferSource bytes, optional WebAssemblyCompileOptions options = {});
-    Promise<Module> compile([AllowResizable] AllowSharedBufferSource bytes, optional WebAssemblyCompileOptions options = {});
+    Promise<Module or Component> compile([AllowResizable] AllowSharedBufferSource bytes, optional WebAssemblyCompileOptions options = {});
     Promise<(WebAssemblyInstantiatedSource or WebAssemblyInstantiatedComponentSource)> instantiate(
         [AllowResizable] AllowSharedBufferSource bytes, optional object importObject, optional WebAssemblyCompileOptions options = {});
 
     // Now takes an InstantiateSource instead of just a Module, and returns a
     // ComponentInstance for a Component.
     Promise<(Instance or ComponentInstance)> instantiate(
-        InstantiateSource moduleObject, optional object importObject);
+        InstantiateSource moduleOrComponentObject, optional object importObject);
 };
 ```
 
@@ -78,9 +80,11 @@ Validation and compilation of components defer to the underlying component embed
 
 A component store is defined by the [canonical ABI](./CanonicalABI.md#component-instances) and is analogous to the core wasm store. It contains a set of component instances and tasks. A store is also a unit of failure where a trap can trigger a lockdown which prevents further execution within the store.
 
-In contrast with core wasm, every component instantiated by the JS-API or ESM (i.e. 'top level') is partitioned to its own store. This means that all top-level component interaction is mediated by the JS-API. A component export imported by another component is treated the same as any other JS import. Nested components share a common store and directly link following the normal component rules.
+In contrast with core wasm, every component instantiated by the JS-API or ESM (i.e. 'top level') is partitioned to its own store. This means that all top-level component interaction is mediated by the JS-API. A component export imported by another component is treated the same as any other JS import.
 
 This ensures that whether an ESM is implemented as a component or with JS is an implementation detail that can change over time. This also means that a failure within a top-level component instance that triggers a lockdown affects only that component instance.
+
+Nested components share a common store and directly link following the normal component rules. This should be sufficient for most cases where you want to directly link components. In the future, we could consider an extension to instantiate two components within the same store.
 
 ## Entry points
 
@@ -130,7 +134,7 @@ The `exports` getter returns **this**.[[Exports]].
 
 Component import/export `plainname`s contain [`label`s](Explainer.md#import-and-export-definitions) that must be transformed into an identifier for use with JS.
 
-Component import/export `interfacename`s (such as `wasi:http/handler@1.0.0`) are used as-is when converted to JS strings or as [module specifiers](#webassembly-esm-integration).
+Fully qualified component import/export `interfacename`s (such as `wasi:http/handler@1.0.0`) are used as-is when converted to JS strings or as [module specifiers](#webassembly-esm-integration).
 
 We define `PascalCase(label)` and `CamelCase(label)` below.
 
@@ -143,7 +147,7 @@ We define `PascalCase(label)` and `CamelCase(label)` below.
 | `URL` | `URL` | `url` |
 | `a1-2-3` | `A123` | `a123` |
 
-Every `plainname` matches exactly one of the four patterns below, and no `interfacename` matches any of them. The algorithms in this document dispatch on these patterns and read their named captures. `<label>` stands for the [`label`](Explainer.md#import-and-export-definitions) production, i.e. `([a-z][0-9a-z]*|[A-Z][0-9A-Z]*)(-([0-9a-z]+|[0-9A-Z]+))*`.
+Every `plainname` matches exactly one of the four patterns below, and no `interfacename` matches any of them. The algorithms in this document dispatch on these patterns and read their named captures. `<label>` stands for the [`label`](Explainer.md#import-and-export-definitions) production.
 
 | Pattern | Regex | Example |
 |---|---|---|
@@ -151,6 +155,8 @@ Every `plainname` matches exactly one of the four patterns below, and no `interf
 | *Property* | `^\[(?<accessor>get\|set)\](?<name><label>)$` | `[get]inner-HTML` |
 | *Constructor* | `^\[constructor\](?<resource><label>)$` | `[constructor]element` |
 | *Member* | `^\[(?<scope>method\|static)\](?:\[(?<accessor>get\|set)\])?(?<resource><label>)\.(?<name><label>)$` | `[method][set]element.inner-HTML` |
+
+`plainname`'s are restricted by component [strong uniqueness](./Explainer.md#name-uniqueness). This helps us statically avoid collisions when building high-level export types (such as [guest resource classes](#guest-resource-classes)) and using the name transformations below.
 
 `LabelOf`(|name|), where |name| is a `plainname`, returns the label that names the definition in JS:
 1. If |name| matches *Constructor*:
@@ -191,8 +197,8 @@ The JS name of an import or export declaration is then:
 An import's specifier is its [`external-id`](Explainer.md#import-and-export-definitions) attribute if it has one, and its JS name otherwise:
 
 `JSSpecifier`(|decl|):
-1. If |decl| has an `external-id` attribute:
-    1. Return that attribute's name.
+1. If |decl| has an `external-id` attribute that is the Unicode string |id|:
+    1. Return |id|.
 1. Return `JSName`(|decl|).
 
 ## Types and values
@@ -233,7 +239,7 @@ Dispatch on `componentValType`:
 - `map<K, V>` → `ToJSValueMap`(|componentValue|, K, V).
 - `own<R>` / `borrow<R>` → See [Resource types](#resource-types).
 - `future<T>` → a Promise (TODO).
-- `stream<T>` → a `ReadableStream` (TODO).
+- `stream<T>` → an `AsyncIterator` (TODO).
 - `error-context` → TODO.
 
 `ToJSValueList(values, T)`:
@@ -261,6 +267,8 @@ Dispatch on `componentValType`:
 1. If that case has a payload of type T:
     1. Perform `CreateDataPropertyOrThrow`(|object|, "value", `ToJSValue`(`PayloadOf`(|value|), T)).
 1. Return |object|.
+
+This operation is used for variant, and also cases in the above table where we can't specialize the behavior of `option` and `result`.
 
 `ToJSValueMap(value, K, V)`:
 1. Let |map| be a new ordinary `Map` object with an empty [[MapData]] and the component realm's `%Map.prototype%`.
@@ -383,6 +391,8 @@ An absent property is therefore **false**, matching a `boolean` dictionary membe
     1. Return a variant value of |case| whose payload is |payload|.
 1. Return a variant value of |case| with no payload.
 
+This operation is used for variant, and also cases in the above table where we can't specialize the behavior of `option` and `result`.
+
 `ToComponentValueMap(jsValue, K, V)`:
 1. If |jsValue| is not an Object:
     1. Throw a `TypeError`.
@@ -454,13 +464,16 @@ A resource type import is satisfied by a constructor. Each time a JS value needs
 To `brand check` given a JS value |jsValue| and an Object |constructor|:
 1. If |constructor| is a WebIDL [interface object](https://webidl.spec.whatwg.org/#dfn-interface-object):
     1. Return **true** if and only if |jsValue| is a platform object that [implements](https://webidl.spec.whatwg.org/#implements) the interface |constructor| is the interface object of.
-1. If |constructor| has a [[ConstructorFunc]] internal slot (i.e. it is a [guest resource class](#guest-resource-classes)):
+1. If |constructor| has a [[ConstructorFunc]] internal slot:
+    1. Assert: |constructor| is a [guest resource class](#guest-resource-classes).
     1. Return **true** if and only if |jsValue| has a [[ResourceClass]] internal slot whose value is |constructor|.
 1. Return ? `InstanceofOperator`(|jsValue|, |constructor|).
 
 Which case applies is fixed for the lifetime of |constructor|.
 
 The first two cases are real brand checks. The `instanceof` fallback only inspects the prototype chain, so a value that was never created by |constructor| can pass it. In the future we may add a way for JS to supply a custom brand check.
+
+The case of a guest resource class may either be from an export of the current component instance, or else an export from a different component instance.
 
 #### Host resource types and values
 
@@ -513,6 +526,10 @@ A component's type may export a resource type that is transparently equal to one
 
 An exported resource type that is only privately a re-export of an imported type, i.e. the component's type declares it as a fresh abstract export, will wrap the original host resource type in a new [guest resource class](#guest-resource-classes). This keeps callers from observing whether an exported resource type is a re-export or defined in the component.
 
+### Re-imported guest resource types
+
+An exported guest resource type may be imported by a separate component instance. In this case, the guest resource type is treated as if it was a host resource type and the previous section rules apply. As explained in [component store](#component-store), there is no direct component model linking between top-level instances through the JS-API.
+
 #### Guest resource classes
 
 A unique JS *guest resource class* is created for each exported [abstract type](#abstract-and-transparent-types). A map from [abstract type key](#abstract-and-transparent-types) to guest resource class is stored on the component instance.
@@ -548,6 +565,7 @@ To `create a guest resource class` given a component instance |componentInstance
         1. Let |reserved| be "constructor".
         1. Let |takesSelf| be **true**.
     1. Else:
+        1. Assert: |e|.Name's `scope` capture is "constructor".
         1. Let |target| be |constructor|
         1. Let |reserved| be "prototype".
         1. Let |takesSelf| be **false**.
@@ -593,7 +611,7 @@ To `create a guest resource instance` given a resource class |class|, |rep|, |ow
 
 #### Conversions for guest resources
 
-The *current lender list* is a per-call spec state. `invoke a component function` establishes it for a JS-to-component call. Each instance lowered as a `borrow` during that call has its [[LendCount]] incremented and is appended to the list, which protects it from being dropped while lent. When the call returns, every [[LendCount]] in the list is decremented.
+The *current lender list* is a per-call spec state. `invoke a component function` establishes it for a JS-to-component call. Each guest resource instance lowered as a `borrow` during that call has its [[LendCount]] incremented and is appended to the list, which protects it from being dropped while lent. When the call returns, every [[LendCount]] in the list is decremented.
 
 For a resource type `R` whose [abstract type](#abstract-and-transparent-types) is one of the component's type exports:
 
@@ -1014,7 +1032,7 @@ Which binding of the resolved module the component receives depends on the impor
 |---|---|---|
 | bare type, function, value | `import v from "JSSpecifier(decl)"` | the [default export](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ImportedDefaultBinding) |
 | instance | `import { a, b } from "JSSpecifier(decl)"` | one [named import](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-NamedImports) per export of the instance type whose name is an `interfacename` or matches *Plain*, named `JSName` of that export |
-| core module, component | `import source M from "JSSpecifier(decl)"` | the module source, as a `Module` or `Component` |
+| core module, component | `import source M from "JSSpecifier(decl)"` | the [module source](https://github.com/tc39/proposal-source-phase-imports), as a `Module` or `Component` |
 
 Reading the imports snapshots the resolved values, and so components cannot participate in cycles: a binding that is still uninitialized when the component is evaluated throws a `ReferenceError`. This matches how core modules work today with ESM-integration.
 

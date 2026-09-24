@@ -1,6 +1,6 @@
 # WebAssembly Components JS-API Explainer
 
-This explainer describes how WebAssembly Components (hereafter 'components') can be used from JS.
+This explainer describes how WebAssembly Components (hereafter 'components' and _not_ [web components](../high-level/FAQ.md#how-do-webassembly-components-relate-to-web-components)) can be used from JS in supported runtimes.
 
 See the [reference](./JS-Reference.md) for an in-depth walkthrough.
 
@@ -8,17 +8,20 @@ See the [reference](./JS-Reference.md) for an in-depth walkthrough.
 
 ## Walkthrough
 
-### Greeter: exporting a function
+### Components that export a function
 
 Let's start with a component that imports nothing:
 
 ```wat
 (component
+  ...
   (export "greet"
     (func (param "who" string) (result string))
   )
 )
 ```
+
+Given the above component (compiled from the WAT text format to the [binary](./Binary.md) format), you can execute it with:
 
 ```js
 const { instance } = await WebAssembly.instantiate(bytes);
@@ -26,7 +29,9 @@ const { instance } = await WebAssembly.instantiate(bytes);
 instance.exports.greet("world");  // "hello, world"
 ```
 
-`exports` holds one property per export and `greet` is an ordinary JS function. Component names are kebab-case and JS names are [camelCase](./JS-Reference.md#names), so an export named `greet-loudly` would be `greetLoudly`.
+The `exports` property of an instance holds one property per export and `greet` is an ordinary JS function
+
+Component names are kebab-case and JS function names are [camelCase](./JS-Reference.md#names), so a function export named `greet-loudly` would be `greetLoudly`.
 
 Arguments are coerced to their expected type, and if that fails a `TypeError` is thrown:
 
@@ -37,7 +42,7 @@ instance.exports.greet();    // TypeError
 
 Passing too few arguments is a `TypeError`. Extra arguments are ignored.
 
-### Logger: importing a function
+### Components that import a function
 
 Now a component that imports:
 
@@ -46,6 +51,7 @@ Now a component that imports:
   (import "log"
     (func (param "message" string))
   )
+  ...
   (export "run" (func))
 )
 ```
@@ -78,7 +84,9 @@ const { instance } =
 
 Components and JS maintain separate type/value systems, so any value crossing the boundary needs a defined translation in both directions.
 
-| Component type | JS |
+The following table describes how a component value is converted into a JS value.
+
+| Component type | JS type |
 |---|---|
 | `bool` | Boolean |
 | `s8`-`s32`, `u8`-`u32` | Number, an exact integer |
@@ -88,17 +96,18 @@ Components and JS maintain separate type/value systems, so any value crossing th
 | `string` | String, well formed |
 | `list<u8>` | `Uint8Array` |
 | `list<T>`, `list<T, N>`, `tuple<T, U>` | Array |
-| `record { a-b: T }` | null-prototype object, `{ aB }` |
-| `flags "a" "b"` | null-prototype object of Booleans, `{ a, b }` |
-| `enum "a" "b"` | String, the label verbatim |
-| `option<T>` | `null`, or the payload |
-| `variant`, `option<option<T>>` | `{ kind, value }` |
-| `result<T, E>` | thrown and caught in return position, else `{ kind, value }` |
+| `record { field-name: T, ... }` | null-prototype object, `{ fieldName: T, ... }` |
+| `flags "flag-a" "flag-b"` | null-prototype object of Booleans, `{ flagA: bool, flagB: bool }` |
+| `enum "case-a" "case-b"` | String, the case label verbatim |
+| `option<T>` (if `T` is not `option`) | `null`, or the payload |
+| `option<option<T>>` | treated as variant, see below |
+| `result<T, E>` (if in return position of function) | if `E` { thrown as a `WebAssembly.ComponentError` } else { `T` } |
+| `variant` | `{ kind: string, value: T }` |
 | `map<K, V>` | `Map` |
 | `own<R>`, `borrow<R>` | the original JS value for an imported resource type, an instance of its class for an exported one |
 | `future<T>`, `stream<T>`, `error-context` | not yet specified |
 
-See [ToJSValue](./JS-Reference.md#tojsvalue) and [ToComponentValue](./JS-Reference.md#tocomponentvalue) for detailed algorithms.
+Converting a JS value to a component value accepts all of the above, but also has additional coercions. See [ToJSValue](./JS-Reference.md#tojsvalue) and [ToComponentValue](./JS-Reference.md#tocomponentvalue) for detailed algorithms.
 
 ### Loading with ESM
 
@@ -113,6 +122,7 @@ Each component import becomes a JS import, and its module specifier is the impor
       "https://esm.unpkg.com/slugify@1.6.6")
     (func (param "text" string) (result string))
   )
+  ...
   (export "run" (func))
 )
 ```
@@ -126,7 +136,7 @@ Each component import becomes a JS import, and its module specifier is the impor
 </script>
 ```
 
-### When a call fails
+### Handling expected errors using `result`
 
 Component functions signal failure using a `result<T, E>` value:
   1. Exported component functions that return an error `result` throw JS exceptions.
@@ -139,6 +149,7 @@ An imported JS function that throws where the component asked for a plain return
   (import "lookup"
     (func (param "key" string) (result string (error string)))
   )
+  ...
   (export "parse"
     (func (param "text" string) (result u32 (error string)))
   )
@@ -166,9 +177,33 @@ try {
 
 In the second call, parsing fails and leads to a call to `lookup` which throws a JS exception. This is converted to a `result` and consumed by the component. The component then propagates it to the original JS caller as a thrown `ComponentError` carrying the original message.
 
-### Importing a resource
+### Handling unexpected failures with lockdown
 
-Components see JS values as resources. A resource type import is satisfied by passing a constructor function.
+In the case a component is executing and traps, the trap is surfaced as a `WebAssembly.RuntimeError` (as in core wasm), and then the component is locked down to prevent future execution. If an exported function from the component is invoked again, it immediately results in another trap.
+
+```js
+import { buggyFunction, normalFunction } from "component.wasm"
+
+// normalFunction doesn't trap
+normalFunction();
+
+try {
+  // Calling buggyFunction traps and locks down the component.
+  buggyFunction()
+} catch (err) {
+  assert(err instanceof WebAssembly.RuntimeError);
+  try {
+    // Calling normalFunction again leads to a lockdown trap.
+    normalFunction();
+  } catch (err) {
+    assert(err instanceof WebAssembly.RuntimeError);
+  }
+}
+```
+
+### Importing JS values as resource types
+
+Components can also accept JS values as resources. A resource type import is satisfied by passing a constructor function.
 
 Whenever a JS value must be converted to a resource type, an `instanceof` check is performed against the imported constructor. If the constructor is a [WebIDL interface object](https://webidl.spec.whatwg.org/#interface-object) or an [exported component resource constructor](#exporting-a-resource), a precise [brand check](./JS-Reference.md#brand-checks) is performed.
 
@@ -202,6 +237,7 @@ The above allows most JS classes to be imported as a resource by just passing th
       (result (option string))
     )
   )
+  ...
   (export "find"
     (func
       (param "root" (borrow $element))
@@ -219,6 +255,8 @@ const { instance } =
 
 instance.exports.find(document.body, "h1");  // "page-title" or null
 ```
+
+Component [`plainnames`](./Explainer.md#import-and-export-definitions) as used in imports/exports are converted to idiomatic JS names ([rules here](./JS-Reference.md#names)). Type names are converted to pascal case, and everything else is converted to camel case. This allows the component imports of  `element` and `get-attribute` to be satisfied with `Element` and `getAttribute` respectively.
 
 ### Importing from the JS global
 
@@ -244,6 +282,8 @@ The example above still needs someone to write `{ element: Element }`. A compone
   )
   (alias export $g "element" (type $el))
 
+  ...
+
   (export "encode-id"
     (func
       (param "el" (borrow $el))
@@ -262,7 +302,7 @@ exports.encodeId(document.body);
 
 Importing from `wasm:js/global` is equivalent to an imports object with: `{ "wasm:js/global": globalThis }`. The normal rules for reading from the imports object still apply.
 
-ESM-integration defaults to enabling `wasm:js/global` which allows a component to import and use web APIs without any glue code:
+ESM-integration defaults to enabling `js/global` in the compile options (the `wasm:` prefix is implicit) which allows a component to import and use web APIs without any glue code:
 
 ```html
 <script type="module">
@@ -277,11 +317,13 @@ A resource type exported from a component becomes a JS class:
 
 ```wat
 (component
+  ...
+
   (export "counter" (type $counter (sub resource)))
   (export "[constructor]counter"
     (func (result (own $counter)))
   )
-  (export "[method]counter.increment"
+  (export "[method]counter.increment-once"
     (func
       (param "self" (borrow $counter))
       (result u32)
@@ -295,12 +337,16 @@ const { instance } = await WebAssembly.instantiate(bytes);
 const { Counter } = instance.exports;
 
 let c = new Counter();
-c.increment();  // 1
-c.increment();  // 2
+c.incrementOnce();  // 1
+c.incrementOnce();  // 2
 ```
+
+As in the importing a resource case above, component names are converted to JS names. This allows an export of `counter` to become a JS class named `Counter`, and `increment-once` to become `incrementOnce`.
 
 ## Status
 
-- `async` functions, `future`, `stream` and `error-context` have no binding yet.
+The following have no binding yet:
+- Component model async features such as `async` functions, `future`, `stream`.
+- `error-context`.
 
 Everything else we know to be open is collected in the reference's [follow ups](./JS-Reference.md#follow-ups).
