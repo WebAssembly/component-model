@@ -575,17 +575,15 @@ To `create a guest resource class` given a component instance |componentInstance
     1. Assert: there is only one by validation rules.
     1. Set |constructor|.[[ConstructorFunc]] to |c|.Func.
 1. For each |e| of |members| matching *Member*, in declaration order:
+    1. If `JSName`(|e|) is in `reserved class members`:
+        1. Continue.
     1. If |e|.Name's `scope` capture is "method":
         1. Let |target| be |prototype|.
-        1. Let |reserved| be "constructor".
         1. Let |takesSelf| be **true**.
     1. Else:
         1. Assert: |e|.Name's `scope` capture is "constructor".
         1. Let |target| be |constructor|
-        1. Let |reserved| be "prototype".
         1. Let |takesSelf| be **false**.
-    1. If `JSName`(|e|) is |reserved|:
-        1. Throw a `TypeError`.
     1. If |e|.Name has an `accessor` capture:
         1. Perform `define an accessor for a component function` given |target|, |e| and **false**.
     1. Else:
@@ -593,7 +591,16 @@ To `create a guest resource class` given a component instance |componentInstance
         1. Perform `DefinePropertyOrThrow`(|target|, `JSName`(|e|), PropertyDescriptor { [[Value]]: |func|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Return |constructor|.
 
-A method named `constructor` and a static named `prototype` are rejected because they would unexpectedly change JS class semantics.
+The following names are `reserved class members`:
+  * "__proto__"
+  * "constructor"
+  * "prototype"
+  * "arguments"
+  * "caller"
+  * "name"
+  * "length"
+
+Defining these on the constructor or prototype may unexpectedly change JS class semantics. They are exported through `create the exports object` instead.
 
 *Member* exports with an `accessor` capture become the two halves of one accessor property, on `prototype` when `scope` is "method" and on the class itself when it is "static". Validation requires a `[set]` to be preceded in the same scope by the `[get]` it pairs with, so the getter is always defined first and the setter only fills in the accessor's [[Set]] field.
 
@@ -962,7 +969,9 @@ To `create guest resource classes` given a component instance |componentInstance
 To `create the exports object` given a |componentInstance|:
 1. Let |exportsObject| be `OrdinaryObjectCreate`(**null**).
 1. For each |export| of |componentInstance|.Exports, in declaration order:
-    1. If |export|.Name matches *Constructor* or *Member*:
+    1. If |export|.Name matches *Constructor*:
+        1. Continue.
+    1. If |export|.Name matches *Member* and `JSName`(|export|) is not in `reserved class members`:
         1. Continue.
     1. If |export|.Name matches *Property*:
         1. Perform `define an accessor for a component function` given |exportsObject|, |export| and **true**.
@@ -987,6 +996,8 @@ To `create the exports object` given a |componentInstance|:
     1. Perform `CreateDataPropertyOrThrow`(|exportsObject|, |key|, |value|).
 1. Perform `SetIntegrityLevel`(|exportsObject|, "frozen").
 1. Return |exportsObject|.
+
+TODO: We need a JSName for members that hit the `reserved class members` list. It needs to concatenate the resource name with the method name somehow.
 
 To `create a JS function for a component function` given |componentFunc|, |name| and |takesSelf|:
 1. Let |paramOffset| be 1 if |takesSelf| is **true**, else 0.
