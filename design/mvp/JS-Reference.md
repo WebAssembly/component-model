@@ -234,8 +234,8 @@ Dispatch on `componentValType`:
 - `record { f: T, ... }` → `ToJSValueRecord`(|componentValue|, the fields).
 - `flags "L"+` → `ToJSValueFlags`(|componentValue|, the labels).
 - `enum "L"+` → String, the label verbatim.
-- `option<T>` where T is not `option<_>` → **null** for `none`, else `ToJSValue`(the payload, T).
-- `variant`, and `option<option<_>>`, and `result` outside return position → `ToJSValueVariant`(|componentValue|, the cases). In return position a `result` is unwrapped instead, into a return value or a thrown `ComponentError` (see [Read the imports](#read-the-imports-object) and [Create the exports object](#create-the-exports-object)).
+- Top-level `option<T>` → **undefined** for `none`, else `ToJSValue`(the payload, T).
+- `variant`, and nested `option`, and `result` outside return position → `ToJSValueVariant`(|componentValue|, the cases). In return position a `result` is unwrapped instead, into a return value or a thrown `ComponentError` (see [Read the imports](#read-the-imports-object) and [Create the exports object](#create-the-exports-object)).
 - `map<K, V>` → `ToJSValueMap`(|componentValue|, K, V).
 - `own<R>` / `borrow<R>` → See [Resource types](#resource-types).
 - `future<T>` → a Promise (TODO).
@@ -303,8 +303,8 @@ Dispatch on `targetComponentType`:
 - `record { f: T, ... }` → `ToComponentValueRecord`(|jsValue|, the fields).
 - `flags "L"+` → `ToComponentValueFlags`(|jsValue|, the labels).
 - `enum` → ? `ToString`(|jsValue|) must be one of the labels, else throw a `TypeError`.
-- `option<T>` where T is not `option<_>` → **null** and **undefined** both give `none`; anything else gives `some(ToComponentValue(jsValue, T))` (matching how WebIDL treats a nullable type).
-- `variant`, and `option<option<_>>`, and `result` outside return position → `ToComponentValueVariant`(|jsValue|, the cases). In return position a `result` is unwrapped instead: a JS return value becomes `result.ok`, and a thrown exception becomes `result.error` (see [Read the imports](#read-the-imports-object) and [Create the exports object](#create-the-exports-object)).
+- Top-level `option<T>` → **null** and **undefined** both give `none`; anything else gives `some(ToComponentValue(jsValue, T))`.
+- `variant`, and nested `option`, and `result` outside return position → `ToComponentValueVariant`(|jsValue|, the cases). In return position a `result` is unwrapped instead: a JS return value becomes `result.ok`, and a thrown exception becomes `result.error` (see [Read the imports](#read-the-imports-object) and [Create the exports object](#create-the-exports-object)).
 - `map<K, V>` → `ToComponentValueMap`(|jsValue|, K, V).
 - `own<R>` / `borrow<R>` → See [Resource types](#resource-types).
 - `future<T>` → TODO.
