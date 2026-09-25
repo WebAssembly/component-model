@@ -874,21 +874,35 @@ This spec defines one builtin specifier:
 
 | Specifier | Resolves to |
 |---|---|
-| `wasm:js/global` | [the global object](#the-global-object) |
+| `wasm:js/global/*` | [the global object](#the-global-object) |
 
 To `resolve a builtin specifier` given a String |specifier| and a set of Strings |enabledBuiltins|:
 1. If |specifier| does not start with "wasm:":
     1. Return **empty**.
 1. Let |name| be the portion of |specifier| after "wasm:".
-1. If |name| is not in |enabledBuiltins|:
+1. If |name| does not match something in |enabledBuiltins|:
     1. Return **empty**.
-1. If |name| is "js/global":
-    1. Return the [component realm](#types-and-values)'s global object.
+1. If |name| starts with "js/global":
+    1. Return `resolve a js global builtin` with |name|.
 1. Return **empty**.
 
 #### The global object
 
-`wasm:js/global` can be used to import JS/web APIs off of the global object. It simply resolves to the `globalThis` of the [component realm](#types-and-values), and then the normal [`read the imports`](#read-the-imports-object) rules can take it from there.
+The normal [`read the imports`](#read-the-imports-object) rules are designed so that JS classes can be imported by just providing the constructor object. `wasm:js/global/*` provides a fine-grained way to get access to globally exposed constructors and other functions. This reduces the amount of glue code needed in the common case.
+
+`wasm:js/global` resolves to the `globalThis` of the [component realm](#types-and-values), and nested paths resolve to a chain of property accessors off of the global (e.g. `wasm:js/global/console` is `globalThis.console`).
+
+To `resolve a js global builtin` with String |name|:
+1. Assert: |name| starts with "js/global".
+1. Let |result| be the component realm's `globalThis`.
+1. Let |remaining| be |name| with the regex "js\/global\/?" trimmed from the prefix.
+1. Let |projections| be the result of splitting |remaining| on "/".
+1. For |projection| in |projections|:
+    1. Set |result| to ? `Get`(|result|, |projection|).
+1. Return |result|.
+
+TODO: Handle whitespace?
+TODO: Within the wasm scheme we're parsing this similar to a general URL, but no using the [canonical algorithm](https://url.spec.whatwg.org/). We don't need the general algorithm and it's a nice dependency to avoid. But are there future compatibility or extensibility reasons we should use it?
 
 ### Create the exports object
 
