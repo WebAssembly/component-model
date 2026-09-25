@@ -227,7 +227,7 @@ Dispatch on `componentValType`:
 - `f32` / `f64` → Number, including NaN and infinities.
 - `char` → String containing exactly the one Unicode scalar value.
 - `string` → String [(well formed)](https://tc39.es/ecma262/#sec-isstringwellformedunicode).
-- `list<u8>` → a Uint8Array over a fresh ArrayBuffer holding the bytes.
+- `list<Scalar>` → A `scalar typed array class` over a fresh ArrayBuffer holding the scalars.
 - `list<T>` → `ToJSValueList`(the elements, T).
 - `list<T, N>` → as `list<T>`; `length` is `N`.
 - `tuple<T0, T1, ...>` → as `list`, with element `i` converted as `T_i`.
@@ -241,6 +241,21 @@ Dispatch on `componentValType`:
 - `future<T>` → a Promise (TODO).
 - `stream<T>` → an `AsyncIterator` (TODO).
 - `error-context` → TODO.
+
+The `scalar typed array class` is given by:
+
+| Component type | JS class |
+|----------------|----------|
+| `s8` | Int8Array |
+| `u8` | Uint8Array |
+| `s16` | Int16Array |
+| `u16` | Uint16Array |
+| `s32` | Int32Array |
+| `u32` | Uint32Array |
+| `f32` | Float32Array |
+| `f64` | Float64Array |
+| `s64` | BigInt64Array |
+| `u64` | BigUint64Array |
 
 `ToJSValueList(values, T)`:
 1. Let |n| be the number of |values|.
@@ -296,7 +311,7 @@ Dispatch on `targetComponentType`:
 - Float types → `ToComponentValueFloat`(|jsValue|, the type).
 - `char` → ? `ToString`(|jsValue|); it must consist of exactly one Unicode scalar value, else throw a `TypeError`. A lone surrogate is not a scalar value and is therefore a `TypeError`.
 - `string` → ? `ToString`(|jsValue|), then replace each unpaired surrogate with U+FFFD (matching WebIDL `USVString`).
-- `list<u8>` → `ToComponentValueBytes`(|jsValue|).
+- `list<Scalar>` → `ToComponentValueScalarList`(|scalar|, |jsValue|).
 - `list<T>` → `ToComponentValueList`(|jsValue|, T).
 - `list<T, N>` → as `list<T>`, then the length must be exactly `N`, else throw a `TypeError`.
 - `tuple<T0, ...>` → as `list`, then the length must be exactly the arity, and element `i` converts to `T_i`.
@@ -333,14 +348,14 @@ Dispatch on `targetComponentType`:
 
 `NaN` and infinities are accepted (matching WebIDL `unrestricted float`/`unrestricted double`).
 
-`ToComponentValueBytes(jsValue)`:
-1. If |jsValue| has a [[TypedArrayName]] internal slot whose value is "Uint8Array":
+`ToComponentValueScalarList(scalar, jsValue)`:
+1. If |jsValue| has a [[TypedArrayName]] internal slot whose value is the `scalar typed array class` for |scalar|:
     1. If |jsValue|'s underlying buffer is detached or |jsValue| is out of bounds:
         1. Throw a `TypeError`.
-    1. Return one `u8` per byte of |jsValue|, in order.
-1. Return `ToComponentValueList`(|jsValue|, `u8`).
+    1. Return one |scalar| per element of |jsValue|, in order.
+1. Return `ToComponentValueList`(|jsValue|, |scalar|).
 
-A `Uint8Array` is copied directly, since that is what `ToJSValue` produces. Anything else (including other typed arrays) goes through the iterable path.
+A typed array is copied directly, since that is what `ToJSValue` produces. Anything else (including other typed arrays) goes through the iterable path.
 
 `ToComponentValueList(jsValue, T)`:
 1. If |jsValue| is not an Object:
