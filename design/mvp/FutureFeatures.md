@@ -69,6 +69,6 @@ as originally proposed.
 [Adapter Functions]: https://github.com/WebAssembly/interface-types/blob/main/proposals/interface-types/Explainer.md#adapter-functions
 [Scoping and Layering Proposal]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8
 [`list.lift_canon` and `list.lower_canon`]: https://github.com/WebAssembly/interface-types/blob/main/proposals/interface-types/Explainer.md#optimization-canonical-representation
-[Component Invariants]: Explainer.md#component-invariants
+[Component Invariants]: Text.md#component-invariants
 [GC-free Runtime Instantiation]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8/edit#slide=id.gd06989d984_1_274
 [Core Module Linking]: https://github.com/WebAssembly/module-linking/blob/63cd6c0e3ac5c0cdb798a985790f51ccdd77af00/proposals/module-linking/Explainer.md

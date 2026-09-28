@@ -1,7 +1,7 @@
 # Component Model Binary Format Explainer
 
 This document defines the binary format for the AST defined in the
-[explainer](Explainer.md). The top-level production is `component` and the
+[explainer](Text.md). The top-level production is `component` and the
 convention is that a file suffixed in `.wasm` may contain either a
 [`core:module`] *or* a `component`, using the `layer` field to discriminate
 between the two in the first 8 bytes (see [below](#component-definitions) for
@@ -12,13 +12,13 @@ rules, but rather merge the minimal need-to-know elements of both, with just
 enough detail to create a prototype. A complete definition of the binary format
 and validation will be present in the [formal specification](../../spec/).
 
-See [Gated Features](Explainer.md#gated-features) for an explanation of emoji
+See [Gated Features](Text.md#gated-features) for an explanation of emoji
 annotations like 🪙 and 🔧.
 
 
 ## Component Definitions
 
-(See [Component Definitions](Explainer.md#component-definitions) in the explainer.)
+(See [Component Definitions](Text.md#component-definitions) in the explainer.)
 ```ebnf
 component ::= <preamble> s*:<section>*            => (component flatten(s*))
 preamble  ::= <magic> <version> <layer>
@@ -58,7 +58,7 @@ Notes:
 
 ## Instance Definitions
 
-(See [Instance Definitions](Explainer.md#instance-definitions) in the explainer.)
+(See [Instance Definitions](Text.md#instance-definitions) in the explainer.)
 ```ebnf
 core:instance       ::= ie:<core:instanceexpr>                             => (instance ie)
 core:instanceexpr   ::= 0x00 m:<moduleidx> arg*:vec(<core:instantiatearg>) => (instantiate m arg*)
@@ -114,7 +114,7 @@ Notes:
 
 ## Alias Definitions
 
-(See [Alias Definitions](Explainer.md#alias-definitions) in the explainer.)
+(See [Alias Definitions](Text.md#alias-definitions) in the explainer.)
 ```ebnf
 alias ::= s:<sort> 0x00 i:<instanceidx> n:<name>           => (alias export i n (s))
         | s:<sort> 0x01 i:<core:instanceidx> n:<core:name> => (alias core export i n (s))
@@ -137,7 +137,7 @@ Notes:
 
 ## Type Definitions
 
-(See [Type Definitions](Explainer.md#type-definitions) in the explainer.)
+(See [Type Definitions](Text.md#type-definitions) in the explainer.)
 ```ebnf
 core:type        ::= dt:<core:deftype>                                    => (type dt)
 core:deftype     ::= rt:<core:rectype>                                    => rt               (WebAssembly 3.0)
@@ -276,7 +276,7 @@ Notes:
   `instancetype`. Thus, handle types inside a `componenttype` can only refer
   to resource types that are imported or exported.
 * `<label>` is defined as part of the
-   [text format](Explainer.md#import-and-export-definitions).
+   [text format](Text.md#import-and-export-definitions).
 * All parameter labels, result labels, record field labels, variant case
   labels, flag labels, enum case labels, component import names, component
   export names, instance import names and instance export names must be
@@ -294,7 +294,7 @@ Notes:
 
 ## Canonical Definitions
 
-(See [Canonical Definitions](Explainer.md#canonical-definitions) in the explainer.)
+(See [Canonical Definitions](Text.md#canonical-definitions) in the explainer.)
 ```ebnf
 canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift f opts type-index-space[ft])
            | 0x01 0x00 f:<funcidx> opts:<opts>                   => (canon lower f opts (core func))
@@ -371,7 +371,7 @@ Notes:
 
 ## 🪙 Start Definitions
 
-(See [Start Definitions](Explainer.md#start-definitions) in the explainer.)
+(See [Start Definitions](Text.md#start-definitions) in the explainer.)
 ```ebnf
 start ::= f:<funcidx> arg*:vec(<valueidx>) r:<u32> => (start f (value arg)* (result (value))ʳ)
 ```
@@ -393,7 +393,7 @@ flags are set.
 
 ## Import and Export Definitions
 
-(See [Import and Export Definitions](Explainer.md#import-and-export-definitions)
+(See [Import and Export Definitions](Text.md#import-and-export-definitions)
 in the explainer.)
 ```ebnf
 import         ::= na:<nameattributes> et:<externtype>                  => (import na et)
@@ -416,7 +416,7 @@ Notes:
   `externtype` immediate is present, validation requires it to be a supertype
   of the inferred `externtype` of the `sortidx`.
 * `<externname>`, `<interfacename>` and `<semversuffix>` are defined as part of
-  the [text format](Explainer.md#import-and-export-definitions).
+  the [text format](Text.md#import-and-export-definitions).
 * The redundant `0x00`/`0x01` cases of `nameattributes` will
   [be cleaned up for a 1.0 release](#binary-format-warts-to-fix-in-a-10-release).
 * The `externname`s of all imports in a given component or component-type must
@@ -472,7 +472,7 @@ Notes:
 
 ## 🪙 Value Definitions
 
-(See [Value Definitions](Explainer.md#value-definitions) in the explainer.)
+(See [Value Definitions](Text.md#value-definitions) in the explainer.)
 
 ```ebnf
 value                      ::= t:<valtype> len:<core:u32> v:<val(t)>   => (value t v) (where len = ||v||)
@@ -594,7 +594,7 @@ named once.
 [`core:functype`]: https://webassembly.github.io/spec/core/binary/types.html#binary-functype
 [`core:rectype]: https://webassembly.github.io/gc/core/binary/types.html#recursive-types
 
-[Strongly-unique]: Explainer.md#name-uniqueness
+[Strongly-unique]: Text.md#name-uniqueness
 
 [type-imports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
 [module-linking]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md

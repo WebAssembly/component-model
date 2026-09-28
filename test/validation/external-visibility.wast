@@ -1,4 +1,4 @@
-;; Tests Explainer.md#external-visibility-of-types
+;; Tests Text.md#external-visibility-of-types
 
 ;; resources
 

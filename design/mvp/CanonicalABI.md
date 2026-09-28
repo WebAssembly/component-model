@@ -2,7 +2,7 @@
 
 This document defines the Canonical ABI used to convert between the values and
 functions of components in the Component Model and the values and functions
-of modules in Core WebAssembly. See the [AST explainer](Explainer.md) for a
+of modules in Core WebAssembly. See the [AST explainer](Text.md) for a
 walkthrough of the static structure of a component and the [concurrency
 explainer] for a high-level description of the concurrency concepts being
 specified here.
@@ -4815,7 +4815,7 @@ def canon_error_context_new(opts, ptr, tagged_code_units):
   return [i]
 ```
 Supporting the requirement (introduced in the
-[explainer](Explainer.md#error-context-type)) that wasm code does not depend on
+[explainer](Text.md#error-context-type)) that wasm code does not depend on
 the contents of `error-context` values for behavioral correctness, the debug
 message is completely discarded nondeterministically or, in the deterministic
 profile, always. Importantly (for performance), when the debug message is
@@ -4982,13 +4982,13 @@ def canon_thread_available_parallelism():
 
 
 [Virtualization Goals]: Goals.md
-[Canonical Definitions]: Explainer.md#canonical-definitions
-[`canonopt`]: Explainer.md#canonical-definitions
-[`canon`]: Explainer.md#canonical-definitions
-[Type Definitions]: Explainer.md#type-definitions
-[Component Invariant]: Explainer.md#component-invariants
-[JavaScript Embedding]: Explainer.md#JavaScript-embedding
-[ESM-integration]: Explainer.md#esm-integration
+[Canonical Definitions]: Text.md#canonical-definitions
+[`canonopt`]: Text.md#canonical-definitions
+[`canon`]: Text.md#canonical-definitions
+[Type Definitions]: Text.md#type-definitions
+[Component Invariant]: Text.md#component-invariants
+[JavaScript Embedding]: Text.md#JavaScript-embedding
+[ESM-integration]: Text.md#esm-integration
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Shared-Everything Dynamic Linking]: examples/SharedEverythingDynamicLinking.md
 [Concurrency Explainer]: Concurrency.md

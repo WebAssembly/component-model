@@ -1541,32 +1541,32 @@ the concurrency story:
 [`waitUntil`]: https://developer.mozilla.org/en-US/docs/Web/API/ExtendableEvent/waitUntil
 [`setInterval`]: https://developer.mozilla.org/en-US/docs/Web/API/Window/setInterval
 
-[AST Explainer]: Explainer.md
-[Canonical Built-in]: Explainer.md#canonical-built-ins
-[Component Invariant]: Explainer.md#component-invariants
-[`context.get`]: Explainer.md#-contextget
-[`context.set`]: Explainer.md#-contextset
-[`backpressure.inc`]: Explainer.md#-backpressureinc-and-backpressuredec
-[`backpressure.dec`]: Explainer.md#-backpressureinc-and-backpressuredec
-[`task.return`]: Explainer.md#-taskreturn
-[`task.cancel`]: Explainer.md#-taskcancel
-[`subtask.cancel`]: Explainer.md#-subtaskcancel
-[`waitable-set.new`]: Explainer.md#-waitable-setnew
-[`waitable-set.wait`]: Explainer.md#-waitable-setwait
-[`waitable-set.poll`]: Explainer.md#-waitable-setpoll
-[`waitable.join`]: Explainer.md#-waitablejoin
-[`thread.index`]: Explainer.md#-threadindex
-[`thread.new-indirect`]: Explainer.md#-threadnew-indirect
-[`thread.resume-later`]: Explainer.md#-threadresume-later
-[`thread.suspend`]: Explainer.md#-threadsuspend
-[`thread.yield`]: Explainer.md#-threadyield
-[`thread.suspend-then-resume`]: Explainer.md#-threadsuspend-then-resume
-[`thread.yield-then-resume`]: Explainer.md#-threadyield-then-resume
-[`thread.suspend-then-promote`]: Explainer.md#-threadsuspend-then-promote
-[`thread.yield-then-promote`]: Explainer.md#-threadyield-then-promote
-[`{stream,future}.new`]: Explainer.md#-streamnew-and-futurenew
-[`{stream,future}.{read,write}`]: Explainer.md#-streamread-and-streamwrite
-[`stream.cancel-write`]: Explainer.md#-streamcancel-read-streamcancel-write-futurecancel-read-and-futurecancel-write
+[AST Explainer]: Text.md
+[Canonical Built-in]: Text.md#canonical-built-ins
+[Component Invariant]: Text.md#component-invariants
+[`context.get`]: Text.md#-contextget
+[`context.set`]: Text.md#-contextset
+[`backpressure.inc`]: Text.md#-backpressureinc-and-backpressuredec
+[`backpressure.dec`]: Text.md#-backpressureinc-and-backpressuredec
+[`task.return`]: Text.md#-taskreturn
+[`task.cancel`]: Text.md#-taskcancel
+[`subtask.cancel`]: Text.md#-subtaskcancel
+[`waitable-set.new`]: Text.md#-waitable-setnew
+[`waitable-set.wait`]: Text.md#-waitable-setwait
+[`waitable-set.poll`]: Text.md#-waitable-setpoll
+[`waitable.join`]: Text.md#-waitablejoin
+[`thread.index`]: Text.md#-threadindex
+[`thread.new-indirect`]: Text.md#-threadnew-indirect
+[`thread.resume-later`]: Text.md#-threadresume-later
+[`thread.suspend`]: Text.md#-threadsuspend
+[`thread.yield`]: Text.md#-threadyield
+[`thread.suspend-then-resume`]: Text.md#-threadsuspend-then-resume
+[`thread.yield-then-resume`]: Text.md#-threadyield-then-resume
+[`thread.suspend-then-promote`]: Text.md#-threadsuspend-then-promote
+[`thread.yield-then-promote`]: Text.md#-threadyield-then-promote
+[`{stream,future}.new`]: Text.md#-streamnew-and-futurenew
+[`{stream,future}.{read,write}`]: Text.md#-streamread-and-streamwrite
+[`stream.cancel-write`]: Text.md#-streamcancel-read-streamcancel-write-futurecancel-read-and-futurecancel-write
 [Donut Wrapping]: Linking.md#higher-order-shared-nothing-linking-aka-donut-wrapping
 
 [Canonical ABI Explainer]: CanonicalABI.md
@@ -1583,8 +1583,8 @@ the concurrency story:
 [Binary Format]: Binary.md
 [WIT]: WIT.md
 [Blast Zone]: FutureFeatures.md#blast-zones
-[`start`]: Explainer.md#start-definitions
-[JS API]: Explainer.md#JS-API
+[`start`]: Text.md#start-definitions
+[JS API]: Text.md#JS-API
 
 [Store]: https://webassembly.github.io/spec/core/exec/runtime.html#syntax-store
 [Deterministic Profile]: https://webassembly.github.io/spec/versions/core/WebAssembly-3.0-draft.pdf#subsubsection*.798
