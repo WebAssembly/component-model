@@ -4,10 +4,11 @@ This repository is where the Component Model is being standardized. For a more
 user-focused explanation, take a look at the **[Component Model Documentation]**.
 
 This repository contains:
-* high-level [goals], [use cases], [design choices] and [FAQ] docs
-* low-level [WIT], [text format], [binary format], [linking], [concurrency] and
-  [ABI] docs
+* a general [explainer] that introduces the Component Model via WAT examples
+* focused explainers covering [linking] and [concurrency]
+* detailed definitions of the [text format], [binary format], [ABI] and [WIT]
 * a growing [WAST test suite]
+* the original high-level [goals], [use cases], [design choices] and [FAQ] docs
 
 In the future, this repository will additionally contain a [formal spec] and a
 reference interpreter.
@@ -46,6 +47,7 @@ To contribute to any of these repositories, see the Community Group's
 [Use Cases]: design/high-level/UseCases.md
 [Design Choices]: design/high-level/Choices.md
 [FAQ]: design/high-level/FAQ.md
+[Explainer]: design/mvp/Explainer.md
 [WIT]: design/mvp/WIT.md
 [Text Format]: design/mvp/Text.md
 [Binary Format]: design/mvp/Binary.md

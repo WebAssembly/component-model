@@ -2780,6 +2780,9 @@ canonversion      ::= [1-9] [0-9]* 🔗
 semversuffixlit   ::= '"' <semversuffix> '"' 🔗
 semversuffix      ::= [0-9A-Za-z.+-]* 🔗
 ```
+
+TODO: consider whether any of this should be deleted, referring to the walkthrough
+
 The names of component imports and exports provide two options:
 * a **plain name** that leaves it up to the developer to "read the docs"
   or otherwise figure out what to do; and
