@@ -1,5 +1,5 @@
 ;; Tests for `[constructor]`/`[method]`/`[static]` annotated plainnames
-;; (Explainer.md#import-and-export-definitions and the import/export
+;; (Text.md#import-and-export-definitions and the import/export
 ;; validation rules of Binary.md).
 
 ;; `[constructor]a` requires a single `(own $a)` or `(result (own $a) (error E)?)`
