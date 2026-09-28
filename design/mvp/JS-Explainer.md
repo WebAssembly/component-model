@@ -10,7 +10,7 @@ See the [reference](./JS-Reference.md) for an in-depth walkthrough.
 
 ### Components that export a function
 
-The examples below show a component's [type](./Explainer.md#declarators), which lists its imports and exports and leaves out the implementation, since that's all JS can observe.
+The examples below show a component's [type](./Text.md#declarators), which lists its imports and exports and leaves out the implementation, since that's all JS can observe.
 
 Let's start with a component that imports nothing:
 
@@ -115,7 +115,7 @@ const { instance } =
 instance.exports.math.add(1, 2);  // 3
 ```
 
-Instances are often named with an [`interfacename`](./Explainer.md#import-and-export-definitions) such as `wasi:cli/stdout@0.2.0`, which is used as the JS property name verbatim.
+Instances are often named with an [`interfacename`](./Text.md#import-and-export-definitions) such as `wasi:cli/stdout@0.2.0`, which is used as the JS property name verbatim.
 
 ### Values at a glance
 
@@ -158,7 +158,7 @@ import { greet } from "./component.wasm"
 greet("world"); // "hello, world"
 ```
 
-Each component import becomes a JS import, and its module specifier is the import's [`external-id`](Explainer.md#import-and-export-definitions).
+Each component import becomes a JS import, and its module specifier is the import's [`external-id`](Text.md#import-and-export-definitions).
 
 The following component imports the default value from the "https://esm.unpkg.com/slugify@1.6.6" module.
 
@@ -315,7 +315,7 @@ const { instance } =
 instance.exports.find(document.body, "h1");  // "page-title" or undefined
 ```
 
-Component [`plainnames`](./Explainer.md#import-and-export-definitions) as used in imports/exports are converted to idiomatic JS names ([rules here](./JS-Reference.md#names)). Type names are converted to pascal case, and everything else is converted to camel case. This allows the component imports of `element` and `get-attribute` to be satisfied with `Element` and `getAttribute` respectively.
+Component [`plainnames`](./Text.md#import-and-export-definitions) as used in imports/exports are converted to idiomatic JS names ([rules here](./JS-Reference.md#names)). Type names are converted to pascal case, and everything else is converted to camel case. This allows the component imports of `element` and `get-attribute` to be satisfied with `Element` and `getAttribute` respectively.
 
 ### Importing from the JS global
 

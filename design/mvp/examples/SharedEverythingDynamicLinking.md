@@ -13,7 +13,7 @@ should be able to leverage off existing support for native dynamic linking (of
 
 Shared-everything dynamic linking should be *complementary* to the
 shared-nothing dynamic linking of components described in the
-[explainer](../Explainer.md). In particular, dynamically-linked modules must not
+[explainer](../Text.md). In particular, dynamically-linked modules must not
 share linear memory across component instance boundaries. For example, we want
 the static dependency graph on the left to produce the runtime instance graph
 on the right:

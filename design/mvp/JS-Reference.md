@@ -1,6 +1,6 @@
 # WebAssembly Components JS-API Reference
 
-This is the in-depth reference for the WebAssembly Component JS-API. See the [component model explainer](./Explainer.md) for an in-depth explanation of WebAssembly Components (hereafter 'components'). See the [JS-API explainer](./JS-Explainer.md) for a higher-level introduction to the JS-API.
+This is the in-depth reference for the WebAssembly Component JS-API. See the [component model explainer](./Text.md) for an in-depth explanation of WebAssembly Components (hereafter 'components'). See the [JS-API explainer](./JS-Explainer.md) for a higher-level introduction to the JS-API.
 
 **This is a draft and is not complete. Major details are unresolved, and there are bugs.**
 
@@ -137,7 +137,7 @@ The `exports` getter returns **this**.[[Exports]].
 
 ## Names
 
-Component import/export `plainname`s contain [`label`s](Explainer.md#import-and-export-definitions) that must be transformed into an identifier for use with JS.
+Component import/export `plainname`s contain [`label`s](Text.md#import-and-export-definitions) that must be transformed into an identifier for use with JS.
 
 Fully qualified component import/export `interfacename`s (such as `wasi:http/handler@1.0.0`) are used as-is when converted to JS strings or as [module specifiers](#webassembly-esm-integration).
 
@@ -152,7 +152,7 @@ We define `PascalCase(label)` and `CamelCase(label)` below.
 | `URL` | `URL` | `url` |
 | `a1-2-3` | `A123` | `a123` |
 
-Every `plainname` matches exactly one of the four patterns below, and no `interfacename` matches any of them. The algorithms in this document dispatch on these patterns and read their named captures. `<label>` stands for the [`label`](Explainer.md#import-and-export-definitions) production.
+Every `plainname` matches exactly one of the four patterns below, and no `interfacename` matches any of them. The algorithms in this document dispatch on these patterns and read their named captures. `<label>` stands for the [`label`](Text.md#import-and-export-definitions) production.
 
 | Pattern | Regex | Groups | Example |
 |---|---|---|---|
@@ -161,7 +161,7 @@ Every `plainname` matches exactly one of the four patterns below, and no `interf
 | *Constructor* | `^\[constructor\](<label>)$` | 1: `resource` | `[constructor]element` |
 | *Member* | `^\[(method\|static)\](\[(get\|set)\])?(<label>)\.(<label>)$` | 1: `scope`, 3: `accessor`, 4: `resource`, 5: `name` | `[method][set]element.inner-HTML` |
 
-`plainname`'s are restricted by component [strong uniqueness](./Explainer.md#name-uniqueness). This helps us statically avoid collisions when building high-level export types (such as [guest resource classes](#guest-resource-classes)) and using the name transformations below.
+`plainname`'s are restricted by component [strong uniqueness](./Text.md#name-uniqueness). This helps us statically avoid collisions when building high-level export types (such as [guest resource classes](#guest-resource-classes)) and using the name transformations below.
 
 `LabelOf`(|name|), where |name| is a `plainname`, returns the label that names the definition in JS:
 1. If |name| matches *Constructor*:
@@ -172,7 +172,7 @@ Every `plainname` matches exactly one of the four patterns below, and no `interf
 1. Return the List of Strings produced by splitting |label| on occurrences of U+002D (-). The hyphens themselves are discarded.
 
 `Capitalize`(|fragment|):
-1. If |fragment| is an [`acronym`](Explainer.md#import-and-export-definitions):
+1. If |fragment| is an [`acronym`](Text.md#import-and-export-definitions):
     1. Return |fragment|.
 1. Return |fragment| with its first character uppercased.
 
@@ -313,7 +313,7 @@ This operation is used for variant, and also cases in the above table where we c
         1. Append an entry (|key|, |mapValue|) to [[MapData]].
 1. Return |map|.
 
-A `map<K, V>` is a [specialization](Explainer.md#type-definitions) of `list<tuple<K, V>>` where the last pair for a key defines its value. So `[(a,1),(a,2)]` round-trips from a component value to JS and back as `[(a,2)]`.
+A `map<K, V>` is a [specialization](Text.md#type-definitions) of `list<tuple<K, V>>` where the last pair for a key defines its value. So `[(a,1),(a,2)]` round-trips from a component value to JS and back as `[(a,2)]`.
 
 ### ToComponentValue
 
@@ -526,7 +526,7 @@ Host/guest resource types below are created only for abstract types, and stored 
 
 A type import or export *declares a resource type* if following `(eq R)` reaches a `(sub resource)`. An *abstract type key* can be found for any such declaration by following `(eq R)` until you reach that `(sub resource)`.
 
-Type declarations that do not declare a resource type, such as an exported `record`, exist only to satisfy [external visibility](Explainer.md#external-visibility-of-types) and have no JS representation. The JS-API skips them: a type import is not read from the imports object and a type export is left off the exports object.
+Type declarations that do not declare a resource type, such as an exported `record`, exist only to satisfy [external visibility](Text.md#external-visibility-of-types) and have no JS representation. The JS-API skips them: a type import is not read from the imports object and a type export is left off the exports object.
 
 ### Host resource types (i.e. imported)
 

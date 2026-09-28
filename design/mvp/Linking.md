@@ -321,7 +321,7 @@ future features of WIT and the Component Model.)
 [Canonical ABI]: CanonicalABI.md
 [Binary Format]: Binary.md
 [WIT]: WIT.md
-[`external-id`]: Explainer.md#import-and-export-definitions
+[`external-id`]: Text.md#import-and-export-definitions
 [ESM-integration]: JS-Reference.md#webassembly-esm-integration
 
 [WebAssembly/tool-conventions]: https://github.com/WebAssembly/tool-conventions

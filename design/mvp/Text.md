@@ -1,4 +1,4 @@
-# Component Model AST Explainer
+# Text Format / AST Explainer
 
 This explainer walks through the grammar of a [component](../high-level) and
 the proposed embedding of components into native JavaScript runtimes. For a
