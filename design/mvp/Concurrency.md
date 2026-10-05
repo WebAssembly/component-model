@@ -29,6 +29,7 @@ gated by the 🔀 (async) and 🧵 (threading) emojis.
   * [Async Export ABI](#async-export-abi)
 * [Examples](#examples)
 * [Component Instance Lifetime](#component-instance-lifetime)
+* [Guest Language Task Affinity](#guest-language-task-affinity)
 * [TODO](#todo)
 
 
@@ -1474,6 +1475,31 @@ instantiate or destroy the *root* component of the tree, and all other child
 instances are instantiated/destroyed along with the root. Thus, when the above
 rules set an expectation that any component instance in a tree be kept alive,
 the whole tree would be kept alive.
+
+
+## Guest Language Task Affinity
+
+Components with `async` exports may be called concurrently by the host or other
+components. Consequently, when a guest language has its own async/await
+constructs, multiple guest tasks spawned by different Component Model tasks may
+be running within a single instance. In these situations, guest-language
+runtimes are required to maintain *guest task affinity*: a runtime must ensure
+that each guest task runs only within the Component Model task that spawned it.
+
+This is necessary because, when the component subsequently calls a
+host-provided import, the host may observe which task made the call and decide
+how to handle it based on that task. For example, an embedder running a
+component as a server might create an identifier for each inbound request and
+associate that identifier with any output written to stdout or stderr, as well
+as with any logs generated while handling the request.
+
+If necessary, a guest runtime can switch execution to another Component Model
+task by having each such task wait on a `stream<()>` that is written to whenever
+it has guest tasks to run. Alternatively, [`thread.resume-later`] and friends
+can switch execution to an existing thread belonging to the desired Component
+Model task. Guest runtimes that cannot support guest task affinity must prevent
+concurrent reuse, either by applying backpressure or by allowing only `sync`
+exports.
 
 
 ## TODO
