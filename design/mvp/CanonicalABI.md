@@ -3863,7 +3863,8 @@ validation specifies:
 * `$t` must be `i32` (see [here][thread-local storage]).
   * 🐘 - `$t` may also be `i64`. All `context.get` and `context.set` built-ins
     defined in a single component must specify the same `$t`.
-* `$i` must be less than `2`
+* `$i` must be `0`
+  * 🧵 - `$i` may also be `1`
 * `$f` is given type `(func (result $t))`
 
 Calling `$f` invokes the following function, which reads the [thread-local
@@ -3889,7 +3890,8 @@ validation specifies:
 * `$t` must be `i32` (see [here][thread-local storage])
   * 🐘 - `$t` may also be `i64`. All `context.get` and `context.set` built-ins
     defined in a single component must specify the same `$t`.
-* `$i` must be less than `2`
+* `$i` must be `0`
+  * 🧵 - `$i` may also be `1`
 * `$f` is given type `(func (param $v $t))`
 
 Calling `$f` invokes the following function, which writes to the [thread-local
@@ -4574,7 +4576,7 @@ For a canonical definition:
 validation specifies
 * `$ft` must refer to the type `(func (param $c T))` where `T` is `i32`
   * 🐘 - `T` may be `i32` or `i64`
-* `$ftbl` must refer to a table whose element type matches `funcref`
+* `$ftbl` must refer to a table whose element type is `funcref`
 * `$new_indirect` is given type `(func (param $fi U) (param $c T) (result i32))`
   where `T` comes from `$ft`, as described above, and `U` is `i32`
   * 🐘 - `U` is `i32` or `i64` as determined by `$ftbl`'s address type
