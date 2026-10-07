@@ -10,18 +10,19 @@ See the [reference](./JS-Reference.md) for an in-depth walkthrough.
 
 ### Components that export a function
 
+The examples below show a component's [type](./Explainer.md#declarators), which lists its imports and exports and leaves out the implementation, since that's all JS can observe.
+
 Let's start with a component that imports nothing:
 
 ```wat
-(component
-  ...
+(type (component
   (export "greet"
     (func (param "who" string) (result string))
   )
-)
+))
 ```
 
-Given the above component (compiled from the WAT text format to the [binary](./Binary.md) format), you can execute it with:
+Given a component of the above type (compiled to the [binary](./Binary.md) format), you can execute it with:
 
 ```js
 const { instance } = await WebAssembly.instantiate(bytes);
@@ -47,13 +48,12 @@ instance.exports.greet();    // TypeError
 Now a component that imports:
 
 ```wat
-(component
+(type (component
   (import "log"
     (func (param "message" string))
   )
-  ...
   (export "run" (func))
-)
+))
 ```
 
 The import `log` must be a JS callable object, and will be called with a JS String.
@@ -85,14 +85,13 @@ const { instance } =
 Related functions can be grouped into an `instance`, which maps to a nested JS object:
 
 ```wat
-(component
+(type (component
   (import "console"
     (instance
       (export "log" (func (param "message" string)))
       (export "error" (func (param "message" string)))
     )
   )
-  ...
   (export "math"
     (instance
       (export "add"
@@ -100,7 +99,7 @@ Related functions can be grouped into an `instance`, which maps to a nested JS o
       )
     )
   )
-)
+))
 ```
 
 The `console` import is read from the imports object, and then `log` and `error` are read from it. This means the `console` builtin can be passed directly:
@@ -159,26 +158,24 @@ Each component import becomes a JS import, and its module specifier is the impor
 The following component imports the default value from the "https://esm.unpkg.com/slugify@1.6.6" module.
 
 ```wat
-(component
+(type (component
   (import "slugify"
     (external-id
       "https://esm.unpkg.com/slugify@1.6.6")
     (func (param "text" string) (result string))
   )
-  ...
-)
+))
 ```
 
 If there is no `external-id`, the specifier is the import's [JS name](./JS-Reference.md#names), and an import map can be used to specify the URL to resolve for the import:
 
 ```wat
-(component
+(type (component
   (import "slugify"
     (func (param "text" string) (result string))
   )
-  ...
   (export "run" (func))
-)
+))
 ```
 
 ```html
@@ -208,15 +205,14 @@ Component functions signal failure using a `result<T, E>` value:
 An imported JS function that throws where the component asked for a plain return type results in a trap.
 
 ```wat
-(component
+(type (component
   (import "lookup"
-    (func (param "key" string) (result string (error string)))
+    (func (param "key" string) (result (result string (error string))))
   )
-  ...
   (export "parse"
-    (func (param "text" string) (result u32 (error string)))
+    (func (param "text" string) (result (result u32 (error string))))
   )
-)
+))
 ```
 
 `parse` tries to parse its `text` argument as an integer, and if that fails performs a fallible lookup.
@@ -281,7 +277,7 @@ Any imported function whose name is tagged `[constructor]`, `[method]`, or `[sta
 The above allows most JS classes to be imported as a resource by just passing the constructor function:
 
 ```wat
-(component
+(type (component
   (import "element"
     (type $element (sub resource))
   )
@@ -300,7 +296,6 @@ The above allows most JS classes to be imported as a resource by just passing th
       (result (option string))
     )
   )
-  ...
   (export "find"
     (func
       (param "root" (borrow $element))
@@ -308,7 +303,7 @@ The above allows most JS classes to be imported as a resource by just passing th
       (result (option string))
     )
   )
-)
+))
 ```
 
 ```js
@@ -326,7 +321,7 @@ Component [`plainnames`](./Explainer.md#import-and-export-definitions) as used i
 The example above still needs someone to write `{ Element }`. A component can skip that and take its imports straight from the global object by importing `wasm:js/global`:
 
 ```wat
-(component
+(type (component
   (import "wasm:js/global"
     (instance $g
       (export "btoa"
@@ -344,16 +339,13 @@ The example above still needs someone to write `{ Element }`. A component can sk
     )
   )
   (alias export $g "element" (type $el))
-
-  ...
-
   (export "encode-id"
     (func
       (param "el" (borrow $el))
       (result (option string))
     )
   )
-)
+))
 ```
 
 ```js
@@ -379,9 +371,7 @@ ESM-integration defaults to enabling `js/global` in the compile options (the `wa
 A resource type exported from a component becomes a JS class:
 
 ```wat
-(component
-  ...
-
+(type (component
   (export "counter" (type $counter (sub resource)))
   (export "[constructor]counter"
     (func (result (own $counter)))
@@ -392,7 +382,7 @@ A resource type exported from a component becomes a JS class:
       (result u32)
     )
   )
-)
+))
 ```
 
 ```js
