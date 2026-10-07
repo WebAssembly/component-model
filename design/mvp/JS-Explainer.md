@@ -94,7 +94,7 @@ The following table describes how a component value is converted into a JS value
 | `f32`, `f64` | Number, including NaN and infinities | `number` |
 | `char` | String of exactly one Unicode scalar value | `string` |
 | `string` | String, well formed | `string` |
-| `list<u8>` | `Uint8Array` | `Uint8Array` |
+| `list<sN, N?>`, `list<uN, N?>`, `list<fN, N?>` | `IntNArray`, `UintNArray`, `FloatNArray` | `IntNArray`, `UintNArray`, `FloatNArray` |
 | `list<T>`, `list<T, N>`, `tuple<T, U>` | Array | `T[]` |
 | `record { field-name: T, ... }` | null-prototype object,  | `{ fieldName: T, ... }` |
 | `flags "flag-a" "flag-b"` | null-prototype object of Booleans | `{ flagA?: boolean, flagB?: boolean }` |

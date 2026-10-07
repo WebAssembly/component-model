@@ -278,7 +278,7 @@ The `scalar typed array class` is given by:
 
 `ToJSValueVariant(value, cases)`:
 1. Let |object| be `OrdinaryObjectCreate`(**null**).
-1. Perform `CreateDataPropertyOrThrow`(|object|, "kind", `PascalCase`(`CaseLabelOf`(|value|, |cases|))).
+1. Perform `CreateDataPropertyOrThrow`(|object|, "kind", `CaseLabelOf`(|value|, |cases|)).
 1. If that case has a payload of type T:
     1. Perform `CreateDataPropertyOrThrow`(|object|, "value", `ToJSValue`(`PayloadOf`(|value|), T)).
 1. Return |object|.
@@ -327,18 +327,17 @@ Dispatch on `targetComponentType`:
 - `error-context` → TODO.
 
 `ToComponentValueInteger(jsValue, t)`:
-1. If |t| is `s64` or `u64` and `Type`(|jsValue|) is BigInt:
-    1. Let |n| be |jsValue|'s value.
-    1. If |n| is outside |t|'s range:
-        1. Throw a `TypeError`.
-    1. Return |n|.
-1. Let |number| be ? `ToNumber`(|jsValue|).
-1. If |number| is `NaN` or an infinity:
-    1. Throw a `TypeError`.
-1. Let |n| be |number| truncated toward zero.
-1. If |n| is outside |t|'s range:
-    1. Throw a `TypeError`.
-1. Return |n|.
+1. Return the result of the matching operation below, applied to |jsValue|:
+    - `s8` → `ToInt8`
+    - `u8` → `ToUint8`
+    - `s16` → `ToInt16`
+    - `u16` → `ToUint16`
+    - `s32` → `ToInt32`
+    - `u32` → `ToUint32`
+    - `s64` → `ToBigInt64`
+    - `u64` → `ToBigUint64`
+
+Out-of-range values wrap and `NaN` and infinities become 0, matching the core JS API's `ToWebAssemblyValue`. The 64-bit types require a BigInt, so a Number throws a `TypeError`.
 
 `ToComponentValueFloat(jsValue, t)`:
 1. Let |num| be ? `ToNumber`(|jsValue|).
@@ -355,7 +354,7 @@ Dispatch on `targetComponentType`:
     1. Return one |scalar| per element of |jsValue|, in order.
 1. Return `ToComponentValueList`(|jsValue|, |scalar|).
 
-A typed array is copied directly, since that is what `ToJSValue` produces. Anything else (including other typed arrays) goes through the iterable path.
+A typed array of the matching class is copied directly, since that is what `ToJSValue` produces. Anything else goes through the iterable path, so other typed arrays and plain Arrays behave like they do in the `new TypedArray(iterable)` constructor.
 
 `ToComponentValueList(jsValue, T)`:
 1. If |jsValue| is not an Object:
@@ -379,8 +378,6 @@ The iterable is consumed before any element is converted, so that the canonical 
 1. Let |record| be a new component record value with one field per |fields|.
 1. For each field `f: T` of |fields|, in declaration order:
     1. Let |m| be ? `Get`(|jsValue|, `CamelCase`(f)).
-    1. If |m| is **undefined** and `T` is not `option<_>`:
-        1. Throw a `TypeError`.
     1. Set |record|'s `f` field to ? `ToComponentValue`(|m|, T).
 1. Return |record|.
 
@@ -398,7 +395,7 @@ An absent property is therefore **false**, matching a `boolean` dictionary membe
 1. If |jsValue| is not an Object:
     1. Throw a `TypeError`.
 1. Let |kind| be ? `ToString`(? `Get`(|jsValue|, "kind")).
-1. If there is no case of |cases| whose label `L` has `PascalCase`(`L`) equal to |kind|:
+1. If there is no case of |cases| whose label `L` has `L` equal to |kind|:
     1. Throw a `TypeError`.
 1. Let |case| be that case.
 1. If |case| has a payload type T:
@@ -449,7 +446,7 @@ To `drop a guest resource` given a resource type |resourceType| and a guest rep 
 Imported and exported resource types are either abstract or transparently equivalent to a previous abstract import or export.
 
 ```
-(component
+(type (component
   (import "r1" (type $r1 (sub resource)))
   (import "r2" (type (eq $r1)))
   (import "r3" (type (sub resource)))
@@ -459,7 +456,7 @@ Imported and exported resource types are either abstract or transparently equiva
   (export "r6" (type (sub resource)))
 
   (export "r7" (type (eq $r3)))
-)
+))
 ```
 
 `r1`, `r3`, `r4`, `r6` are the abstract types of this component type, while `r2`, `r5`, and `r7` are transparently equal to one of the abstract types.
