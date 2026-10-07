@@ -86,26 +86,25 @@ Components and JS maintain separate type/value systems, so any value crossing th
 
 The following table describes how a component value is converted into a JS value.
 
-| Component type | JS type |
-|---|---|
-| `bool` | Boolean |
-| `s8`-`s32`, `u8`-`u32` | Number, an exact integer |
-| `s64`, `u64` | BigInt |
-| `f32`, `f64` | Number, including NaN and infinities |
-| `char` | String of exactly one Unicode scalar value |
-| `string` | String, well formed |
-| `list<u8>` | `Uint8Array` |
-| `list<T>`, `list<T, N>`, `tuple<T, U>` | Array |
-| `record { field-name: T, ... }` | null-prototype object, `{ fieldName: T, ... }` |
-| `flags "flag-a" "flag-b"` | null-prototype object of Booleans, `{ flagA: bool, flagB: bool }` |
-| `enum "case-a" "case-b"` | String, the case label verbatim |
-| `option<T>` (if `T` is not `option`) | `null`, or the payload |
-| `option<option<T>>` | treated as variant, see below |
-| `result<T, E>` (if in return position of function) | if `E` { thrown as a `WebAssembly.ComponentError` } else { `T` } |
-| `variant` | `{ kind: string, value: T }` |
-| `map<K, V>` | `Map` |
-| `own<R>`, `borrow<R>` | the original JS value for an imported resource type, an instance of its class for an exported one |
-| `future<T>`, `stream<T>`, `error-context` | not yet specified |
+| Component type | JS type | TypeScript |
+|---|---|---|
+| `bool` | Boolean | `boolean` |
+| `s8`-`s32`, `u8`-`u32` | Number, an exact integer | `number` |
+| `s64`, `u64` | BigInt | `bigint` |
+| `f32`, `f64` | Number, including NaN and infinities | `number` |
+| `char` | String of exactly one Unicode scalar value | `string` |
+| `string` | String, well formed | `string` |
+| `list<u8>` | `Uint8Array` | `Uint8Array` |
+| `list<T>`, `list<T, N>`, `tuple<T, U>` | Array | `T[]` |
+| `record { field-name: T, ... }` | null-prototype object,  | `{ fieldName: T, ... }` |
+| `flags "flag-a" "flag-b"` | null-prototype object of Booleans | `{ flagA?: boolean, flagB?: boolean }` |
+| `enum "case-a" "case-b"` | String, the case label verbatim | `"case-a" \| "case-b"` |
+| `option<T>` (if top-level) | `undefined`, or the payload | `T \| undefined` |
+| `result<T, E>` (if in return position of function) | if `E` { thrown as a `WebAssembly.ComponentError` } else { `T` } | `T`
+| `variant`, `option<T>`, `result<T, E>` | null-prototype object with discriminating `kind` field and optional `value` field | `{ kind: "a-b" } \| { kind: "c-d", value: T }` |
+| `map<K, V>` | `Map` | `Map<K, V>` |
+| `own<R>`, `borrow<R>` | the original JS value for an imported resource type, an instance of its class for an exported one | `R` |
+| `future<T>`, `stream<T>`, `error-context` | *not yet specified* | *not yet specified* |
 
 Converting a JS value to a component value accepts all of the above, but also has additional coercions. See [ToJSValue](./JS-Reference.md#tojsvalue) and [ToComponentValue](./JS-Reference.md#tocomponentvalue) for detailed algorithms.
 
