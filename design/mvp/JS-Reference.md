@@ -149,12 +149,12 @@ We define `PascalCase(label)` and `CamelCase(label)` below.
 
 Every `plainname` matches exactly one of the four patterns below, and no `interfacename` matches any of them. The algorithms in this document dispatch on these patterns and read their named captures. `<label>` stands for the [`label`](Explainer.md#import-and-export-definitions) production.
 
-| Pattern | Regex | Example |
-|---|---|---|
-| *Plain* | `^(?<name><label>)$` | `query-selector` |
-| *Property* | `^\[(?<accessor>get\|set)\](?<name><label>)$` | `[get]inner-HTML` |
-| *Constructor* | `^\[constructor\](?<resource><label>)$` | `[constructor]element` |
-| *Member* | `^\[(?<scope>method\|static)\](?:\[(?<accessor>get\|set)\])?(?<resource><label>)\.(?<name><label>)$` | `[method][set]element.inner-HTML` |
+| Pattern | Regex | Groups | Example |
+|---|---|---|---|
+| *Plain* | `^(<label>)$` | 1: `name` | `query-selector` |
+| *Property* | `^\[(get\|set)\](<label>)$` | 1: `accessor`, 2: `name` | `[get]inner-HTML` |
+| *Constructor* | `^\[constructor\](<label>)$` | 1: `resource` | `[constructor]element` |
+| *Method* | `^\[(method\|static)\](\[(get\|set)\])?(<label>)\.(<label>)$` | 1: `scope`, 3: `accessor`, 4: `resource`, 5: `name` | `[method][set]element.inner-HTML` |
 
 `plainname`'s are restricted by component [strong uniqueness](./Explainer.md#name-uniqueness). This helps us statically avoid collisions when building high-level export types (such as [guest resource classes](#guest-resource-classes)) and using the name transformations below.
 
@@ -570,11 +570,11 @@ To `create a guest resource class` given a component instance |componentInstance
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.toStringTag%`, PropertyDescriptor { [[Value]]: |name|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, "constructor", PropertyDescriptor { [[Value]]: |constructor|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|constructor|, "prototype", PropertyDescriptor { [[Value]]: |prototype|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **false** }).
-1. Let |members| be the function exports in |componentInstance|'s scope whose names match *Constructor* or *Member* with a `resource` capture naming |resourceType|.
+1. Let |members| be the function exports in |componentInstance|'s scope whose names match *Constructor* or *Method* with a `resource` capture naming |resourceType|.
 1. If some |c| of |members| matches *Constructor*:
     1. Assert: there is only one by validation rules.
     1. Set |constructor|.[[ConstructorFunc]] to |c|.Func.
-1. For each |e| of |members| matching *Member*, in declaration order:
+1. For each |e| of |members| matching *Method*, in declaration order:
     1. If `JSName`(|e|) is in `reserved class members`:
         1. Continue.
     1. If |e|.Name's `scope` capture is "method":
@@ -602,7 +602,7 @@ The following names are `reserved class members`:
 
 Defining these on the constructor or prototype may unexpectedly change JS class semantics. They are exported through `create the exports object` instead.
 
-*Member* exports with an `accessor` capture become the two halves of one accessor property, on `prototype` when `scope` is "method" and on the class itself when it is "static". Validation requires a `[set]` to be preceded in the same scope by the `[get]` it pairs with, so the getter is always defined first and the setter only fills in the accessor's [[Set]] field.
+*Method* exports with an `accessor` capture become the two halves of one accessor property, on `prototype` when `scope` is "method" and on the class itself when it is "static". Validation requires a `[set]` to be preceded in the same scope by the `[get]` it pairs with, so the getter is always defined first and the setter only fills in the accessor's [[Set]] field.
 
 #### Guest resource instances
 
@@ -716,7 +716,7 @@ The top-level `read the imports` algorithm walks the component's imports and res
 
 The resolved JS values are then handed to the per-sort algorithms (`read the function import`, `read the type import`, and the rest) to produce the component definitions used during instantiation.
 
-While walking, the algorithm recognizes the pattern of a resource type import accompanied by *Constructor* and *Member* function imports naming it. A resource type import is read first and looks for a constructor (see [resource types](#resource-types)). Those function imports then read from the constructor and its prototype directly. This allows the common case of importing a class to be satisfied by just passing the constructor.
+While walking, the algorithm recognizes the pattern of a resource type import accompanied by *Constructor* and *Method* function imports naming it. A resource type import is read first and looks for a constructor (see [resource types](#resource-types)). Those function imports then read from the constructor and its prototype directly. This allows the common case of importing a class to be satisfied by just passing the constructor.
 
 Passing an exported component definition to a component import via the JS-API/ESM-integration is treated as if the import were a JS value. There is no "direct linking" that bypasses going through JS semantics. See [component store](#component-store) for more details.
 
@@ -744,7 +744,7 @@ To `read a scope of imports` given a list of import declarations |importDecls|, 
     1. If |builtin| is not **empty**:
         1. Let |importValue| be |builtin|.
     1. Else:
-        1. If |importDecl|.Sort is **func** and |importDecl|.Name matches *Constructor* or *Member*:
+        1. If |importDecl|.Sort is **func** and |importDecl|.Name matches *Constructor* or *Method*:
             1. Let |abstractTypeKey| be the *abstract type key* of the type import named by the `resource` capture.
             1. Assert: |hostResourceTypes|[|abstractTypeKey|] exists. (Validation requires that declaration to precede this one in the same scope)
             1. Let |constructorFunction| be |hostResourceTypes|[|abstractTypeKey|].[[ConstructorObject]].
@@ -850,7 +850,7 @@ To `read the function import` given |componentFuncType|, |importValue|, |importN
 
 1. Let |callKind|, |receiverRule| and |paramOffset| be determined by |importName|:
     1. *Constructor*: `Construct`, no receiver, offset 0.
-    1. *Member* with `scope` "method": `Call`, receiver is component argument 0 (the `borrow` self parameter), offset 1.
+    1. *Method* with `scope` "method": `Call`, receiver is component argument 0 (the `borrow` self parameter), offset 1.
     1. Otherwise: `Call`, receiver is |staticReceiver|, offset 0.
 1. Let |paramTypes| be |componentFuncType|.Params.
 1. Let |resultType| be |componentFuncType|.Result.
@@ -941,11 +941,11 @@ TODO: Within the wasm scheme we're parsing this similar to a general URL, but no
 
 The `create the exports object` algorithm walks the component's exports and builds a fresh JS object whose properties are the exports.
 
-Exported resource types become [guest resource classes](#guest-resource-classes) named `JSName`(|export|), and function exports matching *Constructor* or *Member* are mapped onto the class `R` named by their `resource` capture, just as in `read the imports`:
+Exported resource types become [guest resource classes](#guest-resource-classes) named `JSName`(|export|), and function exports matching *Constructor* or *Method* are mapped onto the class `R` named by their `resource` capture, just as in `read the imports`:
 - *Constructor*: the function becomes `R`'s constructor behaviour. Names are strongly-unique, so there can only be one.
-- *Member* with `scope` "method": the function becomes a method named `JSName`(|export|) on `R.prototype`.
-- *Member* with `scope` "static": the function becomes a static method named `JSName`(|export|) on `R`.
-- *Member* with an `accessor` capture: the "get" and "set" functions become the getter and setter of one accessor property named `JSName`(|export|), again on `R.prototype` or on `R`.
+- *Method* with `scope` "method": the function becomes a method named `JSName`(|export|) on `R.prototype`.
+- *Method* with `scope` "static": the function becomes a static method named `JSName`(|export|) on `R`.
+- *Method* with an `accessor` capture: the "get" and "set" functions become the getter and setter of one accessor property named `JSName`(|export|), again on `R.prototype` or on `R`.
 
 A *Property* export becomes an accessor property on the exports object itself. All other exported component definitions are given JS definitions named `JSName`(|export|) on the exports object.
 
@@ -971,7 +971,7 @@ To `create the exports object` given a |componentInstance|:
 1. For each |export| of |componentInstance|.Exports, in declaration order:
     1. If |export|.Name matches *Constructor*:
         1. Continue.
-    1. If |export|.Name matches *Member* and `JSName`(|export|) is not in `reserved class members`:
+    1. If |export|.Name matches *Method* and `JSName`(|export|) is not in `reserved class members`:
         1. Continue.
     1. If |export|.Name matches *Property*:
         1. Perform `define an accessor for a component function` given |exportsObject|, |export| and **true**.
@@ -1015,7 +1015,7 @@ To `define an accessor for a component function` given an object |target|, a fun
 1. Let |key| be `JSName`(|export|).
 1. Let |accessor| be the `accessor` capture of |export|.Name.
 1. Let |name| be the string-concatenation of |accessor|, " " and |key|.
-1. Let |takesSelf| be **true** if |export|.Name matches *Member* with `scope` "method", and **false** otherwise.
+1. Let |takesSelf| be **true** if |export|.Name matches *Method* with `scope` "method", and **false** otherwise.
 1. Let |func| be `create a JS function for a component function` given |export|.Func, |name| and |takesSelf|.
 1. If |accessor| is "get":
     1. Perform `DefinePropertyOrThrow`(|target|, |key|, PropertyDescriptor { [[Get]]: |func|, [[Set]]: **undefined**, [[Enumerable]]: |enumerable|, [[Configurable]]: **true** }).
