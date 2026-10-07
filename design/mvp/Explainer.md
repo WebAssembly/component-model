@@ -2989,12 +2989,13 @@ the `<major>.<minor>.<patch>(-<pre>)(+<build>)` syntax of [Semantic Versioning
   - `0.0.1+sha.5114f85` &rarr; `0.0.1` / `+sha.5114f85`
 
 When a version is canonicalized, any `semversuffix` that was split off of the
-version should be preserved in the `versionsuffix` field of any resulting
-`import`s and `export`s. This gives component runtimes and other tools access to
-the original version for error messages, documentation, and other development
-purposes. Where a `versionsuffix` is present the preceding `interfacename` must
-have a `canonversion`, and the concatenation of the `canonversion` and
-`versionsuffix` must be a `valid semver`.
+version must be preserved in the `versionsuffix` field of any resulting
+`import`s and `export`s to give component runtimes and other tools access to the
+original version for error messages, documentation, and other development
+purposes. Additionally, validation requires that the `canonversion` concatenated
+with the `versionsuffix` (if present) is a `valid semver`. Where a
+`versionsuffix` is present, the preceding `interfacename` must have a
+`canonversion`.
 
 For compatibility with older versions of this spec, non-canonical
 `interfacename`s (with `interfaceversion`s matching any `valid semver`) are

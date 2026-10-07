@@ -464,11 +464,12 @@ Notes:
 * 📡 Validation of `[set]` names requires that the function have either no
   result type or a result type of `(result (error $E)?)` (with no value type).
 * 🔀/📡 Functions with `[get]` or `[set]` names must not be `async`.
-* 🔗 Validation requires that `versionsuffix` is preceded by an `interfaceversion`
-  matching `canonversion` and that the concatenation of the `canonversion` and
-  the `versionsuffix` results in a `valid semver` as defined by
-  [https://semver.org](https://semver.org/). A `versionsuffix` is otherwise
-  ignored for validation except to improve diagnostic messages.
+* 🔗 Validation requires that a `versionsuffix` is only present when the
+  `interfacename` has a `canonversion` and that the concatenation of the
+  `canonversion` and the `versionsuffix`, if there is one, results in a
+  `valid semver` as defined by [https://semver.org](https://semver.org/). A
+  `versionsuffix` is otherwise ignored for validation except to improve
+  diagnostic messages.
 
 ## 🪙 Value Definitions
 

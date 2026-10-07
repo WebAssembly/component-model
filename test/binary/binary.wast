@@ -1308,13 +1308,19 @@
   "\07\03"                                    ;; type section (3 bytes)
   "\01"                                       ;; 1 type
   "\42\00"                                    ;; empty instancetype
-  "\0a\2f"                                    ;; import section (47 bytes)
-  "\02"                                       ;; 2 imports
+  "\0a\41"                                    ;; import section (65 bytes)
+  "\03"                                       ;; 3 imports
   "\02"                                       ;; externname with attributes
   "\02i1"                                     ;; name "i1"
   "\01"                                       ;; 1 attribute:
   "\00"                                       ;; 0x00 implements:
   "\0cmy:dep/iface"                           ;; name "my:dep/iface"
+  "\05\00"                                    ;; instance (type 0)
+  "\02"                                       ;; externname with attributes
+  "\07a:b/c@1"                                ;; name "a:b/c@1"
+  "\01"                                       ;; 1 attribute:
+  "\01"                                       ;; 0x01 versionsuffix:
+  "\04.2.3"                                   ;; ".2.3"
   "\05\00"                                    ;; instance (type 0)
   "\02"                                       ;; externname with attributes
   "\02i2"                                     ;; name "i2"
