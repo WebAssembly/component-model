@@ -249,7 +249,7 @@ The above allows most JS classes to be imported as a resource by just passing th
 ```
 
 ```js
-const imports = { element: Element };
+const imports = { Element };
 const { instance } =
   await WebAssembly.instantiate(bytes, imports);
 
@@ -260,7 +260,7 @@ Component [`plainnames`](./Explainer.md#import-and-export-definitions) as used i
 
 ### Importing from the JS global
 
-The example above still needs someone to write `{ element: Element }`. A component can skip that and take its imports straight from the global object by importing `wasm:js/global`:
+The example above still needs someone to write `{ Element }`. A component can skip that and take its imports straight from the global object by importing `wasm:js/global`:
 
 ```wat
 (component
