@@ -1693,11 +1693,12 @@ See the [concurrency explainer] for background.
 | Canonical ABI signature    | `[] -> [T]`        |
 
 The `context.get` built-in returns the `i`th element of the [current thread]'s
-[thread-local storage] array. Validation currently restricts `i` to be less
-than 2 and `T` to be `i32` (or, with 🐘, `i64`), but these restrictions may
-be relaxed in the future. Additionally, component-level validation requires
-that all `context.get` and `context.set` built-ins use the *same* `T`, so
-that there is no mixing of writes with one type and reads with another.
+[thread-local storage] array. Validation currently restricts `i` to be `0`
+(or, with 🧵, less than 2) and `T` to be `i32` (or, with 🐘, `i64`), but these
+restrictions may be relaxed in the future. Additionally, component-level
+validation requires that all `context.get` and `context.set` built-ins use the
+*same* `T`, so that there is no mixing of writes with one type and reads with
+another.
 
 For details, see [Thread-Local Storage] in the concurrency explainer and
 [`canon_context_get`] in the Canonical ABI explainer.
@@ -1711,11 +1712,11 @@ For details, see [Thread-Local Storage] in the concurrency explainer and
 
 The `context.set` built-in sets the `i`th element of the [current thread]'s
 [thread-local storage] array to the value `v`. Validation currently restricts
-`i` to be less than 2 and `T` to be `i32` (or, with 🐘, `i64`), but these
-restrictions may be relaxed in the future. Additionally, component-level
-validation requires that all `context.get` and `context.set` built-ins use the
-*same* `T`, so that there is no mixing of writes with one type and reads with
-another.
+`i` to be `0` (or, with 🧵, less than 2) and `T` to be `i32` (or, with 🐘,
+`i64`), but these restrictions may be relaxed in the future. Additionally,
+component-level validation requires that all `context.get` and `context.set`
+built-ins use the *same* `T`, so that there is no mixing of writes with one
+type and reads with another.
 
 For details, see [Thread-Local Storage] in the concurrency explainer and
 [`canon_context_set`] in the Canonical ABI explainer.
