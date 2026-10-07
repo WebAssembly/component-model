@@ -80,6 +80,40 @@ const { instance } =
   await WebAssembly.instantiate(bytes, imports);
 ```
 
+### Grouping imports and exports with `instance`
+
+Related functions can be grouped into an `instance`, which maps to a nested JS object:
+
+```wat
+(component
+  (import "console"
+    (instance
+      (export "log" (func (param "message" string)))
+      (export "error" (func (param "message" string)))
+    )
+  )
+  ...
+  (export "math"
+    (instance
+      (export "add"
+        (func (param "a" u32) (param "b" u32) (result u32))
+      )
+    )
+  )
+)
+```
+
+The `console` import is read from the imports object, and then `log` and `error` are read from it. This means the `console` builtin can be passed directly:
+
+```js
+const { instance } =
+  await WebAssembly.instantiate(bytes, { console });
+
+instance.exports.math.add(1, 2);  // 3
+```
+
+Instances are often named with an [`interfacename`](./Explainer.md#import-and-export-definitions) such as `wasi:cli/stdout@0.2.0`, which is used as the JS property name verbatim.
+
 ### Values at a glance
 
 Components and JS maintain separate type/value systems, so any value crossing the boundary needs a defined translation in both directions.
@@ -112,7 +146,17 @@ Converting a JS value to a component value accepts all of the above, but also ha
 
 [ESM-integration](https://github.com/WebAssembly/esm-integration/tree/main/proposals/esm-integration) extends to components. The loader branches on the `layer` field of the binary, so a component loads anywhere a core module does today.
 
-Each component import becomes a JS import, and its module specifier is the import's [`external-id`](Explainer.md#import-and-export-definitions) if it has one and its name otherwise:
+The original [greeter example](#components-that-export-a-function) using ESM:
+
+```js
+import { greet } from "component.wasm"
+
+greet("world"); // "hello, world"
+```
+
+Each component import becomes a JS import, and its module specifier is the import's [`external-id`](Explainer.md#import-and-export-definitions).
+
+The following component imports the default value from the "https://esm.unpkg.com/slugify@1.6.6" module.
 
 ```wat
 (component
@@ -122,11 +166,29 @@ Each component import becomes a JS import, and its module specifier is the impor
     (func (param "text" string) (result string))
   )
   ...
+)
+```
+
+If there is no `external-id`, the specifier is the import's [JS name](./JS-Reference.md#names), and an import map can be used to specify the URL to resolve for the import:
+
+```wat
+(component
+  (import "slugify"
+    (func (param "text" string) (result string))
+  )
+  ...
   (export "run" (func))
 )
 ```
 
 ```html
+<script type="importmap">
+  {
+    "imports": {
+      "slugify": "https://esm.unpkg.com/slugify@1.6.6"
+    }
+  }
+</script>
 <script type="module">
   import { run } from "./component.wasm";
 
@@ -134,6 +196,8 @@ Each component import becomes a JS import, and its module specifier is the impor
   run();
 </script>
 ```
+
+An [`instance`](#grouping-imports-and-exports-with-instance) import takes one named import per export instead of the default export, so `(import "console" (instance ...))` behaves like `import { log, error } from "console"`.
 
 ### Handling expected errors using `result`
 
