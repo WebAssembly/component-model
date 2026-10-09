@@ -2399,7 +2399,8 @@ The `error-context.debug-message` built-in returns the
 
 In the Canonical ABI, it writes the debug message into `ptr` as an 8-byte or
 16-byte (`ptr`, `length`) pair, according to the Canonical ABI for `string`,
-given the `<canonopt>*` immediates.
+given the `<canonopt>*` immediates, trapping if `ptr` is misaligned or out of
+bounds.
 
 For details, see [`canon_error_context_debug_message`] in the Canonical ABI
 explainer.
