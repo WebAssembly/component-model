@@ -3624,7 +3624,6 @@ validation is performed where `$callee` has type `$ft`:
 * requires options [based on `lift(result)`](#canonopt-validation) if `ft` has a result
 * if `len(flatten_types(ft.param_types())) > max_flat_params`, `memory` is required
 * if `len(flatten_types(ft.result_type())) > max_flat_results`, `memory` is required
-* 🔀 if `async` is specified, `memory` must be present
 
 When instantiating a component instance, the runtime calls `Store.lower` (defined
 above) to capture the `$callee`, `$ft` and `$opts` immediates of `canon lower`
@@ -3948,6 +3947,7 @@ In addition to [general validation of `$opts`](#canonopt-validation) validation
 specifies:
 
 * `$f` is given type `flatten_functype($opts, (func (param $t)?), 'lower')`
+* `$t` must not transitively contain `borrow`
 * `$opts` may only contain `memory` and `string-encoding`
 * [`lift($f.result)` above](#canonopt-validation) defines required options
 
