@@ -4852,12 +4852,17 @@ def canon_error_context_debug_message(opts, i, ptr):
   errctx = inst.handles.get(i)
   trap_if(not isinstance(errctx, ErrorContext))
   cx = LiftLowerContext(opts, inst)
-  store_string(cx, errctx.debug_message, ptr)
+  trap_if(ptr != align_to(ptr, alignment(StringType(), cx.opts.memory.ptr_type())))
+  trap_if(ptr + elem_size(StringType(), cx.opts.memory.ptr_type()) > len(cx.opts.memory))
+  store(cx, errctx.debug_message, StringType(), ptr)
   return []
 ```
 Note that `ptr` points to a region of memory (8 bytes for memory32, 16 bytes
 for memory64) into which will be stored the pointer and length of the debug
-string (allocated via `opts.realloc`).
+string (allocated via `opts.realloc`). As with any `string` stored in linear
+memory, `ptr` must be aligned to the pointer size (4 bytes for memory32, 8 bytes
+for memory64) and the whole region must be in bounds, which is checked
+(trapping otherwise) before `opts.realloc` is called.
 
 
 ### 📝 `canon error-context.drop`

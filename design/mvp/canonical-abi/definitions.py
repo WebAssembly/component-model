@@ -2684,7 +2684,9 @@ def canon_error_context_debug_message(opts, i, ptr):
   errctx = inst.handles.get(i)
   trap_if(not isinstance(errctx, ErrorContext))
   cx = LiftLowerContext(opts, inst)
-  store_string(cx, errctx.debug_message, ptr)
+  trap_if(ptr != align_to(ptr, alignment(StringType(), cx.opts.memory.ptr_type())))
+  trap_if(ptr + elem_size(StringType(), cx.opts.memory.ptr_type()) > len(cx.opts.memory))
+  store(cx, errctx.debug_message, StringType(), ptr)
   return []
 
 ### 📝 `canon error-context.drop`
