@@ -4063,10 +4063,15 @@ def canon_waitable_set_wait(mem, si, ptr):
 def unpack_event(mem, inst, ptr, e: EventTuple):
   event, p1, p2 = e
   cx = LiftLowerContext(LiftLowerOptions(memory = mem), inst)
+  trap_if(ptr != align_to(ptr, 4))
+  trap_if(ptr + 8 > len(cx.opts.memory))
   store(cx, p1, U32Type(), ptr)
   store(cx, p2, U32Type(), ptr + 4)
   return [event]
 ```
+Note that `ptr` points to an 8-byte region of memory into which the two
+`i32` payloads of the event are stored. `ptr` must be 4-byte-aligned and the
+whole region must be in bounds, trapping otherwise.
 
 
 ### 🔀 `canon waitable-set.poll`

@@ -2349,6 +2349,8 @@ def canon_waitable_set_wait(mem, si, ptr):
 def unpack_event(mem, inst, ptr, e: EventTuple):
   event, p1, p2 = e
   cx = LiftLowerContext(LiftLowerOptions(memory = mem), inst)
+  trap_if(ptr != align_to(ptr, 4))
+  trap_if(ptr + 8 > len(cx.opts.memory))
   store(cx, p1, U32Type(), ptr)
   store(cx, p2, U32Type(), ptr + 4)
   return [event]
