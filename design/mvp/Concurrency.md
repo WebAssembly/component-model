@@ -1483,23 +1483,24 @@ Components with `async` exports may be called concurrently by the host or other
 components. Consequently, when a guest language has its own async/await
 constructs, multiple guest tasks spawned by different Component Model tasks may
 be running within a single instance. In these situations, guest-language
-runtimes are required to maintain *guest task affinity*: a runtime must ensure
-that each guest task runs only within the Component Model task that spawned it.
+runtimes should maintain *guest task affinity*: a runtime should ensure that
+each guest task runs only within the Component Model task that spawned it.
 
-This is necessary because, when the component subsequently calls a
-host-provided import, the host may observe which task made the call and decide
-how to handle it based on that task. For example, an embedder running a
-component as a server might create an identifier for each inbound request and
-associate that identifier with any output written to stdout or stderr, as well
-as with any logs generated while handling the request.
+This is necessary to allow the host to change behavior based on which Component
+Model task is running: when the component calls a host-provided import, the host
+may observe which Component Model task made the call and decide how to handle it
+based on that task. For example, an embedder running a component as a server
+might create an identifier for each inbound request and associate that
+identifier with any output written to stdout or stderr, as well as with any logs
+generated while handling the request.
 
 If necessary, a guest runtime can switch execution to another Component Model
 task by having each such task wait on a `stream<()>` that is written to whenever
 it has guest tasks to run. Alternatively, [`thread.resume-later`] and friends
 can switch execution to an existing thread belonging to the desired Component
-Model task. Guest runtimes that cannot support guest task affinity must prevent
-concurrent reuse, either by applying backpressure or by allowing only `sync`
-exports.
+Model task. Guest runtimes that cannot support guest task affinity should
+prevent concurrent reuse, either by applying backpressure or by allowing only
+`sync` exports.
 
 
 ## TODO
