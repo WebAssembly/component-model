@@ -29,7 +29,7 @@ See [Gated Features] for an explanation of emoji like 🔧 and 🏷️.
 
 [IDL]: https://en.wikipedia.org/wiki/Interface_description_language
 [components]: https://github.com/webassembly/component-model
-[Gated Features]: Explainer.md#gated-features
+[Gated Features]: Text.md#gated-features
 
 ## Package Names
 
@@ -86,7 +86,7 @@ Package names are used to generate the [names of imports and exports]
 in the Component Model's representation of [`interface`s][interfaces] and
 [`world`s][worlds] as described [below](#package-format).
 
-[names of imports and exports]: Explainer.md#import-and-export-definitions
+[names of imports and exports]: Text.md#import-and-export-definitions
 
 ## WIT Interfaces
 [interfaces]: #wit-interfaces
@@ -262,7 +262,7 @@ declared. In the case of worlds, all imported names are in the same scope,
 but separate from all the export names, and thus the same name can *not* be
 imported twice, but *can* be both imported and exported.
 
-[Plain Name]: Explainer.md#import-and-export-definitions
+[Plain Name]: Text.md#import-and-export-definitions
 
 ### Union of Worlds with `include`
 
@@ -824,7 +824,7 @@ defined within each language as well.
 [identifiers]: #wit-identifiers
 
 Identifiers in WIT can be defined with two different forms. The first is the
-[kebab-case] [`label`](Explainer.md#import-and-export-names) production in the
+[kebab-case] [`label`](Text.md#import-and-export-names) production in the
 Component Model text format.
 
 ```wit
@@ -1421,7 +1421,7 @@ As a future extension, WIT, components and component registries may allow
 nesting both namespaces and packages, which would then generalize the syntax of
 `use-path` as suggested by the 🪺 suffixed rule.
 
-[Interface Name]: Explainer.md#import-and-export-definitions
+[Interface Name]: Text.md#import-and-export-definitions
 
 ## Item: `world`
 
@@ -1508,7 +1508,7 @@ world my-world {
 }
 ```
 
-[`componenttype`]: Explainer.md#type-definitions
+[`componenttype`]: Text.md#type-definitions
 
 ## Item: `include`
 
@@ -1582,7 +1582,7 @@ replacing the `func` keyword with `get` or `set`. Such functions cannot be
 async and have additional restrictions on their parameters and results as
 defined in [Binary.md](Binary.md#import-and-export-definitions). Each setter
 must have a corresponding getter with the same name (not just equal under
-[strong uniqueness](Explainer.md#name-uniqueness)), though in WIT the getter
+[strong uniqueness](Text.md#name-uniqueness)), though in WIT the getter
 and setter may appear in any order. For example, the following definitions:
 
 ```wit
@@ -1801,7 +1801,7 @@ written return type and are given the implicit return type `r`.
 📡 A resource statement can also contain any number of *getters* and
 *setters*, which may or may not be static. Every setter must have a
 corresponding getter with the same name (not just equal under [strong
-uniqueness](Explainer.md#name-uniqueness)) and same static-ness, though the two
+uniqueness](Text.md#name-uniqueness)) and same static-ness, though the two
 may appear in any order. The parameter and return types of getters and setters
 have extra restrictions defined in [Binary.md](Binary.md#import-and-export-definitions).
 
@@ -2052,7 +2052,7 @@ record bar2 {
 [package-format]: #package-format
 
 Each top-level WIT definition can be compiled into a single canonical
-Component Model [type definition](Explainer.md#type-definitions) that
+Component Model [type definition](Text.md#type-definitions) that
 captures the result of performing the type resolution described above. These
 Component Model types can then be exported by a component along with other
 sorts of exports, allowing a single component to package both runtime
@@ -2069,7 +2069,7 @@ Using component binaries to package WIT in this manner has several advantages:
   downstream tooling, similar to what has happened with the Core WebAssembly
   WAT text format over time.
 * When components are published in registries and assigned names (see the
-  discussion of naming in [Import and Export Definitions](Explainer.md#import-and-export-definitions)),
+  discussion of naming in [Import and Export Definitions](Text.md#import-and-export-definitions)),
   WIT interfaces and worlds can be published with the same tooling and named
   using the same `namespace:package/export` naming scheme.
 * A single package can both contain an implementation and a collection of
@@ -2251,7 +2251,7 @@ able to be used to compile a component without additional type information.
 
 🏷️ When a world imports or exports a named interface with a custom plain name
 (using the `id: use-path` syntax), the encoding uses the `(implements "I")`
-annotation defined in [Explainer.md](Explainer.md#import-and-export-definitions) to indicate which
+annotation defined in [Text.md](Text.md#import-and-export-definitions) to indicate which
 interface the instance implements. Note though that each copy implements a
 unique version of the interface in question. For example, the following WIT:
 
@@ -2306,7 +2306,7 @@ The `(implements "local:demo/store")` prefix tells bindings generators and
 toolchains which interface each plain-named instance import implements, while
 the labels `one` and `two` provide distinct plain names. This is a case of
 the general `(implements ..)` pattern described in
-[Explainer.md](Explainer.md#import-and-export-definitions). Also note here that
+[Text.md](Text.md#import-and-export-definitions). Also note here that
 two copies of the `"bucket"` resource are imported for the `local:demo/w` world.
 This is because the interfaces `one` and `two` duplicate the `store` interface.
 Note that this can import just a single `bucket` resource by extracting out the

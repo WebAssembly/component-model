@@ -47,14 +47,14 @@ To contribute to any of these repositories, see the Community Group's
 [Design Choices]: design/high-level/Choices.md
 [FAQ]: design/high-level/FAQ.md
 [WIT]: design/mvp/WIT.md
-[Text Format]: design/mvp/Explainer.md
+[Text Format]: design/mvp/Text.md
 [Binary Format]: design/mvp/Binary.md
 [Linking]: design/mvp/Linking.md
 [Concurrency]: design/mvp/Concurrency.md
 [ABI]: design/mvp/CanonicalABI.md
 [WAST test suite]: test/
 [formal spec]: spec/
-[Gated Features]: design/mvp/Explainer.md#gated-features
+[Gated Features]: design/mvp/Text.md#gated-features
 [W3C WebAssembly Community Group]: https://www.w3.org/community/webassembly/
 [Contributing Guidelines]: https://webassembly.org/community/contributing/
 [WASI]: https://github.com/WebAssembly/WASI
