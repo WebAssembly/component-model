@@ -1,0 +1,9 @@
+(menhir (modules parser) (flags --table --inspection --explain))
+
+(rule
+ (target lexer.ml)
+ ; NOTE(dbp 2021-10-12): I don't know of a way to depend on a package...
+ ; (deps   lexer.mll)
+ (deps   lexer.mll)
+ (action (chdir %{workspace_root}
+          (run %{bin:ocamllex} -ml -q -o %{target} %{deps}))))
