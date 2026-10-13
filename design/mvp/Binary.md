@@ -145,7 +145,7 @@ core:deftype     ::= rt:<core:rectype>                                    => rt 
                    | mt:<core:moduletype>                                 => mt
 core:moduletype  ::= 0x50 md*:vec(<core:moduledecl>)                      => (module md*)
 core:moduledecl  ::= 0x00 i:<core:import>                                 => i
-                   | 0x01 t:<core:type>                                   => t
+                   | 0x01 rt:<core:rectype>                               => (type rt)
                    | 0x02 a:<core:alias>                                  => a
                    | 0x03 e:<core:exportdecl>                             => e
 core:alias       ::= 0x10 0x01 ct:<u32> idx:<u32>                         => (alias outer ct idx (type))
@@ -163,10 +163,15 @@ Notes:
   component core type is `0x00 0x50`; elsewhere, `0x50`). By the v1.0 release of
   this specification, `core:moduletype` will receive a new, non-overlapping
   opcode.
-* Validation of `core:moduledecl` rejects `core:moduletype` definitions
-  and `outer` aliases of `core:moduletype` definitions inside `type`
-  declarators. Thus, as an invariant, when validating a `core:moduletype`, the
-  core type index space will not contain any core module types.
+* The ambiguity above does not arise within a `core:moduletype`: the `type`
+  declarators of `core:moduledecl` contain a `core:rectype` directly, using the
+  same encoding as a Core WebAssembly type section. Thus, within a
+  `core:moduletype`, a non-final `sub` is encoded as `0x50` without a `0x00`
+  prefix, and a `core:moduletype` cannot be nested.
+* Validation of `core:moduledecl` rejects `outer` aliases of
+  `core:moduletype` definitions. Thus, as an invariant, when validating a
+  `core:moduletype`, the core type index space will not contain any core module
+  types.
 * As described in the explainer, each module type is validated with an
   initially-empty type index space.
 * In `core:alias`, the first `0x10` is the opcode for `type` in `core:sort` and
