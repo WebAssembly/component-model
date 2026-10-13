@@ -3,4 +3,3 @@
 ./values/post-return.wast
 ./async/big-interleaving-test.wast
 ./async/forward.wast
-./validation/version-suffix.wast

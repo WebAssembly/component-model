@@ -10,21 +10,52 @@
   (import "a:b/j@0.0.1" (versionsuffix "+sha.5114f85") (instance))      ;; 0.0.1+sha.5114f85
   (import "a:b/k@0.0.0" (instance))                                     ;; 0.0.0
   (import "a:b/l@0.0.12" (versionsuffix "+b") (instance))               ;; 0.0.12+b
+  (import "a:b/m@1.2.3-alpha" (instance))                               ;; 1.2.3-alpha
+  (import "a:b/n@1.2.3-alpha.1" (versionsuffix "+sha.5114") (instance)) ;; 1.2.3-alpha.1+sha.5114
+  (import "a:b/o@0.2.6-rc.1" (versionsuffix "+b") (instance))           ;; 0.2.6-rc.1+b
+  (import "a:b/p@0.0.1-alpha" (versionsuffix "+sha") (instance))        ;; 0.0.1-alpha+sha
 )
 
-;; pre-release labels aren't split by canonicalization, but the concatenation is
-;; still a valid semver and thus valid
+;; a version with a pre-release label isn't split (other than its build
+;; metadata) and so a pre-release label can't appear in a versionsuffix
+(assert_invalid
+  (component (import "a:b/c@1" (versionsuffix ".2.3-alpha") (instance)))
+  "is not the canonical version of `1.2.3-alpha`")
+(assert_invalid
+  (component (import "a:b/c@1" (versionsuffix ".2.3-alpha.1+sha") (instance)))
+  "is not the canonical version of `1.2.3-alpha.1+sha`")
+(assert_invalid
+  (component (import "a:b/c@0.2" (versionsuffix ".6-rc.1") (instance)))
+  "is not the canonical version of `0.2.6-rc.1`")
+(assert_invalid
+  (component (import "a:b/c@0.0.1" (versionsuffix "-alpha") (instance)))
+  "is not the canonical version of `0.0.1-alpha`")
+(assert_invalid
+  (component (import "a:b/c@0.0.1" (versionsuffix "-alpha+sha") (instance)))
+  "is not the canonical version of `0.0.1-alpha+sha`")
+
+;; non-canonical versions are still allowed when they are a valid semver and
+;; have no versionsuffix
 (component definition
-  (import "a:b/c@1" (versionsuffix ".2.3-alpha") (instance))
-  (import "a:b/d@1" (versionsuffix ".2.3-alpha.1+sha") (instance))
-  (import "a:b/e@0.0.1" (versionsuffix "-alpha") (instance))
-  (import "a:b/f@0.0.1" (versionsuffix "-alpha+sha") (instance))
+  (import "a:b/c@1.2.3" (instance))
+  (import "a:b/d@0.2.6+sha.5114f85" (instance))
+  (import "a:b/e@1.2.3-alpha+sha" (instance))
+  (import "a:b/f@1.2.3" (func))
 )
 
-;; an explicitly-empty versionsuffix is equivalent to no versionsuffix
-(component definition
-  (import "a:b/c@0.0.1" (versionsuffix "") (instance))
-)
+;; empty versionsuffix is not allowed
+(assert_invalid
+  (component (import "a:b/c@0.0.1" (versionsuffix "") (instance)))
+  "version suffix cannot be empty")
+(assert_invalid
+  (component (import "a:b/c" (versionsuffix "") (instance)))
+  "version suffix cannot be empty")
+(assert_invalid
+  (component (import "a" (implements "a:b/c@0.0.1") (versionsuffix "") (instance)))
+  "version suffix cannot be empty")
+(assert_invalid
+  (component (import "a" (implements "a:b/c") (versionsuffix "") (instance)))
+  "version suffix cannot be empty")
 
 ;; when canonversion is not itself a valid semver, a versionsuffix is required
 (assert_invalid
@@ -32,12 +63,6 @@
   "is not valid")
 (assert_invalid
   (component (import "a:b/c@0.2" (instance)))
-  "is not valid")
-(assert_invalid
-  (component (import "a:b/c@1" (versionsuffix "") (instance)))
-  "is not valid")
-(assert_invalid
-  (component (import "a:b/c@0.2" (versionsuffix "") (instance)))
   "is not valid")
 
 ;; the concatenation must be a valid semver
@@ -56,60 +81,72 @@
 (assert_invalid
   (component (import "a:b/c@1" (versionsuffix ".2.3.4") (instance)))
   "is not valid")
-
-;; versions matching neither canonversion nor valid semver
+(assert_invalid
+  (component (import "a:b/c@1" (versionsuffix ".02.3") (instance)))
+  "is not valid")
+(assert_invalid
+  (component (import "a:b/c@1" (versionsuffix ".2.3+") (instance)))
+  "is not valid")
 (assert_invalid
   (component (import "a:b/c@0" (versionsuffix ".1.0") (instance)))
   "is not valid")
 (assert_invalid
   (component (import "a:b/c@0.0" (versionsuffix ".1") (instance)))
   "is not valid")
-(assert_invalid
-  (component (import "a:b/c@01" (versionsuffix ".2.3") (instance)))
-  "is not valid")
-(assert_invalid
-  (component (import "a:b/c@0.01" (versionsuffix ".3") (instance)))
-  "is not valid")
-(assert_invalid
-  (component (import "a:b/c@0.0.01" (instance)))
-  "is not valid")
 
-;; a versionsuffix requires an interfacename with a canonversion
+;; a versionsuffix requires an interfacename with an interfaceversion
 (assert_invalid
   (component (import "a" (versionsuffix ".2.3") (instance)))
-  "is not valid")
-(assert_invalid
-  (component (import "a" (versionsuffix "") (instance)))
-  "is not valid")
+  "`versionsuffix` requires an interface name or `implements`")
 (assert_invalid
   (component (import "a:b/c" (versionsuffix ".2.3") (instance)))
-  "is not valid")
-(assert_invalid
-  (component (import "a:b/c" (versionsuffix "") (instance)))
-  "is not valid")
-(assert_invalid
-  (component (import "a:b/c@1.2.3" (versionsuffix "+sha") (instance)))
-  "is not valid")
-(assert_invalid
-  (component (import "a:b/c@1.2.3" (versionsuffix "") (instance)))
-  "is not valid")
-(assert_invalid
-  (component (import "a:b/c@0.2.6" (versionsuffix "+sha") (instance)))
-  "is not valid")
-(assert_invalid
-  (component (import "a:b/c@0.2.6" (versionsuffix "") (instance)))
-  "is not valid")
-(assert_invalid
-  (component (import "a:b/c@0.0.1-alpha" (versionsuffix "+sha") (instance)))
-  "is not valid")
-(assert_invalid
-  (component (import "a:b/c@0.0.1-alpha" (versionsuffix "") (instance)))
-  "is not valid")
+  "a version suffix requires the name to have a version")
 
-;; versionsuffix composes with external-id (in either order)
+;; only instances can have a versionsuffix
+(assert_invalid
+  (component (import "a:b/c@1" (versionsuffix ".2.3") (func)))
+  "only instances can have an `versionsuffix`")
+(assert_invalid
+  (component (import "a:b/c@1" (versionsuffix ".2.3") (component)))
+  "only instances can have an `versionsuffix`")
+(assert_invalid
+  (component (import "a:b/c@1" (versionsuffix ".2.3") (type (sub resource))))
+  "only instances can have an `versionsuffix`")
+(assert_invalid
+  (component (type (component (export "a:b/c@1" (versionsuffix ".2.3") (func)))))
+  "only instances can have an `versionsuffix`")
+
+;; with `implements`, the versionsuffix applies to the `implements` interfacename
+(component definition
+  (import "a" (implements "a:b/c@1") (versionsuffix ".2.3") (instance $a))
+  (import "b" (implements "a:b/c@0.2") (versionsuffix ".6+sha.5114f85") (instance))
+  (import "c" (implements "a:b/c@0.0.1") (instance))
+  (import "d" (implements "a:b/c@1.2.3") (instance))
+  (export "e" (implements "a:b/c@0.2") (versionsuffix ".1") (instance $a))
+  (type (instance
+    (export "f" (implements "a:b/c@1") (versionsuffix ".2.3") (instance))
+  ))
+)
+(assert_invalid
+  (component (import "a" (implements "a:b/c@1") (instance)))
+  "invalid interface version")
+(assert_invalid
+  (component (import "a" (implements "a:b/c") (versionsuffix ".2.3") (instance)))
+  "a version suffix requires the name to have a version")
+(assert_invalid
+  (component (import "a" (implements "a:b/c@1") (versionsuffix ".2") (instance)))
+  "invalid interface version")
+(assert_invalid
+  (component (import "a" (implements "a:b/c@1") (versionsuffix ".2.3-alpha") (instance)))
+  "is not the canonical version of `1.2.3-alpha`")
+(assert_invalid
+  (component (import "a" (implements "a:b/c@1.2.3") (versionsuffix "+sha") (instance)))
+  "is not the canonical version of `1.2.3+sha`")
+
+;; versionsuffix can be used with external-id
 (component definition
   (import "a:b/c@1" (versionsuffix ".2.3") (external-id "x") (instance))
-  (import "a:b/d@1" (external-id "y") (versionsuffix ".2.3") (instance))
+  (import "label" (implements "a:b/d@1") (versionsuffix ".2.3") (external-id "y") (instance))
 )
 
 ;; versionsuffix is allowed in all import/export positions
@@ -138,7 +175,7 @@
   ))))
 )
 
-;; versionsuffix is ignored by name uniqueness...
+;; versionsuffix is ignored by name uniqueness
 (assert_invalid
   (component
     (import "a:b/c@1" (versionsuffix ".2.3") (instance))

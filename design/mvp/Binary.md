@@ -469,12 +469,11 @@ Notes:
 * 📡 Validation of `[set]` names requires that the function have either no
   result type or a result type of `(result (error $E)?)` (with no value type).
 * 🔀/📡 Functions with `[get]` or `[set]` names must not be `async`.
-* 🔗 Validation requires that a `versionsuffix` is only present when the
-  `interfacename` has a `canonversion` and that the concatenation of the
-  `canonversion` and the `versionsuffix`, if there is one, results in a
-  `valid semver` as defined by [https://semver.org](https://semver.org/). A
-  `versionsuffix` is otherwise ignored for validation except to improve
-  diagnostic messages.
+* 🔗 Validation requires that a `versionsuffix` is only present on
+  `instance`-typed imports or exports that have either an `implements`
+  attribute or an `interfacename` name.
+* 🔗 Validation requires that every `interfacename` with an `interfaceversion`
+  satisfies the [canonical interface name] rules.
 
 ## 🪙 Value Definitions
 
@@ -601,6 +600,7 @@ named once.
 [`core:rectype]: https://webassembly.github.io/gc/core/binary/types.html#recursive-types
 
 [Strongly-unique]: Explainer.md#name-uniqueness
+[Canonical Interface Name]: Explainer.md#-canonical-interface-name
 
 [type-imports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
 [module-linking]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md
