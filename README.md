@@ -4,15 +4,16 @@ This repository is where the Component Model is being standardized. For a more
 user-focused explanation, take a look at the **[Component Model Documentation]**.
 
 This repository contains:
-* high-level [goals], [use cases], [design choices] and [FAQ] docs
-* low-level [WIT], [text format], [binary format], [linking], [concurrency] and
-  [ABI] docs
+* a general [explainer] that introduces the Component Model via WAT examples
+* focused explainers covering [linking], [concurrency] and [JS]
+* detailed definitions of the [text format], [binary format], [ABI] and [IDL]
 * a growing [WAST test suite]
+* the original high-level [goals], [use cases], [design choices] and [FAQ] docs
 
 In the future, this repository will additionally contain a [formal spec] and a
 reference interpreter.
 
-## Milestones
+## Developer Preview Releases
 
 The Component Model is currently being developed incrementally as part of [WASI]
 "Developer Preview" releases. The Component Model features enabled as part of a
@@ -46,11 +47,14 @@ To contribute to any of these repositories, see the Community Group's
 [Use Cases]: design/high-level/UseCases.md
 [Design Choices]: design/high-level/Choices.md
 [FAQ]: design/high-level/FAQ.md
+[Explainer]: design/mvp/Explainer.md
+[IDL]: design/mvp/WIT.md
 [WIT]: design/mvp/WIT.md
 [Text Format]: design/mvp/Text.md
 [Binary Format]: design/mvp/Binary.md
 [Linking]: design/mvp/Linking.md
 [Concurrency]: design/mvp/Concurrency.md
+[JS]: TODO
 [ABI]: design/mvp/CanonicalABI.md
 [WAST test suite]: test/
 [formal spec]: spec/
