@@ -1123,7 +1123,7 @@ and `$C1` is a subtype of `$C2`:
 
 🏷️/🔗 Note that all `attributes` on `import`s and `export`s are ignored by type
 checking and so adding, removing or changing any `external-id` attribute on the
-`func`s above (or any `implements` or `versionsuffix` attribute on `instance`
+`func`s above (or any `implements` or `version-suffix` attribute on `instance`
 imports or exports) does not change the result.
 
 When we next consider type imports and exports, there are two distinct
@@ -2664,7 +2664,7 @@ import        ::= (import <externnamelit> <attributes> bind-id(<externtype>))
 export        ::= (export <id>? <externnamelit> <attributes> <externidx> <externtype>?)
 attributes    ::= <implements>? <versionsuffix>? <externid>?
 implements    ::= (implements <interfacenamelit>) 🏷️
-versionsuffix ::= (versionsuffix <semversuffixlit>) 🔗
+versionsuffix ::= (version-suffix <semversuffixlit>) 🔗
 externid      ::= (external-id <name>) 🏷️
 ```
 Imports and exports both have a *name* (`externnamelit`) and a list of
@@ -2686,17 +2686,17 @@ and exports and instead provide extra semantic information *about* imports and
 exports that hosts or tools can automatically interpret to determine *how* to
 supply imports and call exports. In particular:
 
-🔗 The `versionsuffix` attribute provides the minor/patch/build information that
+🔗 The `version-suffix` attribute provides the minor/patch/build information that
 was stripped from the [Canonical interface name](#-canonical-interface-name) so
 that this information can be used in error messages to reconstruct the full
-original semantic version. A `versionsuffix` may only be attached to an
+original semantic version. A `version-suffix` may only be attached to an
 `instance` import or export and applies to the `interfacename` of the
 `implements` attribute, if present, and otherwise to the `interfacename` of the
 import or export itself. For example:
 ```wat
 (component
-  (import "wasi:http/types@0.2" (versionsuffix ".6") (instance ...))
-  (import "primary" (implements "wasi:keyvalue/store@0.2") (versionsuffix ".1") (instance ...))
+  (import "wasi:http/types@0.2" (version-suffix ".6") (instance ...))
+  (import "primary" (implements "wasi:keyvalue/store@0.2") (version-suffix ".1") (instance ...))
 )
 ```
 
@@ -2999,13 +2999,13 @@ the `<major>.<minor>.<patch>(-<pre>)(+<build>)` syntax of [Semantic Versioning
   - `0.0.1+sha.5114f85` &rarr; `0.0.1` / `+sha.5114f85`
 
 When a version is canonicalized, any `semversuffix` that was split off of the
-version must be preserved in the `versionsuffix` attribute of any resulting
+version must be preserved in the `version-suffix` attribute of any resulting
 `import`s and `export`s to give component runtimes and other tools access to the
 original version for error messages, documentation, and other development
 purposes. Validation checks this by requiring that the `interfaceversion`
-concatenated with the `versionsuffix` (if present) is a `valid semver` and that,
-when a `versionsuffix` is present, canonicalizing the concatenated `valid semver`
-splits it into exactly the `interfaceversion` and the `versionsuffix`. Thus,
+concatenated with the `version-suffix` (if present) is a `valid semver` and that,
+when a `version-suffix` is present, canonicalizing the concatenated `valid semver`
+splits it into exactly the `interfaceversion` and the `version-suffix`. Thus,
 for example:
 - `a:b/c@1` is invalid (`1` is not a `valid semver`)
 - `a:b/c@1` with `.2.3` and `a:b/c@0.0.1-alpha` with `+sha` are valid

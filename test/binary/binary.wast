@@ -1330,7 +1330,7 @@
   "\02"                                       ;; externname with attributes
   "\07a:b/c@1"                                ;; name "a:b/c@1"
   "\01"                                       ;; 1 attribute:
-  "\01"                                       ;; 0x01 versionsuffix:
+  "\01"                                       ;; 0x01 version-suffix:
   "\04.2.3"                                   ;; ".2.3"
   "\05\00"                                    ;; instance (type 0)
   "\02"                                       ;; externname with attributes

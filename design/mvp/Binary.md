@@ -407,7 +407,7 @@ nameattributes ::= 0x00 len:<u32> en:<externname>                       => "en" 
                  | 0x01 len:<u32> en:<externname>                       => "en"                 (if len = |en|)
                  | 0x02 len:<u32> en:<externname> a*:vec(<attribute>)   => "en" a*              (if len = |en|) 🏷️/🔗
 attribute      ::= 0x00 len:<u32> in:<interfacename>                    => (implements "in")    (if len = |in|) 🏷️
-                 | 0x01 len:<u32> vs:<semversuffix>                     => (versionsuffix "vs") (if len = |vs|) 🔗
+                 | 0x01 len:<u32> s:<semversuffix>                      => (version-suffix "s") (if len = |vs|) 🔗
                  | 0x02 n:<name>                                        => (external-id n) 🏷️
 ```
 
@@ -469,7 +469,7 @@ Notes:
 * 📡 Validation of `[set]` names requires that the function have either no
   result type or a result type of `(result (error $E)?)` (with no value type).
 * 🔀/📡 Functions with `[get]` or `[set]` names must not be `async`.
-* 🔗 Validation requires that a `versionsuffix` is only present on
+* 🔗 Validation requires that a `version-suffix` is only present on
   `instance`-typed imports or exports that have either an `implements`
   attribute or an `interfacename` name.
 * 🔗 Validation requires that every `interfacename` with an `interfaceversion`
