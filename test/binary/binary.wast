@@ -1132,15 +1132,6 @@
     "\00asm" "\0d\00\01\00"                   ;; preamble
     "\08\02"                                  ;; canon section (2 bytes)
     "\01"                                     ;; 1 canon
-    "\2e"                                     ;; 0x2e is unallocated
-  )
-  "invalid leading byte (0x2e) for canonical function"
-)
-(assert_malformed
-  (component binary
-    "\00asm" "\0d\00\01\00"                   ;; preamble
-    "\08\02"                                  ;; canon section (2 bytes)
-    "\01"                                     ;; 1 canon
     "\43"                                     ;; 0x43 is unallocated
   )
   "invalid leading byte (0x43) for canonical function"
@@ -1190,7 +1181,7 @@
     "\01"                                     ;; 1 canon
     "\0c\02"                                  ;; thread.yield with flag 0x02
   )
-  "invalid boolean value"
+  "invalid leading byte (0x2) for zero byte"
 )
 (assert_malformed
   (component binary
@@ -1199,7 +1190,7 @@
     "\01"                                     ;; 1 canon
     "\20\02\00"                               ;; waitable-set.wait with flag 0x02
   )
-  "invalid boolean value"
+  "invalid leading byte (0x2) for zero byte"
 )
 
 ;; the 'cancellable' immediate was removed; the vestigial byte must be 0x00
@@ -1223,7 +1214,7 @@
     "\01"                                       ;; 1 canon
     "\20\01\00"                                 ;; 0x20 waitable-set.wait, reserved byte 0x01, (memory 0)
   )
-  "non-zero reserved byte"
+  "invalid leading byte (0x1) for zero byte"
 )
 (assert_malformed
   (component binary
@@ -1245,7 +1236,7 @@
     "\01"                                       ;; 1 canon
     "\21\01\00"                                 ;; 0x21 waitable-set.poll, reserved byte 0x01, (memory 0)
   )
-  "non-zero reserved byte"
+  "invalid leading byte (0x1) for zero byte"
 )
 (assert_malformed
   (component binary
@@ -1254,7 +1245,7 @@
     "\01"                                     ;; 1 canon
     "\29\01"                                  ;; 0x29 thread.suspend, reserved byte 0x01
   )
-  "non-zero reserved byte"
+  "invalid leading byte (0x1) for zero byte"
 )
 (assert_malformed
   (component binary
@@ -1263,7 +1254,7 @@
     "\01"                                     ;; 1 canon
     "\0c\01"                                  ;; 0x0c thread.yield, reserved byte 0x01
   )
-  "non-zero reserved byte"
+  "invalid leading byte (0x1) for zero byte"
 )
 (assert_malformed
   (component binary
@@ -1272,7 +1263,7 @@
     "\01"                                     ;; 1 canon
     "\2a\01"                                  ;; 0x2a thread.suspend-then-resume, reserved byte 0x01
   )
-  "non-zero reserved byte"
+  "invalid leading byte (0x1) for zero byte"
 )
 (assert_malformed
   (component binary
@@ -1281,7 +1272,7 @@
     "\01"                                     ;; 1 canon
     "\2b\01"                                  ;; 0x2b thread.yield-then-resume, reserved byte 0x01
   )
-  "non-zero reserved byte"
+  "invalid leading byte (0x1) for zero byte"
 )
 (assert_malformed
   (component binary
@@ -1290,7 +1281,7 @@
     "\01"                                     ;; 1 canon
     "\2c\01"                                  ;; 0x2c thread.suspend-then-promote, reserved byte 0x01
   )
-  "non-zero reserved byte"
+  "invalid leading byte (0x1) for zero byte"
 )
 (assert_malformed
   (component binary
@@ -1299,7 +1290,7 @@
     "\01"                                     ;; 1 canon
     "\2d\01"                                  ;; 0x2d thread.yield-then-promote, reserved byte 0x01
   )
-  "non-zero reserved byte"
+  "invalid leading byte (0x1) for zero byte"
 )
 
 ;; import section (id 10) and export section (id 11)
