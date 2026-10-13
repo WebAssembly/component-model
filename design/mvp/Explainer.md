@@ -1841,7 +1841,8 @@ Lastly, the `task-cancelled` event is never returned by `waitable-set.wait` or
 
 In the Canonical ABI, the `event-code` return value provides the `event`
 discriminant and the case payloads are stored as two contiguous `i32`s at the
-8-byte-aligned address `payload-addr`.
+4-byte-aligned address `payload-addr`, trapping if `payload-addr` is misaligned
+or out of bounds.
 
 For details, see [Waitables and Waitable Sets] in the concurrency explainer and
 [`canon_waitable_set_wait`] in the Canonical ABI explainer.
