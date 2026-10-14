@@ -1496,7 +1496,7 @@ generated while handling the request.
 
 If necessary, a guest runtime can switch execution to another Component Model
 task by having each such task wait on a `stream<()>` that is written to whenever
-it has guest tasks to run. Alternatively, [`thread.resume-later`] and friends
+it has guest tasks to run. Alternatively, [`thread.suspend-then-resume`] and friends
 can switch execution to an existing thread belonging to the desired Component
 Model task. Guest runtimes that cannot support guest task affinity should
 prevent concurrent reuse, either by applying backpressure or by allowing only
