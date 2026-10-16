@@ -234,7 +234,7 @@ Dispatch on `componentValType`:
 - `record { f: T, ... }` → `ToJSValueRecord`(|componentValue|, the fields).
 - `flags "L"+` → `ToJSValueFlags`(|componentValue|, the labels).
 - `enum "L"+` → String, the label verbatim.
-- Top-level `option<T>` → **undefined** for `none`, else `ToJSValue`(the payload, T).
+- `option<T>` not nested within another `option` → **undefined** for `none`, else `ToJSValue`(the payload, T).
 - `variant`, and nested `option`, and `result` outside return position → `ToJSValueVariant`(|componentValue|, the cases). In return position a `result` is unwrapped instead, into a return value or a thrown `ComponentError` (see [Read the imports](#read-the-imports-object) and [Create the exports object](#create-the-exports-object)).
 - `map<K, V>` → `ToJSValueMap`(|componentValue|, K, V).
 - `own<R>` / `borrow<R>` → See [Resource types](#resource-types).
@@ -312,13 +312,13 @@ Dispatch on `targetComponentType`:
 - `char` → ? `ToString`(|jsValue|); it must consist of exactly one Unicode scalar value, else throw a `TypeError`. A lone surrogate is not a scalar value and is therefore a `TypeError`.
 - `string` → ? `ToString`(|jsValue|), then replace each unpaired surrogate with U+FFFD (matching WebIDL `USVString`).
 - `list<Scalar>` → ? `ToComponentValueScalarList`(|scalar|, |jsValue|).
-- `list<T>` → ? `ToComponentValueList`(|jsValue|, T).
-- `list<T, N>` → as `list<T>`, then the length must be exactly `N`, else throw a `TypeError`.
-- `tuple<T0, ...>` → as `list`, then the length must be exactly the arity, and element `i` converts to `T_i`.
+- `list<T>` → ? `ToComponentValueList`(|jsValue|, T, `none`).
+- `list<T, N>` → ? `ToComponentValueList`(|jsValue|, T, N).
+- `tuple<Types...>` → ? `ToComponentValueTuple`(|jsValue|, Types...)
 - `record { f: T, ... }` → ? `ToComponentValueRecord`(|jsValue|, the fields).
 - `flags "L"+` → ? `ToComponentValueFlags`(|jsValue|, the labels).
 - `enum` → ? ? `ToString`(|jsValue|) must be one of the labels, else throw a `TypeError`.
-- Top-level `option<T>` → **null** and **undefined** both give `none`; anything else gives `some(ToComponentValue(jsValue, T))`.
+- `option<T>` not nested within another `option` → **null** and **undefined** both give `none`; anything else gives `some(ToComponentValue(jsValue, T))`.
 - `variant`, and nested `option`, and `result` outside return position → ? `ToComponentValueVariant`(|jsValue|, the cases). In return position a `result` is unwrapped instead: a JS return value becomes `result.ok`, and a thrown exception becomes `result.error` (see [Read the imports](#read-the-imports-object) and [Create the exports object](#create-the-exports-object)).
 - `map<K, V>` → ? `ToComponentValueMap`(|jsValue|, K, V).
 - `own<R>` / `borrow<R>` → See [Resource types](#resource-types).
@@ -352,11 +352,11 @@ Out-of-range values wrap and `NaN` and infinities become 0, matching the core JS
     1. If |jsValue|'s underlying buffer is detached or |jsValue| is out of bounds:
         1. Throw a `TypeError`.
     1. Return one |scalar| per element of |jsValue|, in order.
-1. Return `ToComponentValueList`(|jsValue|, |scalar|).
+1. Return `ToComponentValueList`(|jsValue|, |scalar|, `none`).
 
 A typed array of the matching class is copied directly, since that is what `ToJSValue` produces. Anything else goes through the iterable path, so other typed arrays and plain Arrays behave like they do in the `new TypedArray(iterable)` constructor.
 
-`ToComponentValueList(jsValue, T)`:
+`ToComponentValueList(jsValue, T, N)`:
 1. If |jsValue| is not an Object:
     1. Throw a `TypeError`.
 1. Let |method| be ? `GetMethod`(|jsValue|, `%Symbol.iterator%`).
@@ -364,13 +364,42 @@ A typed array of the matching class is copied directly, since that is what `ToJS
     1. Throw a `TypeError`.
 1. Let |values| be ? `IteratorToList`(? `GetIteratorFromMethod`(|jsValue|, |method|)).
 1. Let |valuesLength| be the length of |values|.
-1. Let |list| be an empty component list with length |valuesLength| of type `T`.
-1. For |i| in 0..|valuesLength|:
-    1. Let |value| be |values|[|i|].
+1. If |N| is not `none``:
+    1. Let |listLength| be |N|.
+1. Else:
+    1. Let |listLength| be |valuesLength|.
+1. Let |list| be an empty component list with length |listLength| of type `T`.
+1. For |i| in 0..|listLength|:
+    1. If |i| >= |valuesLength|:
+        1. Let |value| be `undefined`.
+    1. Else:
+        1. Let |value| be |values|[|i|].
     1. Set |list|[|i|] to ? `ToComponentValue`(|value|, `T`).
 1. Return |list|.
 
 The iterable is consumed before any element is converted, so that the canonical ABI has the list's length before calling realloc and converting elements.
+
+For fixed-length lists, any missing values from the iterable are filled in with `undefined`.
+
+`ToComponentValueTuple(jsValue, Types...)`:
+1. If |jsValue| is not an Object:
+    1. Throw a `TypeError`.
+1. Let |method| be ? `GetMethod`(|jsValue|, `%Symbol.iterator%`).
+1. If |method| is **undefined**:
+    1. Throw a `TypeError`.
+1. Let |values| be ? `IteratorToList`(? `GetIteratorFromMethod`(|jsValue|, |method|)).
+1. Let |valuesLength| be the length of |values|.
+1. Let |listLength| be the length of |Types|.
+1. Let |list| be an empty component list with length |listLength| of type `T`.
+1. For |i| in 0..|listLength|:
+    1. If |i| >= |valuesLength|:
+        1. Let |value| be `undefined`.
+    1. Else:
+        1. Let |value| be |values|[|i|].
+    1. Set |list|[|i|] to ? `ToComponentValue`(|value|, |Types|[|i|]).
+1. Return |list|.
+
+A tuple is treated like a fixed-length list, except the destination type for conversion changes based on the element index.
 
 `ToComponentValueRecord(jsValue, fields)`:
 1. If |jsValue| is not an Object:
