@@ -30,7 +30,7 @@ const { instance } = await WebAssembly.instantiate(bytes);
 instance.exports.greet("world");  // "hello, world"
 ```
 
-The `exports` property of an instance holds one property per export and `greet` is an ordinary JS function
+The `exports` object of an instance holds one property per export and `greet` is an ordinary JS function
 
 Component names are kebab-case and JS function names are [camelCase](./JS-Reference.md#names), so a function export named `greet-loudly` would be `greetLoudly`.
 
@@ -128,12 +128,13 @@ The following table describes how a component value is converted into a JS value
 | `char` | String of exactly one Unicode scalar value | `string` |
 | `string` | String, well formed | `string` |
 | `list<sN, N?>`, `list<uN, N?>`, `list<fN, N?>` | `IntNArray`, `UintNArray`, `FloatNArray` | `IntNArray`, `UintNArray`, `FloatNArray` |
-| `list<T>`, `list<T, N>`, `tuple<T, U>` | Array | `T[]` |
+| `list<T>`, `list<T, N>` | Array | `T[]` |
+| `tuple<T, U>` | Array | `(T | U)[]` |
 | `record { field-name: T, ... }` | null-prototype object,  | `{ fieldName: T, ... }` |
-| `flags "flag-a" "flag-b"` | null-prototype object of Booleans | `{ flagA?: boolean, flagB?: boolean }` |
+| `flags "flag-a" "flag-b"` | null-prototype object of Booleans | `{ flagA: boolean, flagB: boolean }` |
 | `enum "case-a" "case-b"` | String, the case label verbatim | `"case-a" \| "case-b"` |
 | `option<T>` (if top-level) | `undefined`, or the payload | `T \| undefined` |
-| `result<T, E>` (if in return position of function) | if `E` { thrown as a `WebAssembly.ComponentError` } else { `T` } | `T`
+| `result<T, E>` (if in return position of function) | if `E` { thrown as a `WebAssembly.ComponentError` } else { `T` } | `T` |
 | `variant`, `option<T>`, `result<T, E>` | null-prototype object with discriminating `kind` field and optional `value` field | `{ kind: "a-b" } \| { kind: "c-d", value: T }` |
 | `map<K, V>` | `Map` | `Map<K, V>` |
 | `own<R>`, `borrow<R>` | the original JS value for an imported resource type, an instance of its class for an exported one | `R` |
@@ -148,7 +149,7 @@ Converting a JS value to a component value accepts all of the above, but also ha
 The original [greeter example](#components-that-export-a-function) using ESM:
 
 ```js
-import { greet } from "component.wasm"
+import { greet } from "./component.wasm"
 
 greet("world"); // "hello, world"
 ```
@@ -164,19 +165,22 @@ The following component imports the default value from the "https://esm.unpkg.co
       "https://esm.unpkg.com/slugify@1.6.6")
     (func (param "text" string) (result string))
   )
+
+  ;; maps slugify across a list
+  (export "slugify-list"
+    (func (param "list" (list string)) (result (list string)))
+  )
 ))
+```
+```js
+  // component.wasm is instantiated with slugify=`https://esm.unpkg.com/slugify@1.6.6`.
+  import { slugifyList } from "./component.wasm";
+
+  // And the exported function can be used:
+  slugifyList(["some string", "another string"]); // ["some-string", "another-string"]
 ```
 
 If there is no `external-id`, the specifier is the import's [JS name](./JS-Reference.md#names), and an import map can be used to specify the URL to resolve for the import:
-
-```wat
-(type (component
-  (import "slugify"
-    (func (param "text" string) (result string))
-  )
-  (export "run" (func))
-))
-```
 
 ```html
 <script type="importmap">
@@ -185,12 +189,6 @@ If there is no `external-id`, the specifier is the import's [JS name](./JS-Refer
       "slugify": "https://esm.unpkg.com/slugify@1.6.6"
     }
   }
-</script>
-<script type="module">
-  import { run } from "./component.wasm";
-
-  // calls the default export of `https://esm.unpkg.com/slugify@1.6.6`
-  run();
 </script>
 ```
 
@@ -281,8 +279,7 @@ The above allows most JS classes to be imported as a resource by just passing th
   (import "element"
     (type $element (sub resource))
   )
-  (import
-    "[method]element.query-selector"
+  (import "[method]element.query-selector"
     (func
       (param "self" (borrow $element))
       (param "selectors" string)
@@ -400,6 +397,6 @@ As in the importing a resource case above, component names are converted to JS n
 
 The following have no binding yet:
 - Component model async features such as `async` functions, `future`, `stream`.
-- `error-context`.
+- `error-context`, which would better integrate `result` with JS's `Error` and offer backtrace support.
 
 Everything else we know to be open is collected in the reference's [follow ups](./JS-Reference.md#follow-ups).

@@ -213,7 +213,7 @@ Roundtripping from `ToJSValue` back through `ToComponentValue` is designed to be
   1. A `map` with duplicate keys keeps only the last pair per key (see [`ToJSValueMap`](#tojsvalue))
   1. Float NaNs are [canonicalized](CanonicalABI.md#loading)
 
-Every object a conversion creates, including any error it throws, belongs to the *component realm*: the realm of the `WebAssembly` namespace the component was instantiated through.
+Every object a conversion creates, including any error it throws, belongs to the *component realm*. This is the realm of the `WebAssembly` namespace the component was instantiated through with the JS-API, or the realm the ESM was instantiated in with ESM-integration.
 
 ### ToJSValue
 
@@ -307,20 +307,20 @@ A component value is a specification device. An implementation lowers the JS val
 Dispatch on `targetComponentType`:
 
 - `bool` → `ToBoolean`(|jsValue|).
-- Integer types → `ToComponentValueInteger`(|jsValue|, the type).
-- Float types → `ToComponentValueFloat`(|jsValue|, the type).
+- Integer types → ? `ToComponentValueInteger`(|jsValue|, the type).
+- Float types → ? `ToComponentValueFloat`(|jsValue|, the type).
 - `char` → ? `ToString`(|jsValue|); it must consist of exactly one Unicode scalar value, else throw a `TypeError`. A lone surrogate is not a scalar value and is therefore a `TypeError`.
 - `string` → ? `ToString`(|jsValue|), then replace each unpaired surrogate with U+FFFD (matching WebIDL `USVString`).
-- `list<Scalar>` → `ToComponentValueScalarList`(|scalar|, |jsValue|).
-- `list<T>` → `ToComponentValueList`(|jsValue|, T).
+- `list<Scalar>` → ? `ToComponentValueScalarList`(|scalar|, |jsValue|).
+- `list<T>` → ? `ToComponentValueList`(|jsValue|, T).
 - `list<T, N>` → as `list<T>`, then the length must be exactly `N`, else throw a `TypeError`.
 - `tuple<T0, ...>` → as `list`, then the length must be exactly the arity, and element `i` converts to `T_i`.
-- `record { f: T, ... }` → `ToComponentValueRecord`(|jsValue|, the fields).
-- `flags "L"+` → `ToComponentValueFlags`(|jsValue|, the labels).
-- `enum` → ? `ToString`(|jsValue|) must be one of the labels, else throw a `TypeError`.
+- `record { f: T, ... }` → ? `ToComponentValueRecord`(|jsValue|, the fields).
+- `flags "L"+` → ? `ToComponentValueFlags`(|jsValue|, the labels).
+- `enum` → ? ? `ToString`(|jsValue|) must be one of the labels, else throw a `TypeError`.
 - Top-level `option<T>` → **null** and **undefined** both give `none`; anything else gives `some(ToComponentValue(jsValue, T))`.
-- `variant`, and nested `option`, and `result` outside return position → `ToComponentValueVariant`(|jsValue|, the cases). In return position a `result` is unwrapped instead: a JS return value becomes `result.ok`, and a thrown exception becomes `result.error` (see [Read the imports](#read-the-imports-object) and [Create the exports object](#create-the-exports-object)).
-- `map<K, V>` → `ToComponentValueMap`(|jsValue|, K, V).
+- `variant`, and nested `option`, and `result` outside return position → ? `ToComponentValueVariant`(|jsValue|, the cases). In return position a `result` is unwrapped instead: a JS return value becomes `result.ok`, and a thrown exception becomes `result.error` (see [Read the imports](#read-the-imports-object) and [Create the exports object](#create-the-exports-object)).
+- `map<K, V>` → ? `ToComponentValueMap`(|jsValue|, K, V).
 - `own<R>` / `borrow<R>` → See [Resource types](#resource-types).
 - `future<T>` → TODO.
 - `stream<T>` → TODO.
