@@ -188,18 +188,13 @@ Every `plainname` matches exactly one of the four patterns below, and no `interf
 The JS name of an import or export declaration is then:
 
 `JSName`(|decl|):
+1. If |decl| has an `external-id` attribute that is the Unicode string |id|:
+    1. Return |id|.
 1. If |decl|.Name is an `interfacename`:
     1. Return |decl|.Name.
 1. If |decl| is a type declaration:
     1. Return `PascalCase`(`LabelOf`(|decl|.Name)).
 1. Return `CamelCase`(`LabelOf`(|decl|.Name)).
-
-An import's specifier is its [`external-id`](Explainer.md#import-and-export-definitions) attribute if it has one, and its JS name otherwise:
-
-`JSSpecifier`(|decl|):
-1. If |decl| has an `external-id` attribute that is the Unicode string |id|:
-    1. Return |id|.
-1. Return `JSName`(|decl|).
 
 ## Types and values
 
@@ -763,7 +758,7 @@ To `read a scope of imports` given a list of import declarations |importDecls|, 
         1. If |hostResourceTypes|[|abstractTypeKey|] exists:
             1. Append |hostResourceTypes|[|abstractTypeKey|].[[ComponentResourceType]] to |definitions|.
             1. Continue.
-    1. Let |name| be `JSSpecifier`(|importDecl|).
+    1. Let |name| be `JSName`(|importDecl|).
     1. Let |staticReceiver| be **undefined**.
     1. Let |builtin| be `resolve a builtin specifier` given |name| and |enabledBuiltins|.
     1. If |builtin| is not **empty**:
@@ -1100,15 +1095,15 @@ To `create a component error` for an optional component value |e| and component 
 
 [ESM-integration](https://github.com/WebAssembly/esm-integration/tree/main/proposals/esm-integration) extends to components. The module loader branches on the `layer` field of the binary to decide whether the bytes decode as a module or a component, so a component can be loaded anywhere a module can be today.
 
-Each component import has a [module specifier](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ModuleSpecifier) given by `JSSpecifier`(|decl|).
+Each component import has a [module specifier](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ModuleSpecifier) given by `JSName`(|decl|).
 
 Which binding of the resolved module the component receives depends on the import's type:
 
 | Import type | JS equivalent | Value |
 |---|---|---|
-| bare type, function, value | `import v from "JSSpecifier(decl)"` | the [default export](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ImportedDefaultBinding) |
-| instance | `import { a, b } from "JSSpecifier(decl)"` | one [named import](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-NamedImports) per export of the instance type whose name is an `interfacename` or matches *Plain*, named `JSName` of that export |
-| core module, component | `import source M from "JSSpecifier(decl)"` | the [module source](https://github.com/tc39/proposal-source-phase-imports), as a `Module` or `Component` |
+| bare type, function, value | `import v from "JSName(decl)"` | the [default export](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ImportedDefaultBinding) |
+| instance | `import { a, b } from "JSName(decl)"` | one [named import](https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-NamedImports) per export of the instance type whose name is an `interfacename` or matches *Plain*, named `JSName` of that export |
+| core module, component | `import source M from "JSName(decl)"` | the [module source](https://github.com/tc39/proposal-source-phase-imports), as a `Module` or `Component` |
 
 Reading the imports snapshots the resolved values, and so components cannot participate in cycles: a binding that is still uninitialized when the component is evaluated throws a `ReferenceError`. This matches how core modules work today with ESM-integration.
 
