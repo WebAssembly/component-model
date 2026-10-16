@@ -866,10 +866,8 @@ To `find an accessor` given an object |target|, a property key |key| and |kind|,
 The walk stops at the first own property it finds, as an ordinary property access does. A data property that shadows an accessor further up the chain therefore resolves to **undefined** and becomes a `LinkError`.
 
 To `read the function import` given |componentFuncType|, |importValue|, |importName| and |staticReceiver|:
-1. If `IsCallable`(|importValue|) is **false**:
-    1. Throw a `WebAssembly.LinkError`.
-1. If |importName| matches *Constructor* and `IsConstructor`(|importValue|) is **false**:
-    1. Throw a `WebAssembly.LinkError`.
+1. If `IsCallable`(|importValue|) is **false** or (|importName| matches *Constructor* and `IsConstructor`(|importValue|) is **false**):
+    1. Return a component host function of type |componentFuncType| whose body traps when called.
 1. Let |callable| be |importValue|.
 
 1. Let |callKind|, |receiverRule| and |paramOffset| be determined by |importName|:
