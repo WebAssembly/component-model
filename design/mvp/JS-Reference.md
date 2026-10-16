@@ -154,7 +154,7 @@ Every `plainname` matches exactly one of the four patterns below, and no `interf
 | *Plain* | `^(<label>)$` | 1: `name` | `query-selector` |
 | *Property* | `^\[(get\|set)\](<label>)$` | 1: `accessor`, 2: `name` | `[get]inner-HTML` |
 | *Constructor* | `^\[constructor\](<label>)$` | 1: `resource` | `[constructor]element` |
-| *Method* | `^\[(method\|static)\](\[(get\|set)\])?(<label>)\.(<label>)$` | 1: `scope`, 3: `accessor`, 4: `resource`, 5: `name` | `[method][set]element.inner-HTML` |
+| *Member* | `^\[(method\|static)\](\[(get\|set)\])?(<label>)\.(<label>)$` | 1: `scope`, 3: `accessor`, 4: `resource`, 5: `name` | `[method][set]element.inner-HTML` |
 
 `plainname`'s are restricted by component [strong uniqueness](./Explainer.md#name-uniqueness). This helps us statically avoid collisions when building high-level export types (such as [guest resource classes](#guest-resource-classes)) and using the name transformations below.
 
@@ -490,7 +490,7 @@ Imported and exported resource types are either abstract or transparently equiva
 
 `r1`, `r3`, `r4`, `r6` are the abstract types of this component type, while `r2`, `r5`, and `r7` are transparently equal to one of the abstract types.
 
-Host/guest resource types below are created only for abstract types, and stored in maps on the component instance. The map is keyed by an *abstract type key*, which is an import/export declaration for an abstract type.
+Host/guest resource types below are created only for abstract types, and stored in maps on the JS `ComponentInstance` object. The map is keyed by an *abstract type key*, which is an import/export declaration for an abstract type.
 
 A type import or export *declares a resource type* if following `(eq R)` reaches a `(sub resource)`. An *abstract type key* can be found for any such declaration by following `(eq R)` until you reach that `(sub resource)`.
 
@@ -569,16 +569,16 @@ An exported resource type that is only privately a re-export of an imported type
 
 ### Re-imported guest resource types
 
-An exported guest resource type may be imported by a separate component instance. In this case, the guest resource type is treated as if it was a host resource type and the previous section rules apply. As explained in [component store](#component-store), there is no direct component model linking between top-level instances through the JS-API.
+An exported guest resource type may be imported by a separate `ComponentInstance` through the JS-API. In this case, the guest resource type is treated as if it was a host resource type and the previous section rules apply. As explained in [component store](#component-store), there is no direct component model linking between top-level instances through the JS-API.
 
 #### Guest resource classes
 
-A unique JS *guest resource class* is created for each exported [abstract type](#abstract-and-transparent-types). A map from [abstract type key](#abstract-and-transparent-types) to guest resource class is stored on the component instance.
+A unique JS *guest resource class* is created for each exported [abstract type](#abstract-and-transparent-types). A map from [abstract type key](#abstract-and-transparent-types) to guest resource class is stored on the JS `ComponentInstance` object.
 
 A guest resource class is a built-in function object with the following slots:
 1. [[ResourceType]] - the guest resource type.
 1. [[ConstructorFunc]] - the component function that implements `new`, or **empty**.
-1. [[ComponentInstance]] - the component instance the class belongs to.
+1. [[ComponentInstance]] - the JS `ComponentInstance` the class belongs to.
 
 To `create a guest resource class` given a component instance |componentInstance|, resource type |resourceType|, String |name| and an integer |arity|:
 1. Let |prototype| be `OrdinaryObjectCreate`(`%Object.prototype%`).
@@ -591,16 +591,16 @@ To `create a guest resource class` given a component instance |componentInstance
     1. If |constructor|.[[ConstructorFunc]] is **empty**:
         1. Throw a `TypeError`.
     1. Let |rep| be ? `invoke a component function` given |constructor|.[[ConstructorFunc]], **false**, **undefined** and |args|.
-    1. Return ? `create a guest resource instance` given |constructor|, |rep|, **true** and |newTarget|.
+    1. Return ? `create an own guest resource instance` given |constructor|, |rep|, **true** and |newTarget|.
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.dispose%`, PropertyDescriptor { [[Value]]: a built-in function object with name "[Symbol.dispose]" and length 0 that performs `drop a guest resource instance` given its **this** value, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.toStringTag%`, PropertyDescriptor { [[Value]]: |name|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, "constructor", PropertyDescriptor { [[Value]]: |constructor|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|constructor|, "prototype", PropertyDescriptor { [[Value]]: |prototype|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **false** }).
-1. Let |members| be the function exports in |componentInstance|'s scope whose names match *Constructor* or *Method* with a `resource` capture naming |resourceType|.
+1. Let |members| be the function exports in |componentInstance|'s scope whose names match *Constructor* or *Member* with a `resource` capture naming |resourceType|.
 1. If some |c| of |members| matches *Constructor*:
     1. Assert: there is only one by validation rules.
     1. Set |constructor|.[[ConstructorFunc]] to |c|.Func.
-1. For each |e| of |members| matching *Method*, in declaration order:
+1. For each |e| of |members| matching *Member*, in declaration order:
     1. If `JSName`(|e|) is in `reserved class members`:
         1. Continue.
     1. If |e|.Name's `scope` capture is "method":
@@ -626,9 +626,9 @@ The following names are `reserved class members`:
   * "name"
   * "length"
 
-Defining these on the constructor or prototype may unexpectedly change JS class semantics. They are exported through `create the exports object` instead.
+Defining these on the constructor or prototype may unexpectedly change JS class semantics. They are exported through `create the exports object` in a generic way alongside all the other exports.
 
-*Method* exports with an `accessor` capture become the two halves of one accessor property, on `prototype` when `scope` is "method" and on the class itself when it is "static". Validation requires a `[set]` to be preceded in the same scope by the `[get]` it pairs with, so the getter is always defined first and the setter only fills in the accessor's [[Set]] field.
+*Member* exports with an `accessor` capture become the two halves of one accessor property, on `prototype` when `scope` is "method" and on the class itself when it is "static". Validation requires a `[set]` to be preceded in the same scope by the `[get]` it pairs with, so the getter is always defined first and the setter only fills in the accessor's [[Set]] field.
 
 #### Guest resource instances
 
@@ -640,7 +640,7 @@ An instance of a guest resource class has the following slots:
 
 It holds the same state a handle table entry does, plus the class it belongs to.
 
-To `create a guest resource instance` given a resource class |class|, |rep|, |own| and an optional |newTarget|:
+To `create an own guest resource instance` given a resource class |class|, |rep|, and an optional |newTarget|:
 1. Let |defaultProto| be the value of |class|'s `"prototype"` property.
 1. If |newTarget| is present:
     1. Let |proto| be ? `Get`(|newTarget|, "prototype").
@@ -651,10 +651,9 @@ To `create a guest resource instance` given a resource class |class|, |rep|, |ow
 1. Let |instance| be `OrdinaryObjectCreate`(|proto|, « [[ResourceClass]], [[Rep]], [[Own]], [[LendCount]] »).
 1. Set |instance|.[[ResourceClass]] to |class|.
 1. Set |instance|.[[Rep]] to |rep|.
-1. Set |instance|.[[Own]] to |own|.
+1. Set |instance|.[[Own]] to `true`.
 1. Set |instance|.[[LendCount]] to 0.
-1. If |own| is **true**:
-    1. Register |instance| in the [guest resource `FinalizationRegistry`](#guest-resource-finalizationregistry) with held value a record { [[ResourceClass]]: |class|, [[Rep]]: |rep| } and unregister token |instance|.
+1. Register |instance| in the [guest resource `FinalizationRegistry`](#guest-resource-finalizationregistry) with held value a record { [[ResourceClass]]: |class|, [[Rep]]: |rep| } and unregister token |instance|.
 1. Return |instance|.
 
 #### Conversions for guest resources
@@ -667,7 +666,7 @@ For a resource type `R` whose [abstract type](#abstract-and-transparent-types) i
     1. Let |instance| be the surrounding component instance.
     1. Let |abstractTypeKey| be the *abstract type key* of |R|.
     1. Let |class| be |instance|.[[GuestResourceClasses]][|abstractTypeKey|].
-    1. Return `create a guest resource instance` given |class|, |rep| and **true**.
+    1. Return `create an own guest resource instance` given |class|, |rep| and **true**.
 - `ToJSValue(rep, borrow<R>)`:
     1. Assert: unreachable.
     1. This can only happen if an exported function returns a borrow, which is not allowed.
@@ -723,14 +722,14 @@ To `instantiate a component` given |component|, a list of component definitions 
 1. Let |instance| be the result of instantiating |component| with |imports| in |store|.
 1. If instantiation traps:
     1. Throw a `WebAssembly.RuntimeError`.
-1. Perform ? `create guest resource classes` given |instance|.
+1. Let |guestResourceClasses| be ? `create guest resource classes` given |instance|.
 1. Let |exportsObject| be ? `create the exports object` given |instance|.
 1. Return a Record with:
     * [[Store]]: |store|
     * [[ComponentInstance]]: |instance|
     * [[Exports]]: |exportsObject|
     * [[HostResourceTypes]]: |hostResourceTypes|
-    * [[GuestResourceClasses]]: |instance|.[[GuestResourceClasses]].
+    * [[GuestResourceClasses]]: |guestResourceClasses|.
 
 To `instantiate a component from an imports object` given |component|, |importsObject|, and |enabledBuiltins|:
 1. Let |imports| and |hostResourceTypes| be ? `read the imports` given |component|, |importsObject|, and |enabledBuiltins|.
@@ -742,7 +741,7 @@ The top-level `read the imports` algorithm walks the component's imports and res
 
 The resolved JS values are then handed to the per-sort algorithms (`read the function import`, `read the type import`, and the rest) to produce the component definitions used during instantiation.
 
-While walking, the algorithm recognizes the pattern of a resource type import accompanied by *Constructor* and *Method* function imports naming it. A resource type import is read first and looks for a constructor (see [resource types](#resource-types)). Those function imports then read from the constructor and its prototype directly. This allows the common case of importing a class to be satisfied by just passing the constructor.
+While walking, the algorithm recognizes the pattern of a resource type import accompanied by *Constructor* and *Member* function imports naming it. A resource type import is read first and looks for a constructor (see [resource types](#resource-types)). Those function imports then read from the constructor and its prototype directly. This allows the common case of importing a class to be satisfied by just passing the constructor.
 
 Passing an exported component definition to a component import via the JS-API/ESM-integration is treated as if the import were a JS value. There is no "direct linking" that bypasses going through JS semantics. See [component store](#component-store) for more details.
 
@@ -770,7 +769,7 @@ To `read a scope of imports` given a list of import declarations |importDecls|, 
     1. If |builtin| is not **empty**:
         1. Let |importValue| be |builtin|.
     1. Else:
-        1. If |importDecl|.Sort is **func** and |importDecl|.Name matches *Constructor* or *Method*:
+        1. If |importDecl|.Sort is **func** and |importDecl|.Name matches *Constructor* or *Member*:
             1. Let |abstractTypeKey| be the *abstract type key* of the type import named by the `resource` capture.
             1. Assert: |hostResourceTypes|[|abstractTypeKey|] exists. (Validation requires that declaration to precede this one in the same scope)
             1. Let |constructorFunction| be |hostResourceTypes|[|abstractTypeKey|].[[ConstructorObject]].
@@ -786,7 +785,7 @@ To `read a scope of imports` given a list of import declarations |importDecls|, 
                         1. Throw a `WebAssembly.LinkError`.
 
                 1. If |importDecl|.Name has an `accessor` capture:
-                    1. Let |importValue| be ? `find an accessor` given |lookupTarget|, |name| and that capture.
+                    1. Let |importValue| be ? `find an accessor` given |lookupTarget|, |name| and the `accessor` capture.
                 1. Else:
                     1. Let |importValue| be ? `Get`(|lookupTarget|, |name|).
         1. Else:
@@ -814,7 +813,7 @@ To `read an import` given |importDecl|, |importValue|, |staticReceiver| and |hos
 To `read the core module import` given |coreModuleType| and |importValue|:
 1. If |importValue| does not have a [[Module]] internal slot:
     1. Throw a `WebAssembly.LinkError`.
-1. If the type of |importValue|.[[Module]] is not equal to |coreModuleType|:
+1. If the type of |importValue|.[[Module]] is not a subtype of |coreModuleType|:
     1. Throw a `WebAssembly.LinkError`.
 1. Return |importValue|.[[Module]].
 
@@ -845,7 +844,6 @@ To `read the type import` given |importDecl|, |importValue|, and |hostResourceTy
         1. Let |result| be `Call`(|dispose|, |selfValue|, the empty list).
         1. If |result| is an abrupt completion:
             1. Trap.
-1. Let |destructor| be a host function that, given a host resource value, releases its reference to [[JSValue]] and returns.
 1. Let |resourceType| be `create a resource type for host` given |destructor|.
 1. Let |hostResourceType| be a new host resource type record whose [[ComponentResourceType]] is |resourceType| and [[ConstructorObject]] is |importValue|.
 1. Set |hostResourceTypes|[|abstractTypeKey|] to |hostResourceType|.
@@ -876,7 +874,7 @@ To `read the function import` given |componentFuncType|, |importValue|, |importN
 
 1. Let |callKind|, |receiverRule| and |paramOffset| be determined by |importName|:
     1. *Constructor*: `Construct`, no receiver, offset 0.
-    1. *Method* with `scope` "method": `Call`, receiver is component argument 0 (the `borrow` self parameter), offset 1.
+    1. *Member* with `scope` "method": `Call`, receiver is component argument 0 (the `borrow` self parameter), offset 1.
     1. Otherwise: `Call`, receiver is |staticReceiver|, offset 0.
 1. Let |paramTypes| be |componentFuncType|.Params.
 1. Let |resultType| be |componentFuncType|.Result.
@@ -967,17 +965,17 @@ TODO: Within the wasm scheme we're parsing this similar to a general URL, but no
 
 The `create the exports object` algorithm walks the component's exports and builds a fresh JS object whose properties are the exports.
 
-Exported resource types become [guest resource classes](#guest-resource-classes) named `JSName`(|export|), and function exports matching *Constructor* or *Method* are mapped onto the class `R` named by their `resource` capture, just as in `read the imports`:
+Exported resource types become [guest resource classes](#guest-resource-classes) named `JSName`(|export|), and function exports matching *Constructor* or *Member* are mapped onto the class `R` named by their `resource` capture, just as in `read the imports`:
 - *Constructor*: the function becomes `R`'s constructor behaviour. Names are strongly-unique, so there can only be one.
-- *Method* with `scope` "method": the function becomes a method named `JSName`(|export|) on `R.prototype`.
-- *Method* with `scope` "static": the function becomes a static method named `JSName`(|export|) on `R`.
-- *Method* with an `accessor` capture: the "get" and "set" functions become the getter and setter of one accessor property named `JSName`(|export|), again on `R.prototype` or on `R`.
+- *Member* with `scope` "method": the function becomes a method named `JSName`(|export|) on `R.prototype`.
+- *Member* with `scope` "static": the function becomes a static method named `JSName`(|export|) on `R`.
+- *Member* with an `accessor` capture: the "get" and "set" functions become the getter and setter of one accessor property named `JSName`(|export|), again on `R.prototype` or on `R`.
 
 A *Property* export becomes an accessor property on the exports object itself. All other exported component definitions are given JS definitions named `JSName`(|export|) on the exports object.
 
 To `create guest resource classes` given a component instance |componentInstance|:
 1. Let |guestResourceClasses| be an empty map from [abstract type key](#abstract-and-transparent-types) to [guest resource class](#guest-resource-classes).
-1. Let |component| be |componentInstance|.[[Component]].
+1. Let |component| be the component underlying |componentInstance|.
 1. For each type export |export| of |component|'s type, in declaration order, recursing into exported instances:
     1. If |export| does not declare a resource type:
         1. Continue.
@@ -986,18 +984,18 @@ To `create guest resource classes` given a component instance |componentInstance
         1. Throw a `TypeError`.
     1. If |guestResourceClasses|[|abstractTypeKey|] exists:
         1. Continue.
-    1. Let |resourceType| be the component resource type |export| refers to in |componentInstance|.
+    1. Let |resourceType| be the component resource type |export| refers to in |component|.
     1. Let |arity| be the parameter count of the export whose name matches *Constructor* with a `resource` capture naming |export|, or 0 if there is none.
     1. Let |class| be `create a guest resource class` given |componentInstance|, |resourceType|, `JSName`(|export|) and |arity|.
     1. Set |guestResourceClasses|[|abstractTypeKey|] to |class|.
-1. Set |componentInstance|.[[GuestResourceClasses]] to |guestResourceClasses|.
+1. Return |guestResourceClasses|.
 
 To `create the exports object` given a |componentInstance|:
 1. Let |exportsObject| be `OrdinaryObjectCreate`(**null**).
 1. For each |export| of |componentInstance|.Exports, in declaration order:
     1. If |export|.Name matches *Constructor*:
         1. Continue.
-    1. If |export|.Name matches *Method* and `JSName`(|export|) is not in `reserved class members`:
+    1. If |export|.Name matches *Member* and `JSName`(|export|) is not in `reserved class members`:
         1. Continue.
     1. If |export|.Name matches *Property*:
         1. Perform `define an accessor for a component function` given |exportsObject|, |export| and **true**.
@@ -1041,7 +1039,7 @@ To `define an accessor for a component function` given an object |target|, a fun
 1. Let |key| be `JSName`(|export|).
 1. Let |accessor| be the `accessor` capture of |export|.Name.
 1. Let |name| be the string-concatenation of |accessor|, " " and |key|.
-1. Let |takesSelf| be **true** if |export|.Name matches *Method* with `scope` "method", and **false** otherwise.
+1. Let |takesSelf| be **true** if |export|.Name matches *Member* with `scope` "method", and **false** otherwise.
 1. Let |func| be `create a JS function for a component function` given |export|.Func, |name| and |takesSelf|.
 1. If |accessor| is "get":
     1. Perform `DefinePropertyOrThrow`(|target|, |key|, PropertyDescriptor { [[Get]]: |func|, [[Set]]: **undefined**, [[Enumerable]]: |enumerable|, [[Configurable]]: **true** }).
