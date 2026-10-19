@@ -255,7 +255,8 @@ ABI options.
     (memory (core memory $alloc "mem"))
     (realloc (core func $alloc "realloc"))
   ))
-  (core func $lowered-greet (canon lower (func $actions "greet")
+  (alias export $actions "greet" (func $greet))
+  (core func $lowered-greet (canon lower (func $greet)
     (memory (core memory $alloc "mem"))
   ))
   (core module $Main
@@ -295,14 +296,17 @@ potentially other functions too). This `import` adds a new component-level
 Next, the two `(core func (canon lower ...))` definitions *lower* the two
 imported component-level functions, adding new core-level functions to the
 `core func` index space. Because `name` was already added to the `func` index
-space, it is directly referred to by `(func $name)`. For `greet`, the expression
-`(func $actions "greet")` is an **inline alias** that is syntactic sugar for
-emitting the following **alias definition** that precedes `canon lower` and
-explicitly projects `greet` into the `func` index space:
+space, it is directly referred to by `(func $name)`.
+
+Because `greet` is imported as part of an `instance`, it must first be
+*projected* out of the `instance` via an `alias export` which takes the source
+`instance` index, the name of the export to project (`"greet"`), and the index
+space of the projected export (`func`). After the `alias export`, `greet` has
+a `func` index that can be passed to `canon lower`. Alternatively, the Component
+Model text format has **inline alias** syntactic sugar that allows the `canon
+lower` definition for `greet` to be equivalently written:
 ```wat
-;; equivalently:
-(alias export $actions "greet" (func $greet))
-(core func $lowered-greet (canon lower (func $greet) ...))
+(core func $lowered-greet (canon lower (func $actions "greet") ...))
 ```
 
 Next, `(core module $Main ...)` shows the flattened core function types of the
