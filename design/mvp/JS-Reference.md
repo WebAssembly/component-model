@@ -759,7 +759,6 @@ To `read a scope of imports` given a list of import declarations |importDecls|, 
             1. Append |hostResourceTypes|[|abstractTypeKey|].[[ComponentResourceType]] to |definitions|.
             1. Continue.
     1. Let |name| be `JSName`(|importDecl|).
-    1. Let |staticReceiver| be **undefined**.
     1. Let |builtin| be `resolve a builtin specifier` given |name| and |enabledBuiltins|.
     1. If |builtin| is not **empty**:
         1. Let |importValue| be |builtin|.
@@ -773,7 +772,6 @@ To `read a scope of imports` given a list of import declarations |importDecls|, 
             1. Else:
                 1. If the `scope` capture is "static":
                     1. Let |lookupTarget| be |constructorFunction|.
-                    1. Set |staticReceiver| to |lookupTarget|.
                 1. Else:
                     1. Let |lookupTarget| be ? `Get`(|constructorFunction|, "prototype").
                     1. If `Type`(|lookupTarget|) is not Object:
@@ -788,18 +786,17 @@ To `read a scope of imports` given a list of import declarations |importDecls|, 
                 1. Throw a `TypeError`.
 
             1. If |importDecl|.Sort is **func** and |importDecl|.Name matches *Property*:
-                1. Set |staticReceiver| to |importsObject|.
                 1. Let |importValue| be ? `find an accessor` given |importsObject|, |name| and the `accessor` capture.
             1. Else:
                 1. Let |importValue| be ? `Get`(|importsObject|, |name|).
-    1. Let |resolved| be ? `read an import` given |importDecl|, |importValue|, |staticReceiver| and |hostResourceTypes|.
+    1. Let |resolved| be ? `read an import` given |importDecl|, |importValue| and |hostResourceTypes|.
     1. Append |resolved| to |definitions|.
 1. Return |definitions|.
 
-To `read an import` given |importDecl|, |importValue|, |staticReceiver| and |hostResourceTypes|:
+To `read an import` given |importDecl|, |importValue| and |hostResourceTypes|:
 1. Match |importDecl|.Sort:
     1. **core module**: return ? `read the core module import` given |importDecl|.ModuleType and |importValue|.
-    1. **func**: return ? `read the function import` given |importDecl|.FuncType, |importValue|, |importDecl|.Name and |staticReceiver|.
+    1. **func**: return ? `read the function import` given |importDecl|.FuncType, |importValue|, |importDecl|.Name.
     1. **type**: return ? `read the type import` given |importDecl|, |importValue|, and |hostResourceTypes|.
     1. **value**: return ? `read the value import` given |importDecl|.ValType and |importValue|.
     1. **instance**: return ? `read the instance import` given |importDecl|.InstanceType, |importValue| and |hostResourceTypes|.
@@ -860,7 +857,7 @@ To `find an accessor` given an object |target|, a property key |key| and |kind|,
 
 The walk stops at the first own property it finds, as an ordinary property access does. A data property that shadows an accessor further up the chain therefore resolves to **undefined** and becomes a `LinkError`.
 
-To `read the function import` given |componentFuncType|, |importValue|, |importName| and |staticReceiver|:
+To `read the function import` given |componentFuncType|, |importValue|, |importName|:
 1. If `IsCallable`(|importValue|) is **false** or (|importName| matches *Constructor* and `IsConstructor`(|importValue|) is **false**):
     1. Return a component host function of type |componentFuncType| whose body traps when called.
 1. Let |callable| be |importValue|.
@@ -868,7 +865,7 @@ To `read the function import` given |componentFuncType|, |importValue|, |importN
 1. Let |callKind|, |receiverRule| and |paramOffset| be determined by |importName|:
     1. *Constructor*: `Construct`, no receiver, offset 0.
     1. *Member* with `scope` "method": `Call`, receiver is component argument 0 (the `borrow` self parameter), offset 1.
-    1. Otherwise: `Call`, receiver is |staticReceiver|, offset 0.
+    1. Otherwise: `Call`, receiver is **undefined**, offset 0.
 1. Let |paramTypes| be |componentFuncType|.Params.
 1. Let |resultType| be |componentFuncType|.Result.
 1. If |resultType| is a `result`:
