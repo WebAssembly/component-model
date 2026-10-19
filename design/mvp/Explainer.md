@@ -645,9 +645,11 @@ module.
 One interesting thing to notice in `$Main` is that there is no core-level
 representation of the resource type `$file`: everything is untyped `i32` indices
 and type safety is ensured by dynamic casts performed inside `canon`-defined
-functions. In the future, if Core WebAssembly is extended with [type-imports],
-resource types could be type-imported by modules and then the untyped `i32`
-indices could be replaced by references to the imported type.
+functions. In the future, new ABI options could be added to lower handles into
+`externref` values instead of `i32` values. In the farther future, if Core
+WebAssembly is extended with [type-imports], resource types could be
+type-imported by modules, allowing the untyped `i32` or `externref` values to be
+replaced by typed references that avoid the dynamic casts.
 
 Lastly, the `(core instance (instantiate $Main ...))` definition links
 everything together as above, without any distinction between methods,
