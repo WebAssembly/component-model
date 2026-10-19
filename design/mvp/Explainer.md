@@ -588,10 +588,12 @@ cannot appear anywhere in a function return type (e.g.,
 Next, the `(import "open" (func ...))` definition imports a function that
 returns an `own`ed `file` handle. `own` handles imply unique ownership of the
 `resource` they point to. When an `own` handle is passed to `resource.drop`, the
-pointed-to resource is destroyed. In some cases, the "uniquely-owned resource"
-is really just a reference count on a shared object and "destroy" just means
-"drop the reference count on the shared object" (analogous to destroying a C++
-`std::shared_ptr` or a Unix file descriptor).
+pointed-to resource is destroyed. The meaning of destruction is determined by
+whoever defined the imported resource type, which can be the host or, as shown
+in the next section, another component. In some cases, the "uniquely-owned
+resource" is really just a reference count on a shared object and "destroy" just
+means "drop the reference count on the shared object" (analogous to destroying a
+C++ `std::shared_ptr` or a Unix file descriptor).
 
 Next, the `(import "[method]file.read" (func ...))` definition imports a
 function taking a `borrow`ed `file` handle. `borrow` handles imply that *someone
