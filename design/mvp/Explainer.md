@@ -121,12 +121,12 @@ definition:
 ```
 
 The Component Model's validation rules assign this example component the
-following type, which can be expressed within the text format inside a `type`
-definition:
+following type, which can be written in the Component Model's WAT text format as
+a component-level `type` definition:
 ```wat
-(component
+(type (component
   (export "greeting" (func (result string)))
-)
+))
 ```
 Notably, the `mem` and `greeting` module exports are not present in the
 component's type because they are encapsulated by the component and not
@@ -204,11 +204,11 @@ likely be replaced (in a non-breaking transitional manner) with a combination of
 caller-supplied buffers and [lazy] value copying.
 
 The Component Model's validation rules assign this component definition the
-following type:
+following component-level type:
 ```wat
-(component
+(type (component
   (export "greeting" (func (param "name" string) (result string)))
-)
+))
 ```
 Again, all the core-level definitions and ABI options are encapsulated, exposing
 only the single component-level export. As shown here, unlike core functions,
@@ -333,15 +333,15 @@ needs to match the `with`-names used in `instantiate`. Thus, components have
 considerable flexibility to internally remap names between modules as needed.
 
 The Component Model's validation rules assign this example component the
-following type which, due to running everything during a module `start`
-function, has no exports:
+following component-level type which, due to running everything during a module
+`start` function, has no exports:
 ```wat
-(component
+(type (component
   (import "name" (func (result string)))
   (import "actions" (instance
     (export "greet" (func (param "msg" string)))
   ))
-)
+))
 ```
 Notably, the fact that this component contains two core modules which share
 `mem` is kept an encapsulated implementation detail. Also absent is any
@@ -444,16 +444,16 @@ the `type` index `$pair`. This allows `$Pair` to be used in `sum`'s function
 type; attempting to use `$pair` would be a validation error.
 
 The Component Model's validation rules assign this example component the
-following type (using no folded or `$identifier` syntactic sugar for
-illustrative purposes):
+following component-level type (using no folded or `$identifier` syntactic sugar
+for illustrative purposes):
 ```wat
-(component
+(type (component
   (type (;0;) (record (field "first" u8) (field "second" u32)))
   (export (;1;) "byte-word-pair" (type (eq 0)))
   (type (;2;) (list 1))
   (type (;3;) (func (param "input" 2) (result u32)))
   (export "sum" (func (type 3)))
-)
+))
 ```
 The `(eq 0)` bound inside `(type ...)` says that the export `byte-word-pair` is
 introducing a new name that is transparently `eq`ual to `type` index `0`. In the
@@ -648,15 +648,15 @@ everything together as above, without any distinction between methods,
 non-methods, `lower`ed imports, or ABI built-ins.
 
 The Component Model's validation rules assign this example component the
-following type:
+following component-level type:
 ```wat
-(component
+(type (component
   (import "file" (type $file (sub resource)))
   (import "open" (func
     (param "path" string) (result (own $file))))
   (import "[method]file.read" (func
     (param "self" (borrow $file)) (param "n" u32) (result (list u8))))
-)
+))
 ```
 Notably, the `i32` indices have been encapsulated by the component, so that
 components can pass handles between each other without having to share an
@@ -777,16 +777,16 @@ for resource types in these functions; just the regular `memory` and `realloc`
 ABI options needed for the `string` and `list` params and results.
 
 The Component Model's validation rules assign this example component the
-following type (which is the same as the previous example's type after replacing
-`import` with `export`):
+following component-level type (which is the same as the previous example's type
+after replacing `import` with `export`):
 ```wat
-(component
+(type (component
   (export "file" (type $File (sub resource)))
   (export "open" (func
     (param "path" string) (result (own $File))))
   (export "[method]file.read" (func
     (param "self" (borrow $File)) (param "n" u32) (result (list u8))))
-)
+))
 ```
 Notably, the `i32` `rep` type of `file` is kept an encapsulated implementation
 detail of the component and thus, e.g., a component can shift from `(rep i32)`
@@ -1004,12 +1004,12 @@ achieved using an expensive [sidecar container] that proxies all incoming and
 outgoing network traffic.
 
 The Component Model's validation rules assign this example component the
-following type:
+following component-level type:
 ```wat
-(component
+(type (component
   (import "backing-store" (instance ...))
   (export "run" (func ...))
-)
+))
 ```
 Notably, the child components and the `file` definitions shared between them are
 kept an encapsulated implementation detail of the parent component and thus
