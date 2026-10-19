@@ -1031,8 +1031,12 @@ following component-level type:
 Notably, the child components and the `file` definitions shared between them are
 kept an encapsulated implementation detail of the parent component and thus
 cannot interfere with the host or another component that has its own distinct
-implementation of `file`. In particular, there is no global runtime namespace or
-registry in which different local implementations of `file` might clash.
+implementation of `file`. In particular, as described above, the parent
+component completely determines (via `instantiate`) how its children's imports
+are supplied and exports are used, even when seemingly-global interface names or
+`external-id`s are present. Thus, the Component Model has no implicit global
+runtime namespace or registry in which different local implementations of `file`
+might clash.
 
 ### Factoring out shared code
 
