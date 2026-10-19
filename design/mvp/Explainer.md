@@ -806,7 +806,16 @@ its public interface.
 Earlier sections mentioned how `[method]` and a few other name prefixes can be
 used as hints in API names to improve the ergonomics of language bindings (in
 languages with these concepts). This section describes several other hints
-embedded in name strings that can improve language bindings. Because best-effort
+embedded in imports and exports that can improve language bindings.
+
+The general theme here is that when a hint contributes to a name's uniqueness
+and may be mangled into a source-level function name, the hint goes into the
+name string, like `[method]`. This allows the name string to be used by simple
+tools that "just want a string" (like linkers, debuggers and profilers) without
+making these tools care about the additional structure or how to canonically
+serialize it into a string. When these conditions don't apply, the hints are
+instead put into **attributes** that are part of the import/export definition
+but are part of neither the name nor the type. Because best-effort
 "content-sniffing" of patterns in arbitrary strings is a recipe for disaster,
 the Component Model defines and enforces a strict grammar of allowed name
 strings that avoids ambiguous interpretation both now and as new language
@@ -839,7 +848,7 @@ needs to be some arbitrary Unicode string. For example, with ECMAScript Module
 integration ([ESM-integration]), components loaded as ESMs would have their
 import names interpreted as [module specifier] strings, which can be arbitrary
 Unicode strings (including URLs). For these and other use cases, component
-imports and exports may have an `external-id` **attribute** that is separate
+imports and exports may have an `external-id` attribute that is separate
 from the name (and thus not used for language bindings) and separate from the
 type (and thus not part of the static or dynamic semantics). For example, if the
 following component is loaded as an ESM, the given URL would be fetched by the
