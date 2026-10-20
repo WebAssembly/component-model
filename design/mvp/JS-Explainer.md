@@ -129,11 +129,11 @@ The following table describes how a component value is converted into a JS value
 | `string` | String, well formed | `string` |
 | `list<sN, N?>`, `list<uN, N?>`, `list<fN, N?>` | `IntNArray`, `UintNArray`, `FloatNArray` | `IntNArray`, `UintNArray`, `FloatNArray` |
 | `list<T>`, `list<T, N>` | Array | `T[]` |
-| `tuple<T, U>` | Array | `(T | U)[]` |
+| `tuple<T, U>` | Array | `(T \| U)[]` |
 | `record { field-name: T, ... }` | null-prototype object,  | `{ fieldName: T, ... }` |
 | `flags "flag-a" "flag-b"` | null-prototype object of Booleans | `{ flagA: boolean, flagB: boolean }` |
 | `enum "case-a" "case-b"` | String, the case label verbatim | `"case-a" \| "case-b"` |
-| `option<T>` (if top-level) | `undefined`, or the payload | `T \| undefined` |
+| `option<T>` (if not nested inside another `option`) | `undefined`, or the payload | `T \| undefined` |
 | `result<T, E>` (if in return position of function) | if `E` { thrown as a `WebAssembly.ComponentError` } else { `T` } | `T` |
 | `variant`, `option<T>`, `result<T, E>` | null-prototype object with discriminating `kind` field and optional `value` field | `{ kind: "a-b" } \| { kind: "c-d", value: T }` |
 | `map<K, V>` | `Map` | `Map<K, V>` |

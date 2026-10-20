@@ -863,7 +863,7 @@ To `read the function import` given |componentFuncType|, |importValue|, |importN
 1. Let |callable| be |importValue|.
 
 1. Let |callKind|, |receiverRule| and |paramOffset| be determined by |importName|:
-    1. *Constructor*: `Construct`, no receiver, offset 0.
+    1. *Constructor*: `Construct`, receiver is **undefined**, offset 0.
     1. *Member* with `scope` "method": `Call`, receiver is component argument 0 (the `borrow` self parameter), offset 1.
     1. Otherwise: `Call`, receiver is **undefined**, offset 0.
 1. Let |paramTypes| be |componentFuncType|.Params.
