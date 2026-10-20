@@ -645,7 +645,8 @@ module.
 * For `read` and `drop`, the `i32` parameter must refer to a valid handle table
   element of the right type or else there is a trap.
 * For `drop`, after the checks, the referred-to resource is destroyed and the
-  `i32` index is marked invalid but available for subsequent reuse.
+  `i32` index is marked invalid but available for subsequent reuse (which is
+  safe because the handle table is per-component-instance).
 
 One interesting thing to notice in `$Main` is that there is no core-level
 representation of the resource type `$file`: everything is untyped `i32` indices
