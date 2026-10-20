@@ -54,9 +54,11 @@ returns the `string` value `"hello world"`:
     )
   )
   (core instance $main (instantiate $Main))
+  (alias core export $main "greeting" (core func $main-greeting))
+  (alias core export $main "mem" (core memory $main-mem))
   (func $greeting (result string)
-    (canon lift (core func $main "greeting")
-      (memory (core memory $main "mem"))
+    (canon lift (core func $main-greeting)
+      (memory (core memory $main-mem))
       string-encoding=utf8
     )
   )
@@ -85,16 +87,24 @@ Next, `(core instance $main (instantiate $Main))` creates a new instance of
 `$Main` each time the containing component is instantiated. Without this
 `core instance` definition, zero instances of `$Main` would be created and
 `$Main` would be dead code. It is also possible to instantiate a single module
-*multiple* times with multiple `core instance` definitions.
+*multiple* times with multiple `core instance` definitions. Each `core instance`
+definition adds a single index to the `core instance` index space; none of the
+instance's exports have associated indices (yet).
+
+Next, the two `(alias ...)` definitions project the `greeting` and `mem` exports
+out of the `$main` instance, adding new `core func` and `core memory` indices to
+the respective index spaces and binding the WAT identifiers `$main-greeting` and
+`$main-mem` to these new indices. Export aliases thus allow a component to
+project just the exports of interest from an `instantiate`d (or, as we'll see
+later, `import`ed) instance.
 
 Next, `(func $greeting ...)` defines a new component-level function using a
 `canon` (short for "Canonical ABI") definition that takes a set of **ABI
 options** to specify exactly how this new function is to be implemented. In
 particular, the example's `canon` definition specifies:
-* to `lift` the core function `greeting` exported by the instance `$main` to
-  produce a component-level function of type `(func (result string))`;
-* to use the memory `mem` exported by the instance `$main` to load the
-  string's contents; and
+* to `lift` the core `$main-greeting` function to produce a component-level
+  function of type `(func (result string))`;
+* to use the memory `$main-mem` to load the string's contents; and
 * to decode the string's contents using UTF-8.
 
 Currently, the other two `string-encoding` options are `utf16` and
@@ -110,6 +120,20 @@ function (`greeting`). With memory64 ([🐘]), when the `memory` ABI option refe
 to a 64-bit memory, the pointers and lengths mentioned above are replaced with
 `i64`. In the future, a new ABI option will likely be added for [wasm-gc] to
 replace these integer offsets with typed GC references.
+
+The Component Model text format also provides **inline aliases** as syntactic
+sugar that implicitly emits export aliases as needed. Using inline aliases, the
+two `alias` definitions shown in the example can be removed and replaced by a
+succinct inline expression identifying the source instance and the export name:
+```wat
+  ;; equivalently:
+  (func $greeting (result string)
+    (canon lift (core func $main "greeting")
+      (memory (core memory $main "mem"))
+      string-encoding=utf8
+    )
+  )
+```
 
 Lastly, `(export "greeting" (func $greeting))` exports the new component-level
 function to the outside world with the name `greeting`. As in core wasm, there
@@ -260,8 +284,7 @@ ABI options.
     (memory (core memory $alloc "mem"))
     (realloc (core func $alloc "realloc"))
   ))
-  (alias export $actions "greet" (func $greet))
-  (core func $lowered-greet (canon lower (func $greet)
+  (core func $lowered-greet (canon lower (func $actions "greet")
     (memory (core memory $alloc "mem"))
   ))
   (core module $Main
@@ -301,17 +324,14 @@ potentially other functions too). This `import` adds a new component-level
 Next, the two `(core func (canon lower ...))` definitions *lower* the two
 imported component-level functions, adding new core-level functions to the
 `core func` index space. Because `name` was already added to the `func` index
-space, it is directly referred to by `(func $name)`.
-
-Because `greet` is imported as part of an `instance`, it must first be
-*projected* out of the `instance` via an `alias export` which takes the source
-`instance` index, the name of the export to project (`"greet"`), and the index
-space of the projected export (`func`). After the `alias export`, `greet` has
-a `func` index that can be passed to `canon lower`. Alternatively, the Component
-Model text format has **inline alias** syntactic sugar that allows the `canon
-lower` definition for `greet` to be equivalently written:
+space, it is directly referred to by `(func $name)`. Because `greet` is imported
+as part of the `$actions` instance, an inline export alias is used to first
+project `greet` from `$actions`, implicitly generating the following
+component-level export alias:
 ```wat
-(core func $lowered-greet (canon lower (func $actions "greet") ...))
+;; equivalently:
+(alias export $actions "greet" (func $greet))
+(core func $lowered-greet (canon lower (func $greet) ...))
 ```
 
 Next, `(core module $Main ...)` shows the lowered function types of the `name`
