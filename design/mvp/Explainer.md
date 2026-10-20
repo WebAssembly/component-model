@@ -855,9 +855,10 @@ all-lowercase or, if they represent acronyms, all-uppercase. Based on this,
 language bindings are expected to case and concatenate the words and acronyms
 according to their local style. Consequently, the names `myFoo`, `my-Foo`,
 and `my_foo` are not valid and, depending on the language:
-* `my-foo` could turn into `my_foo`, `MY_FOO`, `myFoo` or `MyFoo`; and
-* `my-JSON-parser` could turn into `my_json_parser`, `MY_JSON_PARSER`,
-  `myJsonParser`, `myJSONParser`, `MyJsonParser` or `MyJSONParser`.
+* `my-foo` could turn into `my_foo`, `My_foo`, `MY_FOO`, `myFoo` or `MyFoo`; and
+* `my-JSON-parser` could turn into `my_json_parser`, `My_json_parser`,
+  `MY_JSON_PARSER`, `myJsonParser`, `myJSONParser`, `MyJsonParser` or
+  `MyJSONParser`.
 
 Kebab-cased strings can be used in conjunction with `[method]` and other
 prefixes, e.g.:
