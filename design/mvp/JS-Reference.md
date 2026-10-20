@@ -210,6 +210,23 @@ Roundtripping from `ToJSValue` back through `ToComponentValue` is designed to be
 
 Every object a conversion creates, including any error it throws, belongs to the *component realm*. This is the realm of the `WebAssembly` namespace the component was instantiated through with the JS-API, or the realm the ESM was instantiated in with ESM-integration.
 
+Conversions run within the *current call*, a Record with the following fields:
+
+| Field | Value |
+|---|---|
+| [[HostResourceTypes]] | map from [abstract type key](#abstract-and-transparent-types) to [host resource type](#host-resource-types-and-values) |
+| [[GuestResourceClasses]] | map from [abstract type key](#abstract-and-transparent-types) to [guest resource class](#guest-resource-classes) |
+| [[Lenders]] | an optional List of [guest resource instances](#guest-resource-instances) lent as a `borrow` back to the defining component |
+
+To `run within a call` given |hostResourceTypes|, |guestResourceClasses| and an Abstract Closure |steps|:
+1. Let |previousCall| be the current call.
+1. Set the current call to Record { [[HostResourceTypes]]: |hostResourceTypes|, [[GuestResourceClasses]]: |guestResourceClasses|, [[Lenders]]: **empty** }.
+1. Let |result| be Completion(|steps|()).
+1. Set the current call to |previousCall|.
+1. Return ? |result|.
+
+A trap in |steps| also restores the previous call as it unwinds.
+
 ### ToJSValue
 
 `ToJSValue(componentValue, componentValType)` converts a component value to a JS value. It is infallible.
@@ -457,8 +474,9 @@ We sketch two operations here that will be formalized more fully in the [embeddi
 To `create a resource type for host` given a host function |destructor|:
 1. Return a fresh component resource type whose representation is host-defined and whose destructor is |destructor|.
 
-To `drop a guest resource` given a resource type |resourceType| and a guest rep |rep| owned by the host:
-1. Let |instance| be the surrounding component instance.
+To `drop a guest resource` given a [guest resource class](#guest-resource-classes) |class| and a guest rep |rep| owned by the host:
+1. Let |resourceType| be |class|.[[ResourceType]].
+1. Let |instance| be |class|.[[ComponentInstance]].
 1. If |instance|.[[Store]].is_locked_down()
     1. Perform ? `trap` given |instance|.
 1. Perform the effect of [`canon resource.drop`](CanonicalABI.md#canon-resourcedrop) on an owning handle holding |resourceType| and |rep|, invoking |resourceType|'s destructor. There is no handle table entry to remove, because the host was holding the rep.
@@ -538,15 +556,13 @@ A map from imported abstract type to host resource type is built by [`read the i
 For a resource type `R` whose abstract type is one of the component's type imports:
 
 - `ToJSValue(rep, own<R> | borrow<R>)`:
-    1. Let |instance| be the surrounding component instance.
     1. Let |abstractTypeKey| be the *abstract type key* of |R|.
-    1. Let |hostType| be |instance|.[[HostResourceTypes]][|abstractTypeKey|].
+    1. Let |hostType| be the current call's [[HostResourceTypes]][|abstractTypeKey|].
     1. Assert: |rep| is a host resource value whose [[Type]] is |hostType|.
     1. Return |rep|.[[JSValue]].
 - `ToComponentValue(jsValue, own<R> | borrow<R>)`:
-    1. Let |instance| be the surrounding component instance.
     1. Let |abstractTypeKey| be the *abstract type key* of |R|.
-    1. Let |hostType| be |instance|.[[HostResourceTypes]][|abstractTypeKey|].
+    1. Let |hostType| be the current call's [[HostResourceTypes]][|abstractTypeKey|].
     1. Let |matches| be ? `brand check` given |jsValue| and |hostType|.[[ConstructorObject]].
     1. If |matches| is **false**:
         1. Throw a `TypeError`.
@@ -585,7 +601,8 @@ To `create a guest resource class` given a component instance |componentInstance
 1. Set |constructor|'s [[Construct]] behaviour, given JS arguments |args| and |newTarget|, to perform:
     1. If |constructor|.[[ConstructorFunc]] is **empty**:
         1. Throw a `TypeError`.
-    1. Let |rep| be ? `invoke a component function` given |constructor|.[[ConstructorFunc]], **false**, **undefined** and |args|.
+    1. Let |rep| be ? `run within a call` given |componentInstance|.[[HostResourceTypes]], |componentInstance|.[[GuestResourceClasses]], and the following steps:
+        1. Return ? `invoke a component function` given |constructor|.[[ConstructorFunc]], **false**, **undefined** and |args|.
     1. Return ? `create an own guest resource instance` given |constructor|, |rep|, **true** and |newTarget|.
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.dispose%`, PropertyDescriptor { [[Value]]: a built-in function object with name "[Symbol.dispose]" and length 0 that performs `drop a guest resource instance` given its **this** value, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.toStringTag%`, PropertyDescriptor { [[Value]]: |name|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
@@ -653,22 +670,20 @@ To `create an own guest resource instance` given a resource class |class|, |rep|
 
 #### Conversions for guest resources
 
-The *current lender list* is a per-call spec state. `invoke a component function` establishes it for a JS-to-component call. Each guest resource instance lowered as a `borrow` during that call has its [[LendCount]] incremented and is appended to the list, which protects it from being dropped while lent. When the call returns, every [[LendCount]] in the list is decremented.
+Each guest resource instance lowered as a `borrow` while converting the arguments of a JS-to-component call has its [[LendCount]] incremented and is appended to the current call's [[Lenders]], which protects it from being disposed while lent. When the call resolves (and so the callee has dropped all its borrows) `invoke a component function` decrements every [[LendCount]] in the list.
 
 For a resource type `R` whose [abstract type](#abstract-and-transparent-types) is one of the component's type exports:
 
 - `ToJSValue(rep, own<R>)`:
-    1. Let |instance| be the surrounding component instance.
     1. Let |abstractTypeKey| be the *abstract type key* of |R|.
-    1. Let |class| be |instance|.[[GuestResourceClasses]][|abstractTypeKey|].
+    1. Let |class| be the current call's [[GuestResourceClasses]][|abstractTypeKey|].
     1. Return `create an own guest resource instance` given |class|, |rep| and **true**.
 - `ToJSValue(rep, borrow<R>)`:
     1. Assert: unreachable.
     1. This can only happen if an exported function returns a borrow, which is not allowed.
 - `ToComponentValue(jsValue, own<R>)`:
-    1. Let |instance| be the surrounding component instance.
     1. Let |abstractTypeKey| be the *abstract type key* of |R|.
-    1. Let |class| be |instance|.[[GuestResourceClasses]][|abstractTypeKey|].
+    1. Let |class| be the current call's [[GuestResourceClasses]][|abstractTypeKey|].
     1. If |jsValue| does not have a [[ResourceClass]] internal slot, or |jsValue|.[[ResourceClass]] is not |class|:
         1. Throw a `TypeError`.
     1. If |jsValue|.[[Rep]] is **empty**, or |jsValue|.[[Own]] is **false**, or |jsValue|.[[LendCount]] is not 0:
@@ -678,21 +693,21 @@ For a resource type `R` whose [abstract type](#abstract-and-transparent-types) i
     1. Unregister |jsValue| from the [guest resource `FinalizationRegistry`](#guest-resource-finalizationregistry).
     1. Return |rep|.
 - `ToComponentValue(jsValue, borrow<R>)`:
-    1. Let |instance| be the surrounding component instance.
     1. Let |abstractTypeKey| be the *abstract type key* of |R|.
-    1. Let |class| be |instance|.[[GuestResourceClasses]][|abstractTypeKey|].
+    1. Let |class| be the current call's [[GuestResourceClasses]][|abstractTypeKey|].
     1. If |jsValue| does not have a [[ResourceClass]] internal slot, or |jsValue|.[[ResourceClass]] is not |class|:
         1. Throw a `TypeError`.
     1. If |jsValue|.[[Rep]] is **empty**:
         1. Throw a `TypeError`.
-    1. Assert: a lender list is currently established.
+    1. Let |lenders| be the current call's [[Lenders]].
+    1. Assert: |lenders| is not **empty**.
     1. Increment |jsValue|.[[LendCount]].
-    1. Append |jsValue| to the current lender list.
+    1. Append |jsValue| to |lenders|.
     1. Return |jsValue|.[[Rep]].
 
 #### Guest resource FinalizationRegistry
 
-There is an unexposed "guest resource `FinalizationRegistry`" created per-Realm of the WebAssembly namespace object. The callback for it, given a held value |record|, performs `drop a guest resource` given |record|.[[ResourceClass]].[[ResourceType]] and |record|.[[Rep]].
+There is an unexposed "guest resource `FinalizationRegistry`" created per-Realm of the WebAssembly namespace object. The callback for it, given a held value |record|, performs `drop a guest resource` given |record|.[[ResourceClass]] and |record|.[[Rep]].
 
 The held value is a record of the instance's class and rep rather than the instance itself, because registering an object with itself as the held value would keep it alive forever. The record never goes stale, because the instance is unregistered whenever its [[Rep]] is taken.
 
@@ -705,14 +720,16 @@ To `drop a guest resource instance` given |resourceInstance|:
 1. Let |rep| be |resourceInstance|.[[Rep]].
 1. Set |resourceInstance|.[[Rep]] to **empty**.
 1. Unregister |resourceInstance| from the guest resource `FinalizationRegistry`.
-1. Perform `drop a guest resource` given |class|.[[ResourceType]] and |rep|.
+1. Perform `drop a guest resource` given |class| and |rep|.
 1. Return **undefined**.
 
-The [[LendCount]] check can only fail on the `%Symbol.dispose%` path, because a lent instance is kept alive by the current lender list.
+The [[LendCount]] check can only fail on the `%Symbol.dispose%` path, because a lent instance is kept alive by the [[Lenders]] of the call it was lent to.
 
 ## Instantiation
 
 To `instantiate a component` given |component|, a list of component definitions |imports|, and |hostResourceTypes|:
+1. If the type of any function import or export of |component|, including those nested in instance imports and exports, is `async`:
+    1. Throw a `WebAssembly.LinkError`.
 1. Let |store| be a new component store.
 1. Let |instance| be the result of instantiating |component| with |imports| in |store|.
 1. If instantiation traps:
@@ -725,6 +742,8 @@ To `instantiate a component` given |component|, a list of component definitions 
     * [[Exports]]: |exportsObject|
     * [[HostResourceTypes]]: |hostResourceTypes|
     * [[GuestResourceClasses]]: |guestResourceClasses|.
+
+We temporarily reject any async function imports/exports until they are specified.
 
 To `instantiate a component from an imports object` given |component|, |importsObject|, and |enabledBuiltins|:
 1. Let |imports| and |hostResourceTypes| be ? `read the imports` given |component|, |importsObject|, and |enabledBuiltins|.
@@ -796,9 +815,9 @@ To `read a scope of imports` given a list of import declarations |importDecls|, 
 To `read an import` given |importDecl|, |importValue| and |hostResourceTypes|:
 1. Match |importDecl|.Sort:
     1. **core module**: return ? `read the core module import` given |importDecl|.ModuleType and |importValue|.
-    1. **func**: return ? `read the function import` given |importDecl|.FuncType, |importValue|, |importDecl|.Name.
+    1. **func**: return ? `read the function import` given |importDecl|.FuncType, |importValue|, |importDecl|.Name and |hostResourceTypes|.
     1. **type**: return ? `read the type import` given |importDecl|, |importValue|, and |hostResourceTypes|.
-    1. **value**: return ? `read the value import` given |importDecl|.ValType and |importValue|.
+    1. **value**: return ? `read the value import` given |importDecl|.ValType, |importValue| and |hostResourceTypes|.
     1. **instance**: return ? `read the instance import` given |importDecl|.InstanceType, |importValue| and |hostResourceTypes|.
     1. **component**: return ? `read the component import` given |importDecl|.ComponentType and |importValue|.
 
@@ -857,17 +876,17 @@ To `find an accessor` given an object |target|, a property key |key| and |kind|,
 
 The walk stops at the first own property it finds, as an ordinary property access does. A data property that shadows an accessor further up the chain therefore resolves to **undefined** and becomes a `LinkError`.
 
-To `read the function import` given |componentFuncType|, |importValue|, |importName|:
-1. If `IsCallable`(|importValue|) is **false** or (|importName| matches *Constructor* and `IsConstructor`(|importValue|) is **false**):
-    1. Return a component host function of type |componentFuncType| whose body traps when called.
-1. Let |callable| be |importValue|.
+To `read the function import` given |componentFuncType|, |importValue|, |importName| and |hostResourceTypes|:
+1. Let |isConstructor| be **true** if |importName| matches *Constructor*, and **false** otherwise.
+1. If `IsCallable`(|importValue|) is **false** or (|isConstructor| is **true** and `IsConstructor`(|importValue|) is **false**):
+    1. Return a new Abstract Closure with parameters (|onStart|, |onResolve|) that traps when called.
+1. Let |takesSelf| be **true** if |importName| matches *Member* with `scope` "method", and **false** otherwise.
+1. Return `create a component function for a JS function` given |componentFuncType|, |importValue|, |isConstructor|, |takesSelf| and |hostResourceTypes|.
 
-1. Let |callKind|, |receiverRule| and |paramOffset| be determined by |importName|:
-    1. *Constructor*: `Construct`, receiver is **undefined**, offset 0.
-    1. *Member* with `scope` "method": `Call`, receiver is component argument 0 (the `borrow` self parameter), offset 1.
-    1. Otherwise: `Call`, receiver is **undefined**, offset 0.
+To `create a component function for a JS function` given |componentFuncType|, |callable|, a Boolean |isConstructor|, a Boolean |takesSelf| and |hostResourceTypes|:
 1. Let |paramTypes| be |componentFuncType|.Params.
 1. Let |resultType| be |componentFuncType|.Result.
+1. Let |paramOffset| be 1 if |takesSelf| is **true**, else 0.
 1. If |resultType| is a `result`:
     1. Let |okType| be its `ok` payload type, or **empty** if it has none.
     1. Let |errorType| be its `error` payload type, or **empty** if it has none.
@@ -875,41 +894,48 @@ To `read the function import` given |componentFuncType|, |importValue|, |importN
 1. Else:
     1. Let |okType| be |resultType|, or **empty** if |componentFuncType| has no result.
     1. Let |throwing| be **false**.
-1. Return a component host function of type |componentFuncType| whose body, given component arguments « |v_0|, ..., |v_{n-1}| » where |n| is |paramTypes|.length, performs:
-    1. Let |args| be a new empty List.
-    1. For each i in [|paramOffset|, |n|):
-        1. Append `ToJSValue`(|v_i|, |paramTypes|[i]) to |args|.
-    1. If |callKind| is `Construct`:
-        1. Let |completion| be `Construct`(|callable|, |args|).
-    1. Else:
-        1. If |receiverRule| is "component argument 0":
-            1. Let |thisArg| be `ToJSValue`(|v_0|, |paramTypes|[0]).
+1. Return a new Abstract Closure with parameters (|onStart|, |onResolve|) that performs the following steps when called:
+    1. Let |values| be |onStart|().
+    1. Let |results| be `run within a call` given |hostResourceTypes|, a new empty map, and a new Abstract Closure that performs the following steps when called:
+        1. Let |args| be a new empty List.
+        1. For each i in [|paramOffset|, |values|.length):
+            1. Append `ToJSValue`(|values|[i], |paramTypes|[i]) to |args|.
+        1. If |isConstructor| is **true**:
+            1. Let |completion| be Completion(`Construct`(|callable|, |args|)).
         1. Else:
-            1. Let |thisArg| be |receiverRule|.
-        1. Let |completion| be `Call`(|callable|, |thisArg|, |args|).
-    1. If |completion| is an abrupt completion:
-        1. If |throwing| is **false**:
-            1. Trap.
-        1. If |errorType| is **empty**:
-            1. Return `result.error`.
-        1. Let |errorValue| be `ToComponentValue`(|completion|.[[Value]], |errorType|).
+            1. If |takesSelf| is **true**:
+                1. Let |thisArg| be `ToJSValue`(|values|[0], |paramTypes|[0]).
+            1. Else:
+                1. Let |thisArg| be **undefined**.
+            1. Let |completion| be Completion(`Call`(|callable|, |thisArg|, |args|)).
+        1. If |completion| is an abrupt completion:
+            1. If |throwing| is **false**:
+                1. Trap.
+            1. If |errorType| is **empty**:
+                1. Return « `result.error` ».
+            1. Let |errorValue| be `ToComponentValue`(|completion|.[[Value]], |errorType|).
+            1. If that throws:
+                1. Trap.
+            1. Return « `result.error(|errorValue|)` ».
+        1. If |okType| is **empty**:
+            1. If |throwing| is **true**:
+                1. Return « `result.ok` ».
+            1. Return « ».
+        1. Let |okValue| be `ToComponentValue`(|completion|.[[Value]], |okType|).
         1. If that throws:
             1. Trap.
-        1. Return `result.error(|errorValue|)`.
-    1. If |okType| is **empty**:
         1. If |throwing| is **true**:
-            1. Return `result.ok`.
-        1. Return with no result.
-    1. Let |componentResult| be `ToComponentValue`(|completion|.[[Value]], |okType|).
-    1. If that throws:
-        1. Trap.
-    1. If |throwing| is **true**:
-        1. Return `result.ok(|componentResult|)`.
-    1. Else:
-        1. Return |componentResult|.
+            1. Return « `result.ok(|okValue|)` ».
+        1. Return « |okValue| ».
+    1. Perform |onResolve|(|results|).
+    1. Let |onCancel| be a new Abstract Closure with no parameters that performs nothing when called.
+    1. Return |onCancel|.
 
-To `read the value import` given |componentValType| and |importValue|:
-1. Return ? `ToComponentValue`(|importValue|, |componentValType|).
+The returned closure is a `FuncInst`. Since |componentFuncType| is not `async`, it calls |onStart| and |onResolve| synchronously, and so the caller never needs the returned `OnCancel`.
+
+To `read the value import` given |componentValType|, |importValue| and |hostResourceTypes|:
+1. Return ? `run within a call` given |hostResourceTypes|, a new empty map, and a new Abstract Closure with no parameters that captures |importValue| and |componentValType| and performs the following steps when called:
+    1. Return ? `ToComponentValue`(|importValue|, |componentValType|).
 
 ### Builtin imports
 
@@ -1002,7 +1028,8 @@ To `create the exports object` given a |componentInstance|:
         1. **func**:
             1. Let |value| be `create a JS function for a component function` given |export|.Func, |key| and **false**.
         1. **value**:
-            1. Let |value| be `ToJSValue`(|export|.Value, |export|.Type).
+            1. Let |value| be `run within a call` given |componentInstance|.[[HostResourceTypes]], |componentInstance|.[[GuestResourceClasses]], and a new Abstract Closure that performs the following steps when called:
+                1. Return `ToJSValue`(|export|.Value, |export|.Type).
         1. **instance**:
             1. Let |value| be ? `create the exports object` given the exported instance.
         1. **component**:
@@ -1020,10 +1047,12 @@ To `create a JS function for a component function` given |componentFunc|, |name|
 1. Else:
     1. Let |okType| be |componentFunc|.Result, or **empty** if |componentFunc| has no result.
 1. Return a built-in function object with name |name| and length |componentFunc|.Params.length - |paramOffset|, whose behaviour, given a **this** value |thisValue| and JS arguments |args|, performs:
-    1. Let |componentResult| be ? `invoke a component function` given |componentFunc|, |takesSelf|, |thisValue| and |args|.
-    1. If |okType| is **empty**:
-        1. Return **undefined**.
-    1. Return `ToJSValue`(|componentResult|, |okType|).
+    1. Let |instance| be the instance of |componentFunc|.
+    1. Return ? `run within a call` given |instance|.[[HostResourceTypes]], |instance|.[[GuestResourceClasses]], and a new Abstract Closure that performs the following steps when called:
+        1. Let |componentResult| be ? `invoke a component function` given |componentFunc|, |takesSelf|, |thisValue| and |args|.
+        1. If |okType| is **empty**:
+            1. Return **undefined**.
+        1. Return `ToJSValue`(|componentResult|, |okType|).
 
 To `define an accessor for a component function` given an object |target|, a function export |export| and a Boolean |enumerable|:
 1. Let |key| be `JSName`(|export|).
@@ -1057,21 +1086,33 @@ To `invoke a component function` given |componentFunc|, a Boolean |takesSelf|, |
 1. Let |instance| be the instance of |componentFunc|.
 1. If |instance|.[[Store]].is_locked_down():
     1. Perform ? `trap` given |instance|.
+1. Let |call| be the current call.
 1. Let |lenders| be a new empty List.
-1. Let |previousLenders| be the current lender list.
-1. Set the current lender list to |lenders|.
-1. Once the remaining steps complete, either normally or abruptly, perform:
+1. Let |onStart| be a new Abstract Closure with no parameters that performs the following steps when called:
+    1. Set |call|.[[Lenders]] to |lenders|.
+    1. Once the remaining steps complete, either normally or abruptly, set |call|.[[Lenders]] to **empty**.
+    1. Let |values| be a new empty List.
+    1. If |formalParamsOffset| is 1:
+        1. Append ? `ToComponentValue`(|thisValue|, |paramTypes|[0]) to |values|.
+    1. For each i in [0, |formalParamsCount|): append ? `ToComponentValue`(|args|[i], |paramTypes|[i + |formalParamsOffset|]) to |values|.
+    1. Return |values|.
+1. Let |resolved| be **false**.
+1. Let |componentResult| be **empty**.
+1. Let |onResolve| be a new Abstract Closure with parameters (|results|) that performs the following steps when called:
+    1. Assert: |results| is not None.
     1. Decrement the [[LendCount]] of every instance in |lenders|.
-    1. Set the current lender list to |previousLenders|.
-    1. If the completion is abrupt and the call has entered the guest:
-        1. Invoke |instance|.[[Store]].lock_down().
-1. Let |values| be a new empty List.
-1. If |formalParamsOffset| is 1:
-    1. Append ? `ToComponentValue`(|thisValue|, |paramTypes|[0]) to |values|.
-1. For each i in [0, |formalParamsCount|): append ? `ToComponentValue`(|args|[i], |paramTypes|[i + |formalParamsOffset|]) to |values|.
-1. Let |componentResult| be the result of invoking |componentFunc| with |values|.
+    1. Set |resolved| to **true**.
+    1. If |results| is not empty, set |componentResult| to |results|[0].
+1. Let |completion| be Completion(|instance|.[[Store]].invoke(|componentFunc|, |onStart|, |onResolve|)).
 1. If the call traps:
+    1. If |resolved| is **false**, decrement the [[LendCount]] of every instance in |lenders|.
     1. Perform ? `trap` given |instance|.
+1. If |completion| is an abrupt completion:
+    1. Decrement the [[LendCount]] of every instance in |lenders|.
+    1. If the call has entered the guest:
+        1. Invoke |instance|.[[Store]].lock_down().
+    1. Return ? |completion|.
+1. Assert: |resolved| is **true**.
 1. If |throwing| is **true** and |componentResult| is `result.error(|e|)`:
     1. Throw `create a component error` for |e| and |errorType|.
 1. If |okType| is **empty**:
@@ -1080,6 +1121,8 @@ To `invoke a component function` given |componentFunc|, a Boolean |takesSelf|, |
     1. Return the `result.ok` payload of |componentResult|.
 1. Else:
     1. Return |componentResult|.
+
+|componentFunc| is not `async` (see [instantiation](#instantiation)), so |onStart| and |onResolve| are called by `canon_lift` synchronously.
 
 To `create a component error` for an optional component value |e| and component type |errorType|:
 1. If |errorType| is **empty**:
@@ -1118,4 +1161,4 @@ A component's exports become the bindings of its module namespace object. There 
 1. Should a `[get]`/`[set]` import fall back to a `Get`/`Set` on the target when the property is not an accessor? That would let data properties, `Proxy` traps and module namespace bindings satisfy a property import.
 1. How does a component feature test an import?
 1. How does a component pass one of its own functions to a JS callback, e.g. `add-event-listener`?
-1. Top-level await, and async start functions.
+1. Async function types, top-level await, and async start functions.
