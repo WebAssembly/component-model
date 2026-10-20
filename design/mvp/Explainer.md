@@ -166,13 +166,14 @@ return value.
       (memory.copy (local.get $ptr) (i32.const 16 (; = "hello " ;)) (i32.const 6))
       (memory.copy (i32.add (local.get $ptr) (i32.const 6)) (local.get $namePtr) (local.get $nameLen))
       (call $libc-free (local.get $namePtr))
-      (local.set $retp (i32.const 0))
+      (local.set $retp (call $libc-malloc (i32.const 8)))
       (i32.store offset=0 (local.get $retp) (local.get $ptr))
       (i32.store offset=4 (local.get $retp) (local.get $len))
       (local.get $retp)
     )
     (func (export "greeting-post-return") (param $retp i32)
       (call $libc-free (i32.load offset=0 (; = $ptr ;) (local.get $retp)))
+      (call $libc-free (local.get $retp))
     )
   )
   (core instance $main (instantiate $Main))
@@ -195,13 +196,17 @@ passed into `greeting`.
 
 The `$retp` value passed to `greeting-post-return` is the same as the
 `$retp` value returned by `greeting`. If there is no dynamic allocation, as
-in the previous example, the `post-return` ABI option can be omitted.
+in the previous example, the `post-return` ABI option can be omitted. In this
+example, both the `string`'s contents and the (pointer, length) pair are
+dynamically allocated, so both need to be freed by `greeting-post-return`.
 
 In the next iteration of the Component Model ABI, to address some limitations
 with the current approach (including: out-of-memory handling, custom allocators,
 recursive value types and zero-copy forwarding) the `realloc` ABI option will
 likely be replaced (in a non-breaking transitional manner) with a combination of
-caller-supplied buffers and [lazy] value copying.
+caller-supplied buffers and [lazy] value copying. Also, as mentioned above,
+multi-value return in the next ABI iteration would avoid the need to return the
+(pointer, length) pair through memory.
 
 The Component Model's validation rules assign this component definition the
 following component-level type:
