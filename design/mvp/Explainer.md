@@ -931,10 +931,30 @@ attribute of a plain-named import or export. For example:
   (import "d" (implements "wasi:keyvalue/store@0.1.0") (instance ...))
 )
 ```
-Keying off its static, built-in knowledge of "`wasi:http/client`" and
-"`wasi:keyvalue/store`", a host can look at this component at compile or load
-time and know to use the plain names `a`/`b`/`c`/`d` (or `external-id`s, if they
-were present) to look up the appropriate HTTP backend or key-value store.
+In this example, `a` through `d` are the *names* of the four imports and thus
+can be used for name-based linking as usual, while the interface names in the
+`implements` attribute are metadata that a runtime or tool can use to resolve
+`a` through `d` or provide feedback to the developer during interactive
+development or debugging.
+
+Lastly, `implements` and `external-id` can be used together when their
+independent use cases both apply, e.g.:
+```wat
+(component
+  (import "a" (implements "wasi:http/client@0.3.0") (external-id "backend~1") (instance ...))
+  (import "b" (implements "wasi:http/client@0.3.0") (external-id "backend~2") (instance ...))
+  (import "c" (implements "wasi:keyvalue/store@0.1.0") (external-id "redis://localhost:6379/0") (instance ...))
+  (import "d" (implements "wasi:keyvalue/store@0.1.0") (external-id "memcached://localhost:11211") (instance ...))
+)
+```
+In this example, `a` through `d` are, as always, the unique names used by
+`instantiate` expressions in parent components, manual host linking APIs (like
+`WebAssembly.instantiate`) and guest language bindings to unambiguously refer to
+these four imports. However, a host or tool that has built-in support for the
+`wasi:http/client` and `wasi:keyvalue/store` interfaces can recognize these
+interface names in the `implements` attributes and then use the `external-id`
+payload strings to automatically generate the four arguments passed to the
+imports `a` through `d`.
 
 ### Component linking
 
