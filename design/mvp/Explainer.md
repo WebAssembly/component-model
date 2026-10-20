@@ -645,8 +645,8 @@ instancedecl  ::= core-prefix(<core:type>)
                 | <type>
                 | <alias>
                 | <exportdecl>
-importdecl    ::= (import <externnamelit> <attribute>* bind-id(<externtype>))
-exportdecl    ::= (export <externnamelit> <attribute>* bind-id(<externtype>))
+importdecl    ::= (import <externnamelit> <attributes> bind-id(<externtype>))
+exportdecl    ::= (export <externnamelit> <attributes> bind-id(<externtype>))
 externtype    ::= (<sort> (type <idx>) )
                 | core-prefix(<core:moduletype>)
                 | <functype>
@@ -1121,9 +1121,10 @@ and `$C1` is a subtype of `$C2`:
 )
 ```
 
-🏷️/🔗 Note that all `attribute`s on `import`s and `export`s are ignored by type
-checking and so any `external-id`, `implements` or `versionsuffix` attribute can
-be added to any of the `func`s above without changing the result.
+🏷️/🔗 Note that all `attributes` on `import`s and `export`s are ignored by type
+checking and so adding, removing or changing any `external-id` attribute on the
+`func`s above (or any `implements` or `version-suffix` attribute on `instance`
+imports or exports) does not change the result.
 
 When we next consider type imports and exports, there are two distinct
 subcases of `typebound` to consider: `eq` and `sub`.
@@ -2661,17 +2662,15 @@ exported (e.g., `(export $x "x" (func $f))` binds a new identifier `$x`).
 
 Given this, the syntax of imports and exports are defined as follows:
 ```ebnf
-import        ::= (import <externnamelit> <attribute>* bind-id(<externtype>))
-export        ::= (export <id>? <externnamelit> <attribute>* <externidx> <externtype>?)
-attribute     ::= <versionsuffix> 🔗
-                | <implements> 🏷️
-                | <externid> 🏷️
-versionsuffix ::= (versionsuffix <semversuffixlit>) 🔗
+import        ::= (import <externnamelit> <attributes> bind-id(<externtype>))
+export        ::= (export <id>? <externnamelit> <attributes> <externidx> <externtype>?)
+attributes    ::= <implements>? <versionsuffix>? <externid>?
 implements    ::= (implements <interfacenamelit>) 🏷️
+versionsuffix ::= (version-suffix <semversuffixlit>) 🔗
 externid      ::= (external-id <name>) 🏷️
 ```
 Imports and exports both have a *name* (`externnamelit`) and a list of
-*attributes* (`attribute*`). Imports always include a type (`externtype`).
+*attributes* (`attributes`). Imports always include a type (`externtype`).
 Exports always refer to a preceding definition (`externidx`) whose type is used
 by default as the type of the export. However, this "inferred" type can be
 overridden with an optional type ascription (`externtype`) which must be
@@ -2689,10 +2688,19 @@ and exports and instead provide extra semantic information *about* imports and
 exports that hosts or tools can automatically interpret to determine *how* to
 supply imports and call exports. In particular:
 
-🔗 The `versionsuffix` attribute provides the minor/patch/pre-release/build
-information that was stripped from the [Canonical interface name](#-canonical-interface-name)
-so that this information can be used in error messages to reconstruct the full
-original semantic version.
+🔗 The `version-suffix` attribute provides the minor/patch/build information that
+was stripped from the [Canonical interface name](#-canonical-interface-name) so
+that this information can be used in error messages to reconstruct the full
+original semantic version. A `version-suffix` may only be attached to an
+`instance` import or export and applies to the `interfacename` of the
+`implements` attribute, if present, and otherwise to the `interfacename` of the
+import or export itself. For example:
+```wat
+(component
+  (import "wasi:http/types@0.2" (version-suffix ".6") (instance ...))
+  (import "primary" (implements "wasi:keyvalue/store@0.2") (version-suffix ".1") (instance ...))
+)
+```
 
 🏷️ The `implements` attribute indicates that an imported or exported `instance`
 implements a particular WIT interface. This enables a component to semantically
@@ -2780,8 +2788,9 @@ canonversion      ::= [1-9] [0-9]* 🔗
                     | '0.' [1-9] [0-9]* 🔗
                     | '0.0.' [1-9] [0-9]* 🔗
                     | '0.0.0' 🔗
+                    | <version core> '-' <pre-release> 🔗
 semversuffixlit   ::= '"' <semversuffix> '"' 🔗
-semversuffix      ::= [0-9A-Za-z.+-]* 🔗
+semversuffix      ::= [0-9A-Za-z.+-]+ 🔗
 ```
 The names of component imports and exports provide two options:
 * a **plain name** that leaves it up to the developer to "read the docs"
@@ -2824,8 +2833,9 @@ annotations trigger additional type-validation rules (listed in detail in
   parameter from `[method]`) whose type matches the getter's return type, and
   must return either nothing or `(result (error <valtype>)?)`.
 
-The `valid semver` production is as defined by the [Semantic Versioning 2.0]
-spec and is meant to be interpreted according to that specification. The use of
+The `valid semver` production (along with its `version core` and `pre-release`
+sub-productions) is as defined by the [Semantic Versioning 2.0] spec and is
+meant to be interpreted according to that specification. The use of
 `valid semver` in `interfaceversion` is temporary for backward compatibility;
 see [Canonical interface name](#-canonical-interface-name) below (🔗).
 
@@ -2991,12 +3001,19 @@ the `<major>.<minor>.<patch>(-<pre>)(+<build>)` syntax of [Semantic Versioning
   - `0.0.1+sha.5114f85` &rarr; `0.0.1` / `+sha.5114f85`
 
 When a version is canonicalized, any `semversuffix` that was split off of the
-version should be preserved in the `versionsuffix` field of any resulting
-`import`s and `export`s. This gives component runtimes and other tools access to
-the original version for error messages, documentation, and other development
-purposes. Where a `versionsuffix` is present the preceding `interfacename` must
-have a `canonversion`, and the concatenation of the `canonversion` and
-`versionsuffix` must be a `valid semver`.
+version must be preserved in the `version-suffix` attribute of any resulting
+`import`s and `export`s to give component runtimes and other tools access to the
+original version for error messages, documentation, and other development
+purposes. Validation checks this by requiring that the `interfaceversion`
+concatenated with the `version-suffix` (if present) is a `valid semver` and that,
+when a `version-suffix` is present, canonicalizing the concatenated `valid semver`
+splits it into exactly the `interfaceversion` and the `version-suffix`. Thus,
+for example:
+- `a:b/c@1` is invalid (`1` is not a `valid semver`)
+- `a:b/c@1` with `.2.3` and `a:b/c@0.0.1-alpha` with `+sha` are valid
+- `a:b/c@1` with `.2.3-alpha` is invalid (`1.2.3-alpha` is not split)
+- `a:b/c@1.2` with `.3` and `a:b/c@1.2.3` with `+sha` are invalid (`1.2.3` and
+  `1.2.3+sha` are split after `1`)
 
 For compatibility with older versions of this spec, non-canonical
 `interfacename`s (with `interfaceversion`s matching any `valid semver`) are
