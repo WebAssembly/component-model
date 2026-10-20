@@ -731,7 +731,7 @@ section's example component:
       (call $new (local.get $ptr))
     )
     (func (export "read") (param $ptr i32) (param $n i32) (result i32)
-      ... use $ptr ... return list<u8> ...
+      ... use $ptr ... return (list u8) ...
     )
   )
   (core instance $main (instantiate $Main
