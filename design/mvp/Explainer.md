@@ -103,9 +103,9 @@ Currently, the other two `string-encoding` options are `utf16` and
 example.
 
 Given the ABI options supplied to `canon`, the Component Model specifies how the
-given component-level type (`(func (result string))`) is **flattened** into a
+given component-level type (`(func (result string))`) is **lowered** into a
 core-level type (`(func (result i32))`). The Component Model's validation rules
-for `canon lift` require that this flattened type matches the given core
+for `canon lift` require that this lowered type matches the given core
 function (`greeting`). With memory64 ([🐘]), when the `memory` ABI option refers
 to a 64-bit memory, the pointers and lengths mentioned above are replaced with
 `i64`. In the future, a new ABI option will likely be added for [wasm-gc] to
@@ -309,9 +309,9 @@ lower` definition for `greet` to be equivalently written:
 (core func $lowered-greet (canon lower (func $actions "greet") ...))
 ```
 
-Next, `(core module $Main ...)` shows the flattened core function types of the
-`lower`ed `name` and `greet` functions (which will be explicitly linked to these
-imports by the `instantiate` expression below).
+Next, `(core module $Main ...)` shows the lowered function types of the `name`
+and `greet` functions (which will be explicitly linked to these imports by the
+`instantiate` expression below).
 
 In the case of `name`, due to the aforementioned current lack of multi-value
 return, the pointer and length of the `string` result are written to a
@@ -387,18 +387,19 @@ its own `type` index):
 
 The Component Model ABI attempts to pass primitive, `record`, `variant`, and
 fixed-length `list` values as scalar Core WebAssembly parameters and results
-according to the flattening rules. However, if there would be more than 16 flat
-parameters (or 1 flat result), all parameters (or results) are passed through
-linear memory instead. Additionally, the encoded contents of `string`s and the
-elements of dynamic-length `list`s are *always* passed through linear memory.
-Thus, the ABI also specifies an in-memory representation for all value types
-that uses traditional C-like `struct` and `union` packing and alignment rules.
+according to the type-lowering rules. However, if there would be more than 16
+core parameters (or 1 core result), all parameters (or results) are passed
+through linear memory instead. Additionally, the encoded contents of `string`s
+and the elements of dynamic-length `list`s are *always* passed through linear
+memory. Thus, the ABI also specifies an in-memory representation for all value
+types that uses traditional C-like `struct` and `union` packing and alignment
+rules.
 
 As an example, the following component exports a `sum` function that receives a
 list of `$Pair` and returns the sum of all the fields. The `list` type is
-flattened into a `realloc`ed pointer and length, like `string`, where the
-pointer points to a contiguous array of 8-byte `record`s where the `first` field
-is followed by 3 padding bytes to keep the `second` field aligned.
+lowered into a `realloc`ed pointer and length, like `string`, where the pointer
+points to a contiguous array of 8-byte `record`s where the `first` field is
+followed by 3 padding bytes to keep the `second` field aligned.
 ```wat
 (component
   (core module $Main
@@ -627,10 +628,9 @@ ABI built-ins are like instructions in Core WebAssembly: they don't grant
 additional capabilities and thus don't have to be imported. Whereas Core
 WebAssembly instructions are written directly inside `func` bodies, ABI
 built-ins are introduced as new `core func` indices by `canon` definitions that
-can be imported and called by core modules with a flattened type, just like
-`lower`ed functions.
+can be imported and called by core modules just like `lower`ed functions.
 
-Next, the `$Main` module shows the flattened function types of the two imported
+Next, the `$Main` module shows the lowered function types of the two imported
 functions and the `resource.drop` ABI built-in. In all three functions, handles
 are represented as `i32` indices into a *per-component-instance* handle table
 that is maintained by the wasm runtime and *not* directly accessible to the
@@ -739,7 +739,7 @@ Component validation requires the given `type` index to be a resource type that
 was defined in the same component, ensuring that components are always able to
 encapsulate the construction and representation of their own resource types.
 
-Next, the `$Main` module shows the flattened function type of `resource.new`
+Next, the `$Main` module shows the lowered function type of `resource.new`
 which is imported as `file` `new`. The `i32` parameter of `new` matches the
 `rep` type of `$file`. Regardless of `rep`, the result is always the `i32` index
 of a new `own` handle added to the caller's handle table. Thus, when a component
