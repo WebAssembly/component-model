@@ -901,7 +901,10 @@ of: namespace `:` package name `/` package item name. For example:
 )
 ```
 Language bindings for guest code running in this component could then see, e.g.,
-`client` inside an `http` module inside a `wasi` module.
+`client` inside an `http` module inside a `wasi` module. In the future, this
+triplet structure may be generalized to allow nesting ([🪺]) of both namespaces
+and package names (with the distinction being that the top-level package is
+published with a version while the namespaces above it aren't).
 
 Next, to support API authors with versioning, interface names may optionally end
 with `@` followed by a [SemVer] version string:
@@ -1263,6 +1266,7 @@ the basis of a portable inside-and-outside-the-browser WebAssembly ecosystem.
 [JS API]: TODO#TODO
 [Text format reference]: Text.md
 [External Visibility]: Text.md#external-visibility-of-types
+[🪺]: Text.md#gated-features
 [🐘]: Text.md#gated-features
 [🔧]: Text.md#gated-features
 [📡]: Text.md#gated-features
