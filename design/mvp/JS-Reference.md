@@ -559,7 +559,7 @@ When receiving a guest resource `own` handle, we try to acquire unique ownership
 
 Right now we only define it for the case of importing a resource type that actually is exported by a separately instantiated component. In the future we could define a Symbol based protocol that would let users and other specs define custom transfer operations.
 
-To `transfer` a JS value |jsValue| and an Object |constructor|:
+To `transfer a JS value` with Value |jsValue| and an Object |constructor|:
 1. If |constructor| has a [[ConstructorFunc]] internal slot:
     1. Assert: |constructor| is a [guest resource class](#guest-resource-classes).
     1. Let |newResourceObject| be the result of `transfer a guest resource object` given |jsValue|.
@@ -583,7 +583,8 @@ For a resource type `R` whose abstract type is one of the component's type impor
     1. Let |matches| be ? `brand check` given |jsValue| and |hostType|.[[ConstructorObject]].
     1. If |matches| is **false**:
         1. Throw a `TypeError`.
-    1. Return a host resource value whose [[Type]] is |hostType| and whose [[JSValue]] is |jsValue|.
+    1. Let |transferredValue| be the result of `transfer a JS value` given |jsValue| and |hostType|.[[ConstructorObject]].
+    1. Return a host resource value whose [[Type]] is |hostType| and whose [[JSValue]] is |transferredValue|.
 
 Converting the same JS value to a host resource type yields fresh handle indices. There is no canonicalization of indices.
 
