@@ -622,7 +622,7 @@ To `create a guest resource class` given a component instance |componentInstance
     1. Let |rep| be ? `run within a call` given |componentInstance|.[[HostResourceTypes]], |componentInstance|.[[GuestResourceClasses]], and the following steps:
         1. Return ? `invoke a component function` given |constructor|.[[ConstructorFunc]], **false**, **undefined** and |args|.
     1. Return ? `create an own guest resource object` given |constructor|, |rep|, **true** and |newTarget|.
-1. Let |disposeFunc| be a built-in function object with name "[Symbol.dispose]" and length 0 that performs `drop a guest resource object` given its **this** value.
+1. Let |disposeFunc| be a built-in function object with name "[Symbol.dispose]" and length 0 that performs `dispose a guest resource object` given its **this** value.
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.dispose%`, PropertyDescriptor { [[Value]]: |disposeFunc|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.toStringTag%`, PropertyDescriptor { [[Value]]: |name|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, "constructor", PropertyDescriptor { [[Value]]: |constructor|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
@@ -698,18 +698,25 @@ To `transfer a guest resource object` given resource object |resourceObject|:
 1. Perform `detach a guest resource object` with |resourceObject|.
 1. Return |newResourceObject|.
 
-To `drop a guest resource object` given |resourceObject|:
+To `dispose a guest resource object` given |resourceObject|:
 1. If |resourceObject|.[[Rep]] is **empty**:
     1. Assert |resourceObject|.[[LendCount]] is 0.
     1. Return **undefined**.
 1. If |resourceObject|.[[LendCount]] is not 0:
     1. Throw a `TypeError`.
 1. Let |class| be |resourceObject|.[[ResourceClass]].
+1. Let |rep| be |resourceObject|.[[Rep]].
 1. Perform `detach a guest resource object` with |resourceObject|.
 1. Perform `drop a guest resource` given |class| and |rep|.
 1. Return **undefined**.
 
 The [[LendCount]] check can only fail on the `%Symbol.dispose%` path, because a lent object is kept alive by the [[Lenders]] of the call it was lent to.
+
+To `finalize a guest resource object` given |resourceClass| and |resourceRep|:
+1. Assert |resourceObject|.[[LendCount]] is 0.
+1. Perform `dispose a guest resource` given |resourceClass| and |resourceRep|.
+
+The current call lender list should keep all guest resource object's alive such that they cannot be finalized.
 
 #### Conversions for guest resources
 
@@ -749,7 +756,7 @@ For a resource type `R` whose [abstract type](#abstract-and-transparent-types) i
 
 #### Guest resource FinalizationRegistry
 
-There is an unexposed "guest resource `FinalizationRegistry`" created per-Realm of the WebAssembly namespace object. The callback for it, given a held value |record|, performs `drop a guest resource` given |record|.[[ResourceClass]] and |record|.[[Rep]].
+There is an unexposed "guest resource `FinalizationRegistry`" created per-Realm of the WebAssembly namespace object. The callback for it, given a held value |record|, performs `finalize a guest resource object` given |record|.[[ResourceClass]] and |record|.[[Rep]].
 
 The held value is a record of the objects's class and rep rather than the object itself, because registering an object with itself as the held value would keep it alive forever. The record never goes stale, because the object is unregistered whenever its [[Rep]] is taken.
 
