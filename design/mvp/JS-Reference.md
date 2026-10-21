@@ -511,24 +511,6 @@ Type declarations that do not declare a resource type, such as an exported `reco
 
 ### Host resource types (i.e. imported)
 
-#### Brand checks
-
-A resource type import is satisfied by a constructor. Each time a JS value needs to be converted to a value of that resource type, it is *brand checked* against the constructor.
-
-To `brand check` given a JS value |jsValue| and an Object |constructor|:
-1. If |constructor| is a WebIDL [interface object](https://webidl.spec.whatwg.org/#dfn-interface-object):
-    1. Return **true** if and only if |jsValue| is a platform object that [implements](https://webidl.spec.whatwg.org/#implements) the interface |constructor| is the interface object of.
-1. If |constructor| has a [[ConstructorFunc]] internal slot:
-    1. Assert: |constructor| is a [guest resource class](#guest-resource-classes).
-    1. Return **true** if and only if |jsValue| has a [[ResourceClass]] internal slot whose value is |constructor|.
-1. Return ? `InstanceofOperator`(|jsValue|, |constructor|).
-
-Which case applies is fixed for the lifetime of |constructor|.
-
-The first two cases are real brand checks. The `instanceof` fallback only inspects the prototype chain, so a value that was never created by |constructor| can pass it. In the future we may add a way for JS to supply a custom brand check.
-
-The case of a guest resource class may either be from an export of the current component instance, or else an export from a different component instance.
-
 #### Host resource types and values
 
 A *host resource type* is what the JS-API creates to satisfy a resource type import. It is a Record with the following fields:
@@ -550,6 +532,41 @@ A host resource value just holds a strong reference to the underlying value. `%S
 One host resource type is created per imported [abstract type](#abstract-and-transparent-types). Two abstract type imports satisfied by the same JS constructor become distinct component resource types, and a handle for one cannot be passed where the other is expected.
 
 A map from imported abstract type to host resource type is built by [`read the imports`](#read-the-imports-object) and stored on a [component instance](#entry-points).
+
+#### Brand checks
+
+A resource type import is satisfied by a constructor. Each time a JS value needs to be converted to a value of that resource type, it is *brand checked* against the constructor.
+
+To `brand check` given a JS value |jsValue| and an Object |constructor|:
+1. If |constructor| is a WebIDL [interface object](https://webidl.spec.whatwg.org/#dfn-interface-object):
+    1. Return **true** if and only if |jsValue| is a platform object that [implements](https://webidl.spec.whatwg.org/#implements) the interface |constructor| is the interface object of.
+1. If |constructor| has a [[ConstructorFunc]] internal slot:
+    1. Assert: |constructor| is a [guest resource class](#guest-resource-classes).
+    1. Return **true** if and only if |jsValue| has a [[ResourceClass]] internal slot whose value is |constructor|.
+1. Return ? `InstanceofOperator`(|jsValue|, |constructor|).
+
+Which case applies is fixed for the lifetime of |constructor|.
+
+The first two cases are real brand checks. The `instanceof` fallback only inspects the prototype chain, so a value that was never created by |constructor| can pass it. In the future we may add a way for JS to supply a custom brand check through a Symbol based protocol.
+
+The case of a guest resource class may either be from an export of the current component instance, or else an export from a different component instance.
+
+#### Transfer
+
+An `own` handle denotes unique ownership. Calling `resource.drop` on a guest resource `own` will run `Symbol.dispose`, which can result in errors if JS also thinks it owns the guest resource.
+
+When receiving a guest resource `own` handle, we try to acquire unique ownership of it from JS. We re-use the concept of a 'transfer' as defined by [`ArrayBuffer`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ArrayBuffer/transfer) to do this.
+
+Right now we only define it for the case of importing a resource type that actually is exported by a separately instantiated component. In the future we could define a Symbol based protocol that would let users and other specs define custom transfer operations.
+
+To `transfer` a JS value |jsValue| and an Object |constructor|:
+1. If |constructor| has a [[ConstructorFunc]] internal slot:
+    1. Assert: |constructor| is a [guest resource class](#guest-resource-classes).
+    1. Let |newResourceInstance| be the result of `transfer a guest resource instance` given |jsValue|.
+    1. Return |newResourceInstance|.
+1. Return |jsValue|.
+
+Which case applies is fixed for the lifetime of |constructor|.
 
 #### Conversions for host resources
 
@@ -604,7 +621,8 @@ To `create a guest resource class` given a component instance |componentInstance
     1. Let |rep| be ? `run within a call` given |componentInstance|.[[HostResourceTypes]], |componentInstance|.[[GuestResourceClasses]], and the following steps:
         1. Return ? `invoke a component function` given |constructor|.[[ConstructorFunc]], **false**, **undefined** and |args|.
     1. Return ? `create an own guest resource instance` given |constructor|, |rep|, **true** and |newTarget|.
-1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.dispose%`, PropertyDescriptor { [[Value]]: a built-in function object with name "[Symbol.dispose]" and length 0 that performs `drop a guest resource instance` given its **this** value, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
+1. Let |disposeFunc| be a built-in function object with name "[Symbol.dispose]" and length 0 that performs `drop a guest resource instance` given its **this** value.
+1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.dispose%`, PropertyDescriptor { [[Value]]: |disposeFunc|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.toStringTag%`, PropertyDescriptor { [[Value]]: |name|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, "constructor", PropertyDescriptor { [[Value]]: |constructor|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|constructor|, "prototype", PropertyDescriptor { [[Value]]: |prototype|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **false** }).
@@ -646,11 +664,10 @@ Defining these on the constructor or prototype may unexpectedly change JS class 
 
 An instance of a guest resource class has the following slots:
 1. [[ResourceClass]] - the resource class this is an instance of.
-1. [[Rep]] - the rep, or **empty** once the handle has been dropped.
-1. [[Own]] - whether this instance owns the resource.
+1. [[Rep]] - the rep, or **empty** once the handle has been detached or dropped.
 1. [[LendCount]] - how many outstanding `borrow`s were lent from this instance.
 
-It holds the same state a handle table entry does, plus the class it belongs to.
+It holds the same state a handle table entry does, plus the class it belongs to. A guest resource instance always owns a rep.
 
 To `create an own guest resource instance` given a resource class |class|, |rep|, and an optional |newTarget|:
 1. Let |defaultProto| be the value of |class|'s `"prototype"` property.
@@ -660,13 +677,38 @@ To `create an own guest resource instance` given a resource class |class|, |rep|
         1. Set |proto| to |defaultProto|.
 1. Else:
     1. Let |proto| be |defaultProto|.
-1. Let |instance| be `OrdinaryObjectCreate`(|proto|, « [[ResourceClass]], [[Rep]], [[Own]], [[LendCount]] »).
+1. Let |instance| be `OrdinaryObjectCreate`(|proto|, « [[ResourceClass]], [[Rep]], [[LendCount]] »).
 1. Set |instance|.[[ResourceClass]] to |class|.
 1. Set |instance|.[[Rep]] to |rep|.
-1. Set |instance|.[[Own]] to `true`.
 1. Set |instance|.[[LendCount]] to 0.
 1. Register |instance| in the [guest resource `FinalizationRegistry`](#guest-resource-finalizationregistry) with held value a record { [[ResourceClass]]: |class|, [[Rep]]: |rep| } and unregister token |instance|.
 1. Return |instance|.
+
+To `detach a guest resource instance` given resource instance |resourceInstance|:
+1. Assert: resourceInstance|.[[Rep]] is not **empty** and |resourceInstance|.[[LendCount]] is 0:
+1. Set |resourceInstance|.[[Rep]] to **empty**.
+1. Unregister |resourceInstance| from the guest resource `FinalizationRegistry`.
+1. Return |newResourceInstance|.
+
+To `transfer a guest resource instance` given resource instance |resourceInstance|:
+1. If |resourceInstance|.[[Rep]] is **empty** or |resourceInstance|.[[LendCount]] is not 0:
+    1. Throw a `TypeError`.
+1. Let |newResourceInstance| be `create an own guest resource instance` with resource class |resourceInstance|.[[ResourceClass]], rep |resourceInstance|.[[Rep]], and **undefined**.
+1. Perform `detach a guest resource instance` with |resourceInstance|.
+1. Return |newResourceInstance|.
+
+To `drop a guest resource instance` given |resourceInstance|:
+1. If |resourceInstance|.[[Rep]] is **empty**:
+    1. Assert |resourceInstance|.[[LendCount]] is 0.
+    1. Return **undefined**.
+1. If |resourceInstance|.[[LendCount]] is not 0:
+    1. Throw a `TypeError`.
+1. Let |class| be |resourceInstance|.[[ResourceClass]].
+1. Perform `detach a guest resource instance` with |resourceInstance|.
+1. Perform `drop a guest resource` given |class| and |rep|.
+1. Return **undefined**.
+
+The [[LendCount]] check can only fail on the `%Symbol.dispose%` path, because a lent instance is kept alive by the [[Lenders]] of the call it was lent to.
 
 #### Conversions for guest resources
 
@@ -686,11 +728,10 @@ For a resource type `R` whose [abstract type](#abstract-and-transparent-types) i
     1. Let |class| be the current call's [[GuestResourceClasses]][|abstractTypeKey|].
     1. If |jsValue| does not have a [[ResourceClass]] internal slot, or |jsValue|.[[ResourceClass]] is not |class|:
         1. Throw a `TypeError`.
-    1. If |jsValue|.[[Rep]] is **empty**, or |jsValue|.[[Own]] is **false**, or |jsValue|.[[LendCount]] is not 0:
+    1. If |jsValue|.[[Rep]] is **empty**, or |jsValue|.[[LendCount]] is not 0:
         1. Throw a `TypeError`.
     1. Let |rep| be |jsValue|.[[Rep]].
-    1. Set |jsValue|.[[Rep]] to **empty**.
-    1. Unregister |jsValue| from the [guest resource `FinalizationRegistry`](#guest-resource-finalizationregistry).
+    1. Perform `detach a guest resource instance` with |jsValue|.
     1. Return |rep|.
 - `ToComponentValue(jsValue, borrow<R>)`:
     1. Let |abstractTypeKey| be the *abstract type key* of |R|.
@@ -710,20 +751,6 @@ For a resource type `R` whose [abstract type](#abstract-and-transparent-types) i
 There is an unexposed "guest resource `FinalizationRegistry`" created per-Realm of the WebAssembly namespace object. The callback for it, given a held value |record|, performs `drop a guest resource` given |record|.[[ResourceClass]] and |record|.[[Rep]].
 
 The held value is a record of the instance's class and rep rather than the instance itself, because registering an object with itself as the held value would keep it alive forever. The record never goes stale, because the instance is unregistered whenever its [[Rep]] is taken.
-
-To `drop a guest resource instance` given |resourceInstance|:
-1. If |resourceInstance|.[[Rep]] is **empty** or |resourceInstance|.[[Own]] is **false**:
-    1. Return **undefined**.
-1. Let |class| be |resourceInstance|.[[ResourceClass]].
-1. If |resourceInstance|.[[LendCount]] is not 0:
-    1. Throw a `TypeError`.
-1. Let |rep| be |resourceInstance|.[[Rep]].
-1. Set |resourceInstance|.[[Rep]] to **empty**.
-1. Unregister |resourceInstance| from the guest resource `FinalizationRegistry`.
-1. Perform `drop a guest resource` given |class| and |rep|.
-1. Return **undefined**.
-
-The [[LendCount]] check can only fail on the `%Symbol.dispose%` path, because a lent instance is kept alive by the [[Lenders]] of the call it was lent to.
 
 ## Instantiation
 
