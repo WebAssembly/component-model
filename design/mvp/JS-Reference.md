@@ -216,7 +216,7 @@ Conversions run within the *current call*, a Record with the following fields:
 |---|---|
 | [[HostResourceTypes]] | map from [abstract type key](#abstract-and-transparent-types) to [host resource type](#host-resource-types-and-values) |
 | [[GuestResourceClasses]] | map from [abstract type key](#abstract-and-transparent-types) to [guest resource class](#guest-resource-classes) |
-| [[Lenders]] | an optional List of [guest resource instances](#guest-resource-instances) lent as a `borrow` back to the defining component |
+| [[Lenders]] | an optional List of [guest resource objects](#guest-resource-objects) lent as a `borrow` back to the defining component |
 
 To `run within a call` given |hostResourceTypes|, |guestResourceClasses| and an Abstract Closure |steps|:
 1. Let |previousCall| be the current call.
@@ -562,8 +562,8 @@ Right now we only define it for the case of importing a resource type that actua
 To `transfer` a JS value |jsValue| and an Object |constructor|:
 1. If |constructor| has a [[ConstructorFunc]] internal slot:
     1. Assert: |constructor| is a [guest resource class](#guest-resource-classes).
-    1. Let |newResourceInstance| be the result of `transfer a guest resource instance` given |jsValue|.
-    1. Return |newResourceInstance|.
+    1. Let |newResourceObject| be the result of `transfer a guest resource object` given |jsValue|.
+    1. Return |newResourceObject|.
 1. Return |jsValue|.
 
 Which case applies is fixed for the lifetime of |constructor|.
@@ -620,8 +620,8 @@ To `create a guest resource class` given a component instance |componentInstance
         1. Throw a `TypeError`.
     1. Let |rep| be ? `run within a call` given |componentInstance|.[[HostResourceTypes]], |componentInstance|.[[GuestResourceClasses]], and the following steps:
         1. Return ? `invoke a component function` given |constructor|.[[ConstructorFunc]], **false**, **undefined** and |args|.
-    1. Return ? `create an own guest resource instance` given |constructor|, |rep|, **true** and |newTarget|.
-1. Let |disposeFunc| be a built-in function object with name "[Symbol.dispose]" and length 0 that performs `drop a guest resource instance` given its **this** value.
+    1. Return ? `create an own guest resource object` given |constructor|, |rep|, **true** and |newTarget|.
+1. Let |disposeFunc| be a built-in function object with name "[Symbol.dispose]" and length 0 that performs `drop a guest resource object` given its **this** value.
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.dispose%`, PropertyDescriptor { [[Value]]: |disposeFunc|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.toStringTag%`, PropertyDescriptor { [[Value]]: |name|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, "constructor", PropertyDescriptor { [[Value]]: |constructor|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
@@ -660,16 +660,16 @@ Defining these on the constructor or prototype may unexpectedly change JS class 
 
 *Member* exports with an `accessor` capture become the two halves of one accessor property, on `prototype` when `scope` is "method" and on the class itself when it is "static". Validation requires a `[set]` to be preceded in the same scope by the `[get]` it pairs with, so the getter is always defined first and the setter only fills in the accessor's [[Set]] field.
 
-#### Guest resource instances
+#### Guest resource objects
 
-An instance of a guest resource class has the following slots:
-1. [[ResourceClass]] - the resource class this is an instance of.
+A guest resource object has the following slots:
+1. [[ResourceClass]] - the resource class this object is an instance of.
 1. [[Rep]] - the rep, or **empty** once the handle has been detached or dropped.
-1. [[LendCount]] - how many outstanding `borrow`s were lent from this instance.
+1. [[LendCount]] - how many outstanding `borrow`s were lent from this object.
 
-It holds the same state a handle table entry does, plus the class it belongs to. A guest resource instance always owns a rep.
+It holds the same state a handle table entry does, plus the class it belongs to. A guest resource object always owns a rep.
 
-To `create an own guest resource instance` given a resource class |class|, |rep|, and an optional |newTarget|:
+To `create an own guest resource object` given a resource class |class|, |rep|, and an optional |newTarget|:
 1. Let |defaultProto| be the value of |class|'s `"prototype"` property.
 1. If |newTarget| is present:
     1. Let |proto| be ? `Get`(|newTarget|, "prototype").
@@ -677,49 +677,49 @@ To `create an own guest resource instance` given a resource class |class|, |rep|
         1. Set |proto| to |defaultProto|.
 1. Else:
     1. Let |proto| be |defaultProto|.
-1. Let |instance| be `OrdinaryObjectCreate`(|proto|, « [[ResourceClass]], [[Rep]], [[LendCount]] »).
-1. Set |instance|.[[ResourceClass]] to |class|.
-1. Set |instance|.[[Rep]] to |rep|.
-1. Set |instance|.[[LendCount]] to 0.
-1. Register |instance| in the [guest resource `FinalizationRegistry`](#guest-resource-finalizationregistry) with held value a record { [[ResourceClass]]: |class|, [[Rep]]: |rep| } and unregister token |instance|.
-1. Return |instance|.
+1. Let |object| be `OrdinaryObjectCreate`(|proto|, « [[ResourceClass]], [[Rep]], [[LendCount]] »).
+1. Set |object|.[[ResourceClass]] to |class|.
+1. Set |object|.[[Rep]] to |rep|.
+1. Set |object|.[[LendCount]] to 0.
+1. Register |object| in the [guest resource `FinalizationRegistry`](#guest-resource-finalizationregistry) with held value a record { [[ResourceClass]]: |class|, [[Rep]]: |rep| } and unregister token |object|.
+1. Return |object|.
 
-To `detach a guest resource instance` given resource instance |resourceInstance|:
-1. Assert: resourceInstance|.[[Rep]] is not **empty** and |resourceInstance|.[[LendCount]] is 0:
-1. Set |resourceInstance|.[[Rep]] to **empty**.
-1. Unregister |resourceInstance| from the guest resource `FinalizationRegistry`.
-1. Return |newResourceInstance|.
+To `detach a guest resource object` given resource object |resourceObject|:
+1. Assert: resourceObject|.[[Rep]] is not **empty** and |resourceObject|.[[LendCount]] is 0:
+1. Set |resourceObject|.[[Rep]] to **empty**.
+1. Unregister |resourceObject| from the guest resource `FinalizationRegistry`.
+1. Return |newResourceObject|.
 
-To `transfer a guest resource instance` given resource instance |resourceInstance|:
-1. If |resourceInstance|.[[Rep]] is **empty** or |resourceInstance|.[[LendCount]] is not 0:
+To `transfer a guest resource object` given resource object |resourceObject|:
+1. If |resourceObject|.[[Rep]] is **empty** or |resourceObject|.[[LendCount]] is not 0:
     1. Throw a `TypeError`.
-1. Let |newResourceInstance| be `create an own guest resource instance` with resource class |resourceInstance|.[[ResourceClass]], rep |resourceInstance|.[[Rep]], and **undefined**.
-1. Perform `detach a guest resource instance` with |resourceInstance|.
-1. Return |newResourceInstance|.
+1. Let |newResourceObject| be `create an own guest resource object` with resource class |resourceObject|.[[ResourceClass]], rep |resourceObject|.[[Rep]], and **undefined**.
+1. Perform `detach a guest resource object` with |resourceObject|.
+1. Return |newResourceObject|.
 
-To `drop a guest resource instance` given |resourceInstance|:
-1. If |resourceInstance|.[[Rep]] is **empty**:
-    1. Assert |resourceInstance|.[[LendCount]] is 0.
+To `drop a guest resource object` given |resourceObject|:
+1. If |resourceObject|.[[Rep]] is **empty**:
+    1. Assert |resourceObject|.[[LendCount]] is 0.
     1. Return **undefined**.
-1. If |resourceInstance|.[[LendCount]] is not 0:
+1. If |resourceObject|.[[LendCount]] is not 0:
     1. Throw a `TypeError`.
-1. Let |class| be |resourceInstance|.[[ResourceClass]].
-1. Perform `detach a guest resource instance` with |resourceInstance|.
+1. Let |class| be |resourceObject|.[[ResourceClass]].
+1. Perform `detach a guest resource object` with |resourceObject|.
 1. Perform `drop a guest resource` given |class| and |rep|.
 1. Return **undefined**.
 
-The [[LendCount]] check can only fail on the `%Symbol.dispose%` path, because a lent instance is kept alive by the [[Lenders]] of the call it was lent to.
+The [[LendCount]] check can only fail on the `%Symbol.dispose%` path, because a lent object is kept alive by the [[Lenders]] of the call it was lent to.
 
 #### Conversions for guest resources
 
-Each guest resource instance lowered as a `borrow` while converting the arguments of a JS-to-component call has its [[LendCount]] incremented and is appended to the current call's [[Lenders]], which protects it from being disposed while lent. When the call resolves (and so the callee has dropped all its borrows) `invoke a component function` decrements every [[LendCount]] in the list.
+Each guest resource object lowered as a `borrow` while converting the arguments of a JS-to-component call has its [[LendCount]] incremented and is appended to the current call's [[Lenders]], which protects it from being disposed while lent. When the call resolves (and so the callee has dropped all its borrows) `invoke a component function` decrements every [[LendCount]] in the list.
 
 For a resource type `R` whose [abstract type](#abstract-and-transparent-types) is one of the component's type exports:
 
 - `ToJSValue(rep, own<R>)`:
     1. Let |abstractTypeKey| be the *abstract type key* of |R|.
     1. Let |class| be the current call's [[GuestResourceClasses]][|abstractTypeKey|].
-    1. Return `create an own guest resource instance` given |class|, |rep| and **true**.
+    1. Return `create an own guest resource object` given |class|, |rep| and **true**.
 - `ToJSValue(rep, borrow<R>)`:
     1. Assert: unreachable.
     1. This can only happen if an exported function returns a borrow, which is not allowed.
@@ -731,7 +731,7 @@ For a resource type `R` whose [abstract type](#abstract-and-transparent-types) i
     1. If |jsValue|.[[Rep]] is **empty**, or |jsValue|.[[LendCount]] is not 0:
         1. Throw a `TypeError`.
     1. Let |rep| be |jsValue|.[[Rep]].
-    1. Perform `detach a guest resource instance` with |jsValue|.
+    1. Perform `detach a guest resource object` with |jsValue|.
     1. Return |rep|.
 - `ToComponentValue(jsValue, borrow<R>)`:
     1. Let |abstractTypeKey| be the *abstract type key* of |R|.
@@ -750,7 +750,7 @@ For a resource type `R` whose [abstract type](#abstract-and-transparent-types) i
 
 There is an unexposed "guest resource `FinalizationRegistry`" created per-Realm of the WebAssembly namespace object. The callback for it, given a held value |record|, performs `drop a guest resource` given |record|.[[ResourceClass]] and |record|.[[Rep]].
 
-The held value is a record of the instance's class and rep rather than the instance itself, because registering an object with itself as the held value would keep it alive forever. The record never goes stale, because the instance is unregistered whenever its [[Rep]] is taken.
+The held value is a record of the objects's class and rep rather than the object itself, because registering an object with itself as the held value would keep it alive forever. The record never goes stale, because the object is unregistered whenever its [[Rep]] is taken.
 
 ## Instantiation
 
@@ -1127,15 +1127,15 @@ To `invoke a component function` given |componentFunc|, a Boolean |takesSelf|, |
 1. Let |componentResult| be **empty**.
 1. Let |onResolve| be a new Abstract Closure with parameters (|results|) that performs the following steps when called:
     1. Assert: |results| is not None.
-    1. Decrement the [[LendCount]] of every instance in |lenders|.
+    1. Decrement the [[LendCount]] of every object in |lenders|.
     1. Set |resolved| to **true**.
     1. If |results| is not empty, set |componentResult| to |results|[0].
 1. Let |completion| be Completion(|instance|.[[Store]].invoke(|componentFunc|, |onStart|, |onResolve|)).
 1. If the call traps:
-    1. If |resolved| is **false**, decrement the [[LendCount]] of every instance in |lenders|.
+    1. If |resolved| is **false**, decrement the [[LendCount]] of every object in |lenders|.
     1. Perform ? `trap` given |instance|.
 1. If |completion| is an abrupt completion:
-    1. Decrement the [[LendCount]] of every instance in |lenders|.
+    1. Decrement the [[LendCount]] of every object in |lenders|.
     1. If the call has entered the guest:
         1. Invoke |instance|.[[Store]].lock_down().
     1. Return ? |completion|.
@@ -1183,7 +1183,7 @@ A component's exports become the bindings of its module namespace object. There 
 1. How to dynamically pass a union value? Statically passing a single case of the union works, but not dynamic choice.
 1. How to import multiple overloads of a function? Can we just use `external-id`?
 1. How to support class inheritance and casting?
-1. Do we support a reference equality protocol? `ToJSValue` creates a fresh resource instance per lift, so two `borrow`s of one component-defined resource are two JS objects that do not compare equal. Reps are opaque and reusable after a drop, so an identity map would need careful invalidation.
+1. Do we support a reference equality protocol? `ToJSValue` creates a fresh resource object per lift, so two `borrow`s of one component-defined resource are two JS objects that do not compare equal. Reps are opaque and reusable after a drop, so an identity map would need careful invalidation.
 1. Do we let a JS constructor supply its own brand check?
 1. Should a `[get]`/`[set]` import fall back to a `Get`/`Set` on the target when the property is not an accessor? That would let data properties, `Proxy` traps and module namespace bindings satisfy a property import.
 1. How does a component feature test an import?
