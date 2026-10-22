@@ -531,7 +531,7 @@ A host resource value just holds a strong reference to the underlying value. `%S
 
 One host resource type is created per imported [abstract type](#abstract-and-transparent-types). Two abstract type imports satisfied by the same JS constructor become distinct component resource types, and a handle for one cannot be passed where the other is expected.
 
-A map from imported abstract type to host resource type is built by [`read the imports`](#read-the-imports-object) and stored on a [component instance](#entry-points).
+A map from imported abstract type to host resource type is built by [`read the imports object`](#read-the-imports-object) and stored on a [component instance](#entry-points).
 
 #### Brand checks
 
@@ -551,23 +551,6 @@ The first two cases are real brand checks. The `instanceof` fallback only inspec
 
 The case of a guest resource class may either be from an export of the current component instance, or else an export from a different component instance.
 
-#### Transfer
-
-An `own` handle denotes unique ownership. Calling `resource.drop` on a guest resource `own` will run `Symbol.dispose`, which can result in errors if JS also thinks it owns the guest resource.
-
-When receiving a guest resource `own` handle, we try to acquire unique ownership of it from JS. We re-use the concept of a 'transfer' as defined by [`ArrayBuffer`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/ArrayBuffer/transfer) to do this.
-
-Right now we only define it for the case of importing a resource type that actually is exported by a separately instantiated component. In the future we could define a Symbol based protocol that would let users and other specs define custom transfer operations.
-
-To `transfer a JS value` with Value |jsValue| and an Object |constructor|:
-1. If |constructor| has a [[ConstructorFunc]] internal slot:
-    1. Assert: |constructor| is a [guest resource class](#guest-resource-classes).
-    1. Let |newResourceObject| be the result of `transfer a guest resource object` given |jsValue|.
-    1. Return |newResourceObject|.
-1. Return |jsValue|.
-
-Which case applies is fixed for the lifetime of |constructor|.
-
 #### Conversions for host resources
 
 For a resource type `R` whose abstract type is one of the component's type imports:
@@ -583,8 +566,7 @@ For a resource type `R` whose abstract type is one of the component's type impor
     1. Let |matches| be ? `brand check` given |jsValue| and |hostType|.[[ConstructorObject]].
     1. If |matches| is **false**:
         1. Throw a `TypeError`.
-    1. Let |transferredValue| be the result of `transfer a JS value` given |jsValue| and |hostType|.[[ConstructorObject]].
-    1. Return a host resource value whose [[Type]] is |hostType| and whose [[JSValue]] is |transferredValue|.
+    1. Return a host resource value whose [[Type]] is |hostType| and whose [[JSValue]] is |jsValue|.
 
 Converting the same JS value to a host resource type yields fresh handle indices. There is no canonicalization of indices.
 
@@ -598,7 +580,7 @@ An exported resource type that is only privately a re-export of an imported type
 
 ### Re-imported guest resource types
 
-An exported guest resource type may be imported by a separate `ComponentInstance` through the JS-API. In this case, the guest resource type is treated as if it was a host resource type and the previous section rules apply. As explained in [component store](#component-store), there is no direct component model linking between top-level instances through the JS-API.
+An exported guest resource type may be imported by a separate `ComponentInstance` through the JS-API. As explained in [component store](#component-store), there is no direct component model linking between top-level instances through the JS-API. However, we do want to ensure that incidental linking of components through the JS-API works well, and there are tricky questions around handling `own` and `borrow`. So we temporarily throw a `LinkError` in this case.
 
 #### Guest resource classes
 
@@ -691,13 +673,6 @@ To `detach a guest resource object` given resource object |resourceObject|:
 1. Unregister |resourceObject| from the guest resource `FinalizationRegistry`.
 1. Return |newResourceObject|.
 
-To `transfer a guest resource object` given resource object |resourceObject|:
-1. If |resourceObject|.[[Rep]] is **empty** or |resourceObject|.[[LendCount]] is not 0:
-    1. Throw a `TypeError`.
-1. Let |newResourceObject| be `create an own guest resource object` with resource class |resourceObject|.[[ResourceClass]], rep |resourceObject|.[[Rep]], and **undefined**.
-1. Perform `detach a guest resource object` with |resourceObject|.
-1. Return |newResourceObject|.
-
 To `dispose a guest resource object` given |resourceObject|:
 1. If |resourceObject|.[[Rep]] is **empty**:
     1. Assert |resourceObject|.[[LendCount]] is 0.
@@ -781,12 +756,12 @@ To `instantiate a component` given |component|, a list of component definitions 
 We temporarily reject any async function imports/exports until they are specified.
 
 To `instantiate a component from an imports object` given |component|, |importsObject|, and |enabledBuiltins|:
-1. Let |imports| and |hostResourceTypes| be ? `read the imports` given |component|, |importsObject|, and |enabledBuiltins|.
+1. Let |imports| and |hostResourceTypes| be ? `read the imports object` given |component|, |importsObject|, and |enabledBuiltins|.
 1. Return ? `instantiate a component` given |component|, |imports|, and |hostResourceTypes|.
 
 ### Read the imports object
 
-The top-level `read the imports` algorithm walks the component's imports and resolves each to a JS value via property lookups on the |importsObject|, mirroring the core JS-API's algorithm of the same name.
+The top-level `read the imports object` algorithm walks the component's imports and resolves each to a JS value via property lookups on the |importsObject|, mirroring the core JS-API's algorithm of the same name.
 
 The resolved JS values are then handed to the per-sort algorithms (`read the function import`, `read the type import`, and the rest) to produce the component definitions used during instantiation.
 
@@ -794,7 +769,7 @@ While walking, the algorithm recognizes the pattern of a resource type import ac
 
 Passing an exported component definition to a component import via the JS-API/ESM-integration is treated as if the import were a JS value. There is no "direct linking" that bypasses going through JS semantics. See [component store](#component-store) for more details.
 
-To `read the imports` given |component|, |importsObject|, and |enabledBuiltins|:
+To `read the imports object` given |component|, |importsObject|, and |enabledBuiltins|:
 1. Let |hostResourceTypes| be an empty map from [abstract type key](#abstract-and-transparent-types) to [host resource type record](#host-resource-types-and-values).
 1. If |component| has no imports:
     1. Return an empty list and |hostResourceTypes|.
@@ -880,6 +855,9 @@ To `read the type import` given |importDecl|, |importValue|, and |hostResourceTy
 1. Let |abstractTypeKey| be the *abstract type key* of |importDecl|.
 1. Assert: |hostResourceTypes|[|abstractTypeKey|] does not exist. (`read a scope of imports` handles transparent imports)
 1. If `IsCallable`(|importValue|) is **false**:
+    1. Throw a `WebAssembly.LinkError`.
+1. If |importValue| has a [[ConstructorFunc]] internal slot:
+    1. Assert: |importValue| is a [guest resource class](#guest-resource-classes).
     1. Throw a `WebAssembly.LinkError`.
 1. Let |dispose| be ? `Get`(|importValue|, %Symbol.dispose%).
 1. Let |hasDispose| be `IsCallable`(|dispose|).
@@ -996,7 +974,7 @@ To `resolve a builtin specifier` given a String |specifier| and a set of Strings
 
 #### The global object
 
-The normal [`read the imports`](#read-the-imports-object) rules are designed so that JS classes can be imported by just providing the constructor object. `wasm:js/global/*` provides a fine-grained way to get access to globally exposed constructors and other functions. This reduces the amount of glue code needed in the common case.
+The normal [`read the imports object`](#read-the-imports-object) rules are designed so that JS classes can be imported by just providing the constructor object. `wasm:js/global/*` provides a fine-grained way to get access to globally exposed constructors and other functions. This reduces the amount of glue code needed in the common case.
 
 `wasm:js/global` resolves to the `globalThis` of the [component realm](#types-and-values), and nested paths resolve to a chain of property accessors off of the global (e.g. `wasm:js/global/console` is `globalThis.console`).
 
@@ -1016,7 +994,7 @@ TODO: Within the wasm scheme we're parsing this similar to a general URL, but no
 
 The `create the exports object` algorithm walks the component's exports and builds a fresh JS object whose properties are the exports.
 
-Exported resource types become [guest resource classes](#guest-resource-classes) named `JSName`(|export|), and function exports matching *Constructor* or *Member* are mapped onto the class `R` named by their `resource` capture, just as in `read the imports`:
+Exported resource types become [guest resource classes](#guest-resource-classes) named `JSName`(|export|), and function exports matching *Constructor* or *Member* are mapped onto the class `R` named by their `resource` capture, just as in `read the imports object`:
 - *Constructor*: the function becomes `R`'s constructor behaviour. Names are strongly-unique, so there can only be one.
 - *Member* with `scope` "method": the function becomes a method named `JSName`(|export|) on `R.prototype`.
 - *Member* with `scope` "static": the function becomes a static method named `JSName`(|export|) on `R`.
