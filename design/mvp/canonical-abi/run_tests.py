@@ -199,6 +199,9 @@ test(t, [0, 42], {'w':42})
 test(t, [1, 42], {'y':42})
 t2 = VariantType([CaseType('w',U8Type())])
 test(t, [0, 42], {'w':42}, lower_t=t2, lower_v={'w':42})
+t = UnionType([CaseType('x',U8Type()),CaseType('y',StringType())])
+test(t, [0,42,0], {'x': 42})
+test(t, [0,256,0], {'x': 0})
 
 def test_pairs(t, pairs):
   for arg,expect in pairs:

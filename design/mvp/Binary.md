@@ -214,6 +214,7 @@ defvaltype    ::= pvt:<primvaltype>                        => pvt
                 | 0x66 t?:<valtype>?                       => (stream t?) 🔀
                 | 0x65 t?:<valtype>?                       => (future t?) 🔀
                 | 0x63 k:<valtype> v:<valtype>             => (map k v) (if k is in <keytype>) 🗺️
+                | 0x62 lt*:vec(<labelvaltype>)             => (union (case lt)+) (if |lt*| > 0) 💍
 labelvaltype  ::= l:<labellit> t:<valtype>                 => l t
 case          ::= l:<labellit> t?:<valtype>? 0x00          => (case l t?)
 labellit      ::= len:<u32> l:<label>                      => "l"  (if len = |l|)
@@ -285,15 +286,17 @@ Notes:
 * `<label>` is defined as part of the
    [text format](Text.md#import-and-export-definitions).
 * All parameter labels, result labels, record field labels, variant case
-  labels, flag labels, enum case labels, component import names, component
-  export names, instance import names and instance export names must be
-  [strongly-unique] in their containing scope.
+  labels, union case labels, flag labels, enum case labels, component import
+  names, component export names, instance import names and instance export
+  names must be [strongly-unique] in their containing scope.
 * Validation of `externtype` requires the various `typeidx` type constructors
   to match the preceding `sort`.
 * (The `0x00` immediate of `case` may be reinterpreted in the future as the
   `none` case of an optional immediate.)
 * 🔧 for fixed-sized lists the length of the list must be larger than 0 to pass
   validation.
+* 💍 Validation of `union` requires the case payloads to be pairwise
+  [distinguishable](Text.md#specialized-value-types).
 * Validation requires that, for every `defvaltype` `t`, the worst-case in-memory
   element size is less than 2<sup>28</sup>, as defined by `elem_size` in the
   [Canonical ABI](CanonicalABI.md#element-size).
@@ -502,6 +505,7 @@ val(string)                ::= v:<core:name>                           => v
 val(i:<typeidx>)           ::= v:<val(type-index-space[i])>            => v
 val((record (field l t)+)) ::= v+:<val(t)>+                            => (record v+)
 val((variant (case l t?)+) ::= i:<core:u32> v?:<val(t[i])>?            => (variant l[i] v?)
+val((union (case l t)+))   ::= i:<core:u32> v:<val(t[i])>              => (union l[i] v) 💍
 val((list t))              ::= v:vec(<val(t)>)                         => (list v)
 val((list t len))          ::= (v:<val(t)>)^len                        => (list v^len) 🔧
 val((tuple t+))            ::= v+:<val(t)>+                            => (tuple v+)

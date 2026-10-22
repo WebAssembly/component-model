@@ -156,6 +156,10 @@ class MapType(ValType):
   v: ValType
 
 @dataclass
+class UnionType(ValType):
+  cases: list[CaseType] # every case has a payload
+
+@dataclass
 class FlagsType(ValType):
   labels: list[str]
 
@@ -1116,6 +1120,7 @@ def despecialize(t):
     case OptionType(t)       : return VariantType([ CaseType("none", None), CaseType("some", t) ])
     case ResultType(ok, err) : return VariantType([ CaseType("ok", ok), CaseType("error", err) ])
     case MapType(k, v)       : return ListType(despecialize(TupleType([k, v])))
+    case UnionType(cases)    : return VariantType(cases)
     case _                   : return t
 
 ## Type Predicates

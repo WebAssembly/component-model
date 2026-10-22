@@ -75,6 +75,7 @@ shipped as part of a future WASI Developer Preview release:
 * 🐘: [memory64]
 * 📡: getters and setters
 * ➡️: `stream.forward` and `future.forward` built-ins
+* 💍: the `union` type
 
 
 ## Grammar
@@ -625,6 +626,7 @@ defvaltype    ::= bool
                 | (option <valtype>)
                 | (result <valtype>? (error <valtype>)?)
                 | (map <keytype> <valtype>) 🗺️
+                | (union (case <labellit> <valtype>)+) 💍
                 | (own <typeidx>)
                 | (borrow <typeidx>)
                 | (stream <valtype>?) 🔀
@@ -837,6 +839,7 @@ defined by the following mapping:
 (result <valtype>? (error <valtype>)?) ↦ (variant (case "ok" <valtype>?) (case "error" <valtype>?))
                                 string ↦ (list char)
              (map <keytype> <valtype>) ↦ (list (tuple <keytype> <valtype>))
+  (union (case <labellit> <valtype>)+) ↦ (variant (case <labellit> <valtype>)+)
 ```
 
 Specialized value types have the same set of semantic values as their
@@ -870,6 +873,36 @@ Note that, at least initially, variants must have a non-empty list of
 cases. This could be relaxed in the future to allow an empty list of cases, with
 the empty `(variant)` effectively serving as an [empty type] and indicating
 unreachability.
+
+##### Union types
+
+💍 A `union` is a `variant` whose case labels can be dropped by bindings for
+dynamically-typed languages like JS and Python. They instead can pick the case
+by inspecting the dynamic type of a source-language value. To keep this
+inspection unambiguous (preserving that values round-trip through the source
+language without loss), validation requires every case of the `union` to have
+a payload and for every pair of cases to be *distinguishable*. Bindings for
+other languages can treat a `union` like a `variant`.
+
+Two value types are *distinguishable* if their sets of *distinguishable kinds*
+are disjoint, where the distinguishable kinds of a value type are:
+
+| Type | Distinguishable kinds |
+| ---- | --------------------- |
+| `bool`, `s8`, `u8`, `s16`, `u16`, `s32`, `u32`, `s64`, `u64`, `f32`, `f64` | numeric |
+| `char` | numeric, string |
+| `string`, `enum` | string |
+| `list`, `tuple` | list |
+| `record`, `variant`, `flags`, `result`, `map` | object |
+| `(own R)`, `(borrow R)` | resource `R` |
+| `stream` | stream |
+
+Any type without a distinguishable kind is rejected as a case payload.
+
+Imported resource types are assumed to be distinct from each other. However,
+a component may be instantiated such that the resource types are not in fact
+distinguishable. In this case, the embedder must pick the first matching case
+in declaration order. The round-trip is lossy in this case, but well-defined.
 
 #### Definition types
 
@@ -2444,6 +2477,7 @@ val      ::= false | true
            | <core:name>
            | (record <val>+)
            | (variant <labellit> <val>?)
+           | (union <labellit> <val>) 💍
            | (list <val>*)
            | (tuple <val>+)
            | (flags <labellit>*)
@@ -2521,6 +2555,9 @@ For example:
       (entry "b" 2)
     )
   )
+
+  ;; 💍 union:
+  (value $x (union (case "a" u32) (case "b" string)) (union "b" "hello"))
 
   (type $complex
     (tuple
@@ -2843,7 +2880,7 @@ meant to be interpreted according to that specification. The use of
 see [Canonical interface name](#-canonical-interface-name) below (🔗).
 
 The `label` production used inside `plainname` as well as the labels of
-`record` and `variant` types must be [kebab case]. The reason for
+`record`, `variant` and `union` (💍) types must be [kebab case]. The reason for
 this particular form of casing is to unambiguously separate words and acronyms
 (represented as all-caps words) so that source language bindings can convert a
 `label` into the idiomatic casing of that language. (Indeed, because hyphens
@@ -3027,8 +3064,9 @@ be rejected at some point in the future.
 #### External Visibility of Types
 
 Resource types and certain compound value types (specifically `record`,
-`variant`, `enum`, `flags`) have an additional **external visibility**
-requirement when used in the function types of imports and exports:
+`variant`, `enum`, `flags`, `union` 💍) have an additional **external
+visibility** requirement when used in the function types of imports and
+exports:
 
 Like other module systems with abstract types, components have to deal with the
 [avoidance problem] wherein a resource type that is in-scope when defining a
@@ -3079,18 +3117,18 @@ imports and exports:
 ```
 
 The Component Model also imposes the same external-visibility requirement on
-`record`, `variant`, `enum` and `flags` value types, even though these types are
-purely structural types. The reason for this theoretically-unnecessary
-requirement is that, in many source languages, the source-level types that
-correspond to these component-level types are not structural and thus require
-some fixed type name to use in generated function signatures. For example, in C,
-`struct`s, `union`s and `enum`s all require a name, and in the absence of a
-component- or WIT-supplied name, a bindings generator would be forced to
-mechanically generate a name that will inevitably be less meaningful than what a
-component or WIT author would choose.
+`record`, `variant`, `enum`, `flags` and `union` (💍) value types, even though
+these types are purely structural types. The reason for this
+theoretically-unnecessary requirement is that, in many source languages, the
+source-level types that correspond to these component-level types are not
+structural and thus require some fixed type name to use in generated function
+signatures. For example, in C, `struct`s, `union`s and `enum`s all require a
+name, and in the absence of a component- or WIT-supplied name, a bindings
+generator would be forced to mechanically generate a name that will inevitably
+be less meaningful than what a component or WIT author would choose.
 
 Thus, the preceding example also applies when `resource` is swapped with
-`record`, `variant`, `enum` and `flags`:
+`record`, `variant`, `enum`, `flags` and `union`:
 ```wat
 (component
   (type $R (record (field "x" u32) (field "y" u32)))

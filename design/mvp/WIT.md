@@ -798,6 +798,12 @@ interface foo {
       exec,
     }
 
+    // similar to `variant`, but every case must have a distinguishable type payload
+    union user-id {
+      name(string),
+      number(u32),
+    }
+
     // type aliases are allowed to primitive types and additionally here are some
     // examples of other types
     type t1 = u32;
@@ -813,7 +819,7 @@ interface foo {
 }
 ```
 
-The `record`, `variant`, `enum`, and `flags` types must all have names
+The `record`, `variant`, `enum`, `flags`, and `union` types must all have names
 associated with them. The `list`, `option`, `result`, `tuple`, and primitive
 types do not need a name and can be mentioned in any context. This restriction
 is in place to assist with code generation in all languages to leverage
@@ -1093,6 +1099,7 @@ keyword ::= 'as'
           | 'u32'
           | 'u64'
           | 'u8'
+          | 'union'
           | 'use'
           | 'variant'
           | 'with'
@@ -1552,6 +1559,7 @@ typedef-item ::= resource-item
                | record-item
                | flags-items
                | enum-items
+               | union-items 💍
                | type-item
 
 func-item ::= id ':' func-type ';'
@@ -1743,6 +1751,38 @@ variant-cases ::= variant-case
 
 variant-case ::= id
                | id '(' ty ')'
+```
+
+### Item: `union` (variant with distinguishable payloads)
+
+💍 A `union` statement defines a new type which is equivalent to a
+`variant` where every case has a payload type and the payload types are all
+[distinguishable](Text.md#specialized-value-types).
+
+This allows bindings for dynamically-typed languages such as JS or Python to
+represent a union as just its payload (dropping the case name).
+
+All `union` types must have at least one case specified.
+
+```wit
+resource blob;
+
+union blob-part {
+    bytes(list<u8>),
+    blob(blob),
+    text(string),
+}
+```
+
+Specifically the structure of this is:
+
+```ebnf
+union-items ::= 'union' id '{' union-cases '}'
+
+union-cases ::= union-case
+              | union-case ',' union-cases?
+
+union-case ::= id '(' ty ')'
 ```
 
 ### Item: `enum` (variant but with no payload)
