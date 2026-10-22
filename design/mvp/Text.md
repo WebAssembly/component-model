@@ -76,6 +76,7 @@ shipped as part of a future WASI Developer Preview release:
 * 📡: getters and setters
 * ➡️: `stream.forward` and `future.forward` built-ins
 * 💍: the `union` type
+* 🎭: function overloading
 
 
 ## Grammar
@@ -896,8 +897,10 @@ are disjoint, where the distinguishable kinds of a value type are:
 | `record`, `variant`, `flags`, `result`, `map` | object |
 | `(own R)`, `(borrow R)` | resource `R` |
 | `stream` | stream |
+| `union` | the kinds of every case payload |
 
-Any type without a distinguishable kind is rejected as a case payload.
+A `union`, or any type without a distinguishable kind, is rejected as a case
+payload.
 
 Imported resource types are assumed to be distinct from each other. However,
 a component may be instantiated such that the resource types are not in fact
@@ -2803,9 +2806,13 @@ externname        ::= <plainname>
 plainname         ::= <label>
                     | '[get]' <label> 📡
                     | '[set]' <label> 📡
+                    | '[overload]' <label> '.' <label> 🎭
                     | '[constructor]' <label>
+                    | '[constructor][overload]' <label> '.' <label> 🎭
                     | '[method]' (📡 '[get]' | '[set]')? <label> '.' <label>
+                    | '[method][overload]' <label> '.' <label> '.' <label> 🎭
                     | '[static]' (📡 '[get]' | '[set]')? <label> '.' <label>
+                    | '[static][overload]' <label> '.' <label> '.' <label> 🎭
 labellit          ::= '"' <label> '"'
 label             ::= <first-fragment> ( '-' <fragment> )*
 first-fragment    ::= <first-word>
@@ -2846,6 +2853,26 @@ annotated as being a constructor, method, 📡 property getter, 📡 property se
 or static function of a preceding resource, as well as a 📡 property getter or
 📡 property setter not attached to a resource.
 
+🎭 The `[overload]` annotation allows several functions to share one name,
+forming an *overload set*, so that bindings can bind overloaded JS and Web APIs
+(e.g., `CanvasRenderingContext2D.fill()`) idiomatically. The *base name* of an
+`[overload]` name is the name without `[overload]` and its last `.`-separated
+label, the *suffix* (e.g., `[method][overload]context.fill.with-path` has the
+base name `[method]context.fill` and the suffix `with-path`). The names whose
+base names are not [strongly-unique](#name-uniqueness) form an overload set,
+which requires their base names to be equal. Each source language can then pick
+its own representation:
+* Languages without overloading append the suffix to get a unique name (e.g.,
+  `[overload]fill.with-path` becomes `fill_with_path` in C).
+* Languages with static overloading (e.g., C++, C# or Swift) bind the set as
+  overloads of one function, resolved by the compiler.
+* Languages with dynamic overloading (e.g., JS or Python) bind the set as one
+  function that picks an overload by the number and dynamic types of its
+  arguments.
+
+At the component level, the members of an overload set are still separate
+imports or exports, and callers pick which one to call.
+
 When a function is annotated with `constructor`, `method`, or `static`, the
 first `label` is the name of the resource and the second `label` is the logical
 field name of the function. This additional nesting information allows bindings
@@ -2872,6 +2899,11 @@ annotations trigger additional type-validation rules (listed in detail in
   or export, must have exactly one parameter (besides the required `self`
   parameter from `[method]`) whose type matches the getter's return type, and
   must return either nothing or `(result (error <valtype>)?)`.
+* 🎭 An `[overload]` import or export must be a function, and is subject to
+  the rules of its base name. All functions in an overload set must agree on
+  `async`. Within an overload set, the functions with the same number of
+  parameters must have a *distinguishing parameter index* `i`, where the types
+  of their `i`th parameters are pairwise [distinguishable](#union-types).
 
 The `valid semver` production (along with its `version core` and `pre-release`
 sub-productions) is as defined by the [Semantic Versioning 2.0] spec and is
@@ -2997,6 +3029,24 @@ bindings generator may choose one of the two and ignore the other. This is a
 temporary measure: in a later release, it is expected that both of these
 examples will not be considered strongly-unique, so API designers are
 encouraged to avoid this case.
+
+🎭 An `[overload]` name with base name `B` and suffix `s` is compared as two
+names: `B`, and `B` with `-s` appended to its last label. For example,
+`[method][overload]foo.bar.baz` is compared as `[method]foo.bar` and
+`[method]foo.bar-baz`. The base names of an
+overload set are not compared with each other. Thus, the following names are
+strongly-unique:
+
+* `[overload]log.text`, `[overload]log.pair`, `[overload]log.with-level`,
+  `[method][overload]foo.bar.a`, `[method][overload]foo.bar.b`, `log-other`
+
+but attempting to add any of the following names would be a validation error:
+
+* `log`, `[get]log` (conflicts with the base name of `[overload]log.text`)
+* `log-text` (conflicts with `[overload]log.text`)
+* `[overload]LOG.other` (base name is not equal to `log`)
+* `[method]foo.bar` (conflicts with the base name of
+  `[method][overload]foo.bar.a`)
 
 
 #### 🔗 Canonical Interface Name

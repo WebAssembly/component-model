@@ -434,8 +434,8 @@ Notes:
 * The `externname`s of all exports in a given component, instance, component-
   type or instance-type must be [strongly-unique]; attributes are ignored.
 * Validation requires that `plainname`s annotated with `[constructor]`,
-  `[method]`, `[static]`, 📡 `[get]`, or 📡 `[set]` only occur on `func` imports
-  or exports.
+  `[method]`, `[static]`, 📡 `[get]`, 📡 `[set]` or 🎭 `[overload]` only occur
+  on `func` imports or exports.
 * Validation requires that, for `plainname`s annotated with `[constructor]`,
   `[method]`, or `[static]`, the first `label` matches the `plainname` of a
   preceding `resource` import or export, respectively, in the same scope
@@ -474,6 +474,11 @@ Notes:
 * 📡 Validation of `[set]` names requires that the function have either no
   result type or a result type of `(result (error $E)?)` (with no value type).
 * 🔀/📡 Functions with `[get]` or `[set]` names must not be `async`.
+* 🎭 Validation of `[overload]` names applies the rules above to the base name.
+* 🎭 Validation requires that all functions in an overload set agree on
+  `async`, and that the functions with the same number of parameters have a
+  distinguishing parameter index, as defined in the
+  [explainer](Text.md#import-and-export-definitions).
 * 🔗 Validation requires that a `version-suffix` is only present on
   `instance`-typed imports or exports that have either an `implements`
   attribute or an `interfacename` name.

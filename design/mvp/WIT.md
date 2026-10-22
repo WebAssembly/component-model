@@ -1562,7 +1562,9 @@ typedef-item ::= resource-item
                | union-items 💍
                | type-item
 
-func-item ::= id ':' func-type ';'
+func-item ::= id overload-suffix? ':' func-type ';'
+
+overload-suffix ::= '.' id 🎭
 
 func-type ::= 'async'? 'func' param-list result-list
             | 'get' param-list result-list 📡
@@ -1606,6 +1608,28 @@ foo: func(x: u32);
 [get]bar: func() -> u64;
 [set]bar: func(v: u64);
 ```
+
+🎭 Functions can be [overloaded](Text.md#import-and-export-definitions)
+by giving each overload the same name followed by a `.` and a unique suffix.
+Overloads cannot be getters or setters. For
+example, the following definitions:
+
+```wit
+resource path2d;
+fill.empty: func();
+fill.with-path: func(path: borrow<path2d>);
+```
+
+will desugar into:
+
+```wit
+resource path2d;
+[overload]fill.empty: func();
+[overload]fill.with-path: func(path: borrow<path2d>);
+```
+
+Inside a `resource`, methods, static functions and constructors (written
+`constructor.with-init(...)`) can be overloaded in the same way.
 
 🏷️ As with `import`s and `export`s in worlds, and for the same use cases,
 interface items can be annotated with `@external-id`:
@@ -1895,8 +1919,8 @@ Specifically, the syntax for a `resource` definition is:
 resource-item ::= 'resource' id ';'
                 | 'resource' id '{' ( gate external-id? resource-method )* '}'
 resource-method ::= func-item
-                  | id ':' 'static' func-type ';'
-                  | 'constructor' param-list ';'
+                  | id overload-suffix? ':' 'static' func-type ';'
+                  | 'constructor' overload-suffix? param-list ';'
 ```
 
 As with the items of a `world` or an `interface`, the methods of a `resource`
