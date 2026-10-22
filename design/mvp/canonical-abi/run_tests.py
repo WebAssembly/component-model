@@ -49,7 +49,7 @@ def mk_opts(memory = MemInst(bytearray(), 'i32'), encoding = 'utf8', realloc = N
 def mk_cx(memory = MemInst(bytearray(), 'i32'), encoding = 'utf8', realloc = None, post_return = None):
   opts = mk_opts(memory, encoding, realloc, post_return)
   inst = ComponentInstance(Store())
-  return LiftLowerContext(opts, inst)
+  return LiftLowerContext('lift', opts, inst)
 
 def lift_and_run(opts, inst, ft, callee, on_start, on_resolve):
   func_inst = inst.store.lift(callee, ft, opts, inst)
@@ -290,7 +290,7 @@ def test_string(src_encoding, dst_encoding, s, addr_type='i32'):
     except UnicodeEncodeError:
       pass
     encoded = s.encode('utf-16-le')
-    tagged_code_units = int(len(encoded) / 2) | utf16_tag(addr_type)
+    tagged_code_units = int(len(encoded) / 2) | (1 << (ptr_size(addr_type) * 8 - 1))
     test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, addr_type)
 
 encodings = ['utf8', 'utf16', 'latin1+utf16']
@@ -416,7 +416,7 @@ test_heap(t, [{'0':42, '1':83}, {'0':43, '1':84}], [0, 2],
           [42,0xff,83,0, 43,0xff,84,0])
 
 def test_flatten(t, params, results, addr_type='i32'):
-  opts = mk_opts(MemInst(bytearray(), addr_type))
+  cx = mk_cx(MemInst(bytearray(), addr_type))
   expect = CoreFuncType(params, results)
 
   if len(params) > definitions.MAX_FLAT_PARAMS:
@@ -424,13 +424,15 @@ def test_flatten(t, params, results, addr_type='i32'):
 
   if len(results) > definitions.MAX_FLAT_RESULTS:
     expect.results = [addr_type]
-  got = flatten_functype(opts, t, 'lift')
+  cx.direction = 'lift'
+  got = flatten_functype(cx, t)
   assert(got == expect)
 
   if len(results) > definitions.MAX_FLAT_RESULTS:
     expect.params += [addr_type]
     expect.results = []
-  got = flatten_functype(opts, t, 'lower')
+  cx.direction = 'lower'
+  got = flatten_functype(cx, t)
   assert(got == expect)
 
 test_flatten(FuncType([U8Type(),F32Type(),F64Type()],[]), ['i32','f32','f64'], [])
@@ -584,9 +586,9 @@ def test_handles():
 
   store = Store()
   producer_inst = ComponentInstance(store)
-  rt = ResourceType(producer_inst, dtor) # usable in imports and exports
+  rt = ResourceType(producer_inst, 'i32', dtor) # usable in imports and exports
   inst = ComponentInstance(store)
-  rt2 = ResourceType(inst, dtor) # only usable in exports
+  rt2 = ResourceType(inst, 'i32', dtor) # only usable in exports
   opts = mk_opts()
 
   host_ft = FuncType([
@@ -677,6 +679,58 @@ def test_handles():
   assert(all(inst.handles.array[i] is None for i in range(4)))
   assert(len(inst.handles.free) == 4)
   definitions.MAX_FLAT_RESULTS = before
+
+
+def test_i64_borrows():
+  store = Store()
+  impl_inst = ComponentInstance(store)
+  rt = ResourceType(impl_inst, 'i64')
+  other_inst = ComponentInstance(store)
+
+  ft = FuncType([
+    BorrowType(rt),
+    ListType(TupleType([BorrowType(rt), U8Type()]))
+  ],[])
+
+  def flat_params(direction, inst):
+    return flatten_functype(LiftLowerContext(direction, mk_opts(), inst), ft).params
+  assert(flat_params('lift', impl_inst) == ['i64', 'i32', 'i32'])
+  assert(flat_params('lower', impl_inst) == ['i32', 'i32', 'i32'])
+  assert(flat_params('lift', other_inst) == ['i32', 'i32', 'i32'])
+  cx = LiftLowerContext('lift', mk_opts(), impl_inst)
+  assert(elem_size(cx, BorrowType(rt)) == alignment(cx, BorrowType(rt)) == 4)
+
+  reps = [2**32 + 1, 2**32 + 2, 2**32 + 3]
+  def on_start():
+    return [reps[0], [mk_tup(reps[1], 7), mk_tup(reps[2], 8)]]
+
+  impl_heap = Heap(100)
+  impl_opts = mk_opts(MemInst(impl_heap.memory, 'i32'), realloc = impl_heap.realloc)
+  def core_impl(args):
+    [rep, ptr, length] = args
+    assert(rep == reps[0])
+    assert(length == 2)
+    assert(int.from_bytes(impl_heap.memory[ptr : ptr+8], 'little') == reps[1])
+    assert(impl_heap.memory[ptr+8] == 7)
+    assert(int.from_bytes(impl_heap.memory[ptr+16 : ptr+24], 'little') == reps[2])
+    assert(impl_heap.memory[ptr+24] == 8)
+    return []
+  lift_and_run(impl_opts, impl_inst, ft, core_impl, on_start, lambda _: ())
+
+  other_heap = Heap(100)
+  other_opts = mk_opts(MemInst(other_heap.memory, 'i32'), realloc = other_heap.realloc)
+  def core_other(args):
+    [h0, ptr, length] = args
+    assert(length == 2)
+    h1 = int.from_bytes(other_heap.memory[ptr : ptr+4], 'little')
+    assert(other_heap.memory[ptr+4] == 7)
+    h2 = int.from_bytes(other_heap.memory[ptr+8 : ptr+12], 'little')
+    assert(other_heap.memory[ptr+12] == 8)
+    for h,rep in zip([h0, h1, h2], reps):
+      assert(other_inst.handles.get(h).rep == rep)
+      [] = canon_resource_drop(rt, h)
+    return []
+  lift_and_run(other_opts, other_inst, ft, core_other, on_start, lambda _: ())
 
 
 def test_async_to_async():
@@ -3125,6 +3179,7 @@ test_roundtrips()
 test_trap_propagation()
 test_cross_component_realloc()
 test_handles()
+test_i64_borrows()
 test_async_to_async()
 test_async_callback()
 test_callback_interleaving()
