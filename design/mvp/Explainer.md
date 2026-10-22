@@ -718,19 +718,19 @@ section's example component:
 (component
   (core module $Alloc ...)
   (core instance $alloc (instantiate $Alloc))
-  (type $file (resource (rep i32) (dtor (core func $alloc "free"))))
+  (type $file (resource (rep i64) (dtor (core func $alloc "free"))))
   (core func $file-new (canon resource.new $file))
   (core module $Main
-    (import "alloc" "mem" (memory 1))
-    (import "alloc" "malloc" (func $malloc (param i32) (result i32)))
-    (import "file" "new" (func $new (param i32) (result i32)))
-    (func (export "open") (param $pathPtr i32) (param $pathLen i32) (result i32)
-      (local $ptr i32)
-      (local.set $ptr (call $malloc (i32.const ...)))
+    (import "alloc" "mem" (memory i64 1))
+    (import "alloc" "malloc" (func $malloc (param i64) (result i64)))
+    (import "file" "new" (func $new (param i64) (result i32)))
+    (func (export "open") (param $pathPtr i64) (param $pathLen i64) (result i32)
+      (local $ptr i64)
+      (local.set $ptr (call $malloc (i64.const ...)))
       ... initialize $ptr
       (call $new (local.get $ptr))
     )
-    (func (export "read") (param $ptr i32) (param $n i32) (result i32)
+    (func (export "read") (param $ptr i64) (param $n i32) (result i64)
       ... use $ptr ... return (list u8) ...
     )
   )
@@ -749,12 +749,13 @@ section's example component:
 ```
 Walking through the definitions in order, starting after `$alloc`:
 
-The `(type $file (resource ...))` defines a new resource type with an `i32`
+The `(type $file (resource ...))` defines a new resource type with an `i64`
 representation type that, when destroyed, calls the `free` function exported by
 `$alloc` to free the memory allocation. Currently, `i32` and `i64` [🐘] are the
 only allowed representation types but, in the future, as part of [wasm-gc]
-support, reference types could be added. In any case, the general idea is that
-a resource's representation value is pointer-like and pointer-sized.
+support, reference types could be added. In any case, the general idea is that a
+resource's representation value is pointer-like and pointer-sized. This example
+uses a 64-bit `memory` and thus specifies an `i64` resource representation.
 
 Next, the `(core func $file-new (canon resource.new $file))` definition appends
 a new `core func` index for the `resource.new` ABI built-in. As this definition
@@ -766,7 +767,7 @@ was defined in the same component, ensuring that components are always able to
 encapsulate the construction and representation of their own resource types.
 
 Next, the `$Main` module shows the lowered function type of `resource.new`
-which is imported as `file` `new`. The `i32` parameter of `new` matches the
+which is imported as `file` `new`. The `i64` parameter of `new` matches the
 `rep` type of `$file`. Regardless of `rep`, the result is always the `i32` index
 of a new `own` handle added to the caller's handle table. Thus, when a component
 implements a resource type, it starts out as the owner of all new resources of
@@ -779,14 +780,14 @@ the callee to the caller.
 
 The `read` function exported by `$Main` is `lift`ed to implement the
 `[method]file.read` function exported by the component. The component-level
-first parameter of `[method]file.read` is `(param "self" (borrow $file))` and
-so the corresponding first parameter of `read` is `(param i32)`. As an ABI-level
-optimization, this `i32` is *not* the index of a `borrow` handle but, rather,
-it's the unboxed representation value of the resource pointed to by the given
-`borrow` handle. This optimization applies only when passing a `(borrow $R)`
-handle to the component instance that defined `$R` and it skips the overhead of
-adding a handle, calling `resource.rep`, and then calling `resource.drop` to
-drop the handle.
+first parameter of `[method]file.read` is `(param "self" (borrow $File))` which
+would normally be lowered to an `i32` handle index. However, as an ABI-level
+optimization, because this `canon lift` definition is inside the same component
+that defines `$file`, the first lowered parameter type is `i64`, matching the
+`(rep i64)` of `$file`. This optimization skips the per-call overhead of adding
+a borrowed handle to the handle table, calling `resource.rep` to get the `i64`,
+and then calling `resource.drop` to remove the borrowed handle from the handle
+table.
 
 Because of all the static and dynamic checks described above, `open` and `read`
 can rely on the following useful guarantees:
@@ -822,10 +823,12 @@ after replacing `import` with `export`):
     (param "self" (borrow $File)) (param "n" u32) (result (list u8))))
 ))
 ```
-Notably, the `i32` `rep` type of `file` is kept an encapsulated implementation
-detail of the component and thus, e.g., a component can shift from `(rep i32)`
-to `(rep i64)` (and later, with [wasm-gc], `(rep (ref $T))`) without changing
-its public interface.
+Notably, the `i64` address type of `memory` and representation type of `file`
+are kept an encapsulated implementation detail of the component and thus this
+64-bit component can be imported and called by the 32-bit component shown in the
+previous section without a problem. This encapsulation also means that
+components can change their memory and resource representation types over time
+without breaking clients.
 
 ### Structured names and attributes
 
