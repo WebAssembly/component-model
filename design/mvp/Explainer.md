@@ -2698,7 +2698,7 @@ import or export itself. For example:
 ```wat
 (component
   (import "wasi:http/types@0.2" (version-suffix ".6") (instance ...))
-  (import "primary" (implements "wasi:keyvalue/store@0.2") (version-suffix ".1") (instance ...))
+  (import "primary" (implements "local:demo/store@0.2") (version-suffix ".1") (instance ...))
 )
 ```
 
@@ -2708,16 +2708,16 @@ import or export the same `interfacename` multiple times (with different names).
 For example:
 ```wat
 (component
-  (import "primary" (implements "wasi:keyvalue/store") (instance ...))
-  (import "secondary" (implements "wasi:keyvalue/store") (instance ...))
+  (import "primary" (implements "local:demo/store") (instance ...))
+  (import "secondary" (implements "local:demo/store") (instance ...))
 )
 ```
 This ensures that imports and exports continue to have unique names (so that,
 e.g., guest code executing inside this component has distinct `primary`-
-and `secondary`-scoped names for all `wasi:keyvalue/store` operations) while
+and `secondary`-scoped names for all `local:demo/store` operations) while
 still providing the semantic information conveyed by the `interfacename` (so
-that, e.g., hosts can implement both imports with a standard static host
-`wasi:keyvalue/store` implementation that is dynamically parameterized by the
+that, e.g., hosts can implement both imports with a single static host
+`local:demo/store` implementation that is dynamically parameterized by the
 store names `"primary"` and `"secondary"`).
 
 🏷️ The `external-id` attribute addresses the naming-expressivity gap left
@@ -2736,16 +2736,16 @@ modules. E.g.:
 )
 ```
 Used together, `implements` and `external-id` allow a single component to, e.g.,
-import multiple `wasi:keyvalue/store`s using their platform's internal store
+import multiple `local:demo/store`s using their platform's internal store
 naming scheme without needing to create a separate mapping or name-mangling
 scheme:
 ```wat
 (component
   (import "users"
-    (implements "wasi:keyvalue/store") (external-id "user-db-prod:region-a")
+    (implements "local:demo/store") (external-id "user-db-prod:region-a")
     (instance ...))
   (import "catalog"
-    (implements "wasi:keyvalue/store") (external-id "catalog-db-prod:region-a")
+    (implements "local:demo/store") (external-id "catalog-db-prod:region-a")
     (instance ...))
 )
 ```
