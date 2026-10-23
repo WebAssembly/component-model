@@ -1551,7 +1551,7 @@ class GuestBuffer(Buffer):
 
   def __init__(self, t, cx, ptr, length):
     trap_if(length > Buffer.MAX_LENGTH)
-    if t and length > 0:
+    if t is not None:
       trap_if(ptr != align_to(ptr, alignment(t, cx.opts.memory.ptr_type())))
       trap_if(ptr + length * elem_size(t, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
     self.cx = cx
@@ -1584,11 +1584,13 @@ class WritableGuestBuffer(GuestBuffer, WritableBuffer):
       assert(all(v == () for v in vs))
     self.progress += len(vs)
 ```
-When `t` is `None` (arising from `stream` and `future` with empty element
-types), the core-wasm-supplied `ptr` is entirely ignored, while the `length`
-and `progress` are still semantically meaningful. Source bindings may represent
-this case with a generic stream/future of [unit] type or a distinct type that
-conveys events without values.
+As with `load_list_from_range` below, the alignment and range checks are
+performed even when `length` is `0`. When `t` is `None` (arising from `stream`
+and `future` with empty element types), the core-wasm-supplied `ptr` is
+entirely ignored, while the `length` and `progress` are still semantically
+meaningful. Source bindings may represent this case with a generic
+stream/future of [unit] type or a distinct type that conveys events without
+values.
 
 The `load_list_from_valid_range` and `store_list_into_valid_range` functions
 that do all the heavy lifting are shared with function parameter/result lifting
@@ -1691,30 +1693,33 @@ the code below:
       assert(self.has_pending_event())
     elif self.other.buffer is None:
       self.buffer = buffer
-    elif buffer.remain() > 0 and self.other.buffer.remain() > 0:
-      trap_if(self.owner and self.owner is self.other.owner and not none_or_number_type(self.t))
-      n = min(buffer.remain(), self.other.buffer.remain())
-      if is_read:
-        buffer.write(self.other.buffer.read(n))
-      else:
-        self.other.buffer.write(buffer.read(n))
-      self.notify(buffer.progress)
-      self.other.notify(self.other.buffer.progress)
-      if self.other.buffer.remain() == 0:
-        self.other.buffer = None
-    elif buffer.remain() > 0 or (is_read and self.other.buffer.remain() == 0):
-      self.other.notify(progress = 0)
-      self.other.buffer = None
-      self.buffer = buffer
     else:
-      self.notify(progress = 0)
+      trap_if(self.owner and self.owner is self.other.owner and not none_or_number_type(self.t))
+      if buffer.remain() > 0 and self.other.buffer.remain() > 0:
+        n = min(buffer.remain(), self.other.buffer.remain())
+        if is_read:
+          buffer.write(self.other.buffer.read(n))
+        else:
+          self.other.buffer.write(buffer.read(n))
+        self.notify(buffer.progress)
+        self.other.notify(self.other.buffer.progress)
+        if self.other.buffer.remain() == 0:
+          self.other.buffer = None
+      elif buffer.remain() > 0 or (is_read and self.other.buffer.remain() == 0):
+        self.other.notify(progress = 0)
+        self.other.buffer = None
+        self.buffer = buffer
+      else:
+        self.notify(progress = 0)
 ```
 As a temporary measure (until [lazy lowering] obviates the problem), there is
 also a trap when both the `read` and `write` come from the same component
 instance and there is a non-empty, non-number element type. The reason for this
 trap is that when lifting and lowering can alias the same memory, the eager
 interleaving semantics of copying compound values would otherwise be complex to
-precisely specify and implement.
+precisely specify and implement. The trap is checked whenever both ends have
+provided a buffer (cases 3, 4 and 5), even if no elements end up being copied,
+so that whether a trap occurs doesn't depend on the buffer lengths.
 
 The `End.cancel` method is called by `{stream,future}.cancel-{read,write}` to
 transition an end from `COPYING` (set by `End.copy` above) to `CANCELLING_COPY`.

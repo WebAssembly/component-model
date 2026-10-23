@@ -2006,7 +2006,8 @@ enum copy-result {
 The `stream.read` and `stream.write` built-ins take the matching [readable or
 writable end] of a stream as the first parameter and, if `T` is present, a
 buffer for the `T` values to be read from or written to. If `T` is not present,
-the buffer parameter is ignored.
+the buffer parameter is ignored. Otherwise, the buffer's alignment and bounds
+are checked even when its length is `0`.
 
 If the return value is a `stream-result`, then the `progress` field indicates how
 many `T` elements were read or written from the given buffer before the
