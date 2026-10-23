@@ -862,7 +862,11 @@ original list defines the final value of the key. However, bindings generators
 are not *required* to deduplicate keys and may instead simply present the
 original list to guest code. To simplify bindings generation, `<keytype>` is a
 conservative subset of `<valtype>`, but this subset could be expanded over time
-based on use cases.
+based on use cases. Similarly, validation currently rejects `(map K V)` when `V`
+transitively contains an `own`, `borrow`, `future`, `stream` or
+`error-context`, since dropping the value of a duplicate key would otherwise
+require bindings generators to correctly dispose of the contained handles. This
+restriction could be relaxed in the future.
 
 Note that, at least initially, variants must have a non-empty list of
 cases. This could be relaxed in the future to allow an empty list of cases, with
