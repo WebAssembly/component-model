@@ -1978,7 +1978,7 @@ def test_wasm_to_wasm_stream():
     result,n = unpack_result(mem1[retp+4])
     assert(n == 4 and result == CopyResult.COMPLETED)
 
-    [ret] = canon_stream_write(StreamType(U8Type()), opts1, wsi, 12345, 0)
+    [ret] = canon_stream_write(StreamType(U8Type()), opts1, wsi, 0, 0)
     assert(ret == definitions.BLOCKED)
 
     fut4.set()
@@ -1988,7 +1988,7 @@ def test_wasm_to_wasm_stream():
     assert(mem1[retp+0] == wsi)
     assert(mem1[retp+4] == 0)
 
-    [ret] = canon_stream_write(StreamType(U8Type()), opts1, wsi, 12345, 0)
+    [ret] = canon_stream_write(StreamType(U8Type()), opts1, wsi, 0, 0)
     assert(ret == 0)
 
     [errctxi] = canon_error_context_new(opts1, 0, 0)
@@ -2032,7 +2032,7 @@ def test_wasm_to_wasm_stream():
     fut2.set()
     thread.wait_until(fut3.is_set)
 
-    [ret] = canon_stream_read(StreamType(U8Type()), opts2, rsi, 12345, 0)
+    [ret] = canon_stream_read(StreamType(U8Type()), opts2, rsi, 0, 0)
     assert(ret == 0)
 
     mem2[0:8] = bytes(8)
@@ -2047,7 +2047,7 @@ def test_wasm_to_wasm_stream():
 
     thread.wait_until(fut4.is_set)
 
-    [ret] = canon_stream_read(StreamType(U8Type()), opts2, rsi, 12345, 0)
+    [ret] = canon_stream_read(StreamType(U8Type()), opts2, rsi, 0, 0)
     assert(ret == definitions.BLOCKED)
 
     [event] = canon_waitable_set_wait(MemInst(mem2, 'i32'), seti, retp)

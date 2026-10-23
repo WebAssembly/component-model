@@ -895,7 +895,7 @@ class GuestBuffer(Buffer):
 
   def __init__(self, t, cx, ptr, length):
     trap_if(length > Buffer.MAX_LENGTH)
-    if t and length > 0:
+    if t is not None:
       trap_if(ptr != align_to(ptr, alignment(t, cx.opts.memory.ptr_type())))
       trap_if(ptr + length * elem_size(t, cx.opts.memory.ptr_type()) > len(cx.opts.memory))
     self.cx = cx
@@ -962,23 +962,24 @@ class End(Waitable):
       assert(self.has_pending_event())
     elif self.other.buffer is None:
       self.buffer = buffer
-    elif buffer.remain() > 0 and self.other.buffer.remain() > 0:
-      trap_if(self.owner and self.owner is self.other.owner and not none_or_number_type(self.t))
-      n = min(buffer.remain(), self.other.buffer.remain())
-      if is_read:
-        buffer.write(self.other.buffer.read(n))
-      else:
-        self.other.buffer.write(buffer.read(n))
-      self.notify(buffer.progress)
-      self.other.notify(self.other.buffer.progress)
-      if self.other.buffer.remain() == 0:
-        self.other.buffer = None
-    elif buffer.remain() > 0 or (is_read and self.other.buffer.remain() == 0):
-      self.other.notify(progress = 0)
-      self.other.buffer = None
-      self.buffer = buffer
     else:
-      self.notify(progress = 0)
+      trap_if(self.owner and self.owner is self.other.owner and not none_or_number_type(self.t))
+      if buffer.remain() > 0 and self.other.buffer.remain() > 0:
+        n = min(buffer.remain(), self.other.buffer.remain())
+        if is_read:
+          buffer.write(self.other.buffer.read(n))
+        else:
+          self.other.buffer.write(buffer.read(n))
+        self.notify(buffer.progress)
+        self.other.notify(self.other.buffer.progress)
+        if self.other.buffer.remain() == 0:
+          self.other.buffer = None
+      elif buffer.remain() > 0 or (is_read and self.other.buffer.remain() == 0):
+        self.other.notify(progress = 0)
+        self.other.buffer = None
+        self.buffer = buffer
+      else:
+        self.notify(progress = 0)
 
   def cancel(self):
     assert(self.state == End.State.COPYING)

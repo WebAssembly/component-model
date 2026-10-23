@@ -4,3 +4,4 @@
 ./async/big-interleaving-test.wast
 ./async/forward.wast
 ./validation/map.wast
+./async/zero-length.wast
