@@ -1469,18 +1469,18 @@ world my-component {
 or exported with a custom [plain name]. For example:
 ```wit
 world my-world {
-    import primary: wasi:keyvalue/store;
-    import secondary: wasi:keyvalue/store;
-    export my-handler: wasi:http/handler;
+    import primary: local:demo/store;
+    import secondary: local:demo/store;
+    export my-handler: local:demo/handler;
 }
 ```
 Here, `primary` and `secondary` are two distinct imports that both have types
-based on the `wasi:keyvalue/store` interface. The plain name of the import is
+based on the `local:demo/store` interface. The plain name of the import is
 the `id` before the colon (e.g., `primary`), not the interface name. This
-contrasts with `import wasi:keyvalue/store;` (without the `id :` prefix), which
+contrasts with `import local:demo/store;` (without the `id :` prefix), which
 would create a single import using the full interface name
-`wasi:keyvalue/store`. Similarly, the export `my-handler` has a type derived
-from `wasi:http/handler` but uses the plain name `my-handler` instead of the
+`local:demo/store`. Similarly, the export `my-handler` has a type derived
+from `local:demo/handler` but uses the plain name `my-handler` instead of the
 full interface name, which is useful when a component wants to export the same
 interface multiple times or simply use a more descriptive name.
 
@@ -1495,16 +1495,16 @@ world w {
 ```
 
 Using both of these features together, a component can import a
-`wasi:keyvalue/store` interface multiple times, using whatever platform-defined
+`local:demo/store` interface multiple times, using whatever platform-defined
 naming scheme so that the component can be deployed directly to the platform
 without separate configuration or runtime errors:
 ```wit
 world my-world {
     @external-id("user-db-prod:region-a")
-    import users: wasi:keyvalue/store;
+    import users: local:demo/store;
 
     @external-id("catalog-db-prod:region-a")
-    import catalog: wasi:keyvalue/store;
+    import catalog: local:demo/store;
 }
 ```
 
