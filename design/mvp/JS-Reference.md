@@ -606,9 +606,12 @@ To `create a guest resource class` given an instance record |instance|, a list o
 1. Set |constructor|'s [[Construct]] behaviour, given JS arguments |args| and |newTarget|, to perform:
     1. If |constructor|.[[ConstructorFunc]] is **empty**:
         1. Throw a `TypeError`.
+    1. Let |proto| be ? `Get`(|newTarget|, "prototype").
+    1. If `Type`(|proto|) is not Object:
+        1. Set |proto| to |prototype|.
     1. Let |rep| be ? `run within a call` given |instance|.[[HostResourceTypes]], |instance|.[[GuestResourceClasses]], and the following steps:
         1. Return ? `invoke a component function` given |instance|, |constructor|.[[ConstructorFunc]], **false**, **undefined** and |args|.
-    1. Return ? `create an own guest resource object` given |constructor|, |rep|, **true** and |newTarget|.
+    1. Return `create an own guest resource object` given |constructor|, |rep| and |proto|.
 1. Let |disposeFunc| be a built-in function object with name "[Symbol.dispose]" and length 0 that performs `dispose a guest resource object` given its **this** value.
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.dispose%`, PropertyDescriptor { [[Value]]: |disposeFunc|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.toStringTag%`, PropertyDescriptor { [[Value]]: |name|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
@@ -625,8 +628,8 @@ To `create a guest resource class` given an instance record |instance|, a list o
         1. Let |target| be |prototype|.
         1. Let |takesSelf| be **true**.
     1. Else:
-        1. Assert: |e|.Name's `scope` capture is "constructor".
-        1. Let |target| be |constructor|
+        1. Assert: |e|.Name's `scope` capture is "static".
+        1. Let |target| be |constructor|.
         1. Let |takesSelf| be **false**.
     1. If |e|.Name has an `accessor` capture:
         1. Perform `define an accessor for a component function` given |instance|, |target|, |e| and **false**.
@@ -657,14 +660,9 @@ A guest resource object has the following slots:
 
 It holds the same state a handle table entry does, plus the class it belongs to. A guest resource object always owns a rep.
 
-To `create an own guest resource object` given a resource class |class|, |rep|, and an optional |newTarget|:
-1. Let |defaultProto| be the value of |class|'s `"prototype"` property.
-1. If |newTarget| is present:
-    1. Let |proto| be ? `Get`(|newTarget|, "prototype").
-    1. If `Type`(|proto|) is not Object:
-        1. Set |proto| to |defaultProto|.
-1. Else:
-    1. Let |proto| be |defaultProto|.
+To `create an own guest resource object` given a resource class |class|, |rep|, and an optional Object |proto|:
+1. If |proto| is not present:
+    1. Let |proto| be the value of |class|'s `"prototype"` property.
 1. Let |object| be `OrdinaryObjectCreate`(|proto|, « [[ResourceClass]], [[Rep]], [[LendCount]] »).
 1. Set |object|.[[ResourceClass]] to |class|.
 1. Set |object|.[[Rep]] to |rep|.
@@ -707,7 +705,7 @@ For a resource type `R` whose [abstract type](#abstract-and-transparent-types) i
 - `ToJSValue(rep, own<R>)`:
     1. Let |abstractTypeKey| be the *abstract type key* of |R|.
     1. Let |class| be the current call's [[GuestResourceClasses]][|abstractTypeKey|].
-    1. Return `create an own guest resource object` given |class|, |rep| and **true**.
+    1. Return `create an own guest resource object` given |class| and |rep|.
 - `ToJSValue(rep, borrow<R>)`:
     1. Assert: unreachable.
     1. This can only happen if an exported function returns a borrow, which is not allowed.
