@@ -532,7 +532,7 @@ A *host resource value* is the `rep` of a host resource type. It too is a Record
 | [[Type]] | the host resource type this is a rep of |
 | [[JSValue]] | the JS value, held strongly |
 
-A host resource value just holds a strong reference to the underlying value. `%Symbol.dispose` is captured upon instantiation and is invoked when the resource is dropped. Dropping a resource is infallible, so if the destructor fails this results in a trap and lockdown.
+A host resource value just holds a strong reference to the underlying value. `%Symbol.dispose%` is captured from the constructor's prototype upon instantiation and is invoked when the resource is dropped. Dropping a resource is infallible, so if the destructor fails this results in a trap and lockdown.
 
 One host resource type is created per imported [abstract type](#abstract-and-transparent-types). Two abstract type imports satisfied by the same JS constructor become distinct component resource types, and a handle for one cannot be passed where the other is expected.
 
@@ -860,7 +860,10 @@ To `read the type import` given |importDecl|, |importValue|, and |hostResourceTy
 1. If |importValue| has a [[ConstructorFunc]] internal slot:
     1. Assert: |importValue| is a [guest resource class](#guest-resource-classes).
     1. Throw a `WebAssembly.LinkError`.
-1. Let |dispose| be ? `Get`(|importValue|, %Symbol.dispose%).
+1. Let |dispose| be **undefined**.
+1. Let |prototype| be ? `Get`(|importValue|, "prototype").
+1. If `Type`(|prototype|) is Object:
+    1. Set |dispose| to ? `Get`(|prototype|, %Symbol.dispose%).
 1. Let |hasDispose| be `IsCallable`(|dispose|).
 1. Let |destructor| be a host function that given a host resource value |self|:
     1. Let |selfValue| be |self|.[[JSValue]].
@@ -874,7 +877,7 @@ To `read the type import` given |importDecl|, |importValue|, and |hostResourceTy
 1. Set |hostResourceTypes|[|abstractTypeKey|] to |hostResourceType|.
 1. Return |resourceType|.
 
-`%Symbol.dispose` is captured and called when the resource is dropped. Dropping a resource is infallible, so if it throws an exception, this becomes a trap which results in lockdown.
+`%Symbol.dispose%` is captured from the constructor's prototype, and called when the resource is dropped. Dropping a resource is infallible, so if it throws an exception, this becomes a trap which results in lockdown.
 
 To `find an accessor` given an object |target|, a property key |key| and |kind|, which is either "get" or "set":
 1. Let |object| be |target|.
