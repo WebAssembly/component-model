@@ -334,7 +334,7 @@ Dispatch on `targetComponentType`:
 - `tuple<Types...>` → ? `ToComponentValueTuple`(|jsValue|, Types...)
 - `record { f: T, ... }` → ? `ToComponentValueRecord`(|jsValue|, the fields).
 - `flags "L"+` → ? `ToComponentValueFlags`(|jsValue|, the labels).
-- `enum` → ? ? `ToString`(|jsValue|) must be one of the labels, else throw a `TypeError`.
+- `enum` → ? `ToString`(|jsValue|) must be one of the labels, else throw a `TypeError`.
 - `option<T>` not nested within another `option` → **null** and **undefined** both give `none`; anything else gives `some(ToComponentValue(jsValue, T))`.
 - `variant`, and nested `option`, and `result` outside return position → ? `ToComponentValueVariant`(|jsValue|, the cases). In return position a `result` is unwrapped instead: a JS return value becomes `result.ok`, and a thrown exception becomes `result.error` (see [Read the imports](#read-the-imports-object) and [Create the exports object](#create-the-exports-object)).
 - `map<K, V>` → ? `ToComponentValueMap`(|jsValue|, K, V).
@@ -381,7 +381,7 @@ A typed array of the matching class is copied directly, since that is what `ToJS
     1. Throw a `TypeError`.
 1. Let |values| be ? `IteratorToList`(? `GetIteratorFromMethod`(|jsValue|, |method|)).
 1. Let |valuesLength| be the length of |values|.
-1. If |N| is not `none``:
+1. If |N| is not `none`:
     1. Let |listLength| be |N|.
 1. Else:
     1. Let |listLength| be |valuesLength|.
@@ -407,7 +407,7 @@ For fixed-length lists, any missing values from the iterable are filled in with 
 1. Let |values| be ? `IteratorToList`(? `GetIteratorFromMethod`(|jsValue|, |method|)).
 1. Let |valuesLength| be the length of |values|.
 1. Let |listLength| be the length of |Types|.
-1. Let |list| be an empty component list with length |listLength| of type `T`.
+1. Let |list| be an empty component tuple with element types |Types|.
 1. For |i| in 0..|listLength|:
     1. If |i| >= |valuesLength|:
         1. Let |value| be `undefined`.
