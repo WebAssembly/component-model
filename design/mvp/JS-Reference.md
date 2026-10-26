@@ -86,20 +86,28 @@ This ensures that whether an ESM is implemented as a component or with JS is an 
 
 Nested components share a common store and directly link following the normal component rules. This should be sufficient for most cases where you want to directly link components. In the future, we could consider an extension to instantiate two components within the same store.
 
+### Instance records
+
+Every top-level component instance has an *instance record* with the following fields:
+
+| Field | Value |
+|---|---|
+| [[Store]] | the component store |
+| [[ComponentInstance]] | the component instance from the embedding API |
+| [[HostResourceTypes]] | map from [abstract type key](#abstract-and-transparent-types) to [host resource type](#host-resource-types-and-values) |
+| [[GuestResourceClasses]] | map from [abstract type key](#abstract-and-transparent-types) to [guest resource class](#guest-resource-classes) |
+
 ## Entry points
 
-A `Component` has the following slots:
-  1. [[Component]] - the compiled component.
+A `Component` JS object has the following slots:
+  1. [[Component]] - the compiled component from the embedding API.
   1. [[EnabledBuiltins]] - the enabled builtins.
 
-A `ComponentInstance` has the following slots:
-  1. [[Store]] - the component store.
-  1. [[ComponentInstance]] - the component instance.
+A `ComponentInstance` JS object has the following slots:
+  1. [[Instance]] - the [instance record](#instance-records).
   1. [[Exports]] - the [exports object](#create-the-exports-object).
-  1. [[HostResourceTypes]] - map from [abstract type key](#abstract-and-transparent-types) to [host resource type](#host-resource-types-and-values).
-  1. [[GuestResourceClasses]] - map from [abstract type key](#abstract-and-transparent-types) to [guest resource class](#guest-resource-classes).
 
-To `trap` given a component instance |instance|:
+To `trap` given an instance record |instance|:
 1. Invoke |instance|.[[Store]].lock_down().
 1. Throw a `WebAssembly.RuntimeError`.
 
@@ -119,11 +127,8 @@ To `construct a Component` given |bytes| and |options|:
 To `construct a ComponentInstance` given a `Component` |component|, and |importsObject|:
 1. Let |enabledBuiltins| be |component|.[[EnabledBuiltins]].
 1. Let |result| be ? [`instantiate a component from an imports object`](#instantiation) given |component|.[[Component]], |importsObject|, |enabledBuiltins|.
-1. Set **this**.[[Store]] to |result|.[[Store]].
-1. Set **this**.[[ComponentInstance]] to |result|.[[ComponentInstance]].
+1. Set **this**.[[Instance]] to |result|.[[Instance]].
 1. Set **this**.[[Exports]] to |result|.[[Exports]].
-1. Set **this**.[[HostResourceTypes]] to |result|.[[HostResourceTypes]].
-1. Set **this**.[[GuestResourceClasses]] to |result|.[[GuestResourceClasses]].
 
 The `exports` getter returns **this**.[[Exports]].
 
@@ -476,8 +481,8 @@ To `create a resource type for host` given a host function |destructor|:
 
 To `drop a guest resource` given a [guest resource class](#guest-resource-classes) |class| and a guest rep |rep| owned by the host:
 1. Let |resourceType| be |class|.[[ResourceType]].
-1. Let |instance| be |class|.[[ComponentInstance]].
-1. If |instance|.[[Store]].is_locked_down()
+1. Let |instance| be |class|.[[Instance]].
+1. If |instance|.[[Store]].is_locked_down():
     1. Perform ? `trap` given |instance|.
 1. Perform the effect of [`canon resource.drop`](CanonicalABI.md#canon-resourcedrop) on an owning handle holding |resourceType| and |rep|, invoking |resourceType|'s destructor. There is no handle table entry to remove, because the host was holding the rep.
 1. If that traps:
@@ -503,7 +508,7 @@ Imported and exported resource types are either abstract or transparently equiva
 
 `r1`, `r3`, `r4`, `r6` are the abstract types of this component type, while `r2`, `r5`, and `r7` are transparently equal to one of the abstract types.
 
-Host/guest resource types below are created only for abstract types, and stored in maps on the JS `ComponentInstance` object. The map is keyed by an *abstract type key*, which is an import/export declaration for an abstract type.
+Host/guest resource types below are created only for abstract types, and stored in maps on the [instance record](#instance-records). The map is keyed by an *abstract type key*, which is an import/export declaration for an abstract type.
 
 A type import or export *declares a resource type* if following `(eq R)` reaches a `(sub resource)`. An *abstract type key* can be found for any such declaration by following `(eq R)` until you reach that `(sub resource)`.
 
@@ -531,7 +536,7 @@ A host resource value just holds a strong reference to the underlying value. `%S
 
 One host resource type is created per imported [abstract type](#abstract-and-transparent-types). Two abstract type imports satisfied by the same JS constructor become distinct component resource types, and a handle for one cannot be passed where the other is expected.
 
-A map from imported abstract type to host resource type is built by [`read the imports object`](#read-the-imports-object) and stored on a [component instance](#entry-points).
+A map from imported abstract type to host resource type is built by [`read the imports object`](#read-the-imports-object) and stored on the [instance record](#instance-records).
 
 #### Brand checks
 
@@ -584,32 +589,32 @@ An exported guest resource type may be imported by a separate `ComponentInstance
 
 #### Guest resource classes
 
-A unique JS *guest resource class* is created for each exported [abstract type](#abstract-and-transparent-types). A map from [abstract type key](#abstract-and-transparent-types) to guest resource class is stored on the JS `ComponentInstance` object.
+A unique JS *guest resource class* is created for each exported [abstract type](#abstract-and-transparent-types). A map from [abstract type key](#abstract-and-transparent-types) to guest resource class is stored on the [instance record](#instance-records).
 
 A guest resource class is a built-in function object with the following slots:
 1. [[ResourceType]] - the guest resource type.
 1. [[ConstructorFunc]] - the component function that implements `new`, or **empty**.
-1. [[ComponentInstance]] - the JS `ComponentInstance` the class belongs to.
+1. [[Instance]] - the [instance record](#instance-records) the class belongs to.
 
-To `create a guest resource class` given a component instance |componentInstance|, resource type |resourceType|, String |name| and an integer |arity|:
+To `create a guest resource class` given an instance record |instance|, a list of export declarations |exportDecls|, resource type |resourceType|, String |name| and an integer |arity|:
 1. Let |prototype| be `OrdinaryObjectCreate`(`%Object.prototype%`).
 1. Let |constructor| be a built-in function object with name |name| and length |arity|.
 1. Set |constructor|.[[ResourceType]] to |resourceType|.
 1. Set |constructor|.[[ConstructorFunc]] to **empty**.
-1. Set |constructor|.[[ComponentInstance]] to |componentInstance|.
+1. Set |constructor|.[[Instance]] to |instance|.
 1. Set |constructor|'s [[Call]] behaviour to throw a `TypeError`.
 1. Set |constructor|'s [[Construct]] behaviour, given JS arguments |args| and |newTarget|, to perform:
     1. If |constructor|.[[ConstructorFunc]] is **empty**:
         1. Throw a `TypeError`.
-    1. Let |rep| be ? `run within a call` given |componentInstance|.[[HostResourceTypes]], |componentInstance|.[[GuestResourceClasses]], and the following steps:
-        1. Return ? `invoke a component function` given |constructor|.[[ConstructorFunc]], **false**, **undefined** and |args|.
+    1. Let |rep| be ? `run within a call` given |instance|.[[HostResourceTypes]], |instance|.[[GuestResourceClasses]], and the following steps:
+        1. Return ? `invoke a component function` given |instance|, |constructor|.[[ConstructorFunc]], **false**, **undefined** and |args|.
     1. Return ? `create an own guest resource object` given |constructor|, |rep|, **true** and |newTarget|.
 1. Let |disposeFunc| be a built-in function object with name "[Symbol.dispose]" and length 0 that performs `dispose a guest resource object` given its **this** value.
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.dispose%`, PropertyDescriptor { [[Value]]: |disposeFunc|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, `%Symbol.toStringTag%`, PropertyDescriptor { [[Value]]: |name|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|prototype|, "constructor", PropertyDescriptor { [[Value]]: |constructor|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Perform `DefinePropertyOrThrow`(|constructor|, "prototype", PropertyDescriptor { [[Value]]: |prototype|, [[Writable]]: **false**, [[Enumerable]]: **false**, [[Configurable]]: **false** }).
-1. Let |members| be the function exports in |componentInstance|'s scope whose names match *Constructor* or *Member* with a `resource` capture naming |resourceType|.
+1. Let |members| be the function exports of |exportDecls| whose names match *Constructor* or *Member* with a `resource` capture naming |resourceType|.
 1. If some |c| of |members| matches *Constructor*:
     1. Assert: there is only one by validation rules.
     1. Set |constructor|.[[ConstructorFunc]] to |c|.Func.
@@ -624,9 +629,9 @@ To `create a guest resource class` given a component instance |componentInstance
         1. Let |target| be |constructor|
         1. Let |takesSelf| be **false**.
     1. If |e|.Name has an `accessor` capture:
-        1. Perform `define an accessor for a component function` given |target|, |e| and **false**.
+        1. Perform `define an accessor for a component function` given |instance|, |target|, |e| and **false**.
     1. Else:
-        1. Let |func| be `create a JS function for a component function` given |e|.Func, `JSName`(|e|) and |takesSelf|.
+        1. Let |func| be `create a JS function for a component function` given |instance|, |e|.Func, `JSName`(|e|) and |takesSelf|.
         1. Perform `DefinePropertyOrThrow`(|target|, `JSName`(|e|), PropertyDescriptor { [[Value]]: |func|, [[Writable]]: **true**, [[Enumerable]]: **false**, [[Configurable]]: **true** }).
 1. Return |constructor|.
 
@@ -741,17 +746,13 @@ To `instantiate a component` given |component|, a list of component definitions 
 1. If the type of any function import or export of |component|, including those nested in instance imports and exports, is `async`:
     1. Throw a `WebAssembly.LinkError`.
 1. Let |store| be a new component store.
-1. Let |instance| be the result of instantiating |component| with |imports| in |store|.
+1. Let |componentInstance| be the result of instantiating |component| with |imports| in |store|.
 1. If instantiation traps:
     1. Throw a `WebAssembly.RuntimeError`.
-1. Let |guestResourceClasses| be ? `create guest resource classes` given |instance|.
-1. Let |exportsObject| be ? `create the exports object` given |instance|.
-1. Return a Record with:
-    * [[Store]]: |store|
-    * [[ComponentInstance]]: |instance|
-    * [[Exports]]: |exportsObject|
-    * [[HostResourceTypes]]: |hostResourceTypes|
-    * [[GuestResourceClasses]]: |guestResourceClasses|.
+1. Let |instance| be a new [instance record](#instance-records) { [[Store]]: |store|, [[ComponentInstance]]: |componentInstance|, [[HostResourceTypes]]: |hostResourceTypes|, [[GuestResourceClasses]]: a new empty map }.
+1. Perform ? `create guest resource classes` given |instance| and |componentInstance|.Exports.
+1. Let |exportsObject| be ? `create the exports object` given |instance| and |componentInstance|.Exports.
+1. Return a Record { [[Instance]]: |instance|, [[Exports]]: |exportsObject| }.
 
 We temporarily reject any async function imports/exports until they are specified.
 
@@ -1002,32 +1003,33 @@ Exported resource types become [guest resource classes](#guest-resource-classes)
 
 A *Property* export becomes an accessor property on the exports object itself. All other exported component definitions are given JS definitions named `JSName`(|export|) on the exports object.
 
-To `create guest resource classes` given a component instance |componentInstance|:
-1. Let |guestResourceClasses| be an empty map from [abstract type key](#abstract-and-transparent-types) to [guest resource class](#guest-resource-classes).
-1. Let |component| be the component underlying |componentInstance|.
-1. For each type export |export| of |component|'s type, in declaration order, recursing into exported instances:
-    1. If |export| does not declare a resource type:
+To `create guest resource classes` given an [instance record](#instance-records) |instance| and a list of export declarations |exportDecls|:
+1. Let |guestResourceClasses| be |instance|.[[GuestResourceClasses]].
+1. For each |export| of |exportDecls|, in declaration order:
+    1. If |export|.Sort is **instance**:
+        1. Perform ? `create guest resource classes` given |instance| and the exports of the exported instance.
+        1. Continue.
+    1. If |export|.Sort is not **type**, or |export| does not declare a resource type:
         1. Continue.
     1. Let |abstractTypeKey| be the *abstract type key* of |export|.
-    1. If |abstractTypeKey| is one of |component|'s type imports:
+    1. If |abstractTypeKey| is an import declaration:
         1. Throw a `TypeError`.
     1. If |guestResourceClasses|[|abstractTypeKey|] exists:
         1. Continue.
-    1. Let |resourceType| be the component resource type |export| refers to in |component|.
-    1. Let |arity| be the parameter count of the export whose name matches *Constructor* with a `resource` capture naming |export|, or 0 if there is none.
-    1. Let |class| be `create a guest resource class` given |componentInstance|, |resourceType|, `JSName`(|export|) and |arity|.
+    1. Let |resourceType| be the component resource type |export| refers to.
+    1. Let |arity| be the parameter count of the export of |exportDecls| whose name matches *Constructor* with a `resource` capture naming |export|, or 0 if there is none.
+    1. Let |class| be `create a guest resource class` given |instance|, |exportDecls|, |resourceType|, `JSName`(|export|) and |arity|.
     1. Set |guestResourceClasses|[|abstractTypeKey|] to |class|.
-1. Return |guestResourceClasses|.
 
-To `create the exports object` given a |componentInstance|:
+To `create the exports object` given an [instance record](#instance-records) |instance| and a list of export declarations |exportDecls|:
 1. Let |exportsObject| be `OrdinaryObjectCreate`(**null**).
-1. For each |export| of |componentInstance|.Exports, in declaration order:
+1. For each |export| of |exportDecls|, in declaration order:
     1. If |export|.Name matches *Constructor*:
         1. Continue.
     1. If |export|.Name matches *Member* and `JSName`(|export|) is not in `reserved class members`:
         1. Continue.
     1. If |export|.Name matches *Property*:
-        1. Perform `define an accessor for a component function` given |exportsObject|, |export| and **true**.
+        1. Perform `define an accessor for a component function` given |instance|, |exportsObject|, |export| and **true**.
         1. Continue.
     1. Let |key| be `JSName`(|export|).
     1. Match |export|.Sort:
@@ -1037,14 +1039,14 @@ To `create the exports object` given a |componentInstance|:
             1. If |export| does not declare a resource type:
                 1. Continue.
             1. Let |abstractTypeKey| be the *abstract type key* of |export|.
-            1. Let |value| be |componentInstance|.[[GuestResourceClasses]][|abstractTypeKey|].
+            1. Let |value| be |instance|.[[GuestResourceClasses]][|abstractTypeKey|].
         1. **func**:
-            1. Let |value| be `create a JS function for a component function` given |export|.Func, |key| and **false**.
+            1. Let |value| be `create a JS function for a component function` given |instance|, |export|.Func, |key| and **false**.
         1. **value**:
-            1. Let |value| be `run within a call` given |componentInstance|.[[HostResourceTypes]], |componentInstance|.[[GuestResourceClasses]], and a new Abstract Closure that performs the following steps when called:
+            1. Let |value| be `run within a call` given |instance|.[[HostResourceTypes]], |instance|.[[GuestResourceClasses]], and a new Abstract Closure that performs the following steps when called:
                 1. Return `ToJSValue`(|export|.Value, |export|.Type).
         1. **instance**:
-            1. Let |value| be ? `create the exports object` given the exported instance.
+            1. Let |value| be ? `create the exports object` given |instance| and the exports of the exported instance.
         1. **component**:
             1. Let |value| be a new `Component` whose [[Component]] is |export|.Component.
     1. Perform `CreateDataPropertyOrThrow`(|exportsObject|, |key|, |value|).
@@ -1053,26 +1055,25 @@ To `create the exports object` given a |componentInstance|:
 
 TODO: We need a JSName for members that hit the `reserved class members` list. It needs to concatenate the resource name with the method name somehow.
 
-To `create a JS function for a component function` given |componentFunc|, |name| and |takesSelf|:
+To `create a JS function for a component function` given an [instance record](#instance-records) |instance|, |componentFunc|, |name| and |takesSelf|:
 1. Let |paramOffset| be 1 if |takesSelf| is **true**, else 0.
 1. If |componentFunc|.Result is a `result`:
     1. Let |okType| be its `ok` payload type, or **empty** if it has none.
 1. Else:
     1. Let |okType| be |componentFunc|.Result, or **empty** if |componentFunc| has no result.
 1. Return a built-in function object with name |name| and length |componentFunc|.Params.length - |paramOffset|, whose behaviour, given a **this** value |thisValue| and JS arguments |args|, performs:
-    1. Let |instance| be the instance of |componentFunc|.
     1. Return ? `run within a call` given |instance|.[[HostResourceTypes]], |instance|.[[GuestResourceClasses]], and a new Abstract Closure that performs the following steps when called:
-        1. Let |componentResult| be ? `invoke a component function` given |componentFunc|, |takesSelf|, |thisValue| and |args|.
+        1. Let |componentResult| be ? `invoke a component function` given |instance|, |componentFunc|, |takesSelf|, |thisValue| and |args|.
         1. If |okType| is **empty**:
             1. Return **undefined**.
         1. Return `ToJSValue`(|componentResult|, |okType|).
 
-To `define an accessor for a component function` given an object |target|, a function export |export| and a Boolean |enumerable|:
+To `define an accessor for a component function` given an [instance record](#instance-records) |instance|, an object |target|, a function export |export| and a Boolean |enumerable|:
 1. Let |key| be `JSName`(|export|).
 1. Let |accessor| be the `accessor` capture of |export|.Name.
 1. Let |name| be the string-concatenation of |accessor|, " " and |key|.
 1. Let |takesSelf| be **true** if |export|.Name matches *Member* with `scope` "method", and **false** otherwise.
-1. Let |func| be `create a JS function for a component function` given |export|.Func, |name| and |takesSelf|.
+1. Let |func| be `create a JS function for a component function` given |instance|, |export|.Func, |name| and |takesSelf|.
 1. If |accessor| is "get":
     1. Perform `DefinePropertyOrThrow`(|target|, |key|, PropertyDescriptor { [[Get]]: |func|, [[Set]]: **undefined**, [[Enumerable]]: |enumerable|, [[Configurable]]: **true** }).
 1. Else:
@@ -1080,7 +1081,7 @@ To `define an accessor for a component function` given an object |target|, a fun
 
 The "set" case defines a partial descriptor, so it only replaces the [[Set]] field of the accessor property the matching `[get]` export already defined. The `"get "`/`"set "` prefix on the function name follows how JS names accessor functions.
 
-To `invoke a component function` given |componentFunc|, a Boolean |takesSelf|, |thisValue| and a List of JS values |args|:
+To `invoke a component function` given an [instance record](#instance-records) |instance|, |componentFunc|, a Boolean |takesSelf|, |thisValue| and a List of JS values |args|:
 1. Let |paramTypes| be |componentFunc|.Params.
 1. Let |resultType| be |componentFunc|.Result.
 1. Let |formalParamsOffset| be 1 if |takesSelf| is **true**, else 0.
@@ -1096,7 +1097,6 @@ To `invoke a component function` given |componentFunc|, a Boolean |takesSelf|, |
     1. Let |missingFormalArgCount| be |formalParamsCount| - `Length`(|args|).
     1. Let |missingFormalArgs| be a List of `undefined` repeated |missingFormalArgCount| times.
     1. Set |args| to |args| concatenated with |missingFormalArgs|.
-1. Let |instance| be the instance of |componentFunc|.
 1. If |instance|.[[Store]].is_locked_down():
     1. Perform ? `trap` given |instance|.
 1. Let |call| be the current call.
