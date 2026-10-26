@@ -789,7 +789,7 @@ To `read a scope of imports` given a list of import declarations |importDecls|, 
             1. Append |hostResourceTypes|[|abstractTypeKey|].[[ComponentResourceType]] to |definitions|.
             1. Continue.
     1. Let |name| be `JSName`(|importDecl|).
-    1. Let |builtin| be `resolve a builtin specifier` given |name| and |enabledBuiltins|.
+    1. Let |builtin| be ? `resolve a builtin specifier` given |name| and |enabledBuiltins|.
     1. If |builtin| is not **empty**:
         1. Let |importValue| be |builtin|.
     1. Else:
@@ -962,18 +962,18 @@ Builtin imports are opt-in via the `builtins` field of `WebAssemblyCompileOption
 
 This spec defines one builtin specifier:
 
-| Specifier | Resolves to |
-|---|---|
-| `wasm:js/global/*` | [the global object](#the-global-object) |
+| Builtin | Specifiers | Resolves to |
+|---|---|---|
+| `js/global` | `wasm:js/global`, `wasm:js/global/*` | [the global object](#the-global-object) |
 
 To `resolve a builtin specifier` given a String |specifier| and a set of Strings |enabledBuiltins|:
 1. If |specifier| does not start with "wasm:":
     1. Return **empty**.
 1. Let |name| be the portion of |specifier| after "wasm:".
-1. If |name| does not match something in |enabledBuiltins|:
-    1. Return **empty**.
-1. If |name| starts with "js/global":
-    1. Return `resolve a js global builtin` with |name|.
+1. If |name| is "js/global" or starts with "js/global/":
+    1. If |enabledBuiltins| does not contain "js/global":
+        1. Return **empty**.
+    1. Return ? `resolve a js global builtin` with |name|.
 1. Return **empty**.
 
 #### The global object
@@ -983,11 +983,13 @@ The normal [`read the imports object`](#read-the-imports-object) rules are desig
 `wasm:js/global` resolves to the `globalThis` of the [component realm](#types-and-values), and nested paths resolve to a chain of property accessors off of the global (e.g. `wasm:js/global/console` is `globalThis.console`).
 
 To `resolve a js global builtin` with String |name|:
-1. Assert: |name| starts with "js/global".
 1. Let |result| be the component realm's `globalThis`.
-1. Let |remaining| be |name| with the regex "js\/global\/?" trimmed from the prefix.
+1. If |name| is "js/global":
+    1. Return |result|.
+1. Assert: |name| starts with "js/global/".
+1. Let |remaining| be the portion of |name| after "js/global/".
 1. Let |projections| be the result of splitting |remaining| on "/".
-1. For |projection| in |projections|:
+1. For each |projection| of |projections|:
     1. Set |result| to ? `Get`(|result|, |projection|).
 1. Return |result|.
 
