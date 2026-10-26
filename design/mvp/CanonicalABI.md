@@ -4889,7 +4889,7 @@ def canon_thread_available_parallelism():
 [Type Definitions]: Explainer.md#type-definitions
 [Component Invariant]: Explainer.md#component-invariants
 [JavaScript Embedding]: Explainer.md#JavaScript-embedding
-[ESM-integration]: Explainer.md#esm-integration
+[ESM-integration]: JS-Reference.md#webassembly-esm-integration
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Shared-Everything Dynamic Linking]: examples/SharedEverythingDynamicLinking.md
 [Concurrency Explainer]: Concurrency.md

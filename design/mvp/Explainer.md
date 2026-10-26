@@ -36,8 +36,6 @@ more user-focused explanation, take a look at the
     * [External visibility of types](#external-visibility-of-types)
 * [Component invariants](#component-invariants)
 * [JavaScript embedding](#JavaScript-embedding)
-  * [JS API](#JS-API)
-  * [ESM-integration](#ESM-integration)
 * [Examples](#examples)
 
 (Based on the previous [scoping and layering] proposal to the WebAssembly CG,
@@ -2768,8 +2766,8 @@ field name of the function. This additional nesting information allows bindings
 generators to insert the function into the nested scope of a class, abstract
 data type, object, namespace, package, module or whatever resources get bound
 to. For example, a function named `[method]C.foo` could be bound in C++ to a
-member function `foo` in a class `C`. The JS API [below](#JS-API) describes how
-the native JavaScript bindings could look.
+member function `foo` in a class `C`. The [JS API](JS-Explainer.md#exporting-a-resource) describes
+how the native JavaScript bindings look.
 
 To restrict the set of cases that bindings generators need to consider, these
 annotations trigger additional type-validation rules (listed in detail in
@@ -3082,7 +3080,7 @@ In particular, the Component Model maintains the following invariants:
 
 ## JavaScript Embedding
 
-This has been moved to [JS-Overview.md](JS-Overview.md) and [JS-Reference.md](JS-Reference.md).
+This has been moved to [JS-Explainer.md](JS-Explainer.md) and [JS-Reference.md](JS-Reference.md).
 
 ## Examples
 
@@ -3124,28 +3122,9 @@ For some use-case-focused, worked examples, see:
 [`func_invoke`]: https://webassembly.github.io/spec/core/appendix/embedding.html#mathrm-func-invoke-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-funcaddr-mathit-funcaddr-xref-exec-runtime-syntax-val-mathit-val-ast-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-val-mathit-val-ast-xref-appendix-embedding-embed-error-mathit-error
 [`func_alloc`]: https://webassembly.github.io/spec/core/appendix/embedding.html#mathrm-func-alloc-xref-exec-runtime-syntax-store-mathit-store-xref-syntax-types-syntax-functype-mathit-functype-xref-exec-runtime-syntax-hostfunc-mathit-hostfunc-xref-exec-runtime-syntax-store-mathit-store-xref-exec-runtime-syntax-funcaddr-mathit-funcaddr
 
-[`FinalizationRegistry`]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry
 [Semantic Versioning 2.0]: https://semver.org/spec/v2.0.0.html
 
-[JS API]: https://webassembly.github.io/spec/js-api/index.html
-[*read the imports*]: https://webassembly.github.io/spec/js-api/index.html#read-the-imports
-[*create an exports object*]: https://webassembly.github.io/spec/js-api/index.html#create-an-exports-object
-[Interface Object]: https://webidl.spec.whatwg.org/#interface-object
-[`ToJSValue`]: https://webassembly.github.io/spec/js-api/index.html#tojsvalue
-[`ToWebAssemblyValue`]: https://webassembly.github.io/spec/js-api/index.html#towebassemblyvalue
-[`USVString`]: https://webidl.spec.whatwg.org/#es-USVString
-[`sequence`]: https://webidl.spec.whatwg.org/#es-sequence
-[`dictionary`]: https://webidl.spec.whatwg.org/#es-dictionary
-[`enum`]: https://webidl.spec.whatwg.org/#es-enumeration
-[`T?`]: https://webidl.spec.whatwg.org/#es-nullable-type
-[Import Reflection]: https://github.com/tc39-transfer/proposal-import-reflection
-[Module Record]: https://tc39.es/ecma262/#sec-abstract-module-records
 [Module Specifier]: https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ModuleSpecifier
-[Named Imports]: https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-NamedImports
-[Imported Default Binding]: https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#prod-ImportedDefaultBinding
-[JS Tuple]: https://github.com/tc39/proposal-record-tuple
-[JS Record]: https://github.com/tc39/proposal-record-tuple
-[Internal Slot]: https://tc39.es/ecma262/#sec-object-internal-methods-and-internal-slots
 
 [Kebab Case]: https://en.wikipedia.org/wiki/Letter_case#Kebab_case
 [De Bruijn Index]: https://en.wikipedia.org/wiki/De_Bruijn_index
