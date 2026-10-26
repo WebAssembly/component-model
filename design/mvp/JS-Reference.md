@@ -373,13 +373,20 @@ Out-of-range values wrap and `NaN` and infinities become 0, matching the core JS
 
 A typed array of the matching class is copied directly, since that is what `ToJSValue` produces. Anything else goes through the iterable path, so other typed arrays and plain Arrays behave like they do in the `new TypedArray(iterable)` constructor.
 
-`ToComponentValueList(jsValue, T, N)`:
+`IterableToValues(jsValue)`:
 1. If |jsValue| is not an Object:
-    1. Throw a `TypeError`.
+    1. Return **not-iterable**.
 1. Let |method| be ? `GetMethod`(|jsValue|, `%Symbol.iterator%`).
 1. If |method| is **undefined**:
+    1. Return **not-iterable**.
+1. Return ? `IteratorToList`(? `GetIteratorFromMethod`(|jsValue|, |method|)).
+
+`%Symbol.iterator%` is looked up once, and the iterable is consumed before any element is converted, so that the canonical ABI has the length before calling realloc and converting elements.
+
+`ToComponentValueList(jsValue, T, N)`:
+1. Let |values| be ? `IterableToValues`(|jsValue|).
+1. If |values| is **not-iterable**:
     1. Throw a `TypeError`.
-1. Let |values| be ? `IteratorToList`(? `GetIteratorFromMethod`(|jsValue|, |method|)).
 1. Let |valuesLength| be the length of |values|.
 1. If |N| is not `none`:
     1. Let |listLength| be |N|.
@@ -394,17 +401,12 @@ A typed array of the matching class is copied directly, since that is what `ToJS
     1. Set |list|[|i|] to ? `ToComponentValue`(|value|, `T`).
 1. Return |list|.
 
-The iterable is consumed before any element is converted, so that the canonical ABI has the list's length before calling realloc and converting elements.
-
 For fixed-length lists, any missing values from the iterable are filled in with `undefined`.
 
 `ToComponentValueTuple(jsValue, Types...)`:
-1. If |jsValue| is not an Object:
+1. Let |values| be ? `IterableToValues`(|jsValue|).
+1. If |values| is **not-iterable**:
     1. Throw a `TypeError`.
-1. Let |method| be ? `GetMethod`(|jsValue|, `%Symbol.iterator%`).
-1. If |method| is **undefined**:
-    1. Throw a `TypeError`.
-1. Let |values| be ? `IteratorToList`(? `GetIteratorFromMethod`(|jsValue|, |method|)).
 1. Let |valuesLength| be the length of |values|.
 1. Let |listLength| be the length of |Types|.
 1. Let |list| be an empty component tuple with element types |Types|.
@@ -454,13 +456,25 @@ This operation is used for variant, and also cases in the above table where we c
 `ToComponentValueMap(jsValue, K, V)`:
 1. If |jsValue| is not an Object:
     1. Throw a `TypeError`.
-1. If ? `GetMethod`(|jsValue|, `%Symbol.iterator%`) is not **undefined**:
-    1. Return `ToComponentValueList`(|jsValue|, `tuple<K, V>`).
+1. Let |map| be a new empty component map value.
+1. Let |values| be ? `IterableToValues`(|jsValue|).
+1. If |values| is a List:
+    1. For each |v| of |values|:
+        1. Append ? `ToComponentValue`(|v|, `tuple<K, V>`) to |map|.
+    1. Return |map|.
 1. If K is not `string`:
     1. Throw a `TypeError`.
-1. Return one pair per own enumerable string-keyed property of |jsValue|, in property order, reading each value with ? `Get` and converting it with `ToComponentValue`(_, V).
+1. Let |keys| be ? |jsValue|.[[OwnPropertyKeys]]().
+1. For each |key| of |keys|:
+    1. Let |desc| be ? |jsValue|.[[GetOwnProperty]](|key|).
+    1. If |desc| is not **undefined** and |desc|.[[Enumerable]] is **true**:
+        1. Let |typedKey| be ? `ToComponentValue`(|key|, K).
+        1. Let |value| be ? `Get`(|jsValue|, |key|).
+        1. Let |typedValue| be ? `ToComponentValue`(|value|, V).
+        1. Append (|typedKey|, |typedValue|) to |map|.
+1. Return |map|.
 
-If the value is not iterable, we fall back to converting the object the way WebIDL's `record<DOMString, V>` would, for compatibility.
+If the value is not iterable, we fall back to converting the object the way WebIDL's [`record<USVString, V>`](https://webidl.spec.whatwg.org/#js-record) would, for compatibility.
 
 ## Resource types
 
