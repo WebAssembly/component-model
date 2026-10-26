@@ -545,16 +545,13 @@ A resource type import is satisfied by a constructor. Each time a JS value needs
 To `brand check` given a JS value |jsValue| and an Object |constructor|:
 1. If |constructor| is a WebIDL [interface object](https://webidl.spec.whatwg.org/#dfn-interface-object):
     1. Return **true** if and only if |jsValue| is a platform object that [implements](https://webidl.spec.whatwg.org/#implements) the interface |constructor| is the interface object of.
-1. If |constructor| has a [[ConstructorFunc]] internal slot:
-    1. Assert: |constructor| is a [guest resource class](#guest-resource-classes).
-    1. Return **true** if and only if |jsValue| has a [[ResourceClass]] internal slot whose value is |constructor|.
 1. Return ? `InstanceofOperator`(|jsValue|, |constructor|).
 
 Which case applies is fixed for the lifetime of |constructor|.
 
-The first two cases are real brand checks. The `instanceof` fallback only inspects the prototype chain, so a value that was never created by |constructor| can pass it. In the future we may add a way for JS to supply a custom brand check through a Symbol based protocol.
+The first case is a real brand check. The `instanceof` fallback only inspects the prototype chain, so a value that was never created by |constructor| can pass it. In the future we may add a way for JS to supply a custom brand check through a Symbol based protocol.
 
-The case of a guest resource class may either be from an export of the current component instance, or else an export from a different component instance.
+A [guest resource class](#guest-resource-classes) never reaches a brand check, because [importing one](#re-imported-guest-resource-types) is a `LinkError`.
 
 #### Conversions for host resources
 

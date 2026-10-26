@@ -266,7 +266,7 @@ try {
 
 Components can also accept JS values as resources. A resource type import is satisfied by passing a constructor function.
 
-Whenever a JS value must be converted to a resource type, an `instanceof` check is performed against the imported constructor. If the constructor is a [WebIDL interface object](https://webidl.spec.whatwg.org/#interface-object) or an [exported component resource constructor](#exporting-a-resource), a precise [brand check](./JS-Reference.md#brand-checks) is performed.
+Whenever a JS value must be converted to a resource type, an `instanceof` check is performed against the imported constructor. If the constructor is a [WebIDL interface object](https://webidl.spec.whatwg.org/#interface-object), a precise [brand check](./JS-Reference.md#brand-checks) is performed. An [exported component resource class](#exporting-a-resource) can't currently be imported.
 
 Any imported function whose name is tagged `[constructor]`, `[method]`, or `[static]` is looked up on the imported constructor instead of the imports object:
 
