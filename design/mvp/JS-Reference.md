@@ -579,7 +579,7 @@ Converting the same JS value to a host resource type yields fresh handle indices
 
 #### Re-exported host resource types
 
-A component's type may export a resource type that is transparently equal to one of its imported resource types (see [abstract types](#abstract-and-transparent-types)). This currently [throws](#create-the-exports-object), but may be relaxed in the future.
+A component's type may export a resource type that is transparently equal to one of its imported resource types (see [abstract types](#abstract-and-transparent-types)). This currently throws a `LinkError` at [instantiation](#instantiation), but may be relaxed in the future.
 
 An exported resource type that is only privately a re-export of an imported type, i.e. the component's type declares it as a fresh abstract export, will wrap the original host resource type in a new [guest resource class](#guest-resource-classes). This keeps callers from observing whether an exported resource type is a re-export or defined in the component.
 
@@ -745,16 +745,18 @@ The held value is a record of the objects's class and rep rather than the object
 To `instantiate a component` given |component|, a list of component definitions |imports|, and |hostResourceTypes|:
 1. If the type of any function import or export of |component|, including those nested in instance imports and exports, is `async`:
     1. Throw a `WebAssembly.LinkError`.
+1. If any type export of |component|'s type, including those nested in instance exports, declares a resource type whose *abstract type key* is an import declaration:
+    1. Throw a `WebAssembly.LinkError`.
 1. Let |store| be a new component store.
 1. Let |componentInstance| be the result of instantiating |component| with |imports| in |store|.
 1. If instantiation traps:
     1. Throw a `WebAssembly.RuntimeError`.
 1. Let |instance| be a new [instance record](#instance-records) { [[Store]]: |store|, [[ComponentInstance]]: |componentInstance|, [[HostResourceTypes]]: |hostResourceTypes|, [[GuestResourceClasses]]: a new empty map }.
-1. Perform ? `create guest resource classes` given |instance| and |componentInstance|.Exports.
+1. Perform `create guest resource classes` given |instance| and |componentInstance|.Exports.
 1. Let |exportsObject| be ? `create the exports object` given |instance| and |componentInstance|.Exports.
 1. Return a Record { [[Instance]]: |instance|, [[Exports]]: |exportsObject| }.
 
-We temporarily reject any async function imports/exports until they are specified.
+We temporarily reject async function imports/exports until they are specified, and [re-exported host resource types](#re-exported-host-resource-types) until their semantics are settled.
 
 To `instantiate a component from an imports object` given |component|, |importsObject|, and |enabledBuiltins|:
 1. Let |imports| and |hostResourceTypes| be ? `read the imports object` given |component|, |importsObject|, and |enabledBuiltins|.
@@ -1007,13 +1009,12 @@ To `create guest resource classes` given an [instance record](#instance-records)
 1. Let |guestResourceClasses| be |instance|.[[GuestResourceClasses]].
 1. For each |export| of |exportDecls|, in declaration order:
     1. If |export|.Sort is **instance**:
-        1. Perform ? `create guest resource classes` given |instance| and the exports of the exported instance.
+        1. Perform `create guest resource classes` given |instance| and the exports of the exported instance.
         1. Continue.
     1. If |export|.Sort is not **type**, or |export| does not declare a resource type:
         1. Continue.
     1. Let |abstractTypeKey| be the *abstract type key* of |export|.
-    1. If |abstractTypeKey| is an import declaration:
-        1. Throw a `TypeError`.
+    1. Assert: |abstractTypeKey| is not an import declaration, by [instantiation](#instantiation).
     1. If |guestResourceClasses|[|abstractTypeKey|] exists:
         1. Continue.
     1. Let |resourceType| be the component resource type |export| refers to.
