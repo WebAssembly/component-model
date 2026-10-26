@@ -671,10 +671,9 @@ To `create an own guest resource object` given a resource class |class|, |rep|, 
 1. Return |object|.
 
 To `detach a guest resource object` given resource object |resourceObject|:
-1. Assert: resourceObject|.[[Rep]] is not **empty** and |resourceObject|.[[LendCount]] is 0:
+1. Assert: |resourceObject|.[[Rep]] is not **empty** and |resourceObject|.[[LendCount]] is 0.
 1. Set |resourceObject|.[[Rep]] to **empty**.
 1. Unregister |resourceObject| from the guest resource `FinalizationRegistry`.
-1. Return |newResourceObject|.
 
 To `dispose a guest resource object` given |resourceObject|:
 1. If |resourceObject|.[[Rep]] is **empty**:
@@ -691,8 +690,9 @@ To `dispose a guest resource object` given |resourceObject|:
 The [[LendCount]] check can only fail on the `%Symbol.dispose%` path, because a lent object is kept alive by the [[Lenders]] of the call it was lent to.
 
 To `finalize a guest resource object` given |resourceClass| and |resourceRep|:
-1. Assert |resourceObject|.[[LendCount]] is 0.
-1. Perform `dispose a guest resource` given |resourceClass| and |resourceRep|.
+1. If |resourceClass|.[[Instance]].[[Store]].is_locked_down():
+    1. Return.
+1. Perform ? `drop a guest resource` given |resourceClass| and |resourceRep|.
 
 The current call lender list should keep all guest resource object's alive such that they cannot be finalized.
 
