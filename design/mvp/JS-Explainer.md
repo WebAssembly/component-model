@@ -30,18 +30,22 @@ const { instance } = await WebAssembly.instantiate(bytes);
 instance.exports.greet("world");  // "hello, world"
 ```
 
-The `exports` object of an instance holds one property per export and `greet` is an ordinary JS function
+The `exports` object of an instance holds one property per export and `greet` is an ordinary JS function.
 
 Component names are kebab-case and JS function names are [camelCase](./JS-Reference.md#names), so a function export named `greet-loudly` would be `greetLoudly`.
 
 Arguments are coerced to their expected type, and if that fails a `TypeError` is thrown:
 
 ```js
-instance.exports.greet(42);  // "hello, 42"
-instance.exports.greet();    // TypeError
+instance.exports.greet(42);                 // "hello, 42"
+instance.exports.greet(Symbol("nobody"));   // TypeError
 ```
 
-`undefined` is substituted for missing arguments, and extra arguments are ignored, just as in JS.
+`undefined` is substituted for missing arguments, and extra arguments are ignored, just as in JS:
+
+```js
+instance.exports.greet();  // "hello, undefined"
+```
 
 ### Components that import a function
 
@@ -102,7 +106,7 @@ Related functions can be grouped into an `instance`, which maps to a nested JS o
 ))
 ```
 
-The `console` import is read from the imports object, and then `log` and `error` are read from it. This means the `console` builtin can be passed directly:
+The `console` import is read from the imports object, and then `log` and `error` are read from it. This means the global `console` object can be passed directly:
 
 ```js
 const { instance } =
@@ -129,8 +133,8 @@ The following table describes how a component value is converted into a JS value
 | `string` | String, well formed | `string` |
 | `list<sN, N?>`, `list<uN, N?>`, `list<fN, N?>` | `IntNArray`, `UintNArray`, `FloatNArray` | `IntNArray`, `UintNArray`, `FloatNArray` |
 | `list<T>`, `list<T, N>` | Array | `T[]` |
-| `tuple<T, U>` | Array | `(T \| U)[]` |
-| `record { field-name: T, ... }` | null-prototype object,  | `{ fieldName: T, ... }` |
+| `tuple<T, U>` | Array | `[T, U]` |
+| `record { field-name: T, ... }` | null-prototype object | `{ fieldName: T, ... }` |
 | `flags "flag-a" "flag-b"` | null-prototype object of Booleans | `{ flagA: boolean, flagB: boolean }` |
 | `enum "case-a" "case-b"` | String, the case label verbatim | `"case-a" \| "case-b"` |
 | `option<T>` (if not nested inside another `option`) | `undefined`, or the payload | `T \| undefined` |
@@ -308,10 +312,10 @@ const imports = { Element };
 const { instance } =
   await WebAssembly.instantiate(bytes, imports);
 
-instance.exports.find(document.body, "h1");  // "page-title" or null
+instance.exports.find(document.body, "h1");  // "page-title" or undefined
 ```
 
-Component [`plainnames`](./Explainer.md#import-and-export-definitions) as used in imports/exports are converted to idiomatic JS names ([rules here](./JS-Reference.md#names)). Type names are converted to pascal case, and everything else is converted to camel case. This allows the component imports of  `element` and `get-attribute` to be satisfied with `Element` and `getAttribute` respectively.
+Component [`plainnames`](./Explainer.md#import-and-export-definitions) as used in imports/exports are converted to idiomatic JS names ([rules here](./JS-Reference.md#names)). Type names are converted to pascal case, and everything else is converted to camel case. This allows the component imports of `element` and `get-attribute` to be satisfied with `Element` and `getAttribute` respectively.
 
 ### Importing from the JS global
 
@@ -346,10 +350,10 @@ The example above still needs someone to write `{ Element }`. A component can sk
 ```
 
 ```js
-const exports =
-  await WebAssembly.instantiate(bytes, { builtins: ["js/global"] }).exports;
+const { instance } =
+  await WebAssembly.instantiate(bytes, {}, { builtins: ["js/global"] });
 
-exports.encodeId(document.body);
+instance.exports.encodeId(document.body);
 ```
 
 Importing from `wasm:js/global` is equivalent to an imports object with: `{ "wasm:js/global": globalThis }`. The normal rules for reading from the imports object still apply.
