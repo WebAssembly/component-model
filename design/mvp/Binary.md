@@ -260,6 +260,8 @@ Notes:
   rejects any transitive use of `borrow` in an exported value type.
 * Validation of `stream` and `future` rejects element types that transitively
   contain a `borrow`.
+* Validation of `map` rejects value types that transitively contain an `own`,
+  `borrow`, `future`, `stream` or `error-context`.
 * Validation of `stream` rejects `(stream char)` as a temporary
   [TODO](Concurrency.md#TODO).
 * Validation of `resourcetype` requires the destructor (if present) to have

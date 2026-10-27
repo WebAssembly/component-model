@@ -1963,6 +1963,8 @@ meanings though so they're also provided as first-class types.
 values but is meant to be represented by bindings generators in the source
 language as a mapping from keys to values (e.g., as an associative array or or
 hash table) where, in the case of duplicate keys, the last key's value is used.
+Currently, the value type of a `map` may not transitively contain an owned or
+borrowed handle, `future`, `stream` or `error-context`.
 
 The `future` and `stream` types are described as part of the [concurrency
 explainer](Concurrency.md#streams-and-futures).
