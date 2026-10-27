@@ -3438,7 +3438,7 @@ For some use-case-focused, worked examples, see:
 
 [Strongly-unique]: #name-uniqueness
 
-[Donut Wrapped]: Linking.md#higher-order-shared-nothing-linking-aka-donut-wrapping
+[Donut Wrapped]: Explainer.md#virtualization-and-donut-wrapping
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Canonical ABI explainer]: CanonicalABI.md
 [`canon_context_get`]: CanonicalABI.md#-canon-contextget

@@ -1567,7 +1567,7 @@ the concurrency story:
 [`{stream,future}.new`]: Text.md#-streamnew-and-futurenew
 [`{stream,future}.{read,write}`]: Text.md#-streamread-and-streamwrite
 [`stream.cancel-write`]: Text.md#-streamcancel-read-streamcancel-write-futurecancel-read-and-futurecancel-write
-[Donut Wrapping]: Linking.md#higher-order-shared-nothing-linking-aka-donut-wrapping
+[Donut Wrapping]: Explainer.md#virtualization-and-donut-wrapping
 
 [Canonical ABI Explainer]: CanonicalABI.md
 [specified in terms of]: CanonicalABI.md#stack-switching

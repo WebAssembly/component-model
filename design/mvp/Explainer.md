@@ -373,7 +373,7 @@ following component-level type which, due to running everything during a module
 ))
 ```
 Notably, the fact that this component contains two core modules which share
-`mem` is kept an encapsulated implementation detail. Also absent is any
+`mem` is kept as an encapsulated implementation detail. Also absent is any
 imported ambient namespace used to link the modules as is required by, e.g., ELF
 to resolve shared object dependencies. Thus, components are more like Docker
 containers, which keep their filesystem an encapsulated detail of the container.
@@ -824,7 +824,7 @@ after replacing `import` with `export`):
 ))
 ```
 Notably, the `i64` address type of `memory` and representation type of `file`
-are kept an encapsulated implementation detail of the component and thus this
+are kept as an encapsulated implementation detail of the component and thus this
 64-bit component can be imported and called by the 32-bit component shown in the
 previous section without a problem. This encapsulation also means that
 components can change their memory and resource representation types over time
@@ -968,14 +968,18 @@ portable across different kinds of hosts (e.g., between browsers and
 non-browsers) and makes the composite no longer distributable as a single
 artifact. To address these problems, the Component Model allows components to
 nest not just modules but also components and to link these components together
-in the same way as shown above for modules.
+in the same way as shown above for modules. Consequently, a single component can
+nest both modules *and* components *and* arbitrarily link them together, using
+lifting and lowering definitions to bridge the module/component type boundary
+as necessary.
 
 For example, the following example component contains abridged versions of the
 `file`-importing and `file`-exporting example components shown in earlier
 sections. To better illustrate the full linking story, the `file`-exporting
 component is given a new `backing-store` import (presumably used to implement
-the `file`) and the `file`-importing component is given a new `run` export
-(presumably to do something useful with the imported `file`).
+the `file`) and the `file`-importing component is given an additional
+`hash-file` import (that is *not* implemented by the `file`-exporting component)
+and a `run` export.
 ```wat
 (component
   (component $FileExporter
@@ -986,9 +990,10 @@ the `file`) and the `file`-importing component is given a new `run` export
     (export "[method]file.read" (func ...))
   )
   (component $FileImporter
-    (import "file" (type ...))
+    (import "file" (type $File (sub resource)))
     (import "open" (func ...))
     (import "[method]file.read" (func ...))
+    (import "hash-file" (func (param "file" (borrow $File)) (result u64)))
     ...
     (export "run" (func ...))
   )
@@ -996,10 +1001,26 @@ the `file`) and the `file`-importing component is given a new `run` export
   (instance $exporter (instantiate $FileExporter
     (with "backing-store" (instance $backing-store))
   ))
+  (core module $FileHasher
+    (import "file" "read" (func ...))
+    ...
+    (func (export "hash") (param $fileHandle i32) (result i64) ...)
+  )
+  (core func $fileRead
+    (canon lower (func $exporter "[method]file.read") ...)
+  )
+  (core instance $fileHasher (instantiate $FileHasher
+    (with "file" (instance (export "read" (func $fileRead))))
+  ))
+  (alias export $exporter "file" (type $File))
+  (func $hashFile (param "file" (borrow $File)) (result u64)
+    (canon lift (core func $fileHasher "hash") ...)
+  )
   (instance $importer (instantiate $FileImporter
-    (with "file" (type $exporter "file"))
+    (with "file" (type $File))
     (with "open" (func $exporter "open"))
     (with "[method]file.read" (func $exporter "[method]file.read"))
+    (with "hash-file" (func $hashFile))
   ))
   (export "run" (func $importer "run"))
 )
@@ -1010,38 +1031,18 @@ The first two `component` definitions add two new indices to the `component`
 index space. When one component is nested inside another component, the inner
 component is called a **child component** and the outer component is called a
 **parent component**. Because components can nest N-deep, parent and child
-components form a tree.
+components form a **component tree**.
 
-Next, the `(import "backing-store" ...)` definition in the parent component
-is used to supply the `backing-store` import of `$FileExporter`. In general, if
-a parent component wants to instantiate a child component with an import `I`,
-there are 3 choices:
-1. import `I` in the parent (as shown here for `backing-store`)
-2. instantiate a child that exports `I` (as shown here for `file` et al.)
-3. implement `I` in the parent using a `core module` + `canon lift` (not shown
-   here; this is done when "[donut wrapping]")
-
-In particular, under no circumstance is a child component's import satisfied
-directly by the host or grandparent without going through the parent: if the
-child has an import `I` that is not satisfied by a `(with "I" ...)` in the
-parent's `instantiate` expression, there is a validation error. This guarantee,
-combined with the resource-type guarantees mentioned earlier, provides a
-foundation for implementing link-time and run-time [capability-based security].
-
-Next, the `(instance ...)` definitions link everything together, passing the
-parent's `backing-store` into `$FileExporter` and then linking `$FileExporter`'s
-exports with `$FileImporter`'s imports. In a more realistic scenario, the three
-imports of `$FileImporter` would be grouped into a single `instance` import
-(which is what happens by default when, e.g., importing a [WIT](#wit)
-`interface`) which would then allow the three `with` arguments of `instantiate`
-to be replaced with a single `(with "..." (instance $exporter))` argument.
+Next, the `(import "backing-store" ...)` definition is used to import a
+`backing-store` instance that is used to instantiate `$FileExporter` in the
+following `(instance $exporter ...)` definition.
 
 When one component `instantiate`s another component, at runtime, the component
 instance created by `instantiate` is called a **child component instance** and
 the component instance that performed the `instantiate` is called the **parent
 component instance**. Because instances can nest N-deep, parents and children
-form a (component) **instance tree**. This instance tree is meaningfully
-different from the component tree mentioned above in three ways:
+form a (component) **instance tree**. This *instance tree* is meaningfully
+different from the aforementioned *component tree* in three ways:
 * The *component tree* is static (reflecting nesting of bytes in the binary
   format) while the *instance tree* is dynamic (describing runtime state).
 * Parent components can `instantiate` 0..N instances of child components and so
@@ -1050,28 +1051,27 @@ different from the component tree mentioned above in three ways:
   from nested components, but also *imported* components, in which case the
   component and instance trees can be totally dissimilar.
 
+The next 5 definitions use the `core module`, `canon lower`, `core instance`,
+`alias export`, and `canon lift` definitions introduced in the previous sections
+to define and instantiate the `$FileHasher` module to implement the `$hashFile`
+function. In contrast to the previous examples of lifting and lowering,
+`$FileHasher`'s lowered import comes from a sibling component instance
+(`$exporter`), not an import, and `$FileHasher`'s lifted export feeds into a
+sibling component instance (`$importer`), not an export. This demonstrates the
+orthogonality of lifting and lowering from importing and exporting.
+
+Next, the `(instance $importer ...)` definition links everything together,
+fulfilling `$FileImporter`'s imports from both the preceding `$exporter` sibling
+component instance and the parent's `$hashFile` function. Equivalently, the
+first three imports of `$FileImporter` could have been grouped together into a
+single `instance` import, which would then replace the first three `(with ...)`
+arguments with a single `(with "..." (instance $exporter))` argument.
+
 Lastly, the `(export "run" (func $importer "run"))` definition uses an inline
 alias and re-exports `$importer`'s exported `run` function from the parent
 component. Without this re-export, `run` would not be callable from outside the
 parent component and thus the only child wasm code that got to run would be
 the module `start` functions executing during instantiation.
-
-When this parent component is instantiated and the host calls the exported
-`run`, control flow will transfer directly into `$FileImporter`'s internal
-module(s). When `$FileImporter` calls a lowered file operation, control flow
-will then synchronously call into `$FileExporter`'s internal module(s) on the
-same native stack (without a context switch, unlike native cross-process
-communication) after copying the `string` parameter directly from the caller's
-memory into the callee's memory (without an intermediate buffer, unlike native
-pipe- or socket-based communication). Thus, a parent component is somewhat like
-the `compose.yaml` file passed to [Docker Compose] and the two child components
-are like two containers that communicate over the private network created by
-Docker Compose... just with much, much lower overhead. A difference is that,
-unlike `compose.yaml`, a parent component can have its own executable code that
-is linked directly to its children's imports and exports, allowing sophisticated
-virtualization (via [donut wrapping]) that in the container world could only be
-achieved using an expensive [sidecar container] that proxies all incoming and
-outgoing network traffic.
 
 The Component Model's validation rules assign this example component the
 following component-level type:
@@ -1081,15 +1081,43 @@ following component-level type:
   (export "run" (func ...))
 ))
 ```
-Notably, the child components and the `file` definitions shared between them are
-kept an encapsulated implementation detail of the parent component and thus
-cannot interfere with the host or another component that has its own distinct
-implementation of `file`. In particular, as described above, the parent
-component completely determines (via `instantiate`) how its children's imports
-are supplied and exports are used, even when seemingly-global interface names or
-`external-id`s are present. Thus, the Component Model has no implicit global
-runtime namespace or registry in which different local implementations of `file`
-might clash.
+Notably, `$FileExporter`, `$FileHasher`, `$FileImporter` and the `file` resource
+type shared between them are absent from the type because they are kept as an
+encapsulated implementation detail of the parent component. This reflects the
+fact that the parent component completely determines (via `instantiate`) how its
+children's imports are supplied and exports are used (even when seemingly-global
+interface names or `external-id`s are present).
+
+In particular, if a parent component wants to instantiate a child component with
+an import `I`, there are 3 choices:
+1. the parent can import `I` (as shown above for `backing-store`)
+2. the parent can instantiate a child that exports `I` (as shown above for `open`)
+3. the parent can implement `I` itself (as shown above for `hash-file`)
+
+Under no circumstance is a child component's import implicitly satisfied
+directly by the host or grandparent without going through the parent: if the
+child has an import `I` that is not satisfied by a `(with "I" ...)` in the
+parent's `instantiate` expression, there is a validation error. This guarantee,
+combined with the resource type guarantees mentioned earlier, provides a
+foundation for implementing link-time and run-time [capability-based security].
+
+When this parent component is instantiated and the exported `run` function is
+called, control flow will transfer directly into `$FileImporter`'s internal
+module(s). When `$FileImporter` calls `open` or `[method]file.read`, control
+flow will then synchronously call directly into `$FileExporter`'s internal
+module(s), and when `$FileImporter` calls `hash-file`, control flow will
+synchronously call into `$FileHasher`, which in turn calls into
+`$FileExporter`. In all cases, calls happen on the same native stack (without a
+context switch, unlike native cross-process communication) and copy any
+parameters and results directly between the caller's and callee's memories
+(without an intermediate buffer, unlike native pipe- or socket-based
+communication). Thus, a parent component is somewhat like the `compose.yaml`
+file passed to [Docker Compose] and the two child components are like two
+containers that communicate over the private network created by Docker Compose
+(just with much, much lower overhead). A more structural difference is that,
+unlike `compose.yaml`, a parent component can have its own executable code
+(`$FileHasher`) which enables the more-advanced virtualization techniques shown
+[below](#virtualization-and-donut-wrapping).
 
 ### Factoring out shared code
 
@@ -1191,12 +1219,12 @@ Lastly, in addition to importing *modules*, components can also import other
 imported *uninstantiated* via a `component` type that declares both the
 component's imports and exports.
 
-In addition to enabling various advanced virtualization scenarios (using [donut
-wrapping]), component imports allow components to serve as executable [lock
-files] that can resolve dependencies to the exact desired version of a module or
-component. For example, the following component contains no inline core wasm
-code and instead imports and links together `$Alloc`, `$A` and `$B` using
-`external-id`s that point to particular artifacts via URL, OCI Artifact
+In addition to enabling various advanced virtualization scenarios (as shown in
+the next section), component imports allow components to serve as executable
+[lock files] that can resolve dependencies to the exact desired version of a
+module or component. For example, the following component contains no inline
+core wasm code and instead imports and links together `$Alloc`, `$A` and `$B`
+using `external-id`s that point to particular artifacts via URL, OCI Artifact
 Reference, or whatever else the host natively supports.
 ```wat
 (component $LockFile
@@ -1218,6 +1246,278 @@ state when linked within a single component instance) and components (which
 don't). Another way to say this is that the Component Model supports both
 **shared-nothing** (component) linking and **shared-everything** (module)
 linking. For more on linking, see the [Linking Explainer].
+
+### Virtualization and "donut wrapping"
+
+One powerful application of the Component Model functionality presented above is
+[virtualization], in which a parent component interposes on all calls into and
+out of a child component to implement the child's expected execution environment
+in terms of the parent's base execution environment.
+
+As an example, let's start with a component (or a family of components) that we
+want to run with the following type that approximates a reusable, composable
+[HTTP Intermediary]:
+```wat
+(type $HttpGuest (component
+  (import "request" (type $Request (sub resource)))
+  (import "response" (type $Response (sub resource)))
+  ... various other request/response methods/functions
+  (import "send" (func (param "r" (own $Request)) (result (own $Response))))
+  (export "receive" (func (param "r" (own $Request)) (result (own $Response))))
+))
+```
+
+Such a component could run directly in an embedding that natively implements
+`request`, `response` and `send` and calls `receive`. However, let's say that
+we'd instead like to run this component on a host that only natively implements
+a lower-level [BSD Sockets] interface, allowing it to only run components that
+match the following `$SocketServer` type:
+```wat
+(type $SocketServer (component
+  (import "net" (instance
+    (export "socket" (type $Socket (sub resource)))
+    (export "[constructor]socket" (func ... (result (own $Socket))))
+    (export "[method]socket.accept" (func (param "self" (borrow $Socket)) ...))
+    ... various other socket operations
+  ))
+  (export "serve" (func))
+))
+```
+
+To run an `$HttpGuest` component on a `$SocketServer` host, we can use the
+following `$HttpServer` component, which implements the HTTP protocol in terms
+of `$SocketServer` in order to **virtualize** the `$HttpGuest` execution
+environment. This example is a bit more involved than the previous examples and
+so it's presented in chunks.
+
+The first chunk of `$HttpServer` imports and lowers the `net` import of
+`$SocketServer` and defines the `resource.drop` function that is used to drop
+unneeded `socket` resources.
+```wat
+(component $HttpServer
+  (import "net" (instance $net
+    (export "socket" (type $Socket (sub resource)))
+    (export "[constructor]socket" (func ... (result (own $Socket))))
+    (export "[method]socket.accept" (func (param "self" (borrow $Socket)) ...))
+    ...
+  ))
+  (alias export $net "socket" (type $socket))
+  (canon resource.drop $socket (core func $builtin-socket-drop))
+  (core func $lowered-socket-new (canon lower (func $net "[constructor]socket") ...))
+  (core func $lowered-socket-accept (canon lower (func $net "[method]socket.accept") ...))
+  ...
+```
+
+Next, `$HttpServer` needs to internally break a dependency cycle between its own
+nested module and the `$HttpGuest` component that is being virtualized: the
+guest needs to import `request`, `response` and `send` while the server needs to
+import the guest's exported `receive`. To break this cycle, the server can use a
+`table` of `funcref` that gets initialized with `ref.null` up front and gets
+updated with the real functions at the end. The `$LinkageTable` helper module
+defined and instantiated in this next chunk starts this process by defining the
+table and all the functions that need to have a cycle broken using
+`call_indirect`.
+```wat
+  (core module $LinkageTable
+    (table (export "ftbl") 3 3 funcref)
+    (type $FI (func (param i32)))
+    (type $FI2I (func (param i32) (result i32)))
+    (func (export "request-dtor") (type $FI) (call_indirect (type $FI) (local.get 0) (i32.const 0)))
+    (func (export "response-dtor") (type $FI) (call_indirect (type $FI) (local.get 0) (i32.const 1)))
+    (func (export "receive") (type $FI2I) (call_indirect (type $FI2I) (local.get 0) (i32.const 2)))
+  )
+  (core instance $linkage-table (instantiate $LinkageTable))
+```
+
+The next chunk defines the `request` and `response` resource types along with
+the `resource.{new,rep,drop}` ABI built-ins that allow `$HttpServer`'s nested
+module to create, dereference and destroy handles to resource types. As
+mentioned above, only the component that *defines* a resource type has access to
+`resource.{new,rep}`, which is what allows `$HttpServer` to virtualize these
+resource types without the guest components being able to see through the
+abstraction. Defining `request` and `response` requires breaking another cycle:
+the resource type definitions need destructor functions that are implemented by
+the module below, but the module below needs to import the ABI built-ins that
+we're trying to define here that require the resource types. Thus,
+`$LinkageTable` above includes the destructor functions so that they can be
+aliased here and patched below.
+```wat
+  (type $request (resource (rep i32) (dtor (core func $linkage-table "request-dtor"))))
+  (type $response (resource (rep i32) (dtor (core func $linkage-table "response-dtor"))))
+  (canon resource.new $request (core func $builtin-request-new))
+  (canon resource.rep $request (core func $builtin-request-rep))
+  (canon resource.drop $request (core func $builtin-request-drop))
+  (canon resource.new $response (core func $builtin-response-new))
+  (canon resource.rep $response (core func $builtin-response-rep))
+  (canon resource.drop $response (core func $builtin-response-drop))
+```
+
+The next chunk defines and instantiates the `$Main` module that implements the
+"meat" of the `$HttpServer` component (that implements the HTTP protocol). The
+imports of `$Main` allow it to call socket operations, manipulate `request` and
+`response` handles, and call the `$HttpGuest`'s `receive` function (passing a
+`request` handle created by `request-new` and receiving a `response` handle that
+can be dereferenced with `response-rep`). The `send` export of `$Main` is called
+recursively by the guest component during a call to `receive`. The final `elem`
+segment patches the `request` and `response` destructors which will also be
+called recursively during a call to `receive`.
+```wat
+  (core module $Main
+    (import "linkage-table" "ftbl" (table $ftbl 3 3 funcref))
+    (import "linkage-table" "receive" (func (param $handle i32) (result i32)))
+    (import "lowered" "socket-new" (func ... (result i32)))
+    (import "lowered" "socket-accept" (func (param $handle i32) ...))
+    ...
+    (import "builtin" "socket-drop" (func (param $handle i32)))
+    (import "builtin" "request-new" (func (param $rep i32) (result i32)))
+    (import "builtin" "request-rep" (func (param $handle i32) (result i32)))
+    (import "builtin" "request-drop" (func (param $handle i32)))
+    (import "builtin" "response-new" (func (param $rep i32) (result i32)))
+    (import "builtin" "response-rep" (func (param $handle i32) (result i32)))
+    (import "builtin" "response-drop" (func (param $handle i32)))
+    (func (export "send") (param $request i32) (result i32) ...)
+    ...
+    (func (export "serve") ...)
+    (func $request-dtor (param $rep i32) ...)
+    (func $response-dtor (param $rep i32) ...)
+    (elem (table $ftbl) (i32.const 0) func $request-dtor $response-dtor)
+  )
+  (core instance $main (instantiate $Main
+    (with "linkage-table" (instance $linkage-table))
+    (with "lowered" (instance
+      (export "socket-new" (func $lowered-socket-new))
+      (export "socket-accept" (func $lowered-socket-accept))
+      ...
+    ))
+    (with "builtin" (instance
+      (export "socket-drop" (func $builtin-socket-drop))
+      (export "request-new" (func $builtin-request-new))
+      (export "request-rep" (func $builtin-request-rep))
+      (export "request-drop" (func $builtin-request-drop))
+      (export "response-new" (func $builtin-response-new))
+      (export "response-rep" (func $builtin-response-rep))
+      (export "response-drop" (func $builtin-response-drop))
+    ))
+  ))
+  (func (export "serve") (canon lift (core func $main "serve") ...))
+```
+
+The next chunk imports and instantiates an arbitrary `$HttpGuest` component
+using the definitions above:
+```wat
+  (type $HttpGuest (component ...))
+  (import "guest" (component $Guest (type $HttpGuest)))
+  ...
+  (func $send (param "r" (own $request)) (result (own $response))
+    (canon lift (core func $main "send") ...)
+  )
+  (instance $guest (instantiate $Guest
+    (with "request" (type $request))
+    (with "response" (type $response))
+    ...
+    (with "send" (func $send))
+  ))
+```
+
+The final chunk closes the cycle between `$Main` and `$guest`'s exported
+`receive` function by lowering `receive` and then storing it as a `funcref` in
+the `table` of `funcref` contained by `linkage-table` that is called indirectly
+above at index `2`.
+```wat
+  (core func $lowered-receive
+    (canon lower (func $guest "receive") ...)
+  )
+  (core module $PatchLinkageTable
+    (import "linkage-table" "ftbl" (table $ftbl 3 3 funcref))
+    (import "lowered" "receive" (func $receive (param i32) (result i32)))
+    (elem (table $ftbl) (i32.const 2) func $receive)
+  )
+  (core instance (instantiate $PatchLinkageTable
+    (with "linkage-table" (instance $linkage-table))
+    (with "lowered" (instance (export "receive" (func $lowered-receive))))
+  ))
+)
+```
+
+The Component Model's validation rules assign `$HttpServer` the following
+component-level type which is `$SocketServer` extended with an additional import
+of an `$HttpGuest` component:
+```wat
+(type (component
+  (import "net" (instance $net
+    (export "socket" (type $Socket (sub resource)))
+    (export "[constructor]socket" (func ... (result (own $Socket))))
+    (export "[method]socket.accept" (func (param "self" (borrow $Socket)) ...))
+    ...
+  ))
+  (import "guest" (component
+    (import "request" (type $Request (sub resource)))
+    (import "response" (type $Response (sub resource)))
+    ...
+    (import "send" (func (param "r" (own $Request)) (result (own $Response))))
+    (export "receive" (func (param "r" (own $Request)) (result (own $Response))))
+  ))
+  (export "serve" (func))
+))
+```
+Looking at this type and using our imagination, we can think of `$HttpServer`
+as a donut with an `$HttpGuest`-shaped hole in the middle. Consequently, this
+kind of component composition is informally called **donut wrapping** when
+the parent component itself implements the child's imports and consumes the
+child's exports.
+
+If we'd like to "bind" `$HttpServer` to a particular `$HttpGuest` component, so
+that it can be directly instantiated by a `$SocketServer` host, one option is to
+bundle `$HttpServer` and the particular guest component into a single
+*grand*parent component:
+```wat
+(component $VirtualizedGuest
+  (import "net" (instance $net ...))
+  (component $HttpServer ...)
+  (component $SomeGuest ...)
+  (instance $composite (instantiate $HttpServer
+    (with "net" (instance $net))
+    (with "guest" (component $SomeGuest))
+  ))
+  (export "serve" (func $composite "serve"))
+)
+```
+
+Alternatively, as described in the previous section, to factor out the
+`$HttpServer` so that it can be explicitly shared by multiple guest bundles, we
+can convert the nested `$HttpServer` definition into an `import` that uses an
+`external-id` that is automatically interpreted by the host, e.g.:
+```wat
+(component $VirtualizedGuest'
+  (import "net" (instance $net ...))
+  (import "HTTP-server" (external-id "https://...") (component $HttpServer ...))
+  (component $SomeGuest ...)
+  (instance $composite (instantiate $HttpServer
+    (with "net" (instance $net))
+    (with "guest" (component $SomeGuest))
+  ))
+  (export "serve" (func $composite "serve"))
+)
+```
+
+This example demonstrates a fairly complex linking scenario that would be
+difficult, if not impossible, to achieve with traditional linking based on a
+single global namespace. Moreover, this example required no new specialized
+functionality from what was introduced in previous sections, which demonstrates
+the expressive power of decoupling lifting and lowering definitions from import,
+export, alias and instantiation definitions.
+
+When `$VirtualizedGuest` is instantiated and the exported `serve` function is
+called, control flow will transfer directly into `$Main`, then `$SomeGuest`'s
+internal module(s), then back into `$Main`, with all calls between `$Main` and
+`$SomeGuest` happening without context switches, system calls, or intermediate
+buffers. In a Docker Container setting, a similar degree of interposition can be
+achieved by injecting a [sidecar container] that proxies all incoming and
+outgoing network traffic but with much, much greater overhead.
+
+This concludes the walkthrough of the Component Model, not including the
+[concurrency support](Concurrency.md) introduced by the 0.3 Developer Preview
+release.
 
 ## WIT
 
@@ -1282,7 +1582,6 @@ the basis of a portable inside-and-outside-the-browser WebAssembly ecosystem.
 [`high-level`]: ../high-level
 [Released]: ../../README.md#developer-preview-releases
 [Linking Explainer]: Linking.md
-[Donut Wrapping]: Linking.md#higher-order-shared-nothing-linking-aka-donut-wrapping
 [Concurrency Explainer]: Concurrency.md
 [JS Explainer]: TODO
 [ESM-integration]: TODO#TODO
@@ -1308,6 +1607,9 @@ the basis of a portable inside-and-outside-the-browser WebAssembly ecosystem.
 [Module Specifier]: https://tc39.es/ecma262/#table-modulerequest-fields
 [Unicode Scalar Value]: https://unicode.org/glossary/#unicode_scalar_value
 [Capability-Based Security]: https://en.wikipedia.org/wiki/Capability-based_security
+[Virtualization]: https://en.wikipedia.org/wiki/Virtualization
+[HTTP Intermediary]: https://www.rfc-editor.org/info/rfc9110/#section-3.7
+[BSD Sockets]: https://en.wikipedia.org/wiki/Berkeley_sockets
 [Docker Compose]: https://docs.docker.com/compose/
 [Sidecar Container]: https://learn.microsoft.com/en-us/azure/architecture/patterns/sidecar
 [Import Map]: https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/script/type/importmap
