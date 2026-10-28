@@ -899,7 +899,7 @@ value type are:
 | `char`, `enum` | numeric, string |
 | `flags` | numeric, object |
 | `(option T)` | object, kinds of T |
-| `(own R)`, `(borrow R)` | resource `R` |
+| `(own R)`, `(borrow R)` | resource `R` (types that are `eq` are indistinguishable) |
 | `union` | union of kinds of all case payloads |
 | `stream`, `future`, `error-context` | *not allowed* |
 
