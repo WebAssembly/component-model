@@ -2942,7 +2942,7 @@ annotations trigger additional type-validation rules (listed in detail in
   the rules of its base name. All functions in an overload set must agree on
   `async`. Within an overload set, the functions with the same number of
   parameters must have a *distinguishing parameter index* `i`, where the types
-  of their `i`th parameters are pairwise [distinguishable](#union-types).
+  of their `i`th parameters are pairwise [distinguishable](#-union-types).
 
 The `valid semver` production (along with its `version core` and `pre-release`
 sub-productions) is as defined by the [Semantic Versioning 2.0] spec and is

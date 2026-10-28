@@ -296,7 +296,7 @@ Notes:
 * 🔧 for fixed-sized lists the length of the list must be larger than 0 to pass
   validation.
 * 💍 Validation of `union` requires the case payloads to be pairwise
-  [distinguishable](Text.md#specialized-value-types).
+  [distinguishable](Text.md#-union-types).
 * Validation requires that, for every `defvaltype` `t`, the worst-case in-memory
   element size is less than 2<sup>28</sup>, as defined by `elem_size` in the
   [Canonical ABI](CanonicalABI.md#element-size).

@@ -1781,7 +1781,7 @@ variant-case ::= id
 
 💍 A `union` statement defines a new type which is equivalent to a
 `variant` where every case has a payload type and the payload types are all
-[distinguishable](Text.md#specialized-value-types).
+[distinguishable](Text.md#-union-types).
 
 This allows bindings for dynamically-typed languages such as JS or Python to
 represent a union as just its payload (dropping the case name).
