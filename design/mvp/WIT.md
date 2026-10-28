@@ -1559,7 +1559,7 @@ typedef-item ::= resource-item
                | record-item
                | flags-items
                | enum-items
-               | union-items 💍
+               | union-item 💍
                | type-item
 
 func-item ::= id overload-suffix? ':' func-type ';'
@@ -1801,7 +1801,7 @@ union blob-part {
 Specifically the structure of this is:
 
 ```ebnf
-union-items ::= 'union' id '{' union-cases '}'
+union-item ::= 'union' id '{' union-cases '}'
 
 union-cases ::= union-case
               | union-case ',' union-cases?
