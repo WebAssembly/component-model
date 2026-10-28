@@ -322,7 +322,7 @@ future features of WIT and the Component Model.)
 [Binary Format]: Binary.md
 [WIT]: WIT.md
 [`external-id`]: Explainer.md#import-and-export-definitions
-[ESM-integration]: Explainer.md#esm-integration
+[ESM-integration]: JS-Reference.md#webassembly-esm-integration
 
 [WebAssembly/tool-conventions]: https://github.com/WebAssembly/tool-conventions
 [WebAssembly Object File]: https://github.com/WebAssembly/tool-conventions/blob/main/Linking.md

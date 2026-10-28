@@ -1,5 +1,27 @@
 # FAQ
 
+### How do WebAssembly Components relate to Web Components?
+
+[Web Components](https://developer.mozilla.org/en-US/docs/Web/API/Web_components)
+use a particular set of web APIs (like `CustomElementRegistry.define`) to
+define highly reusable DOM custom elements. WebAssembly Components contain
+WebAssembly code that can import and call arbitrary APIs through
+statically-declared, high-level, typed interfaces.
+
+Web Components are almost always implemented in JS today. However, using the
+[JS API](../mvp/JS-Explainer.md), a WebAssembly Component could *implement* a
+Web Component by importing and calling the same web APIs as JS, like
+`CustomElementRegistry.define`, thereby allowing *any* language to natively
+implement a Web Component (without JS glue code). Thus, a WebAssembly Component
+is rather like a JS Module (ESM): a publishable, distributable unit of code
+that may or may not implement a Web Component.
+
+See also these [slides](https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8/edit?slide=id.gced688a2b6_0_9#slide=id.gced688a2b6_0_9)
+for a rationale on the naming of WebAssembly Components.
+
+Whenever there is a chance of ambiguity, the full WebAssembly (or Wasm) Component
+name should be used.
+
 ### How does WASI relate to the Component Model?
 
 [WASI] is layered on top of the Component Model, with the Component Model

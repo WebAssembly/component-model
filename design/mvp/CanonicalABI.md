@@ -151,10 +151,8 @@ class ComponentInstance:
 Components are always instantiated in the context of a *store* (analogous to the
 Core WebAssembly [`store`]) which is saved immutably in the instance's `store`
 field. The `Store` class is defined below as part of the [Embedding](#embedding)
-interface and logically contains all the component instances loaded by the host
-that can interact with each other. For example, in a browser, all component
-instances in the same tab that were created via `WebAssembly.instantiate` or
-[ESM-integration] would go into the same store.
+interface. The [JavaScript Embedding] defines each top-level component instance to go into
+its own store. This allows them to have a separate lock down state.
 
 The other fields of `ComponentInstance` are described below as they are used.
 
@@ -4980,7 +4978,6 @@ def canon_thread_available_parallelism():
 [Type Definitions]: Explainer.md#type-definitions
 [Component Invariant]: Explainer.md#component-invariants
 [JavaScript Embedding]: Explainer.md#JavaScript-embedding
-[ESM-integration]: Explainer.md#esm-integration
 [Adapter Functions]: FutureFeatures.md#custom-abis-via-adapter-functions
 [Shared-Everything Dynamic Linking]: examples/SharedEverythingDynamicLinking.md
 [Concurrency Explainer]: Concurrency.md
