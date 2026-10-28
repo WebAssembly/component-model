@@ -875,37 +875,76 @@ cases. This could be relaxed in the future to allow an empty list of cases, with
 the empty `(variant)` effectively serving as an [empty type] and indicating
 unreachability.
 
-##### Union types
+##### 💍 Union types
 
-💍 A `union` is a `variant` whose case labels can be dropped by bindings for
-dynamically-typed languages like JS and Python. They instead can pick the case
-by inspecting the dynamic type of a source-language value. To keep this
-inspection unambiguous (preserving that values round-trip through the source
-language without loss), validation requires every case of the `union` to have
-a payload and for every pair of cases to be *distinguishable*. Bindings for
-other languages can treat a `union` like a `variant`.
+A `union` is a `variant` whose cases can be distinguished from each other by
+type. This effectively makes the case names optional in bindings, and enables
+dynamically-typed languages like JS and Python to pick a case by inspecting the
+runtime type of a source-language value. Statically-typed languages can choose
+to represent `union`s like `variant`s (with explicit case names) or as simple
+unions of types if their type system permits (e.g. `string | number`).
 
-Two value types are *distinguishable* if their sets of *distinguishable kinds*
-are disjoint, where the distinguishable kinds of a value type are:
+To make runtime case-selection unambiguous, validation requires every case of
+a `union` to have a payload, and for every pair of cases to be
+*distinguishable*. Two value types are *distinguishable* if their sets of
+*distinguishable kinds* are disjoint, where the distinguishable kinds of each
+value type are:
 
 | Type | Distinguishable kinds |
 | ---- | --------------------- |
-| `bool`, `s8`, `u8`, `s16`, `u16`, `s32`, `u32`, `s64`, `u64`, `f32`, `f64` | numeric |
-| `char` | numeric, string |
-| `string`, `enum` | string |
+| `bool`, `s8`, `s16`, `s32`, `s64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64` | numeric |
+| `string` | string |
+| `record`, `variant`, `result`, `map` | object |
 | `list`, `tuple` | list |
-| `record`, `variant`, `flags`, `result`, `map` | object |
+| `char`, `enum` | numeric, string |
+| `flags` | numeric, object |
+| `(option T)` | object, kinds of T |
 | `(own R)`, `(borrow R)` | resource `R` |
-| `stream` | stream |
-| `union` | the kinds of every case payload |
+| `union` | union of kinds of all case payloads |
+| `stream`, `future`, `error-context` | *not allowed* |
 
-A `union`, or any type without a distinguishable kind, is rejected as a case
-payload.
+<details>
+<summary>Rationale for distinguishable kinds</summary>
+
+- `bool` is considered "numeric" because some languages treat `bool` as a
+  subtype of some numeric type (e.g. Python).
+- `char` is considered both "numeric" and "string" because some languages
+  idiomatically represent "single characters" as numeric types (e.g.
+  C++/Java/Rust `char`, Go `rune`) while others idiomatically represent
+  characters as short strings (e.g. JavaScript, Python).
+- `enum` is considered both "numeric" and "string" because enums may be
+  idiomatically represented in various languages as numeric types, or strings,
+  or both.
+- `flags` is considered both "numeric" and "object" because flags may be
+  represented in languages as either a number or a record with entries for each
+  flag.
+- `option` picks up "object" in addition to the kinds of its contained type
+  because some languages are expected to "box" optional values while others are
+  not.
+
+</details>
+
+Some types are not allowed to appear as a union case even if they have
+distinguishability rules defined:
+
+- `union` is disallowed because it would require callers (and therefore
+  bindings) to work out arbitrarily-deeply-nested union cases.
+- `option` is disallowed because `option`s are expected to manifest in various
+  languages in union-like ways (e.g. `string | undefined`), and therefore cause
+  the same problems as `union` itself. Furthermore, the "none" case has no
+  payload. If you want an optional union, represent it as
+  `(option (union ...))`.
+- `result` is disallowed because many languages are expected to translate the
+  "error" case to a thrown exception, and like `option`, the "ok" and "error"
+  cases may not have payloads. If a function that returns a union may fail, the
+  return should be represented as `(result (union ...))`.
+- All types without distinguishable kinds are naturally rejected.
 
 Imported resource types are assumed to be distinct from each other. However,
 a component may be instantiated such that the resource types are not in fact
-distinguishable. In this case, the embedder must pick the first matching case
-in declaration order. The round-trip is lossy in this case, but well-defined.
+distinguishable at runtime. In this case, the embedder must pick the first
+matching case in declaration order. The round-trip is lossy in this case, but
+well-defined.
 
 #### Definition types
 
