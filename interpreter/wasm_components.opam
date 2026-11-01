@@ -1,0 +1,20 @@
+opam-version: "2.0"
+maintainer: "Lucy Menon <semiotics@ccs.neu.edu>"
+authors: "Lucy Menon <semiotics@ccs.neu.edu>"
+homepage: "https://github.com/WebAssembly/component-model"
+bug-reports: "https://github.com/WebAssembly/component-model/issues"
+license: "Apache-2.0"
+dev-repo: "git+https://github.com/WebAssembly/component-model.git"
+build: [
+  ["dune" "build" "-p" name "-j" jobs
+                            "@install"
+                            "@doc" {with-doc}
+  "@runtest" {with-test} ]
+]
+depends: [
+  "ocaml" {>= "4.08.0" & < "4.13"}
+  "dune" {>= "2.9.1"}
+  "wasm" {>= "1.1.1"}
+]
+synopsis:
+    "Library to read and write WebAssembly (Wasm) files and manipulate their AST"
