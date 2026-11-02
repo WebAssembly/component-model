@@ -2609,6 +2609,8 @@ def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], fi, c):
   f = ftbl.get(fi)
   assert(ft == CoreFuncType(['i32'], []) or ft == CoreFuncType(['i64'], []))
   trap_if(f.t != ft)
+  if not DETERMINISTIC_PROFILE and random.randint(0,1):
+    return [-1]
   def thread_func():
     [] = call_and_trap_on_throw(f.callee, [c])
     task.unregister_thread(new_thread)

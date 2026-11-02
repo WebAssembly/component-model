@@ -4648,7 +4648,8 @@ Calling `$new_indirect` invokes the following function which reads a `funcref`
 from `$ftbl` (trapping if out-of-bounds, null or the wrong type), creates a new
 suspended thread that will call the `funcref` passing the closure parameter `$c`
 when resumed, and returns the index of the new thread in the current component
-instance's `threads` table.
+instance's `threads` table. Alternatively, `-1` may be nondeterministically
+returned by the host in case of resource exhaustion.
 ```python
 @dataclass
 class CoreFuncRef:
@@ -4661,6 +4662,8 @@ def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], fi, c):
   f = ftbl.get(fi)
   assert(ft == CoreFuncType(['i32'], []) or ft == CoreFuncType(['i64'], []))
   trap_if(f.t != ft)
+  if not DETERMINISTIC_PROFILE and random.randint(0,1):
+    return [-1]
   def thread_func():
     [] = call_and_trap_on_throw(f.callee, [c])
     task.unregister_thread(new_thread)
