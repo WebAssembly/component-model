@@ -1,0 +1,158 @@
+;; A destructor called by `resource.drop` runs on a fresh thread, so its
+;; `context.get` is always zero on entry, even when the destructor is
+;; reentered recursively or another thread of its instance is blocked.
+
+;; The destructor recursively reenters itself via donut wrapping
+(component
+  (core module $Indirect
+    (table (export "tbl") 1 funcref)
+    (func (export "dtor") (param i32)
+      (call_indirect (param i32) (local.get 0) (i32.const 0))))
+  (core instance $indirect (instantiate $Indirect))
+  (type $R (resource (rep i32) (dtor (core func $indirect "dtor"))))
+  (canon resource.new $R (core func $resource.new))
+  (canon context.get i32 0 (core func $context.get))
+  (canon context.set i32 0 (core func $context.set))
+
+  (component $C
+    (import "r" (type $R (sub resource)))
+    (canon resource.drop $R (core func $resource.drop))
+    (func (export "drop") (param "r" (own $R)) (canon lift (core func $resource.drop))))
+  (instance $c (instantiate $C (with "r" (type $R))))
+  (canon lower (func $c "drop") (core func $drop))
+
+  (core module $M
+    (import "" "tbl" (table 1 funcref))
+    (import "" "resource.new" (func $resource.new (param i32) (result i32)))
+    (import "" "drop" (func $drop (param i32)))
+    (import "" "context.get" (func $context.get (result i32)))
+    (import "" "context.set" (func $context.set (param i32)))
+    ;; dtor(n) sets its context to n+1, then (if n > 0) has $C drop a new
+    ;; resource with rep n-1, which calls back into dtor(n-1)
+    (func $dtor (param $n i32)
+      (if (call $context.get) (then unreachable))
+      (call $context.set (i32.add (local.get $n) (i32.const 1)))
+      (if (local.get $n) (then
+        (call $drop (call $resource.new (i32.sub (local.get $n) (i32.const 1))))))
+      (if (i32.ne (call $context.get) (i32.add (local.get $n) (i32.const 1)))
+        (then unreachable)))
+    (elem (i32.const 0) $dtor)
+    (func (export "run") (param $n i32)
+      (call $context.set (i32.const 100))
+      (call $drop (call $resource.new (local.get $n)))
+      (if (i32.ne (call $context.get) (i32.const 100)) (then unreachable)))
+  )
+  (core instance $m (instantiate $M (with "" (instance
+    (export "tbl" (table $indirect "tbl"))
+    (export "resource.new" (func $resource.new))
+    (export "drop" (func $drop))
+    (export "context.get" (func $context.get))
+    (export "context.set" (func $context.set))))))
+  (func (export "run") (param "n" u32) (canon lift (core func $m "run")))
+)
+(assert_return (invoke "run" (u32.const 3)))
+
+;; The destructor is called while another thread of its instance is blocked
+;; inside an async callback, holding the instance's exclusive lock
+(component
+  (component $P
+    (core module $Memory (memory (export "mem") 1))
+    (core instance $memory (instantiate $Memory))
+    (type $FT (future))
+    (canon context.get i32 0 (core func $context.get))
+    (canon context.set i32 0 (core func $context.set))
+    (canon future.read $FT (memory (core memory $memory "mem")) (core func $future.read))
+    (canon task.return (core func $task.return))
+    (core module $M
+      (import "" "context.get" (func $context.get (result i32)))
+      (import "" "context.set" (func $context.set (param i32)))
+      (import "" "future.read" (func $future.read (param i32 i32) (result i32)))
+      (import "" "task.return" (func $task.return))
+      (func (export "dtor") (param i32)
+        (if (call $context.get) (then unreachable))
+        (call $context.set (i32.const 2)))
+      ;; blocks (holding the exclusive lock) until the caller writes $fut
+      (func (export "hold") (param $fut i32) (result i32)
+        (call $context.set (i32.const 1))
+        (if (call $future.read (local.get $fut) (i32.const 0)) (then unreachable))
+        (if (i32.ne (call $context.get) (i32.const 1)) (then unreachable))
+        (call $task.return)
+        (i32.const 0 (; EXIT ;)))
+      (func (export "cb") (param i32 i32 i32) (result i32) unreachable)
+    )
+    (core instance $m (instantiate $M (with "" (instance
+      (export "context.get" (func $context.get))
+      (export "context.set" (func $context.set))
+      (export "future.read" (func $future.read))
+      (export "task.return" (func $task.return))))))
+    (type $R (resource (rep i32) (dtor (core func $m "dtor"))))
+    (export $R' "r" (type $R))
+    (canon resource.new $R (core func $resource.new))
+    (func (export "make") (param "rep" u32) (result (own $R'))
+      (canon lift (core func $resource.new)))
+    (func (export "hold") async (param "fut" $FT)
+      (canon lift (core func $m "hold") async (callback (core func $m "cb"))))
+  )
+
+  (component $D
+    (import "r" (type $R (sub resource)))
+    (type $FT (future))
+    (import "make" (func $make (param "rep" u32) (result (own $R))))
+    (import "hold" (func $hold async (param "fut" $FT)))
+    (core module $Memory (memory (export "mem") 1))
+    (core instance $memory (instantiate $Memory))
+    (canon lower (func $make) (core func $make))
+    (canon lower (func $hold) async (core func $hold))
+    (canon resource.drop $R (core func $resource.drop))
+    (canon future.new $FT (core func $future.new))
+    (canon future.write $FT (memory (core memory $memory "mem")) (core func $future.write))
+    (canon waitable-set.new (core func $waitable-set.new))
+    (canon waitable.join (core func $waitable.join))
+    (canon waitable-set.wait (memory (core memory $memory "mem")) (core func $waitable-set.wait))
+    (core module $M
+      (import "" "make" (func $make (param i32) (result i32)))
+      (import "" "hold" (func $hold (param i32) (result i32)))
+      (import "" "resource.drop" (func $resource.drop (param i32)))
+      (import "" "future.new" (func $future.new (result i64)))
+      (import "" "future.write" (func $future.write (param i32 i32) (result i32)))
+      (import "" "waitable-set.new" (func $waitable-set.new (result i32)))
+      (import "" "waitable.join" (func $waitable.join (param i32 i32)))
+      (import "" "waitable-set.wait" (func $waitable-set.wait (param i32 i32) (result i32)))
+      (func (export "run") (result i32)
+        (local $r i32) (local $fut i64) (local $ret i32) (local $ws i32)
+        (local.set $r (call $make (i32.const 0)))
+        (local.set $fut (call $future.new))
+        (local.set $ret (call $hold (i32.wrap_i64 (local.get $fut))))
+        (if (i32.ne (i32.and (local.get $ret) (i32.const 0xf)) (i32.const 1 (; STARTED ;)))
+          (then unreachable))
+        ;; "hold" is now blocked, so this dtor call overlaps it
+        (call $resource.drop (local.get $r))
+        ;; unblock "hold" and wait for it to finish its checks
+        (if (call $future.write (i32.wrap_i64 (i64.shr_u (local.get $fut) (i64.const 32))) (i32.const 0))
+          (then unreachable))
+        (local.set $ws (call $waitable-set.new))
+        (call $waitable.join (i32.shr_u (local.get $ret) (i32.const 4)) (local.get $ws))
+        (if (i32.ne (call $waitable-set.wait (local.get $ws) (i32.const 0)) (i32.const 1 (; SUBTASK ;)))
+          (then unreachable))
+        (i32.const 42))
+    )
+    (core instance $m (instantiate $M (with "" (instance
+      (export "make" (func $make))
+      (export "hold" (func $hold))
+      (export "resource.drop" (func $resource.drop))
+      (export "future.new" (func $future.new))
+      (export "future.write" (func $future.write))
+      (export "waitable-set.new" (func $waitable-set.new))
+      (export "waitable.join" (func $waitable.join))
+      (export "waitable-set.wait" (func $waitable-set.wait))))))
+    (func (export "run") async (result u32) (canon lift (core func $m "run")))
+  )
+
+  (instance $p (instantiate $P))
+  (instance $d (instantiate $D
+    (with "r" (type $p "r"))
+    (with "make" (func $p "make"))
+    (with "hold" (func $p "hold"))))
+  (func (export "run") (alias export $d "run"))
+)
+(assert_return (invoke "run") (u32.const 42))
