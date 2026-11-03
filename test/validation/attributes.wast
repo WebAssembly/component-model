@@ -87,11 +87,11 @@
 (assert_malformed
   (component quote
     "(import \"a\" (implements \"a:b/c\") (implements \"a:b/c\") (instance))")
-  "unexpected token")
+  "duplicate `implements` attribute")
 (assert_malformed
   (component quote
     "(import \"a\" (external-id \"x\") (external-id \"y\") (func))")
-  "unexpected token")
+  "duplicate `external-id` attribute")
 
 ;; an `implements` value must be an interface name (`external-id` has no such
 ;; restriction):
