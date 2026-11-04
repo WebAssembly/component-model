@@ -696,25 +696,25 @@ class Table:
 
 class ResourceHandle:
   rt: ResourceType
-  rep: int
+  rep_val: int
   own: bool
   borrow_scope: Optional[Task]
   num_lends: int
 
-  def __init__(self, rt, rep, own, borrow_scope = None):
+  def __init__(self, rt, rep_val, own, borrow_scope = None):
     self.rt = rt
-    self.rep = rep
+    self.rep_val = rep_val
     self.own = own
     self.borrow_scope = borrow_scope
     self.num_lends = 0
 
 class ResourceType(Type):
-  impl: ComponentInstance
+  impl_inst: ComponentInstance
   rep: Literal['i32', 'i64']
   dtor: Optional[Callable]
 
-  def __init__(self, impl, rep, dtor = None):
-    self.impl = impl
+  def __init__(self, impl_inst, rep, dtor = None):
+    self.impl_inst = impl_inst
     self.rep = rep
     self.dtor = dtor
 
@@ -1131,7 +1131,7 @@ def contains(t, p):
   match t:
     case None:
       return False
-    case PrimValType() | OwnType() | BorrowType():
+    case PrimValType() | FlagsType() | OwnType() | BorrowType() | ErrorContextType():
       return p(t)
     case ListType(u) | StreamType(u) | FutureType(u):
       return p(t) or contains(u, p)
@@ -1140,7 +1140,7 @@ def contains(t, p):
     case VariantType(cases):
       return p(t) or any(contains(c.t, p) for c in cases)
     case FuncType():
-      return any(p(u) for u in t.param_types() + t.result_type())
+      return any(contains(u, p) for u in t.param_types() + t.result_type())
     case _:
       assert(False)
 
@@ -1210,11 +1210,14 @@ def alignment_flags(labels):
   if n <= 16: return 2
   return 4
 
-def alignment_borrow(cx, t):
-  if cx.inst is t.rt.impl and cx.direction == 'lower':
-    return ptr_size(t.rt.rep)
+def alignment_borrow(cx, borrowt):
+  if pass_rep_not_handle(cx, borrowt):
+    return ptr_size(borrowt.rt.rep)
   else:
     return 4
+
+def pass_rep_not_handle(cx, borrowt):
+  return cx.inst is borrowt.rt.impl_inst and cx.direction == 'lower'
 
 ## Element Size
 
@@ -1272,9 +1275,9 @@ def elem_size_flags(labels):
   if n <= 16: return 2
   return 4
 
-def elem_size_borrow(cx, t):
-  if cx.inst is t.rt.impl and cx.direction == 'lower':
-    return ptr_size(t.rt.rep)
+def elem_size_borrow(cx, borrowt):
+  if pass_rep_not_handle(cx, borrowt):
+    return ptr_size(borrowt.rt.rep)
   else:
     return 4
 
@@ -1451,21 +1454,21 @@ def unpack_flags_from_int(i, labels):
     i >>= 1
   return record
 
-def lift_own(cx, i, t):
+def lift_own(cx, i, ownt):
   h = cx.inst.handles.remove(i)
   trap_if(not isinstance(h, ResourceHandle))
-  trap_if(h.rt is not t.rt)
+  trap_if(h.rt is not ownt.rt)
   trap_if(h.num_lends != 0)
   trap_if(not h.own)
-  return h.rep
+  return h.rep_val
 
-def lift_borrow(cx, i, t):
+def lift_borrow(cx, i, borrowt):
   assert(isinstance(cx.borrow_scope, Subtask))
   h = cx.inst.handles.get(i)
   trap_if(not isinstance(h, ResourceHandle))
-  trap_if(h.rt is not t.rt)
+  trap_if(h.rt is not borrowt.rt)
   cx.borrow_scope.add_lender(h)
-  return h.rep
+  return h.rep_val
 
 def lift_stream(cx, i, t):
   return lift_async_value(ReadableStreamEnd, cx, i, t)
@@ -1509,7 +1512,7 @@ def store(cx, v, t, ptr):
     case RecordType(fields) : store_record(cx, v, ptr, fields)
     case VariantType(cases) : store_variant(cx, v, ptr, cases)
     case FlagsType(labels)  : store_flags(cx, v, ptr, labels)
-    case OwnType()          : store_int(cx, lower_own(cx, v, t), ptr, 4)
+    case OwnType()          : store_own(cx, v, ptr, t)
     case BorrowType()       : store_borrow(cx, v, ptr, t)
     case StreamType(t)      : store_int(cx, lower_stream(cx, v, t), ptr, 4)
     case FutureType(t)      : store_int(cx, lower_future(cx, v, t), ptr, 4)
@@ -1742,19 +1745,22 @@ def pack_flags_into_int(v, labels):
     shift += 1
   return i
 
-def lower_own(cx, rep, t):
-  h = ResourceHandle(t.rt, rep, own = True)
+def store_own(cx, rep_val, ptr, ownt):
+  store_int(cx, add_own(cx, rep_val, ownt), ptr, 4)
+
+def add_own(cx, rep_val, ownt):
+  h = ResourceHandle(ownt.rt, rep_val, own = True)
   return cx.inst.handles.add(h)
 
-def store_borrow(cx, rep, ptr, t):
-  if cx.inst is t.rt.impl:
-    store_int(cx, rep, ptr, ptr_size(t.rt.rep))
+def store_borrow(cx, rep_val, ptr, borrowt):
+  if pass_rep_not_handle(cx, borrowt):
+    store_int(cx, rep_val, ptr, ptr_size(borrowt.rt.rep))
   else:
-    store_int(cx, add_borrow(cx, rep, t), ptr, 4)
+    store_int(cx, add_borrow(cx, rep_val, borrowt), ptr, 4)
 
-def add_borrow(cx, rep, t):
+def add_borrow(cx, rep_val, borrowt):
   assert(isinstance(cx.borrow_scope, Task))
-  h = ResourceHandle(t.rt, rep, own = False, borrow_scope = cx.borrow_scope)
+  h = ResourceHandle(borrowt.rt, rep_val, own = False, borrow_scope = cx.borrow_scope)
   h.borrow_scope.num_borrows += 1
   return cx.inst.handles.add(h)
 
@@ -1859,9 +1865,9 @@ def join(a, b):
   if (a == 'i32' and b == 'f32') or (a == 'f32' and b == 'i32'): return 'i32'
   return 'i64'
 
-def flatten_borrow(cx, t):
-  if cx.inst is t.rt.impl and cx.direction == 'lower':
-    return [t.rt.rep]
+def flatten_borrow(cx, borrowt):
+  if pass_rep_not_handle(cx, borrowt):
+    return [borrowt.rt.rep]
   else:
     return ['i32']
 
@@ -2000,7 +2006,7 @@ def lower_flat(cx, v, t):
     case RecordType(fields) : return lower_flat_record(cx, v, fields)
     case VariantType(cases) : return lower_flat_variant(cx, v, cases)
     case FlagsType(labels)  : return lower_flat_flags(v, labels)
-    case OwnType()          : return [lower_own(cx, v, t)]
+    case OwnType()          : return lower_flat_own(cx, v, t)
     case BorrowType()       : return lower_flat_borrow(cx, v, t)
     case StreamType(t)      : return [lower_stream(cx, v, t)]
     case FutureType(t)      : return [lower_future(cx, v, t)]
@@ -2055,11 +2061,14 @@ def lower_flat_flags(v, labels):
   assert(0 < len(labels) <= 32)
   return [pack_flags_into_int(v, labels)]
 
-def lower_flat_borrow(cx, rep, t):
-  if cx.inst is t.rt.impl:
-    return [rep]
+def lower_flat_own(cx, rep_val, ownt):
+  return [add_own(cx, rep_val, ownt)]
+
+def lower_flat_borrow(cx, rep_val, borrowt):
+  if pass_rep_not_handle(cx, borrowt):
+    return [rep_val]
   else:
-    return [add_borrow(cx, rep, t)]
+    return [add_borrow(cx, rep_val, borrowt)]
 
 ## Lifting and Lowering Values
 
@@ -2259,10 +2268,10 @@ def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValT
 
 ### `canon resource.new`
 
-def canon_resource_new(rt, rep):
+def canon_resource_new(rt, rep_val):
   inst = current_instance()
   trap_if(not inst.may_leave)
-  h = ResourceHandle(rt, rep, own = True)
+  h = ResourceHandle(rt, rep_val, own = True)
   i = inst.handles.add(h)
   return [i]
 
@@ -2280,10 +2289,10 @@ def canon_resource_drop(rt, i):
     opts = CanonicalOptions(async_ = False)
     ft = FuncType([], [], async_ = False)
     if rt.dtor is not None:
-      dtor = lambda _: rt.dtor([h.rep])
+      dtor = lambda _: rt.dtor([h.rep_val])
     else:
       dtor = lambda _: []
-    callee = inst.store.lift(dtor, ft, opts, rt.impl)
+    callee = inst.store.lift(dtor, ft, opts, rt.impl_inst)
     caller = inst.store.lower(callee, ft, opts, inst)
     caller([])
   else:
@@ -2293,10 +2302,11 @@ def canon_resource_drop(rt, i):
 ### `canon resource.rep`
 
 def canon_resource_rep(rt, i):
-  h = current_instance().handles.get(i)
+  inst = current_instance()
+  h = inst.handles.get(i)
   trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not rt)
-  return [h.rep]
+  return [h.rep_val]
 
 ### 🔀 `canon context.get`
 

@@ -727,7 +727,7 @@ def test_i64_borrows():
     h2 = int.from_bytes(other_heap.memory[ptr+8 : ptr+12], 'little')
     assert(other_heap.memory[ptr+12] == 8)
     for h,rep in zip([h0, h1, h2], reps):
-      assert(other_inst.handles.get(h).rep == rep)
+      assert(other_inst.handles.get(h).rep_val == rep)
       [] = canon_resource_drop(rt, h)
     return []
   lift_and_run(other_opts, other_inst, ft, core_other, on_start, lambda _: ())

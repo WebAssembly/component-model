@@ -1181,21 +1181,21 @@ The `ResourceHandle` class defines the elements of the component instance's
 ```python
 class ResourceHandle:
   rt: ResourceType
-  rep: int
+  rep_val: int
   own: bool
   borrow_scope: Optional[Task]
   num_lends: int
 
-  def __init__(self, rt, rep, own, borrow_scope = None):
+  def __init__(self, rt, rep_val, own, borrow_scope = None):
     self.rt = rt
-    self.rep = rep
+    self.rep_val = rep_val
     self.own = own
     self.borrow_scope = borrow_scope
     self.num_lends = 0
 ```
-The `rt` and `rep` fields of `ResourceHandle` store the resource type and
-representation of the resource, where `rep` is a core value of type `rt.rep`
-(defined below).
+The `rt` and `rep_val` fields of `ResourceHandle` store the resource type and
+representation value of the resource (originally passed to the `resource.new`
+call that created the resource).
 
 The `own` field indicates whether this element was created from an `own` type
 (or, if false, a `borrow` type).
@@ -1217,17 +1217,18 @@ the `rt` field of `ResourceHandle` (above) and thus resource type equality is
 *not* defined structurally (on the contents of `ResourceType`).
 ```python
 class ResourceType(Type):
-  impl: ComponentInstance
+  impl_inst: ComponentInstance
   rep: Literal['i32', 'i64']
   dtor: Optional[Callable]
 
-  def __init__(self, impl, rep, dtor = None):
-    self.impl = impl
+  def __init__(self, impl_inst, rep, dtor = None):
+    self.impl_inst = impl_inst
     self.rep = rep
     self.dtor = dtor
 ```
 The `rep` field stores the core value type given by the `(rep ...)` immediate
-of the `resource` type definition.
+of the `resource` type definition. The `impl_inst` field stores the component
+instance that generated this resource type.
 
 
 ### Waitable State
@@ -1979,7 +1980,7 @@ def contains(t, p):
   match t:
     case None:
       return False
-    case PrimValType() | OwnType() | BorrowType():
+    case PrimValType() | FlagsType() | OwnType() | BorrowType() | ErrorContextType():
       return p(t)
     case ListType(u) | StreamType(u) | FutureType(u):
       return p(t) or contains(u, p)
@@ -1988,7 +1989,7 @@ def contains(t, p):
     case VariantType(cases):
       return p(t) or any(contains(c.t, p) for c in cases)
     case FuncType():
-      return any(p(u) for u in t.param_types() + t.result_type())
+      return any(contains(u, p) for u in t.param_types() + t.result_type())
     case _:
       assert(False)
 ```
@@ -2090,11 +2091,14 @@ when a `(borrow $R)` handle is lowered into the component that defined `$R`, the
 resource's representation value is passed instead of the `i32` handle index and
 thus alignment depends on the resource's `(rep $t)`.
 ```python
-def alignment_borrow(cx, t):
-  if cx.inst is t.rt.impl and cx.direction == 'lower':
-    return ptr_size(t.rt.rep)
+def alignment_borrow(cx, borrowt):
+  if pass_rep_not_handle(cx, borrowt):
+    return ptr_size(borrowt.rt.rep)
   else:
     return 4
+
+def pass_rep_not_handle(cx, borrowt):
+  return cx.inst is borrowt.rt.impl_inst and cx.direction == 'lower'
 ```
 
 
@@ -2165,9 +2169,9 @@ def elem_size_flags(labels):
   if n <= 16: return 2
   return 4
 
-def elem_size_borrow(cx, t):
-  if cx.inst is t.rt.impl and cx.direction == 'lower':
-    return ptr_size(t.rt.rep)
+def elem_size_borrow(cx, borrowt):
+  if pass_rep_not_handle(cx, borrowt):
+    return ptr_size(borrowt.rt.rep)
   else:
     return 4
 ```
@@ -2428,16 +2432,16 @@ component.  The lifting operation fails if unique ownership of the handle isn't
 possible, for example if the index was actually a `borrow` or if the `own`
 handle is currently being lent out as borrows.
 ```python
-def lift_own(cx, i, t):
+def lift_own(cx, i, ownt):
   h = cx.inst.handles.remove(i)
   trap_if(not isinstance(h, ResourceHandle))
-  trap_if(h.rt is not t.rt)
+  trap_if(h.rt is not ownt.rt)
   trap_if(h.num_lends != 0)
   trap_if(not h.own)
-  return h.rep
+  return h.rep_val
 ```
 The abstract lifted value for handle types is currently just the internal
-resource representation `i32`, which is kept opaque from the receiving
+resource representation value, which is kept opaque from the receiving
 component (it's stored in the `handles` table and only accessed indirectly via
 index). (This assumes that resource representations are immutable. If
 representations were to become mutable, the address of the mutable cell would
@@ -2447,13 +2451,13 @@ In contrast to `own`, `borrow` handles are lifted by reading the representation
 from the source handle, leaving the source handle intact in the current
 component instance's `handles` table:
 ```python
-def lift_borrow(cx, i, t):
+def lift_borrow(cx, i, borrowt):
   assert(isinstance(cx.borrow_scope, Subtask))
   h = cx.inst.handles.get(i)
   trap_if(not isinstance(h, ResourceHandle))
-  trap_if(h.rt is not t.rt)
+  trap_if(h.rt is not borrowt.rt)
   cx.borrow_scope.add_lender(h)
-  return h.rep
+  return h.rep_val
 ```
 The `Subtask.add_lender` participates in the enforcement of the dynamic borrow
 rules, which keep the source handle alive until the end of the call (as a
@@ -2521,7 +2525,7 @@ def store(cx, v, t, ptr):
     case RecordType(fields) : store_record(cx, v, ptr, fields)
     case VariantType(cases) : store_variant(cx, v, ptr, cases)
     case FlagsType(labels)  : store_flags(cx, v, ptr, labels)
-    case OwnType()          : store_int(cx, lower_own(cx, v, t), ptr, 4)
+    case OwnType()          : store_own(cx, v, ptr, t)
     case BorrowType()       : store_borrow(cx, v, ptr, t)
     case StreamType(t)      : store_int(cx, lower_stream(cx, v, t), ptr, 4)
     case FutureType(t)      : store_int(cx, lower_future(cx, v, t), ptr, 4)
@@ -2867,33 +2871,40 @@ def pack_flags_into_int(v, labels):
   return i
 ```
 
-Finally, `own` and `borrow` handles are lowered by initializing new handle
-elements in the current component instance's `handles` table. The increment of
-`num_borrows` is complemented by a decrement in `canon_resource_drop` and
-ensures that all borrowed handles are dropped before the end of the task.
+Owned handles are lowered by initializing new handle elements in the current
+component instance's `handles` table and using the `i32` index as the lowered
+value.
 ```python
-def lower_own(cx, rep, t):
-  h = ResourceHandle(t.rt, rep, own = True)
+def store_own(cx, rep_val, ptr, ownt):
+  store_int(cx, add_own(cx, rep_val, ownt), ptr, 4)
+
+def add_own(cx, rep_val, ownt):
+  h = ResourceHandle(ownt.rt, rep_val, own = True)
   return cx.inst.handles.add(h)
+```
 
-def store_borrow(cx, rep, ptr, t):
-  if cx.inst is t.rt.impl:
-    store_int(cx, rep, ptr, ptr_size(t.rt.rep))
+Borrowed handles are lowered like owned handles, with two differences. First,
+the increment of `num_borrows` complements a decrement in `canon_resource_drop`
+and this count is used to ensure that all borrowed handles are dropped before
+the end of the task. Second, the `pass_rep_not_handle` special case is an
+optimization recognizing that, when a borrowed handle is passed into the
+component that implemented the resource type, the only thing the borrowed handle
+is good for is calling `resource.rep`, so lowering might as well avoid the
+overhead of creating an intermediate borrow handle and instead pass the
+`rep_val` directly.
+```python
+def store_borrow(cx, rep_val, ptr, borrowt):
+  if pass_rep_not_handle(cx, borrowt):
+    store_int(cx, rep_val, ptr, ptr_size(borrowt.rt.rep))
   else:
-    store_int(cx, add_borrow(cx, rep, t), ptr, 4)
+    store_int(cx, add_borrow(cx, rep_val, borrowt), ptr, 4)
 
-def add_borrow(cx, rep, t):
+def add_borrow(cx, rep_val, borrowt):
   assert(isinstance(cx.borrow_scope, Task))
-  h = ResourceHandle(t.rt, rep, own = False, borrow_scope = cx.borrow_scope)
+  h = ResourceHandle(borrowt.rt, rep_val, own = False, borrow_scope = cx.borrow_scope)
   h.borrow_scope.num_borrows += 1
   return cx.inst.handles.add(h)
 ```
-The special case in `store_borrow` is an optimization, recognizing that, when
-a borrowed handle is passed to the component that implemented the resource
-type, the only thing the borrowed handle is good for is calling
-`resource.rep`, so lowering might as well avoid the overhead of creating an
-intermediate borrow handle and instead pass the `rep` directly, using the size
-of the resource's representation type.
 
 Lowering a `stream` or `future` simply adds the given readable end to the
 current component instance's `handles` table, establishing unique ownership of
@@ -3056,11 +3067,11 @@ def join(a, b):
 ```
 
 Lastly, matching `store_borrow` above, a `borrow` lowered into the component
-that defined its resource type is passed as its `rep`:
+that defined its resource type is passed as its representation value:
 ```python
-def flatten_borrow(cx, t):
-  if cx.inst is t.rt.impl and cx.direction == 'lower':
-    return [t.rt.rep]
+def flatten_borrow(cx, borrowt):
+  if pass_rep_not_handle(cx, borrowt):
+    return [borrowt.rt.rep]
   else:
     return ['i32']
 ```
@@ -3245,7 +3256,7 @@ def lower_flat(cx, v, t):
     case RecordType(fields) : return lower_flat_record(cx, v, fields)
     case VariantType(cases) : return lower_flat_variant(cx, v, cases)
     case FlagsType(labels)  : return lower_flat_flags(v, labels)
-    case OwnType()          : return [lower_own(cx, v, t)]
+    case OwnType()          : return lower_flat_own(cx, v, t)
     case BorrowType()       : return lower_flat_borrow(cx, v, t)
     case StreamType(t)      : return [lower_stream(cx, v, t)]
     case FutureType(t)      : return [lower_future(cx, v, t)]
@@ -3325,14 +3336,21 @@ def lower_flat_flags(v, labels):
   return [pack_flags_into_int(v, labels)]
 ```
 
-Finally, `borrow` handles are lowered with the same optimization as
+Owned handles are lowered the same way as in `store_own`, except the `i32` table
+index is returned directly.
+```python
+def lower_flat_own(cx, rep_val, ownt):
+  return [add_own(cx, rep_val, ownt)]
+```
+
+Lastly, borrowed handles are lowered with the same optimization as
 `store_borrow` above:
 ```python
-def lower_flat_borrow(cx, rep, t):
-  if cx.inst is t.rt.impl:
-    return [rep]
+def lower_flat_borrow(cx, rep_val, borrowt):
+  if pass_rep_not_handle(cx, borrowt):
+    return [rep_val]
   else:
-    return [add_borrow(cx, rep, t)]
+    return [add_borrow(cx, rep_val, borrowt)]
 ```
 
 ## Lifting and Lowering Values
@@ -3833,10 +3851,10 @@ Calling `$f` invokes the following function, which adds an owning handle
 containing the given resource representation to the current component
 instance's `handles` table:
 ```python
-def canon_resource_new(rt, rep):
+def canon_resource_new(rt, rep_val):
   inst = current_instance()
   trap_if(not inst.may_leave)
-  h = ResourceHandle(rt, rep, own = True)
+  h = ResourceHandle(rt, rep_val, own = True)
   i = inst.handles.add(h)
   return [i]
 ```
@@ -3868,10 +3886,10 @@ def canon_resource_drop(rt, i):
     opts = CanonicalOptions(async_ = False)
     ft = FuncType([], [], async_ = False)
     if rt.dtor is not None:
-      dtor = lambda _: rt.dtor([h.rep])
+      dtor = lambda _: rt.dtor([h.rep_val])
     else:
       dtor = lambda _: []
-    callee = inst.store.lift(dtor, ft, opts, rt.impl)
+    callee = inst.store.lift(dtor, ft, opts, rt.impl_inst)
     caller = inst.store.lower(callee, ft, opts, inst)
     caller([])
   else:
@@ -3903,10 +3921,11 @@ representation from the handle in the current component instance's `handles`
 table:
 ```python
 def canon_resource_rep(rt, i):
-  h = current_instance().handles.get(i)
+  inst = current_instance()
+  h = inst.handles.get(i)
   trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not rt)
-  return [h.rep]
+  return [h.rep_val]
 ```
 Note that the "locally-defined" requirement above ensures that only the
 component instance defining a resource can access its representation.
