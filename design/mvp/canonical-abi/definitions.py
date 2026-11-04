@@ -2278,12 +2278,14 @@ def canon_resource_drop(rt, i):
   if h.own:
     assert(h.borrow_scope is None)
     opts = CanonicalOptions(async_ = False)
-    rep_type = U32Type() if rt.rep == 'i32' else U64Type()
-    ft = FuncType([rep_type], [], async_ = False)
-    dtor = rt.dtor or (lambda rep: [])
+    ft = FuncType([], [], async_ = False)
+    if rt.dtor is not None:
+      dtor = lambda _: rt.dtor([h.rep])
+    else:
+      dtor = lambda _: []
     callee = inst.store.lift(dtor, ft, opts, rt.impl)
     caller = inst.store.lower(callee, ft, opts, inst)
-    caller([h.rep])
+    caller([])
   else:
     h.borrow_scope.num_borrows -= 1
   return []

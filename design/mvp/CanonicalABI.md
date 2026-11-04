@@ -3866,22 +3866,24 @@ def canon_resource_drop(rt, i):
   if h.own:
     assert(h.borrow_scope is None)
     opts = CanonicalOptions(async_ = False)
-    rep_type = U32Type() if rt.rep == 'i32' else U64Type()
-    ft = FuncType([rep_type], [], async_ = False)
-    dtor = rt.dtor or (lambda rep: [])
+    ft = FuncType([], [], async_ = False)
+    if rt.dtor is not None:
+      dtor = lambda _: rt.dtor([h.rep])
+    else:
+      dtor = lambda _: []
     callee = inst.store.lift(dtor, ft, opts, rt.impl)
     caller = inst.store.lower(callee, ft, opts, inst)
-    caller([h.rep])
+    caller([])
   else:
     h.borrow_scope.num_borrows -= 1
   return []
 ```
-The call to a resource's destructor passes the representation value that
-was previously supplied to `resource.new`. The call works like a normal
-non-`async` cross-component call which means that destructors may not block.
-However, the destructor may spawn an explicit thread that blocks as long as
-this explicit thread doesn't transitively block the destructor's implicit thread
-from returning.
+The call to the resource's destructor passes the representation value that was
+previously supplied to `resource.new`. The call works like a normal non-`async`
+cross-component call, which means that destructors may not block. However, the
+destructor may spawn an explicit thread that blocks as long as this explicit
+thread doesn't transitively block the destructor's implicit thread from
+returning.
 
 
 ### `canon resource.rep`
