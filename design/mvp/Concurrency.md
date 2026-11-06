@@ -129,8 +129,8 @@ Thus, overall, `async` in WIT and the Component Model does not behave like a
 essay.
 
 The following table summarizes how the behavior of a callee changes, depending
-on whether it is `sync` or `async` lifted to a `sync` or `async` component
-function type:
+on whether `async` is set as a lifting or lowering ABI option and whether the 
+component function type is `async`:
 
 | Component function type | Lift canonical option | Valid? | Effect of callee blocking | Holds instances's exclusive lock? | Can call while instance lock held? |
 | ----------------------- | --------------------- | ------ | ------------------ | -------------------- | --------------- |
