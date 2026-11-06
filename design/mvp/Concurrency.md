@@ -148,7 +148,7 @@ how it lowers a callee and the type of the callee:
 | `sync`  | `sync`  | ✅ | N/A (Callee traps rather than blocking) |
 | `sync`  | `async` | ❌ | N/A |
 | `async` | `sync`  | ✅ | Caller blocks itself |
-| `async` | `async` | ✅ | Caller resumes execution - it can await the callee by putting it in a waitable set and also reenter the callee instance |
+| `async` | `async` | ✅ | Caller resumes execution - it can await the callee by putting it in a waitable set and also make new calls to the callee instance |
 
 Each time a component export is called, the wasm runtime logically spawns a new
 [green thread]  (as opposed to a [kernel thread]) to execute the export call
