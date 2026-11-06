@@ -146,8 +146,8 @@ how it lowers a callee and the type of the callee:
 | Callee component function type | Lower canonical option | Valid? | Effect on caller when callee blocks |
 | ------------------------------ | ---------------------- | ------ | ----------------------------------- |
 | `sync`  | `sync`  | ✅ | N/A (Callee traps rather than blocking) |
-| `sync`  | `async` | ❌ | N/A                                     |
-| `async` | `sync`  | ✅ | Caller blocks itself                    |
+| `sync`  | `async` | ❌ | N/A |
+| `async` | `sync`  | ✅ | Caller blocks itself |
 | `async` | `async` | ✅ | Caller resumes execution - it can await the callee by putting it in a waitable set and also reenter the callee instance |
 
 Each time a component export is called, the wasm runtime logically spawns a new
