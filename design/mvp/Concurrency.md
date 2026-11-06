@@ -140,7 +140,7 @@ component function type is `async`:
 | `async`  | `async` + callback  | ✅ | Control returns to caller | While running or blocked on the stack (not when having returned to the event loop) | No, waits until lock is released |
 | `async`  | `async` stackful | ✅ | Control returns to caller | No | Yes |
 
-The following table summarizes the how behavior of a caller changes, depending on
+The following table summarizes how the behavior of a caller changes, depending on
 how it lowers a callee and the type of the callee:
 
 | Callee component function type | Lower canonical option | Valid? | Effect on caller when callee blocks |
