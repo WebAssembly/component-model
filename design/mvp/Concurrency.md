@@ -133,7 +133,7 @@ on whether `async` is set as a lifting or lowering ABI option and whether the
 component function type is `async`:
 
 | Component function type | Lift canonical option | Valid? | Effect of callee blocking | Holds instances's exclusive lock? | Can call while instance lock held? |
-| ----------------------- | --------------------- | ------ | ------------------ | -------------------- | --------------- |
+| ----------------------- | --------------------- | ------ | ------------------------- | --------------------------------- | ---------------------------------- |
 | `sync`   | `sync`   | ✅ | Switch to another ready thread in the component instance, trap if there is none | No, but only threads in the same instance and their recursive calls can run until callee returns | Yes |
 | `sync`   | `async`  | ❌ | N/A  | N/A | N/A |
 | `async`  | `sync`   | ✅ | Control returns to caller | While running or blocked | No, call waits until lock is released |
