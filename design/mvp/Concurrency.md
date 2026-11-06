@@ -137,7 +137,7 @@ component function type is `async`:
 | `sync`   | `sync`   | ✅ | Switch to another ready thread in the component instance, trap if there is none | No, but only threads in the same instance and their recursive calls can run until callee returns | Yes |
 | `sync`   | `async`  | ❌ | N/A  | N/A | N/A |
 | `async`  | `sync`   | ✅ | Control returns to caller | While running or blocked | No, call waits until lock is released |
-| `async`  | `async` + callback  | ✅ | Control returns to caller | While running, not while blocked | No, waits until lock is released |
+| `async`  | `async` + callback  | ✅ | Control returns to caller | While running or blocked on the stack (not when having returned to the event loop) | No, waits until lock is released |
 | `async`  | `async` stackful | ✅ | Control returns to caller | No | Yes |
 
 The following table summarizes the how behavior of a caller changes, depending on
