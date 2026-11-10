@@ -134,21 +134,21 @@ component function type is `async`:
 
 | Component function type | Lift canonical option | Valid? | Effect of callee blocking | Holds instances's exclusive lock? | Can call while instance lock held? |
 | ----------------------- | --------------------- | ------ | ------------------------- | --------------------------------- | ---------------------------------- |
-| `sync`   | sync   | ✅ | Switch to another ready thread in the component instance, trap if there is none | No, but only threads in the same instance and their recursive calls can run until callee returns | Yes |
-| `sync`   | async  | ❌ | N/A  | N/A | N/A |
-| `async`  | sync   | ✅ | Control returns to caller | While running or blocked | No, call waits until lock is released |
-| `async`  | async + callback  | ✅ | Control returns to caller | While running or blocked on the stack (not when having returned to the event loop) | No, waits until lock is released |
-| `async`  | async stackful | ✅ | Control returns to caller | No | Yes |
+| sync   | sync   | ✅ | Switch to another ready thread in the component instance, trap if there is none | No, but only threads in the same instance and their recursive calls can run until callee returns | Yes |
+| sync   | async  | ❌ | N/A  | N/A | N/A |
+| async  | sync   | ✅ | Control returns to caller | While running or blocked | No, call waits until lock is released |
+| async  | async + callback  | ✅ | Control returns to caller | While running or blocked on the stack (not when having returned to the event loop) | No, waits until lock is released |
+| async  | async stackful | ✅ | Control returns to caller | No | Yes |
 
 The following table summarizes how the behavior of a caller changes, depending on
 how it lowers a callee and the type of the callee:
 
 | Callee component function type | Lower canonical option | Valid? | Effect on caller when callee blocks |
 | ------------------------------ | ---------------------- | ------ | ----------------------------------- |
-| `sync`  | sync  | ✅ | N/A (Callee traps rather than blocking) |
-| `sync`  | async | ❌ | N/A |
-| `async` | sync  | ✅ | Caller blocks itself |
-| `async` | async | ✅ | Caller resumes execution - it can await the callee by putting it in a waitable set and also make new calls to the callee instance |
+| sync  | sync  | ✅ | N/A (Callee traps rather than blocking) |
+| sync  | async | ❌ | N/A |
+| async | sync  | ✅ | Caller blocks itself |
+| async | async | ✅ | Caller resumes execution - it can await the callee by putting it in a waitable set and also make new calls to the callee instance |
 
 Each time a component export is called, the wasm runtime logically spawns a new
 [green thread]  (as opposed to a [kernel thread]) to execute the export call
