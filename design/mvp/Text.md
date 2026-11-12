@@ -882,16 +882,15 @@ unreachability.
 
 A `union` is a `variant` whose cases can be distinguished from each other by
 type. This effectively makes the case names optional in bindings, and enables
-dynamically-typed languages like JS and Python to pick a case by inspecting the
-runtime type of a source-language value. Statically-typed languages can choose
-to represent `union`s like `variant`s (with explicit case names) or as simple
-unions of types if their type system permits (e.g. `string | number`).
+languages to pick a case by inspecting the type of a source-language value.
+Statically-typed languages can choose to represent `union`s like `variant`s
+(with explicit case names) or as simple unions of types if their type system
+permits (e.g. `string | number`).
 
-To make runtime case-selection unambiguous, validation requires every case of
-a `union` to have a payload, and for every pair of cases to be
-*distinguishable*. Two value types are *distinguishable* if their sets of
-*distinguishable kinds* are disjoint, where the distinguishable kinds of each
-value type are:
+To make case-selection unambiguous, validation requires every case of a `union`
+to have a payload, and for every pair of cases to be *distinguishable*. Two
+value types are *distinguishable* if their sets of *distinguishable kinds* are
+disjoint, where the distinguishable kinds of each value type are:
 
 | Type | Distinguishable kinds |
 | ---- | --------------------- |
@@ -931,7 +930,7 @@ Some types are not allowed to appear as a union case even if they have
 distinguishability rules defined:
 
 - `union` is disallowed because it would require callers (and therefore
-  bindings) to work out arbitrarily-deeply-nested union cases.
+  bindings) to work out the cases of arbitrarily deeply nested unions.
 - `option` is disallowed because `option`s are expected to manifest in various
   languages in union-like ways (e.g. `string | undefined`), and therefore cause
   the same problems as `union` itself. Furthermore, the "none" case has no
@@ -944,10 +943,11 @@ distinguishability rules defined:
 - All types without distinguishable kinds are naturally rejected.
 
 Imported resource types are assumed to be distinct from each other. However,
-a component may be instantiated such that the resource types are not in fact
-distinguishable at runtime. In this case, the embedder must pick the first
-matching case in declaration order. The round-trip is lossy in this case, but
-well-defined.
+it is possible to instantiate a component such that the resource types are not
+in fact distinguishable at runtime; for example, if the same resource type is
+imported twice without an `eq` constraint. In this case, the embedder must pick
+the first matching case in declaration order. The round-trip is lossy in this
+case, but well-defined.
 
 #### Definition types
 
@@ -2979,10 +2979,10 @@ example, for the name `fill#with-path`:
 
 Overload suffixes are forbidden on names with `[get]` or `[set]`.
 
-All functions with the same base name, in the same scope, form an *overload
-set*. All functions in an overload set must agree on `async`, and any functions
-with the same number of parameters must have a *distinguishing parameter index*
-`i`, where the types of their `i`th parameters are pairwise
+All items with the same base name, in the same scope, form an *overload set*.
+All functions in an overload set must agree on `async`, and any functions with
+the same number of parameters must have a *distinguishing parameter index* `i`,
+where the types of their `i`th parameters are pairwise
 [distinguishable](#-union-types).
 
 These options impose additional validation rules on the function type (e.g.
