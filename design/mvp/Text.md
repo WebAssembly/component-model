@@ -946,8 +946,8 @@ Imported resource types are assumed to be distinct from each other. However,
 it is possible to instantiate a component such that the resource types are not
 in fact distinguishable at runtime; for example, if the same resource type is
 imported twice without an `eq` constraint. In this case, the embedder must pick
-the first matching case in declaration order. The round-trip is lossy in this
-case, but well-defined.
+the first matching union case or 🎭 overload in declaration order. The
+round-trip is lossy in this case, but well-defined.
 
 #### Definition types
 
@@ -2980,10 +2980,10 @@ example, for the name `fill#with-path`:
 Overload suffixes are forbidden on names with `[get]` or `[set]`.
 
 All items with the same base name, in the same scope, form an *overload set*.
-All functions in an overload set must agree on `async`, and any functions with
-the same number of parameters must have a *distinguishing parameter index* `i`,
-where the types of their `i`th parameters are pairwise
-[distinguishable](#-union-types).
+All functions in an overload set must agree on `async`, and within the set,
+each group of functions with the same number of parameters must have a single
+*distinguishing parameter index* `i`, where the types of their `i`th parameters
+are all pairwise [distinguishable](#-union-types).
 
 These options impose additional validation rules on the function type (e.g.
 `[method]` requires a `self` param), as well as on the other function names in

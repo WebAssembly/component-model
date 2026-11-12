@@ -1051,7 +1051,7 @@ various constructs. Note that delimiters such as `{` and `(` must all be
 balanced.
 
 ```ebnf
-operator ::= '=' | ',' | ':' | ';' | '(' | ')' | '{' | '}' | '<' | '>' | '*' | '->' | '/' | '.' | '@'
+operator ::= '=' | ',' | ':' | ';' | '(' | ')' | '{' | '}' | '<' | '>' | '*' | '->' | '/' | '.' | '@' | '#'
 ```
 
 ### Keywords
@@ -1448,9 +1448,9 @@ world-definition ::= export-item
                    | typedef-item
                    | include-item
 
-export-item ::= external-id? 'export' id ':' extern-type
+export-item ::= external-id? 'export' id overload-suffix? ':' extern-type
               | 'export' use-path ';'
-import-item ::= external-id? 'import' id ':' extern-type
+import-item ::= external-id? 'import' id overload-suffix? ':' extern-type
               | 'import' use-path ';'
 
 external-id ::= '@external-id' '(' string-literal ')' 🏷️
@@ -1609,12 +1609,12 @@ foo: func(x: u32);
 [set]bar: func(v: u64);
 ```
 
-🎭 Functions can be [overloaded](Text.md#import-and-export-definitions) by
-by giving each overload the same name followed by a `#` and a unique suffix.
+🎭 Functions can be [overloaded](Text.md#import-and-export-definitions) giving
+giving each overload the same name followed by a `#` and a unique suffix.
 Overloads cannot be getters or setters.
 
 Inside a `resource`, methods, static functions and constructors (written
-`constructor.with-init(...)`) can be overloaded in the same way.
+`constructor#with-init(...)`) can be overloaded in the same way.
 
 🏷️ As with `import`s and `export`s in worlds, and for the same use cases,
 interface items can be annotated with `@external-id`:
