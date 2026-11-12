@@ -214,6 +214,7 @@ defvaltype    ::= pvt:<primvaltype>                        => pvt
                 | 0x66 t?:<valtype>?                       => (stream t?) 🔀
                 | 0x65 t?:<valtype>?                       => (future t?) 🔀
                 | 0x63 k:<valtype> v:<valtype>             => (map k v) (if k is in <keytype>) 🗺️
+                | 0x62 lt*:vec(<labelvaltype>)             => (union (case lt)+) (if |lt*| > 0) 💍
 labelvaltype  ::= l:<labellit> t:<valtype>                 => l t
 case          ::= l:<labellit> t?:<valtype>? 0x00          => (case l t?)
 labellit      ::= len:<u32> l:<label>                      => "l"  (if len = |l|)
@@ -285,15 +286,18 @@ Notes:
 * `<label>` is defined as part of the
    [text format](Text.md#import-and-export-definitions).
 * All parameter labels, result labels, record field labels, variant case
-  labels, flag labels, enum case labels, component import names, component
-  export names, instance import names and instance export names must be
-  [strongly-unique] in their containing scope.
+  labels, union case labels, flag labels, enum case labels, component import
+  names, component export names, instance import names and instance export
+  names must be [strongly-unique] in their containing scope.
 * Validation of `externtype` requires the various `typeidx` type constructors
   to match the preceding `sort`.
 * (The `0x00` immediate of `case` may be reinterpreted in the future as the
   `none` case of an optional immediate.)
 * 🔧 for fixed-sized lists the length of the list must be larger than 0 to pass
   validation.
+* 💍 Validation of `union` requires the case payloads to be pairwise
+  [distinguishable](Text.md#-union-types), and forbids any case from having a
+  `union`, `option`, `result`, `stream`, `future`, or `error-context` type.
 * Validation requires that, for every `defvaltype` `t`, the worst-case in-memory
   element size is less than 2<sup>28</sup>, as defined by `elem_size` in the
   [Canonical ABI](CanonicalABI.md#element-size).
@@ -431,11 +435,11 @@ Notes:
 * The `externname`s of all exports in a given component, instance, component-
   type or instance-type must be [strongly-unique]; attributes are ignored.
 * Validation requires that `plainname`s annotated with `[constructor]`,
-  `[method]`, `[static]`, 📡 `[get]`, or 📡 `[set]` only occur on `func` imports
-  or exports.
+  `[method]`, `[static]`, 📡 `[get]`, or 📡 `[set]`, as well as names with an
+  🎭 overload suffix, only occur on `func` imports or exports.
 * Validation requires that, for `plainname`s annotated with `[constructor]`,
-  `[method]`, or `[static]`, the first `label` matches the `plainname` of a
-  preceding `resource` import or export, respectively, in the same scope
+  `[method]`, or `[static]`, the resource name `label` matches the `plainname`
+  of a preceding `resource` import or export, respectively, in the same scope
   (component, component type or instance type).
 * 🏷️ Validation requires that `implements`-annotated imports or exports are
   `instance`-typed and have a `plainname` name.
@@ -471,6 +475,10 @@ Notes:
 * 📡 Validation of `[set]` names requires that the function have either no
   result type or a result type of `(result (error $E)?)` (with no value type).
 * 🔀/📡 Functions with `[get]` or `[set]` names must not be `async`.
+* 🎭 Validation requires that all names in an overload set are functions, that
+  they agree on `async`, and that all functions with the same number of
+  parameters have a distinguishing parameter index, as defined in the
+  [explainer](Text.md#import-and-export-definitions).
 * 🔗 Validation requires that a `version-suffix` is only present on
   `instance`-typed imports or exports that have either an `implements`
   attribute or an `interfacename` name.
@@ -482,43 +490,44 @@ Notes:
 (See [Value Definitions](Text.md#-value-definitions) in the explainer.)
 
 ```ebnf
-value                      ::= t:<valtype> len:<core:u32> v:<val(t)>   => (value t v) (where len = ||v||)
-val(bool)                  ::= 0x00                                    => false
-                             | 0x01                                    => true
-val(u8)                    ::= v:<core:byte>                           => v
-val(s8)                    ::= v:<core:byte>                           => v' (where v' = v if v < 128 else (v - 256))
-val(s16)                   ::= v:<core:s16>                            => v
-val(u16)                   ::= v:<core:u16>                            => v
-val(s32)                   ::= v:<core:s32>                            => v
-val(u32)                   ::= v:<core:u32>                            => v
-val(s64)                   ::= v:<core:s64>                            => v
-val(u64)                   ::= v:<core:u64>                            => v
-val(f32)                   ::= v:<core:f32>                            => v (if !isnan(v))
-                             | 0x00 0x00 0xC0 0x7F                     => nan
-val(f64)                   ::= v:<core:f64>                            => v (if !isnan(v))
-                             | 0x00 0x00 0x00 0x00 0x00 0x00 0xF8 0x7F => nan
-val(char)                  ::= b*:<core:byte>*                         => c (where b* = core:utf8(c))
-val(string)                ::= v:<core:name>                           => v
-val(i:<typeidx>)           ::= v:<val(type-index-space[i])>            => v
-val((record (field l t)+)) ::= v+:<val(t)>+                            => (record v+)
-val((variant (case l t?)+) ::= i:<core:u32> v?:<val(t[i])>?            => (variant l[i] v?)
-val((list t))              ::= v:vec(<val(t)>)                         => (list v)
-val((list t len))          ::= (v:<val(t)>)^len                        => (list v^len) 🔧
-val((tuple t+))            ::= v+:<val(t)>+                            => (tuple v+)
-val((flags l+))            ::= (v:<core:byte>)^N                       => (flags (l[i] for i in 0..|l+|-1 if v[floor(i / 8)] & 2^(i mod 8) > 0)) (where N = ceil(|l+| / 8))
-val((enum l+))             ::= i:<core:u32>                            => (enum l[i])
-val((option t))            ::= 0x00                                    => none
-                             | 0x01 v:<val(t)>                         => (some v)
-val((result))              ::= 0x00                                    => ok
-                             | 0x01                                    => error
-val((result t))            ::= 0x00 v:<val(t)>                         => (ok v)
-                             | 0x01                                    => error
-val((result (error u)))    ::= 0x00                                    => ok
-                             | 0x01 v:<val(u)>                         => (error v)
-val((result t (error u)))  ::= 0x00 v:<val(t)>                         => (ok v)
-                             | 0x01 v:<val(u)>                         => (error v)
-val((map k v))             ::= e*:vec(<entryval(k, v)>)                => (map e*) 🗺️
-entryval(k, v)             ::= key:<val(k)> val:<val(v)>               => (entry key val) 🗺️
+value                       ::= t:<valtype> len:<core:u32> v:<val(t)>   => (value t v) (where len = ||v||)
+val(bool)                   ::= 0x00                                    => false
+                              | 0x01                                    => true
+val(u8)                     ::= v:<core:byte>                           => v
+val(s8)                     ::= v:<core:byte>                           => v' (where v' = v if v < 128 else (v - 256))
+val(s16)                    ::= v:<core:s16>                            => v
+val(u16)                    ::= v:<core:u16>                            => v
+val(s32)                    ::= v:<core:s32>                            => v
+val(u32)                    ::= v:<core:u32>                            => v
+val(s64)                    ::= v:<core:s64>                            => v
+val(u64)                    ::= v:<core:u64>                            => v
+val(f32)                    ::= v:<core:f32>                            => v (if !isnan(v))
+                              | 0x00 0x00 0xC0 0x7F                     => nan
+val(f64)                    ::= v:<core:f64>                            => v (if !isnan(v))
+                              | 0x00 0x00 0x00 0x00 0x00 0x00 0xF8 0x7F => nan
+val(char)                   ::= b*:<core:byte>*                         => c (where b* = core:utf8(c))
+val(string)                 ::= v:<core:name>                           => v
+val(i:<typeidx>)            ::= v:<val(type-index-space[i])>            => v
+val((record (field l t)+))  ::= v+:<val(t)>+                            => (record v+)
+val((variant (case l t?)+)) ::= i:<core:u32> v?:<val(t[i])>?            => (variant l[i] v?)
+val((union (case l t)+))    ::= i:<core:u32> v:<val(t[i])>              => (union l[i] v) 💍
+val((list t))               ::= v:vec(<val(t)>)                         => (list v)
+val((list t len))           ::= (v:<val(t)>)^len                        => (list v^len) 🔧
+val((tuple t+))             ::= v+:<val(t)>+                            => (tuple v+)
+val((flags l+))             ::= (v:<core:byte>)^N                       => (flags (l[i] for i in 0..|l+|-1 if v[floor(i / 8)] & 2^(i mod 8) > 0)) (where N = ceil(|l+| / 8))
+val((enum l+))              ::= i:<core:u32>                            => (enum l[i])
+val((option t))             ::= 0x00                                    => none
+                              | 0x01 v:<val(t)>                         => (some v)
+val((result))               ::= 0x00                                    => ok
+                              | 0x01                                    => error
+val((result t))             ::= 0x00 v:<val(t)>                         => (ok v)
+                              | 0x01                                    => error
+val((result (error u)))     ::= 0x00                                    => ok
+                              | 0x01 v:<val(u)>                         => (error v)
+val((result t (error u)))   ::= 0x00 v:<val(t)>                         => (ok v)
+                              | 0x01 v:<val(u)>                         => (error v)
+val((map k v))              ::= e*:vec(<entryval(k, v)>)                => (map e*) 🗺️
+entryval(k, v)              ::= key:<val(k)> val:<val(v)>               => (entry key val) 🗺️
 ```
 
 Notes:
