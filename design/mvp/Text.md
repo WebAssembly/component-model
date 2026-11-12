@@ -31,6 +31,9 @@ more user-focused explanation, take a look at the
   * [Value definitions](#-value-definitions)
   * [Start definitions](#-start-definitions)
   * [Import and export definitions](#import-and-export-definitions)
+    * [Kebab case](#kebab-case)
+    * [Name attributes and overloading](#name-attributes-and-overloading)
+    * [Semver](#semver)
     * [Name uniqueness](#name-uniqueness)
     * [Canonical interface name](#-canonical-interface-name)
     * [External visibility of types](#external-visibility-of-types)
@@ -2843,15 +2846,17 @@ externnamelit     ::= '"' <externname> '"'
 externname        ::= <plainname>
                     | <interfacename>
 plainname         ::= <label>
+                    | <label> '#' <label> 🎭
                     | '[get]' <label> 📡
                     | '[set]' <label> 📡
-                    | '[overload]' <label> '.' <label> 🎭
                     | '[constructor]' <label>
-                    | '[constructor][overload]' <label> '.' <label> 🎭
-                    | '[method]' (📡 '[get]' | '[set]')? <label> '.' <label>
-                    | '[method][overload]' <label> '.' <label> '.' <label> 🎭
-                    | '[static]' (📡 '[get]' | '[set]')? <label> '.' <label>
-                    | '[static][overload]' <label> '.' <label> '.' <label> 🎭
+                    | '[constructor]' <label> '#' <label> 🎭
+                    | '[method]' <label> '.' <label>
+                    | '[method]' <label> '.' <label> '#' <label> 🎭
+                    | '[method]' ('[get]' | '[set]') <label> '.' <label> 📡
+                    | '[static]' <label> '.' <label>
+                    | '[static]' <label> '.' <label> '#' <label> 🎭
+                    | '[static]' ('[get]' | '[set]') <label> '.' <label> 📡
 labellit          ::= '"' <label> '"'
 label             ::= <first-fragment> ( '-' <fragment> )*
 first-fragment    ::= <first-word>
@@ -2885,70 +2890,28 @@ The names of component imports and exports provide two options:
   (🪺 possibly nested) package that is published in a (🪺 possibly nested)
   namespace.
 
-The `plainname` production captures several language-neutral syntactic hints
-that allow bindings generators to produce more idiomatic bindings in their
-target language. At the top level, a `plainname` allows functions to be
-annotated as being a constructor, method, 📡 property getter, 📡 property setter,
-or static function of a preceding resource, as well as a 📡 property getter or
-📡 property setter not attached to a resource.
+As an example, the following component uses all 4 cases of imports and exports:
+```wat
+(component
+  (import "custom-hook" (func (param string) (result string)))
+  (import "wasi:http/handler" (instance
+    (export "request" (type $request (sub resource)))
+    (export "response" (type $response (sub resource)))
+    (export "handle" (func (param (own $request)) (result (own $response))))
+  ))
+  ... impl
+  (export "wasi:http/handler" (instance $http_handler_impl))
+  (export "get-JSON" (func $get_json_impl))
+)
+```
+Here, `custom-hook` and `get-JSON` are plain names for functions whose semantic
+contract is particular to this component and not defined elsewhere. In
+contrast, `wasi:http/handler` is the name of a separately-defined interface,
+allowing the component to request the ability to make outgoing HTTP requests
+(through imports) and receive incoming HTTP requests (through exports) in a way
+that can be mechanically interpreted by hosts and tooling.
 
-🎭 The `[overload]` annotation allows several functions to share one name,
-forming an *overload set*, so that bindings can bind overloaded JS and Web APIs
-(e.g., `CanvasRenderingContext2D.fill()`) idiomatically. The *base name* of an
-`[overload]` name is the name without `[overload]` and its last `.`-separated
-label, the *suffix* (e.g., `[method][overload]context.fill.with-path` has the
-base name `[method]context.fill` and the suffix `with-path`). The names whose
-base names are not [strongly-unique](#name-uniqueness) form an overload set,
-which requires their base names to be equal. Each source language can then pick
-its own representation:
-* Languages without overloading append the suffix to get a unique name (e.g.,
-  `[overload]fill.with-path` becomes `fill_with_path` in C).
-* Languages with static overloading (e.g., C++, C# or Swift) bind the set as
-  overloads of one function, resolved by the compiler.
-* Languages with dynamic overloading (e.g., JS or Python) bind the set as one
-  function that picks an overload by the number and dynamic types of its
-  arguments.
-
-At the component level, the members of an overload set are still separate
-imports or exports, and callers pick which one to call.
-
-When a function is annotated with `constructor`, `method`, or `static`, the
-first `label` is the name of the resource and the second `label` is the logical
-field name of the function. This additional nesting information allows bindings
-generators to insert the function into the nested scope of a class, abstract
-data type, object, namespace, package, module or whatever resources get bound
-to. For example, a function named `[method]C.foo` could be bound in C++ to a
-member function `foo` in a class `C`. The [JS API](JS-Explainer.md#exporting-a-resource) describes
-how the native JavaScript bindings look.
-
-To restrict the set of cases that bindings generators need to consider, these
-annotations trigger additional type-validation rules (listed in detail in
-[Binary.md](Binary.md#import-and-export-definitions)):
-* A `[constructor]` import or export named `R` must be a function whose result
-  type is `(own $R)` or `(result (own $R) (error <valtype>)?)`, where `$R` is
-  the index of the resource type named `R`.
-* A `[method]` import or export named `R.foo` must be a function whose first
-  parameter is `(param "self" (borrow $R))`, where `$R` is the index of the
-  resource type named `R`.
-* A `[static]` import or export named `R.foo` must be a function, and `R` must
-  be the name of a resource type.
-* 📡 A `[get]` import or export must have no parameters (besides the required
-  `self` parameter from `[method]`), and must return a value.
-* 📡 A `[set]` import or export must be preceded by a matching `[get]` import
-  or export, must have exactly one parameter (besides the required `self`
-  parameter from `[method]`) whose type matches the getter's return type, and
-  must return either nothing or `(result (error <valtype>)?)`.
-* 🎭 An `[overload]` import or export must be a function, and is subject to
-  the rules of its base name. All functions in an overload set must agree on
-  `async`. Within an overload set, the functions with the same number of
-  parameters must have a *distinguishing parameter index* `i`, where the types
-  of their `i`th parameters are pairwise [distinguishable](#-union-types).
-
-The `valid semver` production (along with its `version core` and `pre-release`
-sub-productions) is as defined by the [Semantic Versioning 2.0] spec and is
-meant to be interpreted according to that specification. The use of
-`valid semver` in `interfaceversion` is temporary for backward compatibility;
-see [Canonical interface name](#-canonical-interface-name) below (🔗).
+#### Kebab Case
 
 The `label` production used inside `plainname` as well as the labels of
 `record`, `variant` and `union` (💍) types must be [kebab case]. The reason for
@@ -2971,27 +2934,97 @@ Technically, based on the definitions given, the `fragment` `2` (and `3`) in
 `a1-2-3` is ambiguously either a `word` or an `acronym`, but the distinction
 only relates to casing and numbers aren't cased.
 
-As an example, the following component uses all 4 cases of imports and exports:
-```wat
-(component
-  (import "custom-hook" (func (param string) (result string)))
-  (import "wasi:http/handler" (instance
-    (export "request" (type $request (sub resource)))
-    (export "response" (type $response (sub resource)))
-    (export "handle" (func (param (own $request)) (result (own $response))))
-  ))
-  ... impl
-  (export "wasi:http/handler" (instance $http_handler_impl))
-  (export "get-JSON" (func $get_json_impl))
-)
-```
-Here, `custom-hook` and `get-JSON` are plain names for functions whose semantic
-contract is particular to this component and not defined elsewhere. In
-contrast, `wasi:http/handler` is the name of a separately-defined interface,
-allowing the component to request the ability to make outgoing HTTP requests
-(through imports) and receive incoming HTTP requests (through exports) in a way
-that can be mechanically interpreted by hosts and tooling.
+#### Name Attributes and Overloading
 
+The `plainname` production captures several language-neutral syntactic hints
+that allow bindings generators to produce more idiomatic bindings in their
+target language. At the top level, a `plainname` adds extra attributes that
+allow functions to be marked as constructors, methods, or static functions of
+a preceding resource, as well as 📡 property getters or 📡 property setters.
+
+Depending on their attributes, `plainname`s can have up to three `label`s. The
+three possible labels are called the *resource name*, the *function name*, and
+the 🎭 *overload suffix*.
+
+The `[constructor]`, `[method]`, and `[static]` attributes allow functions to
+be associated with resource types, enabling bindings generators to insert the
+function into the nested scope of a class, abstract data type, object,
+namespace, package, module, or whatever other construct is used to represent
+resource types. For example, a function named `[method]C.foo` could be bound in
+C++ to a member function `foo` in a class `C`, and `[constructor]C` could be
+bound to a constructor of `C`. `[constructor]` requires a resource name but
+no function name. `[method]` and `[static]` require both a resource name
+and function name.
+
+📡 The `[get]` and `[set]` attributes allow functions to be bound as property
+accessors ("getters and setters") in languages that support them. `[get]` and
+`[set]` are compatible with `[method]` and `[static]`, but not `[constructor]`.
+For example, `[method][get]C.foo` could be bound in JS to a getter called `foo`
+in a class `C`. "Standalone" getters and setters are also supported, as some
+languages allow getters and setters that are not associated with a resource or
+class.
+
+🎭 For more ergonomic bindings in languages that support overloading, function
+names can have an optional *overload suffix* appended to the base name. For
+example, for the name `fill#with-path`:
+
+* Languages with static overloading (e.g. C++, C#, Swift) can bind the
+  functions as compile-time overloads of a single function (e.g.
+  `fill(Path path)`).
+* Languages with dynamic overloading (e.g. JS, Python) can bind the functions
+  as one function that dispatches based on the number and runtime types of the
+  arguments (e.g. `fill(...args)`).
+* Languages without overloading (e.g. C) can append the suffix to get a unique
+  name (e.g. `fill_with_path(Path path)`).
+
+Overload suffixes are forbidden on names with `[get]` or `[set]`.
+
+All functions with the same base name, in the same scope, form an *overload
+set*. All functions in an overload set must agree on `async`, and any functions
+with the same number of parameters must have a *distinguishing parameter index*
+`i`, where the types of their `i`th parameters are pairwise
+[distinguishable](#-union-types).
+
+These options impose additional validation rules on the function type (e.g.
+`[method]` requires a `self` param), as well as on the other function names in
+the same scope (e.g. `[set]foo` requires `[get]foo`). All of these rules are
+described in detail in [Binary.md](Binary.md#import-and-export-definitions).
+
+To sum things up, here are some valid and invalid names:
+
+```
+;; Valid
+foo
+foo-bar
+[constructor]blob
+[method]blob.read
+[static]blob.merge
+[get]global-context                         ;; 📡
+[method][get]blob.position                  ;; 📡
+[static][get]blob.max-size                  ;; 📡
+[static][set]blob.max-size                  ;; 📡
+foo#with-options                            ;; 🎭
+[constructor]blob#with-bytes                ;; 🎭
+[method]image.scale#uniform                 ;; 🎭
+[method]image.scale#non-uniform             ;; 🎭
+
+;; Invalid
+[constructor][method]blob                   ;; [constructor] and [method] are incompatible
+[method]blob                                ;; missing function name
+[constructor]blob.with-bytes                ;; [constructor] cannot take a function name
+[get][method]blob.position                  ;; 📡 attributes in wrong order
+foo#with-options#and-stuff                  ;; 🎭 multiple overload suffixes 
+[get]global-context#special                 ;; 🎭 [get] cannot take an overload suffix
+[set]global-context#special                 ;; 🎭 [set] cannot take an overload suffix
+```
+
+#### Semver
+
+The `valid semver` production (along with its `version core` and `pre-release`
+sub-productions) is as defined by the [Semantic Versioning 2.0] spec and is
+meant to be interpreted according to that specification. The use of
+`valid semver` in `interfaceversion` is temporary for backward compatibility;
+see [Canonical interface name](#-canonical-interface-name) below (🔗).
 
 #### Name Uniqueness
 
@@ -2999,60 +3032,92 @@ The goal of the `label` and `externname` productions defined and used above
 is to allow automated bindings generators to map these names into something more
 idiomatic to the language. For example, the name `[method]my-resource.my-method`
 might get mapped to a method named `myMethod` nested inside a class
-`MyResource`. To unburden bindings generators from having to consider
-pathological cases where two unique-in-the-component names get mapped to the
-same source-language identifier, Component Model validation imposes a stronger
-form of uniqueness than simple string equality on all the names that appear
-within the same scope.
+`MyResource`. However, there are many cases where two unique component names
+may map to the same source-language identifier. To encourage broad
+source-language compatibility and make bindings generators easier to write,
+Component Model validation imposes a stronger form of uniqueness than simple
+string equality on all names that appear within the same scope.
 
-To determine whether two names (defined as sequences of [Unicode Scalar
+First, we define what it means to **canonicalize** a name:
+
+1. Remove all hyphens and hashtags and lowercase the entire name.
+2. If the resource name and function name are equal, replace the entire name
+    with the resource name (e.g. `[method]foo.foo` becomes `foo`).
+3. Strip all `[...]` attributes from the name besides `[constructor]` and
+    `[set]`.
+
+For example, `[method]FOO.bar-baz` is canonicalized to `foo.barbaz`, and
+`[constructor]R` is canonicalized to `[constructor]r`.
+
+Then, to determine whether two names (defined as sequences of [Unicode Scalar
 Values]) are **strongly-unique**:
 
-1. Canonicalize each name:
-    1. Remove all hyphens and lowercase all the `acronym`s (uppercase letters) in
-        the name.
-    2. If the name is `[...]*l.l` for any annotations `[...]*` and some `label`
-        `l`, replace the name with `l` (e.g. `[method]foo.foo` becomes `foo`).
-    3. Strip all `[...]` annotations from the name besides `[constructor]`
-        and 📡 `[set]`.
-2. The names are strongly-unique if the resulting canonicalized strings are
-    unequal.
+1. Canonicalize both names. If the canonicalized names are equal, then the
+    names are NOT strongly-unique.
+2. Remove any 🎭 overload suffixes from the names, yielding the *base names*.
+3. Canonicalize the base names, yielding the *canonical base names*.
+4. If the canonical base names are equal AND the base names are NOT equal, then
+    the names are NOT strongly-unique.
+5. Otherwise, the names are strongly-unique.
 
-Thus, the following set of names are strongly-unique and can thus all be
-imports (or exports) of the same component (or component type or instance
-type):
+Put more symbolically:
+
+```
+let A = canonicalize(N), A' = canonicalize(N');
+let B = base(N), B' = base(N');
+let C = canonicalize(B), C' = canonicalize(B');
+return A != A' && (C != C' || B == B');
+```
+
+And put more intuitively: two names are strongly-unique if their
+fully-qualified names differ, and either their overload names differ or are
+overloading the exact same item. Equivalently, two names *conflict* if their
+fully-qualified names match, or the overload names match AND refer to different
+base items.
+
+Thus, the following set of names are strongly-unique and can all be imports (or
+exports) of the same component (or component type or instance type):
 
 * `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[static]foo.baz`,
   `foo:bar/baz`, 📡 `[get]prop`, 📡 `[set]prop`, 📡 `[method][get]foo.prop`,
   📡 `[method][set]foo.prop`, 📡 `[static][get]foo.prop-2`,
-  📡 `[static][set]foo.prop-2`, `[method]foo.get-prop`, `[method]foo.set-prop`
+  📡 `[static][set]foo.prop-2`, `[method]foo.get-prop`, `[method]foo.set-prop`,
+  🎭 `foo-bar#with-options`, 🎭 `[constructor]foo#with-options`,
+  🎭 `[method]foo.bar#baz`, 🎭 `[method]foo.bar-baz#extra`,
+  🎭 `[static]foo.baz#extra`
 
 but attempting to add *any* of the following names would be a validation error:
 
 * `foo`, `FOO`, `[method]foo.foo`, 📡 `[get]foo`, 📡 `[method][get]foo.foo`,
   📡 `[static][set]foo.FOO` (conflicts with `foo`)
 * `foo-BAR`, `foobar`, `foob-ar`, `[static]foobar.FOOBAR`,
-  `[static]foo-BAR.FOO-bar` (conflicts with `foo-bar`)
+  `[static]foo-BAR.FOO-bar`, 🎭 `foo#bar` (conflicts with `foo-bar`)
 * `[constructor]FOO` (conflicts with `[constructor]foo`)
-* `[method]foo.BAR`, `[static]foo.bar` (conflicts with `[method]foo.bar`)
-* `[method]foo.baz` (conflicts with `[static]foo.baz`)
+* `[method]foo.BAR`, `[static]foo.bar`, 🎭 `[static]foo.bar#other` (conflicts
+  with `[method]foo.bar`)
+* `[method]foo.baz`, `[method]foo.baz#other` (conflicts with `[static]foo.baz`)
 * `foo:bar/BAZ` (conflicts with `foo:bar/baz`)
 * 📡 `prop` (conflicts with `[get]prop`)
 * 📡 `[set]PROP` (conflicts with `[set]prop`)
 * 📡 `[method]foo.prop`, 📡 `[static]foo.PROP`, 📡 `[method][get]foo.PROP`,
-  📡 `[static][get]foo.prop` (conflicts with `[method][get]foo.prop`)
+  📡 `[static][get]foo.prop`, 🎭 `[method]foo.pr#op` (conflicts with
+  `[method][get]foo.prop`)
 * 📡 `[method][set]foo.PROP`, 📡 `[static][set]foo.prop` (conflicts with
   `[method][set]foo.prop`)
+* `foo-bar-with-options`, `[method]foo-bar-with-options.FOO-BAR-with-options`,
+  🎭 `FOO-bar#WITH-options`, 🎭 `foo-bar-with#options`, 🎭 `FOO-BAR#other`
+  (conflicts with `foo-bar#with-options`)
+* `[constructor]foo-with-options` (conflicts with
+  `[constructor]foo#with-options`)
 
 Note that additional validation rules involving types apply to names with
-annotations. For example, the validation rules for `[constructor]foo` require
+attributes. For example, the validation rules for `[constructor]foo` require
 `foo` to be a resource type. See [Binary.md](Binary.md#import-and-export-definitions)
 for details.
 
-Note that these rules prevent having a method or static function (📡 or getter
-or setter) with the same name as its resource type, leaving room for a
-constructor. This is to satisfy the naming rules around constructors in many
-languages.
+Note that these rules prevent having a method or static function with the same
+name as its resource type, leaving room for a constructor. This is to satisfy
+the naming rules around constructors in many languages.
 
 📡 Also note that, although `[get]foo` and `foo` are not considered
 strongly-unique, `[set]foo` and `foo` are. However, since `[set]foo` separately
@@ -3060,33 +3125,27 @@ requires `[get]foo` to be present, there is no practical concern of a bindings
 conflict between `[set]foo` and `foo`. The same goes for other uses of `[get]`
 and `[set]` annotations.
 
-📡 Note also that `[method][get]foo.prop` and `[method]foo.get-prop` are
-considered strongly-unique even though in practice they may conflict. Likewise,
-`[method][set]foo.prop` and `[method]foo.set-prop` are considered
-strongly-unique. If this results in a conflict for a bindings generator, the
-bindings generator may choose one of the two and ignore the other. This is a
-temporary measure: in a later release, it is expected that both of these
-examples will not be considered strongly-unique, so API designers are
-encouraged to avoid this case.
+The strong uniqueness rules cannot absolutely prevent collisions in generated
+bindings; in practice, conflicts are always possible. For example,
+`[method][get]foo.prop` and `[method]foo.get-prop` are considered
+strongly-unique, as are `[method][set]foo.prop` and `[method]foo.set-prop`.
+Bindings generators are free to handle conflicts however they choose, e.g.
+renaming a binding, throwing an error, or even ignoring an item. API designers
+are encouraged to avoid overly similar or ambiguous naming.
 
-🎭 An `[overload]` name with base name `B` and suffix `s` is compared as two
-names: `B`, and `B` with `-s` appended to its last label. For example,
-`[method][overload]foo.bar.baz` is compared as `[method]foo.bar` and
-`[method]foo.bar-baz`. The base names of an
-overload set are not compared with each other. Thus, the following names are
-strongly-unique:
-
-* `[overload]log.text`, `[overload]log.pair`, `[overload]log.with-level`,
-  `[method][overload]foo.bar.a`, `[method][overload]foo.bar.b`, `log-other`
-
-but attempting to add any of the following names would be a validation error:
-
-* `log`, `[get]log` (conflicts with the base name of `[overload]log.text`)
-* `log-text` (conflicts with `[overload]log.text`)
-* `[overload]LOG.other` (base name is not equal to `log`)
-* `[method]foo.bar` (conflicts with the base name of
-  `[method][overload]foo.bar.a`)
-
+> [!NOTE]
+> Name uniqueness can be implemented with a hash set S, plus a hash map M from
+> C to B. For each new name:
+> 
+> 1. Check if A is in S. If it is, the new name is NOT strongly-unique.
+> 2. Look up M[C], yielding B' or nothing:
+>     1. If there is no match or B = B', the new name is strongly-unique.
+>     2. Otherwise, the new name is NOT strongly-unique.
+> 3. Add A to S, and let M[C] = B.
+>
+> Note that this does not capture the case where e.g. `foo` is a core module
+> and `foo#with-options` is a function, in which case the names are unique but
+> the overload is not valid.
 
 #### 🔗 Canonical Interface Name
 
