@@ -1,5 +1,5 @@
-;; Tests for the resource-type parts of Explainer.md#type-checking and
-;; validation of Explainer.md#resource-built-ins.
+;; Tests for the resource-type parts of Text.md#type-checking and
+;; validation of Text.md#resource-built-ins.
 
 ;; `sub` bounds are fresh
 
