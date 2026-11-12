@@ -1,47 +1,7 @@
 # Text Format / AST Explainer
 
-This explainer walks through the grammar of a [component](../high-level) and
-the proposed embedding of components into native JavaScript runtimes. For a
-more user-focused explanation, take a look at the
-**[Component Model Documentation]**.
-
-* [Gated features](#gated-features)
-* [Grammar](#grammar)
-  * [Index spaces](#index-spaces)
-  * [Component definitions](#component-definitions)
-  * [Instance definitions](#instance-definitions)
-  * [Alias definitions](#alias-definitions)
-  * [Type definitions](#type-definitions)
-    * [Fundamental value types](#fundamental-value-types)
-      * [Numeric types](#numeric-types)
-      * [Error Context type](#-error-context-type)
-      * [Container types](#container-types)
-      * [Handle types](#handle-types)
-      * [Asynchronous value types](#asynchronous-value-types)
-    * [Specialized value types](#specialized-value-types)
-    * [Definition types](#definition-types)
-    * [Declarators](#declarators)
-    * [Type checking](#type-checking)
-  * [Canonical definitions](#canonical-definitions)
-    * [Canonical ABI](#canonical-abi)
-    * [Canonical built-ins](#canonical-built-ins)
-      * [Resource built-ins](#resource-built-ins)
-      * [Concurrency built-ins](#-concurrency-built-ins)
-      * [Error Context built-ins](#-error-context-built-ins)
-  * [Value definitions](#-value-definitions)
-  * [Start definitions](#-start-definitions)
-  * [Import and export definitions](#import-and-export-definitions)
-    * [Name uniqueness](#name-uniqueness)
-    * [Canonical interface name](#-canonical-interface-name)
-    * [External visibility of types](#external-visibility-of-types)
-* [Component invariants](#component-invariants)
-* [JavaScript embedding](#JavaScript-embedding)
-* [Examples](#examples)
-
-(Based on the previous [scoping and layering] proposal to the WebAssembly CG,
-this repo merges and supersedes the [module-linking] and [interface-types]
-proposals, pushing some of their original features into the post-MVP [future
-feature](FutureFeatures.md) backlog.)
+This explainer walks through the text format of the Component Model which
+extends the Core WebAssembly text format (WAT).
 
 
 ## Gated Features
@@ -3206,7 +3166,6 @@ For some use-case-focused, worked examples, see:
 [Non-Parametric Parametricity]: https://people.mpi-sws.org/~dreyer/papers/npp/main.pdf
 
 [module-linking]: https://github.com/WebAssembly/module-linking/blob/main/proposals/module-linking/Explainer.md
-[interface-types]: https://github.com/WebAssembly/interface-types/blob/main/proposals/interface-types/Explainer.md
 [type-imports]: https://github.com/WebAssembly/proposal-type-imports/blob/master/proposals/type-imports/Overview.md
 [exception-handling]: https://github.com/WebAssembly/exception-handling/blob/main/proposals/exception-handling/Exceptions.md
 [stack-switching]: https://github.com/WebAssembly/stack-switching/blob/main/proposals/stack-switching/Explainer.md
@@ -3280,9 +3239,5 @@ For some use-case-focused, worked examples, see:
 [Returning]: Concurrency.md#returning
 [Resolved]: Concurrency.md#cancellation
 [Cancellation]: Concurrency.md#cancellation
-
-[Component Model Documentation]: https://component-model.bytecodealliance.org
-
-[Scoping and Layering]: https://docs.google.com/presentation/d/1PSC3Q5oFsJEaYyV5lNJvVgh-SNxhySWUqZ6puyojMi8
 
 [`navigator.hardwareConcurrency`]: https://developer.mozilla.org/en-US/docs/Web/API/Navigator/hardwareConcurrency

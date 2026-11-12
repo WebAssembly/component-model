@@ -2,76 +2,10 @@
 
 This document defines the Canonical ABI used to convert between the values and
 functions of components in the Component Model and the values and functions
-of modules in Core WebAssembly. See the [AST explainer](Text.md) for a
+of modules in Core WebAssembly. See the [explainer](Explainer.md) for a
 walkthrough of the static structure of a component and the [concurrency
 explainer] for a high-level description of the concurrency concepts being
 specified here.
-
-* [Introduction](#introduction)
-* [Component Instances](#component-instances)
-* [Concurrency](#concurrency)
-  * [Stack Switching](#stack-switching)
-  * [Threads](#threads)
-  * [Tasks](#tasks)
-* [Embedding](#embedding)
-* [Canonical ABI Options](#canonical-abi-options)
-* [Lifting and Lowering Context](#lifting-and-lowering-context)
-* [Runtime State](#runtime-state)
-  * [Table State](#table-state)
-  * [Resource State](#resource-state)
-  * [Waitable State](#waitable-state)
-  * [Subtask State](#subtask-state)
-  * [Buffer State](#buffer-state)
-  * [Stream and Future State](#stream-and-future-state)
-* [Despecialization](#despecialization)
-* [Type Predicates](#type-predicates)
-* [Alignment](#alignment)
-* [Element Size](#element-size)
-* [Loading](#loading)
-* [Storing](#storing)
-* [Flattening](#flattening)
-* [Flat Lifting](#flat-lifting)
-* [Flat Lowering](#flat-lowering)
-* [Lifting and Lowering Values](#lifting-and-lowering-values)
-* [Canonical definitions](#canonical-definitions)
-  * [`canonopt` Validation](#canonopt-validation)
-  * [`canon lift`](#canon-lift)
-  * [`canon lower`](#canon-lower)
-  * [`canon resource.new`](#canon-resourcenew)
-  * [`canon resource.drop`](#canon-resourcedrop)
-  * [`canon resource.rep`](#canon-resourcerep)
-  * [`canon context.get`](#-canon-contextget) 🔀
-  * [`canon context.set`](#-canon-contextset) 🔀
-  * [`canon backpressure.{inc,dec}`](#-canon-backpressureincdec) 🔀
-  * [`canon task.return`](#-canon-taskreturn) 🔀
-  * [`canon task.cancel`](#-canon-taskcancel) 🔀
-  * [`canon waitable-set.new`](#-canon-waitable-setnew) 🔀
-  * [`canon waitable-set.wait`](#-canon-waitable-setwait) 🔀
-  * [`canon waitable-set.poll`](#-canon-waitable-setpoll) 🔀
-  * [`canon waitable-set.drop`](#-canon-waitable-setdrop) 🔀
-  * [`canon waitable.join`](#-canon-waitablejoin) 🔀
-  * [`canon subtask.cancel`](#-canon-subtaskcancel) 🔀
-  * [`canon subtask.drop`](#-canon-subtaskdrop) 🔀
-  * [`canon {stream,future}.new`](#-canon-streamfuturenew) 🔀
-  * [`canon {stream,future}.{read,write}`](#-canon-streamfuturereadwrite) 🔀
-  * [`canon {stream,future}.cancel-{read,write}`](#-canon-streamfuturecancel-readwrite) 🔀
-  * [`canon {stream,future}.drop-{readable,writable}`](#-canon-streamfuturedrop-readablewritable) 🔀
-  * [`canon {stream,future}.forward`](#-canon-streamfutureforward) ➡️
-  * [`canon thread.index`](#-canon-threadindex) 🧵
-  * [`canon thread.new-indirect`](#-canon-threadnew-indirect) 🧵
-  * [`canon thread.resume-later`](#-canon-threadresume-later) 🧵
-  * [`canon thread.suspend`](#-canon-threadsuspend) 🧵
-  * [`canon thread.yield`](#-canon-threadyield) 🔀
-  * [`canon thread.suspend-then-resume`](#-canon-threadsuspend-then-resume) 🧵
-  * [`canon thread.yield-then-resume`](#-canon-threadyield-then-resume) 🧵
-  * [`canon thread.suspend-then-promote`](#-canon-threadsuspend-then-promote) 🧵
-  * [`canon thread.yield-then-promote`](#-canon-threadyield-then-promote) 🧵
-  * [`canon error-context.new`](#-canon-error-contextnew) 📝
-  * [`canon error-context.debug-message`](#-canon-error-contextdebug-message) 📝
-  * [`canon error-context.drop`](#-canon-error-contextdrop) 📝
-  * [`canon thread.spawn-ref`](#-canon-threadspawn-ref) 🧵②
-  * [`canon thread.spawn-indirect`](#-canon-threadspawn-indirect) 🧵②
-  * [`canon thread.available-parallelism`](#-canon-threadavailable-parallelism) 🧵②
 
 
 ## Introduction
