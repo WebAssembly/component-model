@@ -405,7 +405,6 @@ class Task:
   state: State
   num_borrows: int
   implicit_thread: Optional[Thread]
-  threads: list[Thread]
 
   def __init__(self, ft, opts, inst, on_start, on_resolve):
     self.ft = ft
@@ -416,7 +415,6 @@ class Task:
     self.state = Task.State.INITIAL
     self.num_borrows = 0
     self.implicit_thread = None
-    self.threads = []
 
   def needs_exclusive(self):
     assert(self.ft.async_)
@@ -439,30 +437,15 @@ class Task:
       if self.needs_exclusive():
         assert(self.inst.exclusive_thread is None)
         self.inst.exclusive_thread = self.implicit_thread
-    self.register_thread(self.implicit_thread)
+    self.implicit_thread.index = self.inst.threads.add(self.implicit_thread)
     return True
-
-  def register_thread(self, thread):
-    assert(thread not in self.threads and thread.task is self)
-    self.threads.append(thread)
-    assert(thread.index is None)
-    thread.index = self.inst.threads.add(thread)
 
   def exit_implicit_thread(self):
     assert(current_thread() is self.implicit_thread)
-    self.unregister_thread(self.implicit_thread)
+    self.inst.threads.remove(self.implicit_thread.index)
     if self.ft.async_ and self.needs_exclusive():
       assert(self.inst.exclusive_thread is self.implicit_thread)
       self.inst.exclusive_thread = None
-
-  def unregister_thread(self, thread):
-    assert(thread in self.threads and thread.task is self)
-    self.threads.remove(thread)
-    if len(self.threads) == 0:
-      trap_if(self.state != Task.State.RESOLVED)
-      assert(self.num_borrows == 0)
-    assert(thread.index is not None)
-    self.inst.threads.remove(thread.index)
 
   def request_cancellation(self):
     if self.state == Task.State.INITIAL:
@@ -2625,10 +2608,10 @@ def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], fi, c):
     return [-1]
   def thread_func():
     [] = call_and_trap_on_throw(f.callee, [c])
-    task.unregister_thread(new_thread)
+    task.inst.threads.remove(new_thread.index)
   new_thread = Thread(task, thread_func)
   assert(new_thread.suspended())
-  task.register_thread(new_thread)
+  new_thread.index = task.inst.threads.add(new_thread)
   return [new_thread.index]
 
 ### 🧵 `canon thread.resume-later`
