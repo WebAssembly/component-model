@@ -1,11 +1,10 @@
 # Component Model Binary Format Explainer
 
-This document defines the binary format for the AST defined in the
-[explainer](Text.md). The top-level production is `component` and the
-convention is that a file suffixed in `.wasm` may contain either a
-[`core:module`] *or* a `component`, using the `layer` field to discriminate
-between the two in the first 8 bytes (see [below](#component-definitions) for
-more details).
+This document defines the binary format for the AST shared with the [text
+format](Text.md). The top-level production is `component` and the convention is
+that a file suffixed in `.wasm` may contain either a [`core:module`] *or* a
+`component`, using the `layer` field to discriminate between the two in the
+first 8 bytes (see [below](#component-definitions) for more details).
 
 Note: this document is not meant to completely define the decoding or validation
 rules, but rather merge the minimal need-to-know elements of both, with just

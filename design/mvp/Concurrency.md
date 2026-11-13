@@ -1,36 +1,9 @@
 # Concurrency Explainer
 
-This document contains a high-level summary of the native concurrency support,
-providing background for understanding the definitions in the [WIT], [AST
-explainer], [binary format] and [Canonical ABI explainer] documents that are
+This document contains a high-level summary of the Component Model's concurrency
+support, providing background for understanding the definitions in the [WIT],
+[text format], [binary format] and [Canonical ABI explainer] documents that are
 gated by the 🔀 (async) and 🧵 (threading) emojis.
-
-* [Goals](#goals)
-* [Summary](#summary)
-* [Concepts](#concepts)
-  * [Threads and Tasks](#threads-and-tasks)
-  * [Subtasks and Supertasks](#subtasks-and-supertasks)
-  * [Current Thread and Task](#current-thread-and-task)
-  * [Thread Built-ins](#thread-built-ins)
-  * [Thread-Local Storage](#thread-local-storage)
-  * [Blocking](#blocking)
-  * [Waitables and Waitable Sets](#waitables-and-waitable-sets)
-  * [Streams and Futures](#streams-and-futures)
-  * [Stream Readiness](#stream-readiness)
-  * [Backpressure](#backpressure)
-  * [Returning](#returning)
-  * [Borrows](#borrows)
-  * [Cancellation](#cancellation)
-  * [Nondeterminism](#nondeterminism)
-  * [Reentrance](#reentrance)
-* [Interaction with the start function](#interaction-with-the-start-function)
-* [Async ABI](#async-abi)
-  * [Async Import ABI](#async-import-abi)
-  * [Async Export ABI](#async-export-abi)
-* [Examples](#examples)
-* [Component Instance Lifetime](#component-instance-lifetime)
-* [Guest Language Task Affinity](#guest-language-task-affinity)
-* [TODO](#todo)
 
 
 ## Goals
@@ -493,7 +466,7 @@ Thus, if any *non*-entry-trampoline code calls `context.set`, it is the
 responsibility of *that code* to restore this default assumption before
 allowing control flow to escape into the wild.
 
-For more information, see [`context.get`] in the AST explainer.
+For more information, see [`context.get`].
 
 ### Blocking
 
@@ -1590,7 +1563,7 @@ the concurrency story:
 [`waitUntil`]: https://developer.mozilla.org/en-US/docs/Web/API/ExtendableEvent/waitUntil
 [`setInterval`]: https://developer.mozilla.org/en-US/docs/Web/API/Window/setInterval
 
-[AST Explainer]: Text.md
+[Text Format]: Text.md
 [Canonical Built-in]: Text.md#canonical-built-ins
 [Component Invariant]: Text.md#component-invariants
 [`context.get`]: Text.md#-contextget
