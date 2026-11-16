@@ -1008,13 +1008,13 @@ class End(Waitable):
       writable_end.other = readable_end
       readable_end.other = writable_end
       if writable_end.buffer is not None and readable_end.buffer is not None:
-        if readable_end.buffer.remain() > writable_end.buffer.remain():
-          bigger_end, smaller_end = readable_end, writable_end
+        if readable_end.buffer.remain() < writable_end.buffer.remain():
+          smaller_end = readable_end
         else:
-          bigger_end, smaller_end = writable_end, readable_end
-        buffer = smaller_end.buffer
+          smaller_end = writable_end
+        smaller_buffer = smaller_end.buffer
         smaller_end.buffer = None
-        smaller_end.copy(buffer)
+        smaller_end.copy(smaller_buffer)
 
   def drop(self):
     assert(not self.copying_or_cancelling())
