@@ -889,20 +889,20 @@ permits (e.g. `string | number`).
 
 To make case-selection unambiguous, validation requires every case of a `union`
 to have a payload, and for every pair of cases to be *distinguishable*. Two
-value types are *distinguishable* if their sets of *distinguishable kinds* are
+value types are *distinguishable* if their lists of *distinguishable kinds* are
 disjoint, where the distinguishable kinds of each value type are:
 
 | Type | Distinguishable kinds |
 | ---- | --------------------- |
-| `bool`, `s8`, `s16`, `s32`, `s64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64` | numeric |
-| `string` | string |
-| `record`, `variant`, `result`, `map` | object |
-| `list`, `tuple` | list |
-| `char`, `enum` | numeric, string |
-| `flags` | numeric, object |
-| `(option T)` | object, kinds of T |
-| `(own R)`, `(borrow R)` | resource `R` (types that are `eq` are indistinguishable) |
-| `union` | union of kinds of all case payloads |
+| `bool`, `s8`, `s16`, `s32`, `s64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64` | [numeric] |
+| `string` | [string] |
+| `record`, `variant`, `result`, `map` | [object] |
+| `list`, `tuple` | [list] |
+| `char`, `enum` | [numeric, string] |
+| `flags` | [numeric, object] |
+| `(option T)` | [...kinds of T, object] |
+| `(own R)`, `(borrow R)` | [resource `R`] (types that are `eq` are indistinguishable) |
+| `union` | kinds of all case payloads in declaration order, excluding duplicates |
 | `stream`, `future`, `error-context` | *not allowed* |
 
 <details>
@@ -948,6 +948,16 @@ in fact distinguishable at runtime; for example, if the same resource type is
 imported twice without an `eq` constraint. In this case, the embedder must pick
 the first matching union case or 🎭 overload in declaration order. The
 round-trip is lossy in this case, but well-defined.
+
+Authors of source-language bindings must carefully consider how unions and
+🎭 overloads map to source-language types and values to preserve the desired
+round-trip property. For example, a naive JavaScript binding for
+`(union (case "a" (list string)) (case "b" (map string string)))` might produce
+`Array` for `list` and `Map` for `map`, and might dispatch on the presence of
+`[Symbol.iterator]` when used as a parameter—but this would be incorrect in the
+parameter case, since JS `Map` has `[Symbol.iterator]`, meaning component `map`
+would convert to a JS `Map` and then back to a component `list`. When
+distinguishability is required, narrower source-language types may be required.
 
 #### Definition types
 
