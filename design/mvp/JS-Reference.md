@@ -1111,7 +1111,7 @@ To `create the exports object` given an [instance record](#instance-records) |in
                 1. For each |overload| in |overloadSet|:
                     1. Let |func| be `create a JS function for a component function` given |instance|, |overload|.Func, |key| and **false**.
                     1. Append |func| to |funcs|.
-                1. Let |value| be `create a JS function for overloads` given |instance|, |funcs|, and |overloadSet|.
+                1. Let |value| be `create a JS function for overloads` given |instance|, |funcs|, |overloadSet|, and |key|.
         1. **value**:
             1. Let |value| be `run within a call` given |instance|.[[HostResourceTypes]], |instance|.[[GuestResourceClasses]], and a new Abstract Closure that performs the following steps when called:
                 1. Return `ToJSValue`(|export|.Value, |export|.Type).
@@ -1145,20 +1145,25 @@ To `create a JS function for overloads` given an [instance record](#instance-rec
 1. Let |resourceTypes| be all the resource types in the [distinguishable kinds](Text.md#-union-types) of |paramTypes|, in order.
 1. Let |length| be the minimum number of parameters across all types in |overloadSetTypes|.
 1. Return a built-in function object with name |name| and length |length|, whose behavior, given a **this** value |thisValue| and JS arguments |args|, performs:
-    1. Let |n| be the maximum length of any func in |jsFuncs| such that |n| is less than or equal to |args|.length.
+    1. Let |maxArgs| be the maximum length of all funcs in |jsFuncs|.
+    1. Let |n| be min(|args|.length, |maxArgs|).
     1. Let |arityGroupFuncs| be all functions of length |n| in |jsFuncs|, in order, and let |arityGroupDecls| be all the corresponding export declarations from |overloadSet|.
-    1. TODO: No need for distinguishable kinds (and no coherent notion of distinguishable parameter index) if there is only one func in the group.
-    1. Let |arityGroupTypes| be the Type of each item in |arityGroupDecls|.
-    1. Let |i| be the [distinguishing parameter index](Text.md/#name-attributes-and-overloading) of |arityGroupTypes|.
-    1. Let |kind| be `DistinguishableKind`(|args|[|i|], |resourceTypes|). (TODO: |paramOffset|)
-    1. For each |func| in |arityGroupFuncs|, and each corresponding |funcType| in |arityGroupTypes|:
-        1. Let |paramType| be |funcType|.Params[|i|].
-        1. Let |paramKinds| be the [distinguishable kinds](Text.md#-union-types) of |paramType|.
-        1. If |kind| is in |paramKinds|:
-            1. Return ? `Call`(|func|, |thisValue|, |args|).
-    1. Throw a `TypeError`.
+    1. If |arityGroupFuncs| is empty:
+        1. Throw a `TypeError`.
+    1. Otherwise, if |arityGroupFuncs| has length 1:
+        1. Return ? `Call`(|arityGroupFuncs|[0], |thisValue|, |args|).
+    1. Otherwise:
+        1. Let |arityGroupTypes| be the Type of each item in |arityGroupDecls|.
+        1. Let |d| be the [distinguishing parameter index](Text.md/#name-attributes-and-overloading) of |arityGroupTypes|.
+        1. Let |kind| be ? `DistinguishableKind`(|args|[|d|], |resourceTypes|). (TODO: |paramOffset|)
+        1. For each |func| in |arityGroupFuncs|, and each corresponding |funcType| in |arityGroupTypes|:
+            1. Let |paramType| be |funcType|.Params[|d|].
+            1. Let |paramKinds| be the [distinguishable kinds](Text.md#-union-types) of |paramType|.
+            1. If |kind| is in |paramKinds|:
+                1. Return ? `Call`(|func|, |thisValue|, |args|).
+        1. Throw a `TypeError`.
 
-Overload resolution is defined as a JS function that dispatches to other JS functions based on argument count and distinguishing parameter type.
+Overload resolution is defined as a JS function that dispatches to other JS functions based on argument count and distinguishing parameter type. The overload resolution algorithm is designed to align closely with [WebIDL's](https://webidl.spec.whatwg.org/#js-overloads).
 
 To `define an accessor for a component function` given an [instance record](#instance-records) |instance|, an object |target|, a function export |export| and a Boolean |enumerable|:
 1. Let |key| be `JSName`(|export|).
