@@ -156,10 +156,10 @@ Every `plainname` matches exactly one of the four patterns below, and no `interf
 
 | Pattern | Regex | Groups | Example |
 |---|---|---|---|
-| *Plain* | `^(<label>)$` | 1: `name` | `query-selector` |
+| *Plain* | `^(<label>)(#(<label>))?$` | 1: `name`, 3: `suffix` | `query-selector` |
 | *Property* | `^\[(get\|set)\](<label>)$` | 1: `accessor`, 2: `name` | `[get]inner-HTML` |
-| *Constructor* | `^\[constructor\](<label>)$` | 1: `resource` | `[constructor]element` |
-| *Member* | `^\[(method\|static)\](\[(get\|set)\])?(<label>)\.(<label>)$` | 1: `scope`, 3: `accessor`, 4: `resource`, 5: `name` | `[method][set]element.inner-HTML` |
+| *Constructor* | `^\[constructor\](<label>)(#(<label>))?$` | 1: `resource`, 3: `suffix` | `[constructor]element` |
+| *Member* | `^\[(method\|static)\](\[(get\|set)\])?(<label>)\.(<label>)(#(<label>))?$` | 1: `scope`, 3: `accessor`, 4: `resource`, 5: `name`, 7: `suffix` | `[method][set]element.inner-HTML` |
 
 `plainname`'s are restricted by component [strong uniqueness](./Text.md#name-uniqueness). This helps us statically avoid collisions when building high-level export types (such as [guest resource classes](#guest-resource-classes)) and using the name transformations below.
 
@@ -1091,6 +1091,9 @@ To `create the exports object` given an [instance record](#instance-records) |in
         1. Perform `define an accessor for a component function` given |instance|, |exportsObject|, |export| and **true**.
         1. Continue.
     1. Let |key| be `JSName`(|export|).
+    1. If |exportsObject|[|key|] is already defined:
+        1. Assert: |export|.Sort is **func**.
+        1. Continue.
     1. Match |export|.Sort:
         1. **core module**:
             1. Let |value| be a new `Module` whose [[Module]] is |export|.Module.
@@ -1100,7 +1103,15 @@ To `create the exports object` given an [instance record](#instance-records) |in
             1. Let |abstractTypeKey| be the *abstract type key* of |export|.
             1. Let |value| be |instance|.[[GuestResourceClasses]][|abstractTypeKey|].
         1. **func**:
-            1. Let |value| be `create a JS function for a component function` given |instance|, |export|.Func, |key| and **false**.
+            1. Let |overloadSet| be every member |d| of |exportDecls|, in declaration order, where `JSName`(|d|) equals |key|.
+            1. If |overloadSet| has length 1:
+                1. Let |value| be `create a JS function for a component function` given |instance|, |export|.Func, |key| and **false**.
+            1. Otherwise:
+                1. Let |funcs| be a new empty list.
+                1. For each |overload| in |overloadSet|:
+                    1. Let |func| be `create a JS function for a component function` given |instance|, |overload|.Func, |key| and **false**.
+                    1. Append |func| to |funcs|.
+                1. Let |value| be `create a JS function for overloads` given |instance|, |funcs|, and |overloadSet|.
         1. **value**:
             1. Let |value| be `run within a call` given |instance|.[[HostResourceTypes]], |instance|.[[GuestResourceClasses]], and a new Abstract Closure that performs the following steps when called:
                 1. Return `ToJSValue`(|export|.Value, |export|.Type).
@@ -1108,8 +1119,8 @@ To `create the exports object` given an [instance record](#instance-records) |in
             1. Let |value| be ? `create the exports object` given |instance| and the exports of the exported instance.
         1. **component**:
             1. Let |value| be a new `Component` whose [[Component]] is |export|.Component.
-    1. Perform `CreateDataPropertyOrThrow`(|exportsObject|, |key|, |value|).
-1. Perform `SetIntegrityLevel`(|exportsObject|, "frozen").
+    1. Perform ? `CreateDataPropertyOrThrow`(|exportsObject|, |key|, |value|).
+1. Perform ? `SetIntegrityLevel`(|exportsObject|, "frozen").
 1. Return |exportsObject|.
 
 TODO: We need a JSName for members that hit the `reserved class members` list. It needs to concatenate the resource name with the method name somehow.
@@ -1126,6 +1137,28 @@ To `create a JS function for a component function` given an [instance record](#i
         1. If |okType| is **empty**:
             1. Return **undefined**.
         1. Return `ToJSValue`(|componentResult|, |okType|).
+
+To `create a JS function for overloads` given an [instance record](#instance-records) |instance|, |jsFuncs|, |overloadSet|, and |name|:
+1. TODO: |paramOffset|
+1. Let |overloadSetTypes| be the component function type of each declaration in |overloadSet|.
+1. Let |paramTypes| be the concatenation of all parameter types in all members of |overloadSetTypes|, in order.
+1. Let |resourceTypes| be all the resource types in the [distinguishable kinds](Text.md#-union-types) of |paramTypes|, in order.
+1. Let |length| be the minimum number of parameters across all types in |overloadSetTypes|.
+1. Return a built-in function object with name |name| and length |length|, whose behavior, given a **this** value |thisValue| and JS arguments |args|, performs:
+    1. Let |n| be the maximum length of any func in |jsFuncs| such that |n| is less than or equal to |args|.length.
+    1. Let |arityGroupFuncs| be all functions of length |n| in |jsFuncs|, in order, and let |arityGroupDecls| be all the corresponding export declarations from |overloadSet|.
+    1. TODO: No need for distinguishable kinds (and no coherent notion of distinguishable parameter index) if there is only one func in the group.
+    1. Let |arityGroupTypes| be the Type of each item in |arityGroupDecls|.
+    1. Let |i| be the [distinguishing parameter index](Text.md/#name-attributes-and-overloading) of |arityGroupTypes|.
+    1. Let |kind| be `DistinguishableKind`(|args|[|i|], |resourceTypes|). (TODO: |paramOffset|)
+    1. For each |func| in |arityGroupFuncs|, and each corresponding |funcType| in |arityGroupTypes|:
+        1. Let |paramType| be |funcType|.Params[|i|].
+        1. Let |paramKinds| be the [distinguishable kinds](Text.md#-union-types) of |paramType|.
+        1. If |kind| is in |paramKinds|:
+            1. Return ? `Call`(|func|, |thisValue|, |args|).
+    1. Throw a `TypeError`.
+
+Overload resolution is defined as a JS function that dispatches to other JS functions based on argument count and distinguishing parameter type.
 
 To `define an accessor for a component function` given an [instance record](#instance-records) |instance|, an object |target|, a function export |export| and a Boolean |enumerable|:
 1. Let |key| be `JSName`(|export|).
