@@ -1119,7 +1119,7 @@ To `create the exports object` given an [instance record](#instance-records) |in
                 1. For each |overload| in |overloadSet|:
                     1. Let |func| be `create a JS function for a component function` given |instance|, |overload|.Func, |key| and **false**.
                     1. Append |func| to |funcs|.
-                1. Let |value| be `create a JS function for overloads` given |instance|, |funcs|, |overloadSet|, and |key|.
+                1. Let |value| be `create a JS function for overloads` given |instance|, |funcs|, |overloadSet|, |key| and **false**.
         1. **value**:
             1. Let |value| be `run within a call` given |instance|.[[HostResourceTypes]], |instance|.[[GuestResourceClasses]], and a new Abstract Closure that performs the following steps when called:
                 1. Return `ToJSValue`(|export|.Value, |export|.Type).
@@ -1146,8 +1146,8 @@ To `create a JS function for a component function` given an [instance record](#i
             1. Return **undefined**.
         1. Return `ToJSValue`(|componentResult|, |okType|).
 
-To `create a JS function for overloads` given an [instance record](#instance-records) |instance|, |jsFuncs|, |overloadSet|, and |name|:
-1. TODO: |paramOffset|
+To `create a JS function for overloads` given an [instance record](#instance-records) |instance|, |jsFuncs|, |overloadSet|, |name|, and |takesSelf|:
+1. Let |paramOffset| be 1 if |takesSelf| is **true**, else 0.
 1. Let |overloadSetTypes| be the component function type of each declaration in |overloadSet|.
 1. Let |paramTypes| be the concatenation of all parameter types in all members of |overloadSetTypes|, in order.
 1. Let |resourceTypes| be all the resource types in the [distinguishable kinds](Text.md#-union-types) of |paramTypes|, in order.
@@ -1163,7 +1163,7 @@ To `create a JS function for overloads` given an [instance record](#instance-rec
     1. Otherwise:
         1. Let |arityGroupTypes| be the Type of each item in |arityGroupDecls|.
         1. Let |d| be the [distinguishing parameter index](Text.md/#name-attributes-and-overloading) of |arityGroupTypes|.
-        1. Let |kind| be ? `DistinguishableKind`(|args|[|d|], |resourceTypes|). (TODO: |paramOffset|)
+        1. Let |kind| be ? `DistinguishableKind`(|args|[|d| - |paramOffset|], |resourceTypes|). (TODO: |paramOffset|)
         1. For each |func| in |arityGroupFuncs|, and each corresponding |funcType| in |arityGroupTypes|:
             1. Let |paramType| be |funcType|.Params[|d|].
             1. Let |paramKinds| be `ExtendedDistinguishableKinds`(|paramType|).
