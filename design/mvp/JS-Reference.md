@@ -456,6 +456,13 @@ An absent property is therefore **false**, matching a `boolean` dictionary membe
 
 This operation is used for variant, and also cases in the above table where we can't specialize the behavior of `option` and `result`.
 
+`ExtendedDistinguishableKinds(componentType)`:
+1. Let |kinds| be the [distinguishable kinds](Text.md#-union-types) of |componentType| as defined by the component model spec.
+1. If |componentType| is `option`, append **nullish** to |kinds|.
+1. Return |kinds|.
+
+This operation extends the component spec's notion of "distinguishable kinds" to include a "nullish" case for optional params. This supports overloading and is unused by unions.
+
 `DistinguishableKind(jsValue, resourceTypes)`:
 1. For each |R| in |resourceTypes|:
     1. Let |abstractTypeKey| be the *abstract type key* of |R|.
@@ -468,6 +475,7 @@ This operation is used for variant, and also cases in the above table where we c
         1. Let |class| be the current call's [[GuestResourceClasses]][|abstractTypeKey|].
         1. If |jsValue| has a [[ResourceClass]] internal slot and |jsValue|.[[ResourceClass]] is |class|:
             1. Return **resource |R|**.
+1. If |jsValue| is **undefined** or **null**, return **nullish**.
 1. If |jsValue| is a String, return **string**.
 1. If |jsValue| is a Boolean, return **numeric**.
 1. If |jsValue| is a Number, return **numeric**.
@@ -477,7 +485,7 @@ This operation is used for variant, and also cases in the above table where we c
 1. If |jsValue| has a [[TypedArrayName]] internal slot, return **list**.
 1. Return **object**.
 
-This operation is used for `ToComponentValueUnion` and for overload resolution, and intentionally excludes undefined and null as these cannot map to any union case and must be handled outside the union or overload set.
+This operation is used for `ToComponentValueUnion` and for overload resolution.
 
 `ToComponentValueUnion(jsValue, cases)`:
 1. Let |resourceTypes| be all the resource types in the [distinguishable kinds](Text.md#-union-types) of the members of |cases|, in order.
@@ -1158,7 +1166,7 @@ To `create a JS function for overloads` given an [instance record](#instance-rec
         1. Let |kind| be ? `DistinguishableKind`(|args|[|d|], |resourceTypes|). (TODO: |paramOffset|)
         1. For each |func| in |arityGroupFuncs|, and each corresponding |funcType| in |arityGroupTypes|:
             1. Let |paramType| be |funcType|.Params[|d|].
-            1. Let |paramKinds| be the [distinguishable kinds](Text.md#-union-types) of |paramType|.
+            1. Let |paramKinds| be `ExtendedDistinguishableKinds`(|paramType|).
             1. If |kind| is in |paramKinds|:
                 1. Return ? `Call`(|func|, |thisValue|, |args|).
         1. Throw a `TypeError`.
