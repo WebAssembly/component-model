@@ -1712,8 +1712,8 @@ For details, see [Backpressure] in the concurrency explainer and
 | Canonical ABI signature    | `[lower(FuncT.results)*] -> []`         |
 
 The `task.return` built-in takes as parameters the result values of the
-[current task]. One of `task.return` or `task.cancel` must be called exactly
-once from any of a task's threads.
+[current task]. At most one call to `task.return` or `task.cancel` may be made
+from any of a task's threads; if neither is called, the task never resolves.
 
 The `canon task.return` definition takes component-level return type and the
 list of `canonopt` to be used to lift the return value. When called, the

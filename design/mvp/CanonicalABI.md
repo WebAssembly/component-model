@@ -554,7 +554,6 @@ class Task:
   state: State
   num_borrows: int
   implicit_thread: Optional[Thread]
-  threads: list[Thread]
 
   def __init__(self, ft, opts, inst, on_start, on_resolve):
     self.ft = ft
@@ -565,7 +564,6 @@ class Task:
     self.state = Task.State.INITIAL
     self.num_borrows = 0
     self.implicit_thread = None
-    self.threads = []
 ```
 
 The `Task.needs_exclusive` predicate returns whether this task's implicit thread
@@ -627,14 +625,8 @@ exports.
       if self.needs_exclusive():
         assert(self.inst.exclusive_thread is None)
         self.inst.exclusive_thread = self.implicit_thread
-    self.register_thread(self.implicit_thread)
+    self.implicit_thread.index = self.inst.threads.add(self.implicit_thread)
     return True
-
-  def register_thread(self, thread):
-    assert(thread not in self.threads and thread.task is self)
-    self.threads.append(thread)
-    assert(thread.index is None)
-    thread.index = self.inst.threads.add(thread)
 ```
 Since the order in which suspended threads are resumed is nondeterministic (see
 `Store.tick` below), once `Task.enter_implicit_thread` suspends the task's
@@ -649,32 +641,26 @@ above definition ensures the following properties:
   thundering herd of pending tasks).
 
 Once a task's implicit thread has cleared the backpressure gate, it is added to
-the lists of threads running inside the current task and component instance by
-`Task.register_thread()` (which is also called by `thread.new-indirect`, below).
+the component instance's `threads` table (just like the explicit threads created
+by `thread.new-indirect`, below).
 
 Symmetrically, the `Task.exit_implicit_thread` method is called before a task's
-implicit thread returns to reverse the effects of `Task.enter_implicit_thread`.
-In particular, if the `exclusive_thread` lock was acquired, it is released.
-`Task.unregister_thread` (which is also called by `thread.new-indirect`, below)
-traps if the task's last thread is unregistered and the task has not yet
-returned a value to its caller.
+implicit thread returns to reverse the effects of `Task.enter_implicit_thread`,
+removing the thread from the `threads` table and, if the `exclusive_thread` lock
+was acquired, releasing it.
 ```python
   def exit_implicit_thread(self):
     assert(current_thread() is self.implicit_thread)
-    self.unregister_thread(self.implicit_thread)
+    self.inst.threads.remove(self.implicit_thread.index)
     if self.ft.async_ and self.needs_exclusive():
       assert(self.inst.exclusive_thread is self.implicit_thread)
       self.inst.exclusive_thread = None
-
-  def unregister_thread(self, thread):
-    assert(thread in self.threads and thread.task is self)
-    self.threads.remove(thread)
-    if len(self.threads) == 0:
-      trap_if(self.state != Task.State.RESOLVED)
-      assert(self.num_borrows == 0)
-    assert(thread.index is not None)
-    self.inst.threads.remove(thread.index)
 ```
+Note that there is no trap when a task's implicit thread (or any other thread)
+exits before the task has resolved (by calling `task.return` or `task.cancel`),
+even if it is the task's last thread. In that case, the task will never
+resolve, which, from the caller's perspective, is indistinguishable from the
+case where the task's threads are all blocked forever.
 
 The `Task.request_cancellation` method implements the `OnCancel` callback that
 is called by the `subtask.cancel` built-in. If a task's implicit thread is
@@ -3465,7 +3451,8 @@ In both of the `async` cases below (with or without `callback`), the
 `task.return` built-in must be called, providing the return value as core wasm
 *parameters* to the `task.return` built-in (rather than as core function
 results as in the synchronous case). If `task.return` is *not* called by the
-time the `Task`'s last `Thread` exits, there is a trap (in `Task.unregister_thread`).
+time the `Task`'s last `Thread` exits, the task never resolves (as described
+in `Task.exit_implicit_thread` above).
 
 In the `async` non-`callback` ("stackful async") case, there is a single call
 to the core wasm callee which must return empty core results. Waiting for async
@@ -4621,10 +4608,10 @@ def canon_thread_new_indirect(ft, ftbl: Table[CoreFuncRef], fi, c):
     return [-1]
   def thread_func():
     [] = call_and_trap_on_throw(f.callee, [c])
-    task.unregister_thread(new_thread)
+    task.inst.threads.remove(new_thread.index)
   new_thread = Thread(task, thread_func)
   assert(new_thread.suspended())
-  task.register_thread(new_thread)
+  new_thread.index = task.inst.threads.add(new_thread)
   return [new_thread.index]
 ```
 The newly-created thread starts out in a "suspended" state and so, to

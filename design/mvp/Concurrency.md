@@ -729,10 +729,12 @@ the "started" state.
 The way an `async` export returns its value using the async ABI is by calling
 [`task.return`], passing the core values that are to be lifted as *parameters*.
 When using the async ABI, *any* of the threads contained by a task can call
-`task.return`; there is no "main thread" of a task. When the last thread of a
-task returns, there is a trap if `task.return` has not been called. Thus, *some*
-thread (either the thread created implicitly for the initial export call or some
-thread transitively created by that thread) must call `task.return`.
+`task.return`; there is no "main thread" of a task. However, *some* thread
+(either the thread created implicitly for the initial export call or some
+thread transitively created by that thread) must call `task.return` for the
+caller to receive a result. If the last thread of a task exits before
+`task.return` has been called, the task simply never returns, as if its threads
+blocked forever on some never-met condition.
 
 Returning values by calling `task.return` allows a task to continue executing
 even after it has passed its initial results to the caller. This is also

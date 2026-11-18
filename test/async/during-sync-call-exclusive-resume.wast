@@ -103,7 +103,9 @@
 (assert_trap (invoke "sync-block") "cannot block a synchronous task before returning")
 
 ;; Same as above, except the async callback task has *not* resolved when its
-;; callback returns EXIT during the sync call, which traps.
+;; callback returns EXIT during the sync call. Exiting without having resolved
+;; does not itself trap (the task is simply left unresolved), so the outcome is
+;; the same as above: once no ready threads remain, the sync call traps.
 (component
   (component $C
     (core module $Core
