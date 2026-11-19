@@ -161,17 +161,24 @@
 ;; immediately rather than resume it.
 (component
   (component $Inner
+    (import "sibling" (instance $sibling
+      (export "arm" (func))
+    ))
     (core module $Core
       (import "" "thread.suspend" (func $thread.suspend (result i32)))
+      (import "" "arm" (func $arm))
 
       ;; non-async-typed: suspend with no thread of this instance to switch to
       (func (export "sync-block")
+        (call $arm)
         (drop (call $thread.suspend))
         unreachable)
     )
     (canon thread.suspend (core func $thread.suspend))
+    (canon lower (func $sibling "arm") (core func $arm))
     (core instance $core (instantiate $Core (with "" (instance
       (export "thread.suspend" (func $thread.suspend))
+      (export "arm" (func $arm))
     ))))
     (func (export "sync-block")
       (canon lift (core func $core "sync-block")))
@@ -206,10 +213,9 @@
     (func (export "arm")
       (canon lift (core func $core "arm")))
   )
-  (instance $inner (instantiate $Inner))
   (instance $sibling (instantiate $Sibling))
-  (func (export "arm") (alias export $sibling "arm"))
+  (instance $inner (instantiate $Inner
+    (with "sibling" (instance $sibling))))
   (func (export "sync-block") (alias export $inner "sync-block"))
 )
-(assert_return (invoke "arm"))
 (assert_trap (invoke "sync-block") "cannot block a synchronous task before returning")
