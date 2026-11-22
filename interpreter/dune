@@ -1,0 +1,17 @@
+(env
+; (_ (flags (:standard -w +a-4-27-42-44-45 -warn-error +a-3))))
+  (dev (flags (:standard -g -w +a-4-27-42-44-45-70 -warn-error -A))))
+(include_subdirs unqualified)
+
+
+(library
+ (name wasm_components)
+ (public_name wasm_components)
+ (modules ast desugar elaborate etypes etype_pp parse parser putil lexer flags script substitute subtype valid)
+ (libraries wasm menhirLib))
+
+(executable
+ (name main)
+ (modules main run)
+ (modes byte exe)
+ (libraries bigarray wasm wasm_components))
