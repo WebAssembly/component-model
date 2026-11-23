@@ -119,11 +119,11 @@ example.
 Given the ABI options supplied to `canon`, the Component Model specifies how the
 given component-level type (`(func (result string))`) is **lowered** into a
 core-level type (`(func (result i32))`). The Component Model's validation rules
-for `canon lift` require that this lowered type matches the given core
-function (`$main-greeting`). With memory64 ([🐘]), when the `memory` ABI option
-refers to a 64-bit memory, the pointers and lengths mentioned above are replaced
-with `i64`. In the future, a new ABI option will likely be added for [wasm-gc]
-to replace these integer offsets with typed GC references.
+for `canon lift` require that this lowered type matches the given core function
+(`$main-greeting`). With memory64 ([🐘]), when the `memory` ABI option refers to
+a 64-bit memory, the pointers and lengths mentioned above are replaced with
+`i64`. With the 🛸 `gc` option supplied, values are not lifted and lowered
+through linear memory at all, but through GC heap objects instead.
 
 The Component Model text format also provides **inline aliases** as syntactic
 sugar that implicitly emits export aliases as needed. Using inline aliases, the
@@ -762,11 +762,11 @@ Walking through the definitions in order, starting after `$alloc`:
 
 The `(type $file (resource ...))` defines a new resource type with an `i64`
 representation type that, when destroyed, calls the `free` function exported by
-`$alloc` to free the memory allocation. Currently, `i32` and `i64` [🐘] are the
-only allowed representation types but, in the future, as part of [wasm-gc]
-support, reference types could be added. In any case, the general idea is that a
-resource's representation value is pointer-like and pointer-sized. This example
-uses a 64-bit `memory` and thus specifies an `i64` resource representation.
+`$alloc` to free the memory allocation. Currently, `i32`, `i64` [🐘], and `(ref
+any)` [🛸] are the only allowed representation types. In any case, the general idea
+is that a resource's representation value is pointer-like and
+pointer-sized. This example uses a 64-bit `memory` and thus specifies an `i64`
+resource representation.
 
 Next, the `(core func $file-new (canon resource.new $file))` definition appends
 a new `core func` index for the `resource.new` ABI built-in. As this definition
@@ -1601,6 +1601,7 @@ the basis of a portable inside-and-outside-the-browser WebAssembly ecosystem.
 [External Visibility]: Text.md#external-visibility-of-types
 [🪺]: Text.md#gated-features
 [🐘]: Text.md#gated-features
+[🛸]: Text.md#gated-features
 [🔧]: Text.md#gated-features
 [📡]: Text.md#gated-features
 [Binary Format reference]: Binary.md

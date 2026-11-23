@@ -264,7 +264,9 @@ Notes:
 * Validation of `stream` rejects `(stream char)` as a temporary
   [TODO](Concurrency.md#TODO).
 * Validation of `resourcetype` requires the destructor (if present) to have
-  type `[i32] -> []`.
+  type `[t] -> []`, where `t` is the representation type.
+* Validation of `resourcetype` requires the representation type to be `i32`,
+  `i64` (🐘) or `(ref any)` (🛸).
 * In addition to the validation rules for `alias` *definitions* mentioned above,
   validation of `alias` *declarators* also requires:
   * `export` aliases only alias the `instance` and `type` sorts
@@ -351,6 +353,35 @@ canon    ::= 0x00 0x00 f:<core:funcidx> opts:<opts> ft:<typeidx> => (canon lift 
            | 0x40 sh?:<sh?> ft:<core:typeidx>                    => (canon thread.spawn-ref sh? ft (core func)) 🧵②
            | 0x41 sh?:<sh?> ft:<core:typeidx> t:<core:tableidx>  => (canon thread.spawn-indirect sh? ft t (core func)) 🧵②
            | 0x42 sh?:<sh?>                                      => (canon thread.available-parallelism sh? (core func)) 🧵②
+           | 0x43 dst:<core:typeidx> src:<core:typeidx>          => (canon array.new-array dst src (core func)) 🛸
+           | 0x44 dst:<core:typeidx> src:<core:memoryidx>        => (canon array.new-memory dst src (core func)) 🛸
+           | 0x45 dst:<core:typeidx> src:<core:tableidx>         => (canon array.new-table dst src (core func)) 🛸
+           | 0x46 rt:<typeidx>                                   => (canon gc.resource.new rt (core func)) 🛸
+           | 0x47 rt:<typeidx>                                   => (canon gc.resource.drop rt (core func)) 🛸
+           | 0x48 rt:<typeidx>                                   => (canon gc.resource.rep rt (core func)) 🛸
+           | 0x49 t:<typeidx>                                    => (canon gc.stream.new t (core func)) 🛸
+           | 0x4a t:<typeidx> async?:<async?>                    => (canon gc.stream.cancel-read t async? (core func)) 🛸
+           | 0x4b t:<typeidx> async?:<async?>                    => (canon gc.stream.cancel-write t async? (core func)) 🛸
+           | 0x4c t:<typeidx>                                    => (canon gc.stream.drop-readable t (core func)) 🛸
+           | 0x4d t:<typeidx>                                    => (canon gc.stream.drop-writable t (core func)) 🛸
+           | 0x4e t:<typeidx>                                    => (canon gc.stream.forward t (core func)) 🛸
+           | 0x4f t:<typeidx>                                    => (canon gc.future.new t (core func)) 🛸
+           | 0x50 t:<typeidx> async?:<async?>                    => (canon gc.future.cancel-read t async? (core func)) 🛸
+           | 0x51 t:<typeidx> async?:<async?>                    => (canon gc.future.cancel-write t async? (core func)) 🛸
+           | 0x52 t:<typeidx>                                    => (canon gc.future.drop-readable t (core func)) 🛸
+           | 0x53 t:<typeidx>                                    => (canon gc.future.drop-writable t (core func)) 🛸
+           | 0x54 t:<typeidx>                                    => (canon gc.future.forward t (core func)) 🛸
+           | 0x55                                                => (canon gc.error-context.drop (core func)) 🛸
+           | 0x56                                                => (canon gc.waitable-set.new (core func)) 🛸
+           | 0x57                                                => (canon gc.waitable-set.wait (core func)) 🛸
+           | 0x58                                                => (canon gc.waitable-set.poll (core func)) 🛸
+           | 0x59                                                => (canon gc.waitable-set.drop (core func)) 🛸
+           | 0x5a                                                => (canon gc.waitable.join (core func)) 🛸
+           | 0x5b async?:<async?>                                => (canon gc.subtask.cancel async? (core func)) 🛸
+           | 0x5c                                                => (canon gc.subtask.drop (core func)) 🛸
+           | 0x5d                                                => (canon gc.handle-ref.index (core func)) 🛸
+           | 0x5e                                                => (canon gc.handle-ref.new (core func)) 🛸
+           | 0x5f                                                => (canon gc.handle-ref.get (core func)) 🛸
 async?   ::= 0x00                                                =>
            | 0x01                                                => async
 sh?      ::= 0x00                                                =>
@@ -364,15 +395,21 @@ canonopt ::= 0x00                                                => string-encod
            | 0x05 f:<core:funcidx>                               => (post-return f)
            | 0x06                                                => async 🔀
            | 0x07 f:<core:funcidx>                               => (callback f) 🔀
+           | 0x08                                                => gc 🛸
 ```
 Notes:
 * The second `0x00` byte in `canon` stands for the `func` sort and thus the
   `0x00 <u32>` pair standards for a `func` `sortidx` or `core:sortidx`.
 * Validation prevents duplicate or conflicting `canonopt`.
+  * 🛸 Validation rejects using both `gc` and `memory` (and thus `realloc`) in
+    the same `opts`, for example.
 * When there is no `string-encoding` present, the default value is `utf8`.
   For all other values, the default value is "none".
 * Validation of the individual canonical definitions is described in
   [`CanonicalABI.md`](CanonicalABI.md#canonical-definitions).
+* 🛸 The `gc.*` canonical definitions only exist because the associated non-GC
+  definitions do not take `<opts>`; the definitions that do take `<opts>` use
+  the `gc` `canonopt` to switch to the GC mode instead.
 
 
 ## 🪙 Start Definitions
