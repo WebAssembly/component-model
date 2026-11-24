@@ -4,3 +4,4 @@
 ./async/big-interleaving-test.wast
 ./async/forward.wast
 ./async/exit-without-resolving.wast
+./values/transcode-memory64.wast
