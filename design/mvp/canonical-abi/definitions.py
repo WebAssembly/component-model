@@ -54,6 +54,120 @@ def type_matches_value(t, v):
   match t:
     case 'i32' | 'i64': return type(v) == int
     case 'f32' | 'f64': return type(v) == float
+    case CoreRefType(): return ref_test(v, t)
+  assert(False)
+
+# Core Wasm GC types. Rec groups are compared structurally, which gives
+# iso-recursive type canonicalization for free, since references to other types
+# in the same rec group are rec-group-relative (`CoreRecIdx`).
+
+@dataclass(frozen = True)
+class CoreRecIdx:
+  i: int
+
+@dataclass(frozen = True)
+class CoreRefType:
+  heap_type: str | CoreDefType # 'extern', 'any', 'eq', 'struct', 'array' or a defined type
+  nullable: bool = False
+
+@dataclass(frozen = True)
+class CoreFieldType:
+  t: str | CoreRefType # 'i8', 'i16', 'i32', 'i64', 'f32', 'f64' or a reference type
+  mutable: bool = False
+
+@dataclass(frozen = True)
+class CoreStructType:
+  fields: tuple[CoreFieldType, ...]
+
+@dataclass(frozen = True)
+class CoreArrayType:
+  elem: CoreFieldType
+
+@dataclass(frozen = True)
+class CoreSubType:
+  final: bool
+  supertypes: tuple[CoreRecIdx | CoreDefType, ...]
+  comptype: CoreStructType | CoreArrayType
+
+@dataclass(frozen = True)
+class CoreRecType:
+  subtypes: tuple[CoreSubType, ...]
+
+@dataclass(frozen = True)
+class CoreDefType:
+  rec: CoreRecType
+  i: int
+
+  def comptype(self):
+    return self.rec.subtypes[self.i].comptype
+
+  def supertypes(self):
+    for st in self.rec.subtypes[self.i].supertypes:
+      if isinstance(st, CoreRecIdx):
+        yield CoreDefType(self.rec, st.i)
+      else:
+        yield st
+
+  def matches(self, other):
+    return self == other or any(st.matches(other) for st in self.supertypes())
+
+# Core Wasm GC objects and the subset of GC instructions used by the Canonical
+# ABI. Packed (`i8` and `i16`) fields hold their zero-extended bits.
+
+@dataclass(eq = False)
+class GcStruct:
+  t: CoreDefType
+  fields: list[any]
+
+@dataclass(eq = False)
+class GcArray:
+  t: CoreDefType
+  elems: list[any]
+
+def wrap_packed(t, v):
+  match t:
+    case 'i8'                                          : return v % (1 << 8)
+    case 'i16'                                         : return v % (1 << 16)
+    case 'i32' | 'i64' | 'f32' | 'f64' | CoreRefType() : return v
+
+def struct_new(t: CoreDefType, vs): # struct.new
+  fields = t.comptype().fields
+  assert(len(fields) == len(vs))
+  return GcStruct(t, [wrap_packed(f.t, v) for f,v in zip(fields, vs)])
+
+def struct_get(s: GcStruct, i): # struct.get or struct.get_u
+  return s.fields[i]
+
+def struct_set(s: GcStruct, i, v): # struct.set
+  field = s.t.comptype().fields[i]
+  assert(field.mutable)
+  s.fields[i] = wrap_packed(field.t, v)
+
+def array_new_fixed(t: CoreDefType, vs): # array.new_fixed
+  return GcArray(t, [wrap_packed(t.comptype().elem.t, v) for v in vs])
+
+def array_len(a: GcArray): # array.len
+  return len(a.elems)
+
+def array_get(a: GcArray, i): # array.get or array.get_u
+  return a.elems[i]
+
+def storage_byte_size(t):
+  match t:
+    case 'i8'          : return 1
+    case 'i16'         : return 2
+    case 'i32' | 'f32' : return 4
+    case 'i64' | 'f64' : return 8
+
+def ref_test(v, rt: CoreRefType): # ref.test
+  if v is None:
+    return rt.nullable
+  match rt.heap_type:
+    case 'extern'      : return True
+    case 'any' | 'eq'  : return isinstance(v, GcStruct | GcArray)
+    case 'struct'      : return isinstance(v, GcStruct)
+    case 'array'       : return isinstance(v, GcArray)
+    case CoreDefType() : return isinstance(v, GcStruct | GcArray) and v.t.matches(rt.heap_type)
   assert(False)
 
 @dataclass
@@ -578,10 +692,12 @@ class MemInst:
 class LiftOptions:
   string_encoding: str = 'utf8'
   memory: Optional[MemInst] = None
+  gc: bool = False
 
   def equal(lhs, rhs):
     return lhs.string_encoding == rhs.string_encoding and \
-           lhs.memory is rhs.memory
+           lhs.memory is rhs.memory and \
+           lhs.gc == rhs.gc
 
 @dataclass
 class LiftLowerOptions(LiftOptions):
@@ -638,8 +754,13 @@ class LiftLowerContext:
 
 ### Table State
 
+@dataclass
+class TableEntry:
+  item: any
+  handle_ref: Optional[HandleRef] = None
+
 class Table:
-  array: list[any]
+  array: list[Optional[TableEntry]]
   free: list[int]
 
   MAX_LENGTH = 2**28 - 1
@@ -649,24 +770,24 @@ class Table:
     self.free = []
 
   def __iter__(self):
-    for e in self.array:
-      if e is not None:
-        yield e
+    for entry in self.array:
+      if entry is not None:
+        yield entry.item
 
   def get(self, i):
     trap_if(i >= len(self.array))
     trap_if(self.array[i] is None)
-    return self.array[i]
+    return self.array[i].item
 
   def add(self, e):
     if self.free:
       i = self.free.pop()
       assert(self.array[i] is None)
-      self.array[i] = e
+      self.array[i] = TableEntry(e)
     else:
       i = len(self.array)
       trap_if(i > Table.MAX_LENGTH)
-      self.array.append(e)
+      self.array.append(TableEntry(e))
     return i
 
   def remove(self, i):
@@ -674,6 +795,19 @@ class Table:
     self.array[i] = None
     self.free.append(i)
     return e
+
+  def get_handle_ref(self, i):
+    trap_if(i >= len(self.array))
+    if self.array[i] is None:
+      return None
+    else:
+      return self.array[i].handle_ref
+
+  def set_handle_ref(self, i, r):
+    trap_if(i >= len(self.array))
+    trap_if(self.array[i] is None)
+    trap_if(self.array[i].handle_ref is not None)
+    self.array[i].handle_ref = r
 
 ### Resource State
 
@@ -691,9 +825,11 @@ class ResourceHandle:
     self.borrow_scope = borrow_scope
     self.num_lends = 0
 
+ANYREF = CoreRefType('any')
+
 class ResourceType(Type):
   impl_inst: ComponentInstance
-  rep: Literal['i32', 'i64']
+  rep: Literal['i32', 'i64'] | CoreRefType
   dtor: Optional[Callable]
 
   def __init__(self, impl_inst, rep, dtor = None):
@@ -918,6 +1054,71 @@ class WritableGuestBuffer(GuestBuffer, WritableBuffer):
     else:
       assert(all(v == () for v in vs))
     self.progress += len(vs)
+
+class GcBuffer(Buffer):
+  cx: LiftLowerContext
+  t: Optional[ValType]
+  elems: list[any]
+  offset: int
+  length: int
+  progress: int
+
+  def __init__(self, t, cx, elems, offset, length):
+    trap_if(length > Buffer.MAX_LENGTH)
+    if t is not None:
+      trap_if(offset + length > len(elems))
+    self.cx = cx
+    self.t = t
+    self.elems = elems
+    self.offset = offset
+    self.length = length
+    self.progress = 0
+
+  def remain(self):
+    return self.length - self.progress
+
+class ReadableGcBuffer(GcBuffer, ReadableBuffer):
+  def read(self, n):
+    assert(n <= self.remain())
+    if self.t:
+      vs = []
+      for i in range(n):
+        vs.append(self.lift(self.elems[self.offset + self.progress + i]))
+    else:
+      vs = n * [()]
+    self.progress += n
+    return vs
+
+  def lift(self, v):
+    return lift_gc_value(self.cx, v, self.t)
+
+class WritableGcBuffer(GcBuffer, WritableBuffer):
+  def write(self, vs):
+    assert(len(vs) <= self.remain())
+    if self.t:
+      for i,v in enumerate(vs):
+        self.elems[self.offset + self.progress + i] = self.lower(v)
+    else:
+      assert(all(v == () for v in vs))
+    self.progress += len(vs)
+
+  def lower(self, v):
+    return lower_gc_value(self.cx, v, self.t)
+
+class ReadableGcValueBuffer(ReadableGcBuffer):
+  def __init__(self, t, cx, v = None):
+    assert(t is not None or v is None)
+    ReadableGcBuffer.__init__(self, t, cx, [v], 0, 1)
+
+  def lift(self, v):
+    return lift_unpacked_gc_value(self.cx, v, self.t)
+
+def lift_unpacked_gc_value(cx, v, t):
+  match gc_storage_type(cx, t):
+    case 'i8' | 'i16':
+      return lift_flat(cx, CoreValueIter([v]), t)
+    case 'i32' | 'i64' | 'f32' | 'f64' | CoreRefType():
+      return lift_gc_value(cx, v, t)
 
 ### Stream and Future State
 
@@ -1195,6 +1396,7 @@ def alignment_flags(labels):
 
 def alignment_borrow(cx, borrowt):
   if pass_rep_not_handle(cx, borrowt):
+    assert(borrowt.rt.rep in ['i32', 'i64'])
     return ptr_size(borrowt.rt.rep)
   else:
     return 4
@@ -1260,9 +1462,109 @@ def elem_size_flags(labels):
 
 def elem_size_borrow(cx, borrowt):
   if pass_rep_not_handle(cx, borrowt):
+    assert(borrowt.rt.rep in ['i32', 'i64'])
     return ptr_size(borrowt.rt.rep)
   else:
     return 4
+
+## 🛸 GC Types
+
+EXTERNREF = CoreRefType('extern')
+
+def handle_type(cx):
+  if cx.opts.gc:
+    return EXTERNREF
+  else:
+    return 'i32'
+
+def gc_storage_type(cx, t):
+  match despecialize(t):
+    case BoolType() | S8Type() | U8Type()   : return 'i8'
+    case S16Type() | U16Type()              : return 'i16'
+    case S32Type() | U32Type() | CharType() : return 'i32'
+    case F32Type()                          : return 'f32'
+    case S64Type() | U64Type()              : return 'i64'
+    case F64Type()                          : return 'f64'
+    case StringType()                       : return CoreRefType(gc_string_type(cx))
+    case ListType(t, l)                     : return CoreRefType(gc_list_type(cx, t))
+    case RecordType(fields)                 : return CoreRefType(gc_record_type(cx, fields))
+    case VariantType(cases)                 : return gc_variant_type(cx, cases)
+    case FlagsType(labels)                  : return gc_packed_int_type(elem_size_flags(labels))
+    case BorrowType()                       : return gc_borrow_type(cx, t)
+    case OwnType() | StreamType() | FutureType() | ErrorContextType():
+      return EXTERNREF
+
+def gc_borrow_type(cx, borrowt):
+  if pass_rep_not_handle(cx, borrowt):
+    return borrowt.rt.rep
+  else:
+    return EXTERNREF
+
+def gc_packed_int_type(nbytes):
+  match nbytes:
+    case 1: return 'i8'
+    case 2: return 'i16'
+    case 4: return 'i32'
+    case 8: return 'i64'
+
+def gc_final_type(comptype):
+  return CoreDefType(CoreRecType((CoreSubType(True, (), comptype),)), 0)
+
+GC_UTF8_ARRAY = gc_final_type(CoreArrayType(CoreFieldType('i8')))
+GC_LATIN1_ARRAY = gc_final_type(CoreArrayType(CoreFieldType('i8')))
+GC_UTF16_ARRAY = gc_final_type(CoreArrayType(CoreFieldType('i16')))
+
+def gc_string_type(cx):
+  match cx.opts.string_encoding:
+    case 'utf8'         : return GC_UTF8_ARRAY
+    case 'utf16'        : return GC_UTF16_ARRAY
+    case 'latin1+utf16' : return 'array'
+
+def gc_list_type(cx, elem_type):
+  return gc_final_type(CoreArrayType(CoreFieldType(gc_storage_type(cx, elem_type))))
+
+def gc_record_type(cx, fields):
+  return gc_final_type(CoreStructType(tuple(CoreFieldType(gc_storage_type(cx, f.t)) for f in fields)))
+
+def gc_variant_type(cx, cases):
+  if has_payload(cases):
+    return CoreRefType(gc_variant_base_type(cx, cases))
+  else:
+    return gc_storage_type(cx, discriminant_type(cases))
+
+def has_payload(cases):
+  return any(c.t is not None for c in cases)
+
+def gc_variant_rec_type(cx, cases):
+  discriminant = CoreFieldType(gc_storage_type(cx, discriminant_type(cases)))
+  base = CoreSubType(False, (), CoreStructType((discriminant,)))
+  case_types = []
+  for c in cases:
+    fields = (discriminant,)
+    if c.t is not None:
+      fields += (CoreFieldType(gc_storage_type(cx, c.t)),)
+    case_types.append(CoreSubType(True, (CoreRecIdx(0),), CoreStructType(fields)))
+  return CoreRecType((base, *case_types))
+
+def gc_variant_base_type(cx, cases):
+  return CoreDefType(gc_variant_rec_type(cx, cases), 0)
+
+def gc_variant_case_type(cx, cases, case_index):
+  return CoreDefType(gc_variant_rec_type(cx, cases), 1 + case_index)
+
+def nullable_type(t):
+  match t:
+    case CoreRefType(heap_type, _)                    : return CoreRefType(heap_type, nullable = True)
+    case 'i8' | 'i16' | 'i32' | 'i64' | 'f32' | 'f64' : return t
+
+def unpacked_type(t):
+  match t:
+    case 'i8' | 'i16'                                  : return 'i32'
+    case 'i32' | 'i64' | 'f32' | 'f64' | CoreRefType() : return t
+
+def gc_async_results_type(cx, t):
+  field = CoreFieldType(nullable_type(gc_storage_type(cx, t)), mutable = True)
+  return gc_final_type(CoreStructType((field,)))
 
 ## Loading
 
@@ -1334,7 +1636,13 @@ def convert_i32_to_char(cx, i):
   trap_if(0xD800 <= i <= 0xDFFF)
   return chr(i)
 
-String = tuple[str, str, int]
+class StringHint(Enum):
+  UTF8 = 0
+  UTF16 = 1
+  DYNAMIC_LATIN1 = 2
+  DYNAMIC_UTF16 = 3
+
+String = tuple[str, StringHint, int]
 
 def load_string(cx, ptr) -> String:
   ptr_size = cx.opts.memory.ptr_size()
@@ -1354,20 +1662,28 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   match cx.opts.string_encoding:
     case 'utf8':
       alignment = 1
-      byte_length = tagged_code_units
+      code_units = tagged_code_units
+      byte_length = code_units
       encoding = 'utf-8'
+      hint = StringHint.UTF8
     case 'utf16':
       alignment = 2
-      byte_length = 2 * tagged_code_units
+      code_units = tagged_code_units
+      byte_length = 2 * code_units
       encoding = 'utf-16-le'
+      hint = StringHint.UTF16
     case 'latin1+utf16':
       alignment = 2
       if bool(tagged_code_units & tag):
-        byte_length = 2 * (tagged_code_units ^ tag)
+        code_units = tagged_code_units ^ tag
+        byte_length = 2 * code_units
         encoding = 'utf-16-le'
+        hint = StringHint.DYNAMIC_UTF16
       else:
-        byte_length = tagged_code_units
+        code_units = tagged_code_units
+        byte_length = code_units
         encoding = 'latin-1'
+        hint = StringHint.DYNAMIC_LATIN1
 
   trap_if(byte_length > MAX_STRING_BYTE_LENGTH)
   trap_if(ptr != align_to(ptr, alignment))
@@ -1377,7 +1693,7 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   except UnicodeError:
     trap()
 
-  return (s, cx.opts.string_encoding, tagged_code_units)
+  return (s, hint, code_units)
 
 def lift_error_context(cx, i):
   errctx = cx.inst.handles.get(i)
@@ -1552,39 +1868,26 @@ def store_string(cx, v: String, ptr):
   store_int(cx, tagged_code_units, ptr + ptr_size, ptr_size)
 
 def store_string_into_range(cx, v: String):
-  src, src_encoding, src_tagged_code_units = v
-  tag = utf16_tag(cx)
-
-  if src_encoding == 'latin1+utf16':
-    if bool(src_tagged_code_units & tag):
-      src_simple_encoding = 'utf16'
-      src_code_units = src_tagged_code_units ^ tag
-    else:
-      src_simple_encoding = 'latin1'
-      src_code_units = src_tagged_code_units
-  else:
-    src_simple_encoding = src_encoding
-    src_code_units = src_tagged_code_units
-
+  src, src_hint, src_code_units = v
   match cx.opts.string_encoding:
     case 'utf8':
-      match src_simple_encoding:
-        case 'utf8'         : return store_string_copy(cx, src, src_code_units, 1, 1, 'utf-8')
-        case 'utf16'        : return store_utf16_to_utf8(cx, src, src_code_units)
-        case 'latin1'       : return store_latin1_to_utf8(cx, src, src_code_units)
+      match src_hint:
+        case StringHint.UTF8           : return store_string_copy(cx, src, src_code_units, 1, 1, 'utf-8')
+        case StringHint.UTF16          : return store_utf16_to_utf8(cx, src, src_code_units)
+        case StringHint.DYNAMIC_LATIN1 : return store_latin1_to_utf8(cx, src, src_code_units)
+        case StringHint.DYNAMIC_UTF16  : return store_utf16_to_utf8(cx, src, src_code_units)
     case 'utf16':
-      match src_simple_encoding:
-        case 'utf8'         : return store_utf8_to_utf16(cx, src, src_code_units)
-        case 'utf16'        : return store_string_copy(cx, src, src_code_units, 2, 2, 'utf-16-le')
-        case 'latin1'       : return store_string_copy(cx, src, src_code_units, 2, 2, 'utf-16-le')
+      match src_hint:
+        case StringHint.UTF8           : return store_utf8_to_utf16(cx, src, src_code_units)
+        case StringHint.UTF16          : return store_string_copy(cx, src, src_code_units, 2, 2, 'utf-16-le')
+        case StringHint.DYNAMIC_LATIN1 : return store_string_copy(cx, src, src_code_units, 2, 2, 'utf-16-le')
+        case StringHint.DYNAMIC_UTF16  : return store_string_copy(cx, src, src_code_units, 2, 2, 'utf-16-le')
     case 'latin1+utf16':
-      match src_encoding:
-        case 'utf8'         : return store_string_to_latin1_or_utf16(cx, src, src_code_units)
-        case 'utf16'        : return store_string_to_latin1_or_utf16(cx, src, src_code_units)
-        case 'latin1+utf16' :
-          match src_simple_encoding:
-            case 'latin1'   : return store_string_copy(cx, src, src_code_units, 1, 2, 'latin-1')
-            case 'utf16'    : return store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units)
+      match src_hint:
+        case StringHint.UTF8           : return store_string_to_latin1_or_utf16(cx, src, src_code_units)
+        case StringHint.UTF16          : return store_string_to_latin1_or_utf16(cx, src, src_code_units)
+        case StringHint.DYNAMIC_LATIN1 : return store_string_copy(cx, src, src_code_units, 1, 2, 'latin-1')
+        case StringHint.DYNAMIC_UTF16  : return store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units)
 
 def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment, dst_encoding):
   dst_byte_length = dst_code_unit_size * src_code_units
@@ -1767,37 +2070,63 @@ def lower_async_value(ReadableEndT, cx, end, t):
 MAX_FLAT_PARAMS = 16
 MAX_FLAT_ASYNC_PARAMS = 4
 MAX_FLAT_RESULTS = 1
+MAX_FLAT_GC_RESULTS = 16
 
 def flatten_functype(cx, ft):
   flat_params = flatten_types(cx.reverse_direction(), ft.param_types())
   flat_results = flatten_types(cx, ft.result_type())
-  if not cx.opts.async_:
-    if len(flat_params) > MAX_FLAT_PARAMS:
-      flat_params = [cx.opts.memory.ptr_type()]
-    if len(flat_results) > MAX_FLAT_RESULTS:
+  if cx.opts.gc:
+    if not cx.opts.async_:
+      if len(flat_params) > MAX_FLAT_PARAMS:
+        flat_params = [gc_storage_type(cx.reverse_direction(), TupleType(ft.param_types()))]
+      if len(flat_results) > MAX_FLAT_GC_RESULTS:
+        [result_type] = ft.result_type()
+        flat_results = [gc_storage_type(cx, result_type)]
+    else:
       match cx.direction:
         case 'lift':
-          flat_results = [cx.opts.memory.ptr_type()]
+          if len(flat_params) > MAX_FLAT_PARAMS:
+            flat_params = [gc_storage_type(cx.reverse_direction(), TupleType(ft.param_types()))]
+          if cx.opts.callback:
+            flat_results = ['i32', nullable_type(EXTERNREF)]
+          else:
+            flat_results = []
         case 'lower':
-          flat_params += [cx.opts.memory.ptr_type()]
-          flat_results = []
+          if len(flat_params) > MAX_FLAT_ASYNC_PARAMS:
+            flat_params = [gc_storage_type(cx.reverse_direction(), TupleType(ft.param_types()))]
+          if len(flat_results) > 0:
+            [result_type] = ft.result_type()
+            flat_params += [CoreRefType(gc_async_results_type(cx, result_type))]
+          flat_results = ['i32', nullable_type(EXTERNREF)]
     return CoreFuncType(flat_params, flat_results)
   else:
-    match cx.direction:
-      case 'lift':
-        if len(flat_params) > MAX_FLAT_PARAMS:
-          flat_params = [cx.opts.memory.ptr_type()]
-        if cx.opts.callback:
+    if not cx.opts.async_:
+      if len(flat_params) > MAX_FLAT_PARAMS:
+        flat_params = [cx.opts.memory.ptr_type()]
+      if len(flat_results) > MAX_FLAT_RESULTS:
+        match cx.direction:
+          case 'lift':
+            flat_results = [cx.opts.memory.ptr_type()]
+          case 'lower':
+            flat_params += [cx.opts.memory.ptr_type()]
+            flat_results = []
+      return CoreFuncType(flat_params, flat_results)
+    else:
+      match cx.direction:
+        case 'lift':
+          if len(flat_params) > MAX_FLAT_PARAMS:
+            flat_params = [cx.opts.memory.ptr_type()]
+          if cx.opts.callback:
+            flat_results = ['i32']
+          else:
+            flat_results = []
+        case 'lower':
+          if len(flat_params) > MAX_FLAT_ASYNC_PARAMS:
+            flat_params = [cx.opts.memory.ptr_type()]
+          if len(flat_results) > 0:
+            flat_params += [cx.opts.memory.ptr_type()]
           flat_results = ['i32']
-        else:
-          flat_results = []
-      case 'lower':
-        if len(flat_params) > MAX_FLAT_ASYNC_PARAMS:
-          flat_params = [cx.opts.memory.ptr_type()]
-        if len(flat_results) > 0:
-          flat_params += [cx.opts.memory.ptr_type()]
-        flat_results = ['i32']
-    return CoreFuncType(flat_params, flat_results)
+      return CoreFuncType(flat_params, flat_results)
 
 def flatten_types(cx, ts):
   return [ft for t in ts for ft in flatten_type(cx, t)]
@@ -1811,20 +2140,29 @@ def flatten_type(cx, t):
     case F32Type()                        : return ['f32']
     case F64Type()                        : return ['f64']
     case CharType()                       : return ['i32']
-    case StringType()                     : return 2 * [cx.opts.memory.ptr_type()]
-    case ErrorContextType()               : return ['i32']
+    case StringType()                     : return flatten_string(cx)
+    case ErrorContextType()               : return [handle_type(cx)]
     case ListType(t, l)                   : return flatten_list(cx, t, l)
     case RecordType(fields)               : return flatten_record(cx, fields)
     case VariantType(cases)               : return flatten_variant(cx, cases)
     case FlagsType(labels)                : return ['i32']
-    case OwnType()                        : return ['i32']
+    case OwnType()                        : return [handle_type(cx)]
     case BorrowType()                     : return flatten_borrow(cx, t)
-    case StreamType() | FutureType()      : return ['i32']
+    case StreamType() | FutureType()      : return [handle_type(cx)]
+
+def flatten_string(cx):
+  if cx.opts.gc:
+    return [CoreRefType(gc_string_type(cx))]
+  else:
+    return 2 * [cx.opts.memory.ptr_type()]
 
 def flatten_list(cx, elem_type, maybe_length):
-  if maybe_length is not None:
-    return flatten_type(cx, elem_type) * maybe_length
-  return 2 * [cx.opts.memory.ptr_type()]
+  if cx.opts.gc:
+    return [CoreRefType(gc_list_type(cx, elem_type))]
+  else:
+    if maybe_length is not None:
+      return flatten_type(cx, elem_type) * maybe_length
+    return 2 * [cx.opts.memory.ptr_type()]
 
 def flatten_record(cx, fields):
   flat = []
@@ -1833,15 +2171,18 @@ def flatten_record(cx, fields):
   return flat
 
 def flatten_variant(cx, cases):
-  flat = []
-  for c in cases:
-    if c.t is not None:
-      for i,ft in enumerate(flatten_type(cx, c.t)):
-        if i < len(flat):
-          flat[i] = join(flat[i], ft)
-        else:
-          flat.append(ft)
-  return flatten_type(cx, discriminant_type(cases)) + flat
+  if cx.opts.gc and has_payload(cases):
+    return [CoreRefType(gc_variant_base_type(cx, cases))]
+  else:
+    flat = []
+    for c in cases:
+      if c.t is not None:
+        for i,ft in enumerate(flatten_type(cx, c.t)):
+          if i < len(flat):
+            flat[i] = join(flat[i], ft)
+          else:
+            flat.append(ft)
+    return flatten_type(cx, discriminant_type(cases)) + flat
 
 def join(a, b):
   if a == b: return a
@@ -1850,9 +2191,10 @@ def join(a, b):
 
 def flatten_borrow(cx, borrowt):
   if pass_rep_not_handle(cx, borrowt):
+    assert(cx.opts.gc or borrowt.rt.rep in ['i32', 'i64'])
     return [borrowt.rt.rep]
   else:
-    return ['i32']
+    return [handle_type(cx)]
 
 ## Flat Lifting
 
@@ -1872,6 +2214,7 @@ class CoreValueIter:
       case 'i64': assert(isinstance(v, int) and 0 <= v < 2**64)
       case 'f32': assert(isinstance(v, (int,float)))
       case 'f64': assert(isinstance(v, (int,float)))
+      case CoreRefType(): assert(ref_test(v, t))
       case _    : assert(False)
     return v
 
@@ -1890,15 +2233,15 @@ def lift_flat(cx, vi, t):
     case F64Type()          : return canonicalize_nan64(vi.next('f64'))
     case CharType()         : return convert_i32_to_char(cx, vi.next('i32'))
     case StringType()       : return lift_flat_string(cx, vi)
-    case ErrorContextType() : return lift_error_context(cx, vi.next('i32'))
+    case ErrorContextType() : return lift_error_context(cx, lift_flat_handle(cx, vi))
     case ListType(t, l)     : return lift_flat_list(cx, vi, t, l)
     case RecordType(fields) : return lift_flat_record(cx, vi, fields)
     case VariantType(cases) : return lift_flat_variant(cx, vi, cases)
     case FlagsType(labels)  : return lift_flat_flags(vi, labels)
-    case OwnType()          : return lift_own(cx, vi.next('i32'), t)
-    case BorrowType()       : return lift_borrow(cx, vi.next('i32'), t)
-    case StreamType(t)      : return lift_stream(cx, vi.next('i32'), t)
-    case FutureType(t)      : return lift_future(cx, vi.next('i32'), t)
+    case OwnType()          : return lift_own(cx, lift_flat_handle(cx, vi), t)
+    case BorrowType()       : return lift_borrow(cx, lift_flat_handle(cx, vi), t)
+    case StreamType(t)      : return lift_stream(cx, lift_flat_handle(cx, vi), t)
+    case FutureType(t)      : return lift_future(cx, lift_flat_handle(cx, vi), t)
 
 def lift_flat_unsigned(vi, core_width, t_width):
   i = vi.next('i' + str(core_width))
@@ -1908,25 +2251,80 @@ def lift_flat_unsigned(vi, core_width, t_width):
 def lift_flat_signed(vi, core_width, t_width):
   i = vi.next('i' + str(core_width))
   assert(0 <= i < (1 << core_width))
-  i %= (1 << t_width)
-  if i >= (1 << (t_width - 1)):
-    return i - (1 << t_width)
+  return lift_signed(i % (1 << t_width), t_width)
+
+def lift_signed(i, width):
+  assert(0 <= i < (1 << width))
+  if i >= (1 << (width - 1)):
+    return i - (1 << width)
   return i
 
 def lift_flat_string(cx, vi):
-  ptr = vi.next(cx.opts.memory.ptr_type())
-  packed_length = vi.next(cx.opts.memory.ptr_type())
-  return load_string_from_range(cx, ptr, packed_length)
+  if cx.opts.gc:
+    return lift_gc_string(cx, vi.next(CoreRefType(gc_string_type(cx))))
+  else:
+    ptr = vi.next(cx.opts.memory.ptr_type())
+    packed_length = vi.next(cx.opts.memory.ptr_type())
+    return load_string_from_range(cx, ptr, packed_length)
 
 def lift_flat_list(cx, vi, elem_type, maybe_length):
+  if cx.opts.gc:
+    return lift_gc_list(cx, vi.next(CoreRefType(gc_list_type(cx, elem_type))), elem_type, maybe_length)
+  else:
+    if maybe_length is not None:
+      a = []
+      for i in range(maybe_length):
+        a.append(lift_flat(cx, vi, elem_type))
+      return a
+    ptr = vi.next(cx.opts.memory.ptr_type())
+    length = vi.next(cx.opts.memory.ptr_type())
+    return load_list_from_range(cx, ptr, length, elem_type)
+
+def lift_gc_string(cx, arr) -> String:
+  match cx.opts.string_encoding:
+    case 'utf8':
+      code_unit_size = 1
+      encoding = 'utf-8'
+      hint = StringHint.UTF8
+    case 'utf16':
+      code_unit_size = 2
+      encoding = 'utf-16-le'
+      hint = StringHint.UTF16
+    case 'latin1+utf16':
+      if ref_test(arr, CoreRefType(GC_LATIN1_ARRAY)):
+        code_unit_size = 1
+        encoding = 'latin-1'
+        hint = StringHint.DYNAMIC_LATIN1
+      else:
+        trap_if(not ref_test(arr, CoreRefType(GC_UTF16_ARRAY)))
+        code_unit_size = 2
+        encoding = 'utf-16-le'
+        hint = StringHint.DYNAMIC_UTF16
+
+  code_units = array_len(arr)
+  trap_if(code_units * code_unit_size > MAX_STRING_BYTE_LENGTH)
+  encoded = b''.join(int.to_bytes(array_get(arr, i), code_unit_size, 'little') for i in range(code_units))
+  try:
+    s = encoded.decode(encoding)
+  except UnicodeError:
+    trap()
+
+  return (s, hint, code_units)
+
+def lift_gc_list(cx, arr, elem_type, maybe_length):
+  length = array_len(arr)
   if maybe_length is not None:
-    a = []
-    for i in range(maybe_length):
-      a.append(lift_flat(cx, vi, elem_type))
-    return a
-  ptr = vi.next(cx.opts.memory.ptr_type())
-  length = vi.next(cx.opts.memory.ptr_type())
-  return load_list_from_range(cx, ptr, length, elem_type)
+    trap_if(length != maybe_length)
+  elif not isinstance(gc_storage_type(cx, elem_type), CoreRefType):
+    trap_if(length * elem_size(cx, elem_type) > MAX_LIST_BYTE_LENGTH)
+  else:
+    # TODO FITZGEN: How do we want to impose `MAX_LIST_BYTE_LENGTH` on arrays of
+    # references? Do we want to even impose any limit in this case?
+    pass
+  a = []
+  for i in range(length):
+    a.append(lift_gc_value(cx, array_get(arr, i), elem_type))
+  return a
 
 def lift_flat_record(cx, vi, fields):
   record = {}
@@ -1935,37 +2333,103 @@ def lift_flat_record(cx, vi, fields):
   return record
 
 def lift_flat_variant(cx, vi, cases):
-  flat_types = flatten_variant(cx, cases)
-  assert(flat_types.pop(0) == 'i32')
-  case_index = vi.next('i32')
-  trap_if(case_index >= len(cases))
-  class CoerceValueIter:
-    def next(self, want):
-      have = flat_types.pop(0)
-      x = vi.next(have)
-      match (have, want):
-        case ('i32', 'f32') : return decode_i32_as_float(x)
-        case ('i64', 'i32') : return wrap_i64_to_i32(x)
-        case ('i64', 'f32') : return decode_i32_as_float(wrap_i64_to_i32(x))
-        case ('i64', 'f64') : return decode_i64_as_float(x)
-        case _              : assert(have == want); return x
-  c = cases[case_index]
-  if c.t is None:
-    v = None
+  if cx.opts.gc and has_payload(cases):
+    return lift_gc_variant(cx, vi.next(CoreRefType(gc_variant_base_type(cx, cases))), cases)
   else:
-    v = lift_flat(cx, CoerceValueIter(), c.t)
-  for have in flat_types:
-    _ = vi.next(have)
-  return { c.label: v }
+    flat_types = flatten_variant(cx, cases)
+    assert(flat_types.pop(0) == 'i32')
+    case_index = vi.next('i32')
+    trap_if(case_index >= len(cases))
+    class CoerceValueIter:
+      def next(self, want):
+        have = flat_types.pop(0)
+        x = vi.next(have)
+        match (have, want):
+          case ('i32', 'f32') : return decode_i32_as_float(x)
+          case ('i64', 'i32') : return wrap_i64_to_i32(x)
+          case ('i64', 'f32') : return decode_i32_as_float(wrap_i64_to_i32(x))
+          case ('i64', 'f64') : return decode_i64_as_float(x)
+          case _              : assert(have == want); return x
+    c = cases[case_index]
+    if c.t is None:
+      v = None
+    else:
+      v = lift_flat(cx, CoerceValueIter(), c.t)
+    for have in flat_types:
+      _ = vi.next(have)
+    return { c.label: v }
 
 def wrap_i64_to_i32(i):
   assert(0 <= i < (1 << 64))
   return i % (1 << 32)
 
+def lift_gc_variant(cx, v, cases):
+  if has_payload(cases):
+    case_index = struct_get(v, 0)
+    trap_if(case_index >= len(cases))
+    trap_if(not ref_test(v, CoreRefType(gc_variant_case_type(cx, cases, case_index))))
+    c = cases[case_index]
+    if c.t is None:
+      return { c.label: None }
+    return { c.label: lift_gc_value(cx, struct_get(v, 1), c.t) }
+  else:
+    trap_if(v >= len(cases))
+    return { cases[v].label: None }
+
 def lift_flat_flags(vi, labels):
   assert(0 < len(labels) <= 32)
   i = vi.next('i32')
   return unpack_flags_from_int(i, labels)
+
+class HandleRef:
+  index: int
+
+  def __init__(self, inst, index):
+    inst.handles.set_handle_ref(index, self)
+    self.index = index
+
+def lift_flat_handle(cx, vi):
+  v = vi.next(handle_type(cx))
+  if cx.opts.gc:
+    return unbox_handle(cx.inst, v)
+  else:
+    return v
+
+def unbox_handle(inst, r):
+  trap_if(not isinstance(r, HandleRef))
+  trap_if(inst.handles.get_handle_ref(r.index) is not r)
+  return r.index
+
+def lift_gc_value(cx, v, t):
+  match despecialize(t):
+    case BoolType()         : return convert_int_to_bool(v)
+    case U8Type()           : return v
+    case S8Type()           : return lift_signed(v, 8)
+    case U16Type()          : return v
+    case S16Type()          : return lift_signed(v, 16)
+    case U32Type()          : return v
+    case S32Type()          : return lift_signed(v, 32)
+    case CharType()         : return convert_i32_to_char(cx, v)
+    case F32Type()          : return canonicalize_nan32(v)
+    case U64Type()          : return v
+    case S64Type()          : return lift_signed(v, 64)
+    case F64Type()          : return canonicalize_nan64(v)
+    case StringType()       : return lift_gc_string(cx, v)
+    case ListType(t, l)     : return lift_gc_list(cx, v, t, l)
+    case RecordType(fields) : return lift_gc_record(cx, v, fields)
+    case VariantType(cases) : return lift_gc_variant(cx, v, cases)
+    case FlagsType(labels)  : return unpack_flags_from_int(v, labels)
+    case BorrowType()       : return lift_borrow(cx, unbox_handle(cx.inst, v), t)
+    case OwnType()          : return lift_own(cx, unbox_handle(cx.inst, v), t)
+    case StreamType(t)      : return lift_stream(cx, unbox_handle(cx.inst, v), t)
+    case FutureType(t)      : return lift_future(cx, unbox_handle(cx.inst, v), t)
+    case ErrorContextType() : return lift_error_context(cx, unbox_handle(cx.inst, v))
+
+def lift_gc_record(cx, s, fields):
+  record = {}
+  for i,f in enumerate(fields):
+    record[f.label] = lift_gc_value(cx, struct_get(s, i), f.t)
+  return record
 
 ## Flat Lowering
 
@@ -1984,34 +2448,66 @@ def lower_flat(cx, v, t):
     case F64Type()          : return [maybe_scramble_nan64(v)]
     case CharType()         : return [char_to_i32(v)]
     case StringType()       : return lower_flat_string(cx, v)
-    case ErrorContextType() : return [lower_error_context(cx, v)]
+    case ErrorContextType() : return [lower_flat_handle(cx, lower_error_context(cx, v))]
     case ListType(t, l)     : return lower_flat_list(cx, v, t, l)
     case RecordType(fields) : return lower_flat_record(cx, v, fields)
     case VariantType(cases) : return lower_flat_variant(cx, v, cases)
     case FlagsType(labels)  : return lower_flat_flags(v, labels)
     case OwnType()          : return lower_flat_own(cx, v, t)
     case BorrowType()       : return lower_flat_borrow(cx, v, t)
-    case StreamType(t)      : return [lower_stream(cx, v, t)]
-    case FutureType(t)      : return [lower_future(cx, v, t)]
+    case StreamType(t)      : return [lower_flat_handle(cx, lower_stream(cx, v, t))]
+    case FutureType(t)      : return [lower_flat_handle(cx, lower_future(cx, v, t))]
 
 def lower_flat_signed(i, core_bits):
+  return [lower_signed(i, core_bits)]
+
+def lower_signed(i, width):
   if i < 0:
-    i += (1 << core_bits)
-  return [i]
+    i += (1 << width)
+  return i
 
 def lower_flat_string(cx, v):
-  ptr, packed_length = store_string_into_range(cx, v)
-  return [ptr, packed_length]
+  if cx.opts.gc:
+    return [lower_gc_string(cx, v)]
+  else:
+    ptr, packed_length = store_string_into_range(cx, v)
+    return [ptr, packed_length]
 
 def lower_flat_list(cx, v, elem_type, maybe_length):
-  if maybe_length is not None:
-    assert(maybe_length == len(v))
-    flat = []
-    for e in v:
-      flat += lower_flat(cx, e, elem_type)
-    return flat
-  (ptr, length) = store_list_into_range(cx, v, elem_type)
-  return [ptr, length]
+  if cx.opts.gc:
+    return [lower_gc_list(cx, v, elem_type, maybe_length)]
+  else:
+    if maybe_length is not None:
+      assert(maybe_length == len(v))
+      flat = []
+      for e in v:
+        flat += lower_flat(cx, e, elem_type)
+      return flat
+    (ptr, length) = store_list_into_range(cx, v, elem_type)
+    return [ptr, length]
+
+def lower_gc_string(cx, v: String):
+  src, _, _ = v
+  match cx.opts.string_encoding:
+    case 'utf8':
+      return array_new_fixed(GC_UTF8_ARRAY, list(src.encode('utf-8')))
+    case 'utf16':
+      return array_new_fixed(GC_UTF16_ARRAY, encode_utf16_code_units(src))
+    case 'latin1+utf16':
+      if all(ord(c) < (1 << 8) for c in src):
+        return array_new_fixed(GC_LATIN1_ARRAY, list(src.encode('latin-1')))
+      return array_new_fixed(GC_UTF16_ARRAY, encode_utf16_code_units(src))
+
+def encode_utf16_code_units(src):
+  encoded = src.encode('utf-16-le')
+  return [int.from_bytes(encoded[i : i+2], 'little') for i in range(0, len(encoded), 2)]
+
+def lower_gc_list(cx, v, elem_type, maybe_length):
+  assert(maybe_length is None or maybe_length == len(v))
+  elems = []
+  for e in v:
+    elems.append(lower_gc_value(cx, e, elem_type))
+  return array_new_fixed(gc_list_type(cx, elem_type), elems)
 
 def lower_flat_record(cx, v, fields):
   flat = []
@@ -2020,66 +2516,144 @@ def lower_flat_record(cx, v, fields):
   return flat
 
 def lower_flat_variant(cx, v, cases):
-  case_index, case_value = match_case(v, cases)
-  flat_types = flatten_variant(cx, cases)
-  assert(flat_types.pop(0) == 'i32')
-  c = cases[case_index]
-  if c.t is None:
-    payload = []
+  if cx.opts.gc and has_payload(cases):
+    return [lower_gc_variant(cx, v, cases)]
   else:
-    payload = lower_flat(cx, case_value, c.t)
-    for i,(fv,have) in enumerate(zip(payload, flatten_type(cx, c.t))):
-      want = flat_types.pop(0)
-      match (have, want):
-        case ('f32', 'i32') : payload[i] = encode_float_as_i32(fv)
-        case ('i32', 'i64') : payload[i] = fv
-        case ('f32', 'i64') : payload[i] = encode_float_as_i32(fv)
-        case ('f64', 'i64') : payload[i] = encode_float_as_i64(fv)
-        case _              : assert(have == want)
-  for _ in flat_types:
-    payload.append(0)
-  return [case_index] + payload
+    case_index, case_value = match_case(v, cases)
+    flat_types = flatten_variant(cx, cases)
+    assert(flat_types.pop(0) == 'i32')
+    c = cases[case_index]
+    if c.t is None:
+      payload = []
+    else:
+      payload = lower_flat(cx, case_value, c.t)
+      for i,(fv,have) in enumerate(zip(payload, flatten_type(cx, c.t))):
+        want = flat_types.pop(0)
+        match (have, want):
+          case ('f32', 'i32') : payload[i] = encode_float_as_i32(fv)
+          case ('i32', 'i64') : payload[i] = fv
+          case ('f32', 'i64') : payload[i] = encode_float_as_i32(fv)
+          case ('f64', 'i64') : payload[i] = encode_float_as_i64(fv)
+          case _              : assert(have == want)
+    for _ in flat_types:
+      payload.append(0)
+    return [case_index] + payload
+
+def lower_gc_variant(cx, v, cases):
+  case_index, case_value = match_case(v, cases)
+  if has_payload(cases):
+    fields = [case_index]
+    c = cases[case_index]
+    if c.t is not None:
+      fields.append(lower_gc_value(cx, case_value, c.t))
+    return struct_new(gc_variant_case_type(cx, cases, case_index), fields)
+  else:
+    return case_index
 
 def lower_flat_flags(v, labels):
   assert(0 < len(labels) <= 32)
   return [pack_flags_into_int(v, labels)]
 
 def lower_flat_own(cx, rep_val, ownt):
-  return [add_own(cx, rep_val, ownt)]
+  return [lower_flat_handle(cx, add_own(cx, rep_val, ownt))]
 
 def lower_flat_borrow(cx, rep_val, borrowt):
   if pass_rep_not_handle(cx, borrowt):
     return [rep_val]
   else:
-    return [add_borrow(cx, rep_val, borrowt)]
+    return [lower_flat_handle(cx, add_borrow(cx, rep_val, borrowt))]
+
+def lower_flat_handle(cx, i):
+  if cx.opts.gc:
+    return HandleRef(cx.inst, i)
+  else:
+    return i
+
+def lower_gc_value(cx, v, t):
+  match despecialize(t):
+    case BoolType()         : return int(v)
+    case U8Type()           : return v
+    case S8Type()           : return lower_signed(v, 8)
+    case U16Type()          : return v
+    case S16Type()          : return lower_signed(v, 16)
+    case U32Type()          : return v
+    case S32Type()          : return lower_signed(v, 32)
+    case CharType()         : return char_to_i32(v)
+    case F32Type()          : return maybe_scramble_nan32(v)
+    case U64Type()          : return v
+    case S64Type()          : return lower_signed(v, 64)
+    case F64Type()          : return maybe_scramble_nan64(v)
+    case StringType()       : return lower_gc_string(cx, v)
+    case ListType(t, l)     : return lower_gc_list(cx, v, t, l)
+    case RecordType(fields) : return lower_gc_record(cx, v, fields)
+    case VariantType(cases) : return lower_gc_variant(cx, v, cases)
+    case FlagsType(labels)  : return pack_flags_into_int(v, labels)
+    case BorrowType()       : return lower_gc_borrow(cx, v, t)
+    case OwnType()          : return HandleRef(cx.inst, add_own(cx, v, t))
+    case StreamType(t)      : return HandleRef(cx.inst, lower_stream(cx, v, t))
+    case FutureType(t)      : return HandleRef(cx.inst, lower_future(cx, v, t))
+    case ErrorContextType() : return HandleRef(cx.inst, lower_error_context(cx, v))
+
+def lower_gc_borrow(cx, rep_val, borrowt):
+  if pass_rep_not_handle(cx, borrowt):
+    return rep_val
+  else:
+    return HandleRef(cx.inst, add_borrow(cx, rep_val, borrowt))
+
+def lower_gc_record(cx, v, fields):
+  vs = []
+  for f in fields:
+    vs.append(lower_gc_value(cx, v[f.label], f.t))
+  return struct_new(gc_record_type(cx, fields), vs)
 
 ## Lifting and Lowering Values
 
-def lift_flat_values(cx, max_flat, vi, ts):
+def lift_flat_values(cx, max_flat, vi, ts, is_result = False):
   flat_types = flatten_types(cx, ts)
   if len(flat_types) > max_flat:
-    ptr = vi.next(cx.opts.memory.ptr_type())
-    tuple_type = TupleType(ts)
-    trap_if(ptr != align_to(ptr, alignment(cx, tuple_type)))
-    trap_if(ptr + elem_size(cx, tuple_type) > len(cx.opts.memory))
-    return list(load(cx, ptr, tuple_type).values())
+    if cx.opts.gc:
+      if is_result:
+        [t] = ts
+        return [lift_gc_value(cx, vi.next(gc_storage_type(cx, t)), t)]
+      else:
+        tuple_type = TupleType(ts)
+        return list(lift_gc_value(cx, vi.next(gc_storage_type(cx, tuple_type)), tuple_type).values())
+    else:
+      ptr = vi.next(cx.opts.memory.ptr_type())
+      tuple_type = TupleType(ts)
+      trap_if(ptr != align_to(ptr, alignment(cx, tuple_type)))
+      trap_if(ptr + elem_size(cx, tuple_type) > len(cx.opts.memory))
+      return list(load(cx, ptr, tuple_type).values())
   else:
     return [ lift_flat(cx, vi, t) for t in ts ]
 
-def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
+def lower_flat_values(cx, max_flat, vs, ts, out_param = None, is_result = False):
   flat_types = flatten_types(cx, ts)
   if len(flat_types) > max_flat:
     tuple_type = TupleType(ts)
     tuple_value = {str(i): v for i,v in enumerate(vs)}
-    if out_param is None:
-      ptr = cx.allocate(alignment(cx, tuple_type), elem_size(cx, tuple_type))
-      flat_vals = [ptr]
+    if cx.opts.gc:
+      if is_result:
+        [v] = vs
+        [t] = ts
+        if cx.opts.async_:
+          results = out_param.next(CoreRefType(gc_async_results_type(cx, t)))
+          struct_set(results, 0, lower_gc_value(cx, v, t))
+          return []
+        else:
+          return [lower_gc_value(cx, v, t)]
+      else:
+        return [lower_gc_value(cx, tuple_value, tuple_type)]
     else:
-      ptr = out_param.next(cx.opts.memory.ptr_type())
-      trap_if(ptr != align_to(ptr, alignment(cx, tuple_type)))
-      trap_if(ptr + elem_size(cx, tuple_type) > len(cx.opts.memory))
-      flat_vals = []
-    store(cx, tuple_value, tuple_type, ptr)
+      if out_param is None:
+        ptr = cx.allocate(alignment(cx, tuple_type), elem_size(cx, tuple_type))
+        flat_vals = [ptr]
+      else:
+        ptr = out_param.next(cx.opts.memory.ptr_type())
+        trap_if(ptr != align_to(ptr, alignment(cx, tuple_type)))
+        trap_if(ptr + elem_size(cx, tuple_type) > len(cx.opts.memory))
+        flat_vals = []
+      store(cx, tuple_value, tuple_type, ptr)
   else:
     flat_vals = []
     for i in range(len(vs)):
@@ -2104,7 +2678,8 @@ def canon_lift(callee, ft, opts, inst, on_start, on_resolve) -> OnCancel:
     if not opts.async_:
       flat_results = call_and_trap_on_throw(callee, flat_args)
       assert(types_match_values(flat_ft.results, flat_results))
-      result = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_type())
+      max_flat_results = MAX_FLAT_GC_RESULTS if opts.gc else MAX_FLAT_RESULTS
+      result = lift_flat_values(cx, max_flat_results, CoreValueIter(flat_results), ft.result_type(), is_result = True)
       task.return_(result)
       if opts.post_return is not None:
         assert(cx.inst.may_leave)
@@ -2120,8 +2695,12 @@ def canon_lift(callee, ft, opts, inst, on_start, on_resolve) -> OnCancel:
       task.exit_implicit_thread()
       return
 
-    [packed] = call_and_trap_on_throw(callee, flat_args)
-    code,si = unpack_callback_result(packed)
+    if opts.gc:
+      [code, sr] = call_and_trap_on_throw(callee, flat_args)
+      code,si = unpack_gc_callback_result(inst, code, sr)
+    else:
+      [packed] = call_and_trap_on_throw(callee, flat_args)
+      code,si = unpack_callback_result(packed)
     while code != CallbackCode.EXIT:
       if thread.task.deliver_pending_cancel():
         event = (EventCode.TASK_CANCELLED, 0, 0)
@@ -2145,9 +2724,13 @@ def canon_lift(callee, ft, opts, inst, on_start, on_resolve) -> OnCancel:
         assert(inst.exclusive_thread is None)
         thread.cancellable = False
         inst.exclusive_thread = task.implicit_thread
-      event_code, p1, p2 = event
-      [packed] = call_and_trap_on_throw(opts.callback, [event_code, p1, p2])
-      code,si = unpack_callback_result(packed)
+      if opts.gc:
+        [code, sr] = call_and_trap_on_throw(opts.callback, unpack_gc_event(inst, event))
+        code,si = unpack_gc_callback_result(inst, code, sr)
+      else:
+        event_code, p1, p2 = event
+        [packed] = call_and_trap_on_throw(opts.callback, [event_code, p1, p2])
+        code,si = unpack_callback_result(packed)
     task.exit_implicit_thread()
     return
 
@@ -2175,6 +2758,14 @@ def unpack_callback_result(packed):
   waitable_set_index = packed >> 4
   return (CallbackCode(code), waitable_set_index)
 
+def unpack_gc_callback_result(inst, code, sr):
+  trap_if(code > CallbackCode.MAX)
+  if code == CallbackCode.WAIT and sr is not None:
+    waitable_set_index = unbox_handle(inst, sr)
+  else:
+    waitable_set_index = 0
+  return (CallbackCode(code), waitable_set_index)
+
 def call_and_trap_on_throw(callee, args):
   try:
     return callee(args)
@@ -2195,7 +2786,7 @@ def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValT
 
   if not opts.async_:
     max_flat_params = MAX_FLAT_PARAMS
-    max_flat_results = MAX_FLAT_RESULTS
+    max_flat_results = MAX_FLAT_GC_RESULTS if opts.gc else MAX_FLAT_RESULTS
   else:
     max_flat_params = MAX_FLAT_ASYNC_PARAMS
     max_flat_results = 0
@@ -2219,7 +2810,7 @@ def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValT
         subtask.resolve(Subtask.State.CANCELLED_BEFORE_RETURNED, [])
     else:
       assert(subtask.state == Subtask.State.STARTED)
-      flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
+      flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args, is_result = True)
       subtask.resolve(Subtask.State.RETURNED, flat_results)
 
   subtask.on_cancel = callee(on_start, on_resolve)
@@ -2235,7 +2826,10 @@ def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValT
     if subtask.resolved():
       subtask.deliver_resolve()
       assert(subtask.flat_results == [])
-      return [Subtask.State.RETURNED]
+      if opts.gc:
+        return [Subtask.State.RETURNED, None]
+      else:
+        return [Subtask.State.RETURNED]
     else:
       subtaski = thread.task.inst.handles.add(subtask)
       def on_progress():
@@ -2247,7 +2841,10 @@ def canon_lower(callee, ft, opts, flat_args: list[CoreValType]) -> list[CoreValT
       maybe_on_progress = on_progress
       assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
       assert(0 <= subtask.state < 2**4)
-      return [subtask.state | (subtaski << 4)]
+      if opts.gc:
+        return [subtask.state | (subtaski << 4), HandleRef(thread.task.inst, subtaski)]
+      else:
+        return [subtask.state | (subtaski << 4)]
 
 ### `canon resource.new`
 
@@ -2290,6 +2887,20 @@ def canon_resource_rep(rt, i):
   trap_if(not isinstance(h, ResourceHandle))
   trap_if(h.rt is not rt)
   return [h.rep_val]
+
+### 🛸 `canon gc.resource.{new,drop,rep}`
+
+def canon_gc_resource_new(rt, rep_val):
+  [i] = canon_resource_new(rt, rep_val)
+  return [HandleRef(current_instance(), i)]
+
+def canon_gc_resource_drop(rt, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_resource_drop(rt, i)
+
+def canon_gc_resource_rep(rt, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_resource_rep(rt, i)
 
 ### 🔀 `canon context.get`
 
@@ -2336,7 +2947,7 @@ def canon_task_return(result_type, opts: LiftOptions, flat_args):
   trap_if(result_type != task.ft.result)
   trap_if(not LiftOptions.equal(opts, task.opts))
   cx = LiftLowerContext('lift', opts, task.inst, task)
-  result = lift_flat_values(cx, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_type())
+  result = lift_flat_values(cx, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_type(), is_result = True)
   task.return_(result)
   return []
 
@@ -2448,6 +3059,78 @@ def canon_subtask_drop(i):
   s.drop()
   return []
 
+### 🛸 `canon gc.{waitable-set,waitable,subtask}.*`
+
+def canon_gc_waitable_set_new():
+  [si] = canon_waitable_set_new()
+  return [HandleRef(current_instance(), si)]
+
+def canon_gc_waitable_set_wait(r):
+  inst = current_instance()
+  si = unbox_handle(inst, r)
+  trap_if(not inst.may_leave)
+  wset = inst.handles.get(si)
+  trap_if(not isinstance(wset, WaitableSet))
+  event = wset.wait()
+  return unpack_gc_event(inst, event)
+
+def canon_gc_waitable_set_poll(r):
+  inst = current_instance()
+  si = unbox_handle(inst, r)
+  trap_if(not inst.may_leave)
+  wset = inst.handles.get(si)
+  trap_if(not isinstance(wset, WaitableSet))
+  event = wset.poll()
+  return unpack_gc_event(inst, event)
+
+def unpack_gc_event(inst, e: EventTuple):
+  event, p1, p2 = e
+  if p1 == 0:
+    w = None
+  else:
+    w = inst.handles.get_handle_ref(p1)
+    if w is None:
+      w = HandleRef(inst, p1)
+  return [event, p2, w]
+
+def canon_gc_waitable_set_drop(r):
+  i = unbox_handle(current_instance(), r)
+  return canon_waitable_set_drop(i)
+
+def canon_gc_waitable_join(wr, sr):
+  wi = unbox_handle(current_instance(), wr)
+  if sr is None:
+    si = 0
+  else:
+    si = unbox_handle(current_instance(), sr)
+  return canon_waitable_join(wi, si)
+
+def canon_gc_subtask_cancel(async_, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_subtask_cancel(async_, i)
+
+def canon_gc_subtask_drop(r):
+  i = unbox_handle(current_instance(), r)
+  return canon_subtask_drop(i)
+
+### 🛸 `canon gc.handle-ref.{index,new,get}`
+
+def canon_gc_handle_ref_index(r):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  i = unbox_handle(inst, r)
+  return [i]
+
+def canon_gc_handle_ref_new(i):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  return [HandleRef(inst, i)]
+
+def canon_gc_handle_ref_get(i):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  return [inst.handles.get_handle_ref(i)]
+
 ### 🔀 `canon {stream,future}.new`
 
 def canon_stream_new(stream_t):
@@ -2468,19 +3151,52 @@ def canon_future_new(future_t):
 
 ### 🔀 `canon stream.{read,write}`
 
-def canon_stream_read(stream_t, opts, i, ptr, length):
-  return copy(ReadableStreamEnd, WritableGuestBuffer, 'lower', stream_t, opts, i, ptr, length)
+def canon_stream_read(stream_t, opts, i, *args):
+  if opts.gc:
+    ii = unbox_handle(current_instance(), i)
+    gc_args = gc_stream_buffer_args(stream_t, args)
+    return copy(ReadableStreamEnd, WritableGcBuffer, 'lower', stream_t, opts, ii, *gc_args)
+  else:
+    [ptr, length] = args
+    return copy(ReadableStreamEnd, WritableGuestBuffer, 'lower', stream_t, opts, i, ptr, length)
 
-def canon_stream_write(stream_t, opts, i, ptr, length):
-  return copy(WritableStreamEnd, ReadableGuestBuffer, 'lift', stream_t, opts, i, ptr, length)
+def canon_stream_write(stream_t, opts, i, *args):
+  if opts.gc:
+    ii = unbox_handle(current_instance(), i)
+    gc_args = gc_stream_buffer_args(stream_t, args)
+    return copy(WritableStreamEnd, ReadableGcBuffer, 'lift', stream_t, opts, ii, *gc_args)
+  else:
+    [ptr, length] = args
+    return copy(WritableStreamEnd, ReadableGuestBuffer, 'lift', stream_t, opts, i, ptr, length)
 
-def canon_future_read(future_t, opts, i, ptr):
-  return copy(ReadableFutureEnd, WritableGuestBuffer, 'lower', future_t, opts, i, ptr, 1)
+def gc_stream_buffer_args(stream_t, args):
+  if stream_t.t is None:
+    [length] = args
+    return (None, 0, length)
+  else:
+    [arr, offset, length] = args
+    return (arr.elems, offset, length)
 
-def canon_future_write(future_t, opts, i, ptr):
-  return copy(WritableFutureEnd, ReadableGuestBuffer, 'lift', future_t, opts, i, ptr, 1)
+def canon_future_read(future_t, opts, i, ptr_or_cell = None):
+  if opts.gc:
+    ii = unbox_handle(current_instance(), i)
+    if future_t.t is None:
+      assert(ptr_or_cell is None)
+      elems = None
+    else:
+      elems = ptr_or_cell.fields
+    return copy(ReadableFutureEnd, WritableGcBuffer, 'lower', future_t, opts, ii, elems, 0, 1)
+  else:
+    return copy(ReadableFutureEnd, WritableGuestBuffer, 'lower', future_t, opts, i, ptr_or_cell, 1)
 
-def copy(EndT, BufferT, direction, stream_or_future_t, opts, i, ptr, length):
+def canon_future_write(future_t, opts, i, ptr_or_v = None):
+  if opts.gc:
+    ii = unbox_handle(current_instance(), i)
+    return copy(WritableFutureEnd, ReadableGcValueBuffer, 'lift', future_t, opts, ii, ptr_or_v)
+  else:
+    return copy(WritableFutureEnd, ReadableGuestBuffer, 'lift', future_t, opts, i, ptr_or_v, 1)
+
+def copy(EndT, BufferT, direction, stream_or_future_t, opts, i, *buffer_args):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   end = thread.task.inst.handles.get(i)
@@ -2489,7 +3205,7 @@ def copy(EndT, BufferT, direction, stream_or_future_t, opts, i, ptr, length):
   trap_if(end.state != End.State.IDLE)
   trap_if(end.in_waitable_set() and not opts.async_)
   cx = LiftLowerContext(direction, opts, thread.task.inst, borrow_scope = None)
-  buffer = BufferT(end.t, cx, ptr, length)
+  buffer = BufferT(end.t, cx, *buffer_args)
   end.copy(buffer)
   if not end.has_pending_event():
     if not opts.async_:
@@ -2582,6 +3298,63 @@ def forward(ReadableEndT, WritableEndT, stream_or_future_t, ri, wi):
   trap_if(writable_end.in_waitable_set())
   End.forward(readable_end, writable_end)
   return []
+
+### 🛸 `canon gc.{stream,future}.*`
+
+def canon_gc_stream_new(stream_t):
+  [packed] = canon_stream_new(stream_t)
+  return box_new_ends(current_instance(), packed)
+
+def canon_gc_future_new(future_t):
+  [packed] = canon_future_new(future_t)
+  return box_new_ends(current_instance(), packed)
+
+def box_new_ends(inst, packed):
+  readable_index = packed & 0xffff_ffff
+  writable_index = packed >> 32
+  return [HandleRef(inst, readable_index), HandleRef(inst, writable_index)]
+
+def canon_gc_stream_cancel_read(stream_t, async_, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_stream_cancel_read(stream_t, async_, i)
+
+def canon_gc_stream_cancel_write(stream_t, async_, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_stream_cancel_write(stream_t, async_, i)
+
+def canon_gc_future_cancel_read(future_t, async_, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_future_cancel_read(future_t, async_, i)
+
+def canon_gc_future_cancel_write(future_t, async_, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_future_cancel_write(future_t, async_, i)
+
+def canon_gc_stream_drop_readable(stream_t, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_stream_drop_readable(stream_t, i)
+
+def canon_gc_stream_drop_writable(stream_t, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_stream_drop_writable(stream_t, i)
+
+def canon_gc_future_drop_readable(future_t, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_future_drop_readable(future_t, i)
+
+def canon_gc_future_drop_writable(future_t, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_future_drop_writable(future_t, i)
+
+def canon_gc_stream_forward(stream_t, rr, wr):
+  ri = unbox_handle(current_instance(), rr)
+  wi = unbox_handle(current_instance(), wr)
+  return canon_stream_forward(stream_t, ri, wi)
+
+def canon_gc_future_forward(future_t, rr, wr):
+  ri = unbox_handle(current_instance(), rr)
+  wi = unbox_handle(current_instance(), wr)
+  return canon_future_forward(future_t, ri, wi)
 
 ### 🧵 `canon thread.index`
 
@@ -2689,30 +3462,43 @@ def canon_thread_yield_then_promote(i):
 class ErrorContext:
   debug_message: String
 
-def canon_error_context_new(opts, ptr, tagged_code_units):
+def canon_error_context_new(opts, ptr_or_arr, tagged_code_units = None):
   inst = current_instance()
   trap_if(not inst.may_leave)
   if DETERMINISTIC_PROFILE or random.randint(0,1):
-    s = String(('', 'utf8', 0))
+    s = String(('', StringHint.UTF8, 0))
   else:
     cx = LiftLowerContext('lift', opts, inst)
-    s = load_string_from_range(cx, ptr, tagged_code_units)
+    if opts.gc:
+      assert(tagged_code_units is None)
+      s = lift_gc_string(cx, ptr_or_arr)
+    else:
+      s = load_string_from_range(cx, ptr_or_arr, tagged_code_units)
     s = host_defined_transformation(s)
   i = inst.handles.add(ErrorContext(s))
-  return [i]
+  if opts.gc:
+    return [HandleRef(inst, i)]
+  else:
+    return [i]
 
 ### 📝 `canon error-context.debug-message`
 
-def canon_error_context_debug_message(opts, i, ptr):
+def canon_error_context_debug_message(opts, i, ptr = None):
   inst = current_instance()
   trap_if(not inst.may_leave)
+  if opts.gc:
+    i = unbox_handle(inst, i)
   errctx = inst.handles.get(i)
   trap_if(not isinstance(errctx, ErrorContext))
   cx = LiftLowerContext('lower', opts, inst)
-  trap_if(ptr != align_to(ptr, alignment(cx, StringType())))
-  trap_if(ptr + elem_size(cx, StringType()) > len(cx.opts.memory))
-  store(cx, errctx.debug_message, StringType(), ptr)
-  return []
+  if opts.gc:
+    assert(ptr is None)
+    return [lower_gc_string(cx, errctx.debug_message)]
+  else:
+    trap_if(ptr != align_to(ptr, alignment(cx, StringType())))
+    trap_if(ptr + elem_size(cx, StringType()) > len(cx.opts.memory))
+    store(cx, errctx.debug_message, StringType(), ptr)
+    return []
 
 ### 📝 `canon error-context.drop`
 
@@ -2722,3 +3508,33 @@ def canon_error_context_drop(i):
   errctx = inst.handles.remove(i)
   trap_if(not isinstance(errctx, ErrorContext))
   return []
+
+### 🛸 `canon gc.error-context.*`
+
+def canon_gc_error_context_drop(r):
+  i = unbox_handle(current_instance(), r)
+  return canon_error_context_drop(i)
+
+### 🛸 `canon array.new-{array,memory,table}`
+
+def canon_array_new_array(dst: CoreDefType, src: CoreDefType, a, i, n):
+  trap_if(a is None)
+  trap_if(i + n > array_len(a))
+  return [array_new_fixed(dst, [array_get(a, j) for j in range(i, i + n)])]
+
+def canon_array_new_memory(dst: CoreDefType, mem: MemInst, ptr, n):
+  t = dst.comptype().elem.t
+  nbytes = storage_byte_size(t)
+  trap_if(ptr + n * nbytes > len(mem))
+  vs = []
+  for j in range(n):
+    bits = int.from_bytes(mem[ptr + j*nbytes : ptr + (j+1)*nbytes], 'little')
+    match t:
+      case 'f32'                        : vs.append(core_f32_reinterpret_i32(bits))
+      case 'f64'                        : vs.append(core_f64_reinterpret_i64(bits))
+      case 'i8' | 'i16' | 'i32' | 'i64' : vs.append(bits)
+  return [array_new_fixed(dst, vs)]
+
+def canon_array_new_table(dst: CoreDefType, tbl: list[any], i, n):
+  trap_if(i + n > len(tbl))
+  return [array_new_fixed(dst, tbl[i : i+n])]

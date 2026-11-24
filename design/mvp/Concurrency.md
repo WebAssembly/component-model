@@ -102,7 +102,7 @@ Thus, overall, `async` in WIT and the Component Model does not behave like a
 essay.
 
 The following table summarizes how the behavior of a callee changes, depending
-on whether `async` is set as a lifting or lowering ABI option and whether the 
+on whether `async` is set as a lifting or lowering ABI option and whether the
 component function type is `async`:
 
 | Component function type | Lift canonical option | Valid? | Effect of callee blocking | Holds instances's exclusive lock? | Can call while instance lock held? |
@@ -1169,6 +1169,62 @@ The `(result i32)` has the same interpretation as the stackless export function
 and the runtime will repeatedly call the callback until a value of `0` is
 returned. The `i32` parameters describe what happened that caused the callback
 to be called again.
+
+##### 🚟 🛸 Stackful Async Exports and `gc`
+
+When the 🚟 stackful ABI and 🛸 `gc` option are both provided, the `foo`
+function from the `w` world has the following signatures:
+
+```wat
+(rec (type $utf8 (sub final (array i8))))
+
+;; async, no callback, gc
+(func (param $s (ref $utf8)))
+
+;; task.return, gc
+(func (param $ret (ref $utf8)))
+```
+
+Parameters work just like synchronous parameters.
+
+Results are passed the same way as they are for non-`gc` stackful async exports,
+except that they use the `gc`-lowering of the flattened result types, except
+that if they overflow `MAX_FLAG_PARAMS`, then the result's GC heap storage type
+is passed directly (rather than a `(ref $params)` struct).
+
+##### 🛸 Stackless Async Exports and `gc`
+
+The async stackless export function signature for `foo` from world `w` is:
+```wat
+(rec (type $utf8 (sub final (array i8))))
+
+;; async, callback, gc
+(func (param $s (ref $utf8)) (result i32 (ref null extern)))
+```
+
+The parameters work just like synchronous parameters.
+
+The callee returns their value by calling `task.return` just like the stackful
+case.
+
+The resulting `i32` tells the runtime what to do next, the same as for non-`gc`
+stackless exports, however the waitable set (if any) is not an index bitpacked
+into the `i32`, it is the second `(ref null extern)` result, and must be
+non-null when waiting.
+
+The associated callback must have the following signature:
+```wat
+(func (param $event-code i32)
+      (param $payload i32)
+      (param $waitable (ref null extern))
+      (result i32 (ref null extern)))
+```
+
+The `(result i32 (ref null extern))` has the same interpretation as the
+stackless `gc` export function, and the runtime will repeatedly call the
+callback until the first result is `0`. The `$event-code`, `$payload`, and
+`waitable` parameters describe what happened that caused the callback to be
+called again.
 
 For a complete description of how async exports work, see [`canon_lift`] in the
 Canonical ABI Explainer.

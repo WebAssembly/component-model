@@ -72,7 +72,7 @@ def mk_host_func(store, host_func, ft):
   return func_inst
 
 def mk_str(s):
-  return (s, 'utf8', len(s.encode('utf-8')))
+  return (s, StringHint.UTF8, len(s.encode('utf-8')))
 
 def mk_tup(*a):
   def mk_tup_rec(x):
@@ -118,13 +118,15 @@ def test(t, vals_to_lift, v,
          cx = mk_cx(),
          dst_encoding = None,
          lower_t = None,
-         lower_v = None):
+         lower_v = None,
+         dst_addr_type = None,
+         lowered_vals = None):
   def test_name():
     return "test({},{},{}):".format(t, vals_to_lift, v)
 
   error = None
   def thread_func():
-    nonlocal error, cx, dst_encoding, lower_t, lower_v
+    nonlocal error, cx, dst_encoding, lower_t, lower_v, dst_addr_type
     try:
       vi = CoreValueIter(vals_to_lift)
 
@@ -148,10 +150,14 @@ def test(t, vals_to_lift, v,
       heap = Heap(5*len(cx.opts.memory))
       if dst_encoding is None:
         dst_encoding = cx.opts.string_encoding
-      cx = mk_cx(MemInst(heap.memory, cx.opts.memory.ptr_type()), dst_encoding, heap.realloc)
-      lowered_vals = lower_flat(cx, v, lower_t)
+      if dst_addr_type is None:
+        dst_addr_type = cx.opts.memory.ptr_type()
+      cx = mk_cx(MemInst(heap.memory, dst_addr_type), dst_encoding, heap.realloc)
+      got_lowered_vals = lower_flat(cx, v, lower_t)
+      if lowered_vals is not None and got_lowered_vals != lowered_vals:
+        fail("{} lower_flat() expected {} but got {}".format(test_name(), lowered_vals, got_lowered_vals))
 
-      vi = CoreValueIter(lowered_vals)
+      vi = CoreValueIter(got_lowered_vals)
       got = lift_flat(cx, vi, lower_t)
       if not equal_modulo_string_encoding(got, lower_v):
         fail("{} re-lift expected {} but got {}".format(test_name(), lower_v, got))
@@ -266,44 +272,62 @@ test_nan64(0xffffffffffffffff, CANONICAL_FLOAT64_NAN)
 test_nan64(0x7ff0000000000000, 0x7ff0000000000000)
 test_nan64(0x3ff0000000000000, 0x3ff0000000000000)
 
-def test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, addr_type='i32'):
+def test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, hint,
+                         src_addr_type='i32', dst_addr_type='i32', lowered_vals=None):
   heap = Heap(len(encoded))
   heap.memory[:] = encoded[:]
-  cx = mk_cx(MemInst(heap.memory, addr_type), src_encoding)
-  v = (s, src_encoding, tagged_code_units)
-  test(StringType(), [0, tagged_code_units], v, cx, dst_encoding)
+  cx = mk_cx(MemInst(heap.memory, src_addr_type), src_encoding)
+  tag = 1 << (ptr_size(src_addr_type) * 8 - 1)
+  code_units = tagged_code_units & ~tag
+  v = (s, hint, code_units)
+  test(StringType(), [0, tagged_code_units], v, cx, dst_encoding,
+       dst_addr_type = dst_addr_type, lowered_vals = lowered_vals)
 
-def test_string(src_encoding, dst_encoding, s, addr_type='i32'):
+def test_string(src_encoding, dst_encoding, s, src_addr_type='i32', dst_addr_type='i32'):
+  def run(encoded, tagged_code_units, hint):
+    test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, hint,
+                         src_addr_type, dst_addr_type)
   if src_encoding == 'utf8':
     encoded = s.encode('utf-8')
-    tagged_code_units = len(encoded)
-    test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, addr_type)
+    run(encoded, len(encoded), StringHint.UTF8)
   elif src_encoding == 'utf16':
     encoded = s.encode('utf-16-le')
-    tagged_code_units = int(len(encoded) / 2)
-    test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, addr_type)
+    run(encoded, int(len(encoded) / 2), StringHint.UTF16)
   elif src_encoding == 'latin1+utf16':
     try:
       encoded = s.encode('latin-1')
-      tagged_code_units = len(encoded)
-      test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, addr_type)
+      run(encoded, len(encoded), StringHint.DYNAMIC_LATIN1)
     except UnicodeEncodeError:
       pass
     encoded = s.encode('utf-16-le')
-    tagged_code_units = int(len(encoded) / 2) | (1 << (ptr_size(addr_type) * 8 - 1))
-    test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, addr_type)
+    tag = 1 << (ptr_size(src_addr_type) * 8 - 1)
+    run(encoded, int(len(encoded) / 2) | tag, StringHint.DYNAMIC_UTF16)
 
 encodings = ['utf8', 'utf16', 'latin1+utf16']
 
 fun_strings = ['', 'a', 'hi', '\x00', 'a\x00b', '\x80', '\x80b', 'ab\xefc',
-               '\u01ffy', 'xy\u01ff', 'a\ud7ffb', 'a\u02ff\u03ff\u04ffbc',
-               '\uf123', '\uf123\uf123abc', 'abcdef\uf123']
+               'ǿy', 'xyǿ', 'a퟿b', 'a˿Ͽӿbc',
+               '', 'abc', 'abcdef']
 
-for addr_type in ['i32', 'i64']:
-  for src_encoding in encodings:
-    for dst_encoding in encodings:
-      for s in fun_strings:
-        test_string(src_encoding, dst_encoding, s, addr_type)
+for src_addr_type in ['i32', 'i64']:
+  for dst_addr_type in ['i32', 'i64']:
+    for src_encoding in encodings:
+      for dst_encoding in encodings:
+        for s in fun_strings:
+          test_string(src_encoding, dst_encoding, s, src_addr_type, dst_addr_type)
+
+# A `latin1+utf16` string's UTF-16 tag is read from the source memory's high
+# pointer bit and written to the destination memory's.
+for src_addr_type, dst_addr_type in [('i32', 'i64'), ('i64', 'i32')]:
+  src_tag = 1 << (ptr_size(src_addr_type) * 8 - 1)
+  dst_tag = 1 << (ptr_size(dst_addr_type) * 8 - 1)
+  def t(s, dst_encoding, lowered_vals):
+    test_string_internal('latin1+utf16', dst_encoding, s, s.encode('utf-16-le'), len(s) | src_tag,
+                         StringHint.DYNAMIC_UTF16, src_addr_type, dst_addr_type, lowered_vals)
+  t('a', 'latin1+utf16', [0, 2 | dst_tag])
+  t('ab', 'latin1+utf16', [4, 2])
+  t('a', 'utf16', [0, 2])
+  t('a', 'utf8', [2, 4])
 
 def test_heap(t, expect, args, byte_array, addr_type='i32'):
   heap = Heap(byte_array)
@@ -3175,6 +3199,931 @@ def test_sync_threads():
   assert(result == 42)
   assert(other_result == 43)
 
+def mk_gc_opts(encoding = 'utf8', post_return = None):
+  opts = mk_opts(memory = None, encoding = encoding, post_return = post_return)
+  opts.gc = True
+  return opts
+
+def mk_gc_cx(encoding = 'utf8', direction = 'lift', inst = None):
+  if inst is None:
+    inst = ComponentInstance(Store())
+  return LiftLowerContext(direction, mk_gc_opts(encoding), inst)
+
+def run_in_task(inst, f):
+  error = None
+  def thread_func():
+    nonlocal error
+    try:
+      f()
+    except BaseException as e:
+      error = e
+  task = Task(FuncType([],[]), CanonicalOptions(), inst, lambda: [], lambda _: ())
+  Thread(task, thread_func).resume()
+  if error is not None:
+    raise error
+
+def gc_struct_t(*field_types):
+  return gc_final_type(CoreStructType(tuple(CoreFieldType(t) for t in field_types)))
+
+def gc_array_t(elem_type):
+  return gc_final_type(CoreArrayType(CoreFieldType(elem_type)))
+
+def test_gc_flatten():
+  def flat(ft, direction = 'lift', encoding = 'utf8', inst = None):
+    return flatten_functype(mk_gc_cx(encoding, direction, inst), ft)
+
+  # Small scalars are i32 when flat but packed when in GC heap storage.
+  got = flat(FuncType([U8Type(), S16Type(), BoolType()], []))
+  assert(got == CoreFuncType(['i32','i32','i32'], []))
+  got = flat(FuncType([ListType(TupleType([BoolType(), S8Type(), U16Type()]))], []))
+  tup = gc_struct_t('i8', 'i8', 'i16')
+  assert(got == CoreFuncType([CoreRefType(gc_array_t(CoreRefType(tup)))], []))
+  got = flat(FuncType([U32Type(), S64Type(), F32Type()], [F64Type()]))
+  assert(got == CoreFuncType(['i32','i64','f32'], ['f64']))
+
+  # Strings.
+  utf8 = gc_array_t('i8')
+  utf16 = gc_array_t('i16')
+  assert(GC_UTF8_ARRAY == utf8 and GC_LATIN1_ARRAY == utf8 and GC_UTF16_ARRAY == utf16)
+  ft = FuncType([StringType()], [StringType()])
+  assert(flat(ft, encoding = 'utf8') == CoreFuncType([CoreRefType(utf8)], [CoreRefType(utf8)]))
+  assert(flat(ft, encoding = 'utf16') == CoreFuncType([CoreRefType(utf16)], [CoreRefType(utf16)]))
+  assert(flat(ft, encoding = 'latin1+utf16') == CoreFuncType([CoreRefType('array')], [CoreRefType('array')]))
+
+  # Records and tuples are flattened when flat, but are structs in storage.
+  point = TupleType([S32Type(), S32Type()])
+  line = RecordType([FieldType('a', point), FieldType('b', point)])
+  assert(flat(FuncType([line], [])) == CoreFuncType(['i32','i32','i32','i32'], []))
+  point_t = gc_struct_t('i32', 'i32')
+  line_t = gc_struct_t(CoreRefType(point_t), CoreRefType(point_t))
+  lines_t = gc_array_t(CoreRefType(line_t))
+  assert(flat(FuncType([ListType(line)], [])) == CoreFuncType([CoreRefType(lines_t)], []))
+
+  # Variants without payloads are integers.
+  color = EnumType(['red', 'green', 'blue'])
+  got = flat(FuncType([color, ListType(color)], []))
+  assert(got == CoreFuncType(['i32', CoreRefType(gc_array_t('i8'))], []))
+
+  # Variants with payloads are a rec group of a base struct and a final
+  # subtype for each case.
+  animal = VariantType([CaseType('cat', U32Type()), CaseType('dog', U16Type()), CaseType('rabbit', None)])
+  disc = CoreFieldType('i8')
+  rec = CoreRecType((
+    CoreSubType(False, (), CoreStructType((disc,))),
+    CoreSubType(True, (CoreRecIdx(0),), CoreStructType((disc, CoreFieldType('i32')))),
+    CoreSubType(True, (CoreRecIdx(0),), CoreStructType((disc, CoreFieldType('i16')))),
+    CoreSubType(True, (CoreRecIdx(0),), CoreStructType((disc,)))))
+  assert(flat(FuncType([animal], [])) == CoreFuncType([CoreRefType(CoreDefType(rec, 0))], []))
+  for i in range(1, 4):
+    assert(CoreDefType(rec, i).matches(CoreDefType(rec, 0)))
+    assert(not CoreDefType(rec, 0).matches(CoreDefType(rec, i)))
+
+  # Options and results desugar to variants.
+  tri_bool = OptionType(BoolType())
+  rec = CoreRecType((
+    CoreSubType(False, (), CoreStructType((disc,))),
+    CoreSubType(True, (CoreRecIdx(0),), CoreStructType((disc,))),
+    CoreSubType(True, (CoreRecIdx(0),), CoreStructType((disc, CoreFieldType('i8'))))))
+  assert(flat(FuncType([tri_bool], [])) == CoreFuncType([CoreRefType(CoreDefType(rec, 0))], []))
+
+  # Flags are i32 when flat but the smallest packed integer in storage.
+  flags = FlagsType([f'f{i}' for i in range(9)])
+  got = flat(FuncType([flags, ListType(flags)], []))
+  assert(got == CoreFuncType(['i32', CoreRefType(gc_array_t('i16'))], []))
+
+  # Maps desugar to lists of tuples.
+  got = flat(FuncType([MapType(U32Type(), U8Type())], []))
+  assert(got == CoreFuncType([CoreRefType(gc_array_t(CoreRefType(gc_struct_t('i32', 'i8'))))], []))
+
+  # Fixed-length lists are lowered the same as variable-length lists.
+  got = flat(FuncType([ListType(U8Type(), 3)], []))
+  assert(got == CoreFuncType([CoreRefType(gc_array_t('i8'))], []))
+
+  # Handles, streams and futures are externrefs.
+  store = Store()
+  impl_inst = ComponentInstance(store)
+  other_inst = ComponentInstance(store)
+  rt = ResourceType(impl_inst, 'i64')
+  ft = FuncType([OwnType(rt), BorrowType(rt), FutureType(BoolType()), StreamType(U32Type()), ErrorContextType()], [])
+  assert(flat(ft, 'lift', inst = other_inst) == CoreFuncType(5 * [EXTERNREF], []))
+  assert(flat(ft, 'lower', inst = other_inst) == CoreFuncType(5 * [EXTERNREF], []))
+  assert(flat(ft, 'lower', inst = impl_inst) == CoreFuncType(5 * [EXTERNREF], []))
+  # ... except borrows lowered into the resource's defining component.
+  assert(flat(ft, 'lift', inst = impl_inst) == CoreFuncType([EXTERNREF, 'i64'] + 3 * [EXTERNREF], []))
+
+  # Too many flat params are passed as a single struct of all the params.
+  ft = FuncType([U8Type() for _ in range(17)], [])
+  assert(flat(ft) == CoreFuncType([CoreRefType(gc_struct_t(*(17 * ['i8'])))], []))
+  ft = FuncType([U8Type() for _ in range(16)], [])
+  assert(flat(ft) == CoreFuncType(16 * ['i32'], []))
+
+  # Too many flat results return the result's storage type (in both directions).
+  big = TupleType([U8Type() for _ in range(17)])
+  ft = FuncType([], [big])
+  for direction in ['lift', 'lower']:
+    assert(flat(ft, direction) == CoreFuncType([], [CoreRefType(gc_struct_t(*(17 * ['i8'])))]))
+  ft = FuncType([], [TupleType([U8Type() for _ in range(16)])])
+  assert(flat(ft) == CoreFuncType([], 16 * ['i32']))
+
+  # Async lifts and lowers.
+  def async_flat(ft, direction, callback = None):
+    cx = mk_gc_cx(direction = direction)
+    cx.opts.async_ = True
+    cx.opts.callback = callback
+    return flatten_functype(cx, ft)
+  nullable_externref = CoreRefType('extern', nullable = True)
+  ft = FuncType([U8Type() for _ in range(17)], [StringType()], async_ = True)
+  params_t = CoreRefType(gc_struct_t(*(17 * ['i8'])))
+  assert(async_flat(ft, 'lift', callback = lambda _: None) == CoreFuncType([params_t], ['i32', nullable_externref]))
+  assert(async_flat(ft, 'lift') == CoreFuncType([params_t], []))
+  results_t = CoreRefType(gc_final_type(CoreStructType((CoreFieldType(CoreRefType(GC_UTF8_ARRAY, nullable = True), mutable = True),))))
+  assert(async_flat(ft, 'lower') == CoreFuncType([params_t, results_t], ['i32', nullable_externref]))
+  ft = FuncType([U8Type() for _ in range(4)], [], async_ = True)
+  assert(async_flat(ft, 'lower') == CoreFuncType(4 * ['i32'], ['i32', nullable_externref]))
+  ft = FuncType([U8Type() for _ in range(5)], [], async_ = True)
+  assert(async_flat(ft, 'lower') == CoreFuncType([CoreRefType(gc_struct_t(*(5 * ['i8'])))], ['i32', nullable_externref]))
+
+def test_gc_values():
+  big_tuple_t = TupleType([U32Type() for _ in range(16)] + [StringType()])
+  big_tuple_v = mk_tup(*range(16), mk_str("big"))
+  animal = VariantType([CaseType('cat', U32Type()), CaseType('dog', S16Type()), CaseType('rabbit', None)])
+  cases = [
+    (BoolType(), True),
+    (S8Type(), -1),
+    (U8Type(), 255),
+    (S16Type(), -2),
+    (U16Type(), 65535),
+    (S32Type(), -3),
+    (U32Type(), 2**32-1),
+    (S64Type(), -4),
+    (U64Type(), 2**64-1),
+    (F32Type(), 1.5),
+    (F64Type(), -2.5),
+    (CharType(), '\U0001F6F8'),
+    (StringType(), mk_str("hello")),
+    (StringType(), mk_str("héllo")),
+    (StringType(), mk_str("hēllo \U0001F6F8")),
+    (ListType(S8Type()), [-1, 0, 1, -128, 127]),
+    (ListType(S16Type()), [-1, 0, 1, -32768, 32767]),
+    (ListType(BoolType()), [True, False, True]),
+    (ListType(CharType()), ['a', 'é', '\U0001F6F8']),
+    (ListType(F32Type()), [1.5, -0.5]),
+    (ListType(U8Type(), 3), [1, 2, 3]),
+    (ListType(StringType()), [mk_str("a"), mk_str("ē"), mk_str("c")]),
+    (ListType(ListType(StringType())), [[mk_str("one"), mk_str("two")], [mk_str("three")]]),
+    (TupleType([U16Type(), S8Type()]), mk_tup(3, -4)),
+    (ListType(TupleType([U16Type(), S8Type()])), [mk_tup(3, -4), mk_tup(5, 6)]),
+    (ListType(TupleType([S32Type(), S64Type(), U64Type(), F64Type(), CharType()])),
+     [mk_tup(-2**31, -2**63, 2**64-1, -0.5, '\u00e9'), mk_tup(7, 8, 9, 1.0, 'a')]),
+    (EnumType(['a', 'b', 'c']), {'c': None}),
+    (ListType(EnumType(['a', 'b', 'c'])), [{'c': None}, {'a': None}]),
+    (FlagsType(['a', 'b']), {'a': False, 'b': True}),
+    (ListType(FlagsType([str(i) for i in range(9)])), [{str(i): i % 2 == 0 for i in range(9)}]),
+    (animal, {'cat': 42}),
+    (animal, {'dog': -42}),
+    (animal, {'rabbit': None}),
+    (ListType(animal), [{'cat': 1}, {'dog': -1}, {'rabbit': None}]),
+    (OptionType(StringType()), {'some': mk_str("x")}),
+    (OptionType(StringType()), {'none': None}),
+    (ResultType(U32Type(), BoolType()), {'error': True}),
+    (ListType(OptionType(TupleType([StringType(), U16Type()]))), [{'some': mk_tup(mk_str("answer"), 42)}, {'none': None}]),
+    (MapType(U32Type(), StringType()), [mk_tup(1, mk_str("one")), mk_tup(2, mk_str("two"))]),
+    (big_tuple_t, big_tuple_v),
+    (VariantType([CaseType('x', big_tuple_t)]), {'x': big_tuple_v}),
+  ]
+
+  # Lift each value as both a parameter and a result of an identity function
+  # lifted with the GC ABI in each string encoding.
+  for encoding in ['utf8', 'utf16', 'latin1+utf16']:
+    for t, v in cases:
+      store = Store()
+      ft = FuncType([t], [t])
+      def callee(args):
+        if len(flatten_type(mk_gc_cx(encoding), t)) > MAX_FLAT_PARAMS:
+          [params] = args
+          return [struct_get(params, 0)]
+        return args
+      callee_inst = ComponentInstance(store)
+      got = None
+      def on_start():
+        return [v]
+      def on_resolve(result):
+        nonlocal got
+        [got] = result
+      lift_and_run(mk_gc_opts(encoding), callee_inst, ft, callee, on_start, on_resolve)
+      if not equal_modulo_string_encoding(got, v):
+        fail("test_gc_values({},{},{}) got {}".format(encoding, t, v, got))
+
+      # Then call the same GC-lifted function from a component that lowers it
+      # with the GC ABI using a (possibly) different string encoding.
+      for caller_encoding in ['utf8', 'utf16', 'latin1+utf16']:
+        store = Store()
+        callee_inst = ComponentInstance(store)
+        func = store.lift(callee, ft, mk_gc_opts(encoding), callee_inst)
+        caller_inst = ComponentInstance(store)
+        caller_opts = mk_gc_opts(caller_encoding)
+        def core_caller(args):
+          cx = LiftLowerContext('lower', caller_opts, caller_inst)
+          flat_args = lower_flat_values(cx, MAX_FLAT_PARAMS, [v], [t])
+          flat_results = store.lower(func, ft, caller_opts, caller_inst)(flat_args)
+          assert(types_match_values(flatten_functype(cx, ft).results, flat_results))
+          [got] = lift_flat_values(cx, MAX_FLAT_GC_RESULTS, CoreValueIter(flat_results), [t], is_result = True)
+          if not equal_modulo_string_encoding(got, v):
+            fail("test_gc_values({},{},{},{}) got {}".format(encoding, caller_encoding, t, v, got))
+          return []
+        lift_and_run(mk_opts(), caller_inst, FuncType([], []), core_caller, lambda: [], lambda _: ())
+
+def test_gc_strings():
+  def lift(encoding, a):
+    cx = mk_gc_cx(encoding)
+    got = None
+    def f():
+      nonlocal got
+      got = lift_flat(cx, CoreValueIter([a]), StringType())
+    run_in_task(cx.inst, f)
+    return got
+
+  def lower(encoding, s):
+    cx = mk_gc_cx(encoding, 'lower')
+    return lower_flat(cx, mk_str(s), StringType())[0]
+
+  a = lower('utf8', 'hé')
+  assert(a.t == GC_UTF8_ARRAY and a.elems == [0x68, 0xc3, 0xa9])
+  a = lower('utf16', '\U0001F6F8')
+  assert(a.t == GC_UTF16_ARRAY and a.elems == [0xd83d, 0xdef8])
+  a = lower('latin1+utf16', 'hé')
+  assert(a.t == GC_LATIN1_ARRAY and a.elems == [0x68, 0xe9])
+  a = lower('latin1+utf16', 'hē')
+  assert(a.t == GC_UTF16_ARRAY and a.elems == [0x68, 0x113])
+
+  assert(lift('utf8', array_new_fixed(GC_UTF8_ARRAY, [0x68, 0xc3, 0xa9])) == ('hé', StringHint.UTF8, 3))
+  assert(lift('utf16', array_new_fixed(GC_UTF16_ARRAY, [0xd83d, 0xdef8])) == ('\U0001F6F8', StringHint.UTF16, 2))
+  assert(lift('latin1+utf16', array_new_fixed(GC_LATIN1_ARRAY, [0x68, 0xe9])) == ('hé', StringHint.DYNAMIC_LATIN1, 2))
+  assert(lift('latin1+utf16', array_new_fixed(GC_UTF16_ARRAY, [0x68, 0x113])) == ('hē', StringHint.DYNAMIC_UTF16, 2))
+
+  # Invalid encodings trap.
+  try:
+    lift('utf8', array_new_fixed(GC_UTF8_ARRAY, [0xff]))
+    fail("expected trap")
+  except Trap:
+    pass
+  try:
+    lift('utf16', array_new_fixed(GC_UTF16_ARRAY, [0xd83d]))
+    fail("expected trap")
+  except Trap:
+    pass
+  # latin1+utf16 strings must be one of the two array types.
+  try:
+    lift('latin1+utf16', array_new_fixed(gc_array_t('i32'), [0x68]))
+    fail("expected trap")
+  except Trap:
+    pass
+
+  # GC-lifted latin1+utf16 strings can be stored into linear memory using either
+  # address type.
+  for addr_type in ['i32', 'i64']:
+    for s in ['hé', 'hē']:
+      v = lift('latin1+utf16', lower('latin1+utf16', s))
+      heap = Heap(100)
+      cx = mk_cx(MemInst(heap.memory, addr_type), 'latin1+utf16', heap.realloc)
+      def f():
+        flat = lower_flat(cx, v, StringType())
+        got = lift_flat(cx, CoreValueIter(flat), StringType())
+        assert(got[0] == s)
+      run_in_task(cx.inst, f)
+
+def test_gc_lift_traps():
+  def expect_trap(t, v, encoding = 'utf8'):
+    cx = mk_gc_cx(encoding)
+    def f():
+      try:
+        lift_flat(cx, CoreValueIter([v]), t)
+      except Trap:
+        cx.inst.store.lockdown = False
+        return
+      fail("expected trap lifting {} from {}".format(t, v))
+    run_in_task(cx.inst, f)
+
+  # Out-of-range discriminants.
+  expect_trap(EnumType(['a', 'b']), 2)
+  cx = mk_gc_cx()
+  t = ListType(EnumType(['a', 'b']))
+  expect_trap(t, array_new_fixed(gc_list_type(cx, EnumType(['a', 'b'])), [0, 2]))
+
+  # Variant structs must have a valid discriminant and the matching case type.
+  animal = VariantType([CaseType('cat', U32Type()), CaseType('dog', U16Type()), CaseType('rabbit', None)])
+  rec = gc_variant_rec_type(cx, animal.cases)
+  expect_trap(animal, struct_new(CoreDefType(rec, 0), [0]))
+  expect_trap(animal, struct_new(CoreDefType(rec, 1), [1, 7]))
+  expect_trap(animal, struct_new(CoreDefType(rec, 3), [3]))
+  expect_trap(animal, struct_new(CoreDefType(rec, 3), [0]))
+
+  # Fixed-length lists must have the right length.
+  t = ListType(U8Type(), 3)
+  expect_trap(t, array_new_fixed(gc_list_type(cx, U8Type()), [1, 2]))
+  expect_trap(t, array_new_fixed(gc_list_type(cx, U8Type()), [1, 2, 3, 4]))
+
+  # Lists and strings respect the same byte length limits as linear memory.
+  before = (definitions.MAX_LIST_BYTE_LENGTH, definitions.MAX_STRING_BYTE_LENGTH)
+  definitions.MAX_LIST_BYTE_LENGTH = 7
+  definitions.MAX_STRING_BYTE_LENGTH = 7
+  expect_trap(ListType(U16Type()), array_new_fixed(gc_list_type(cx, U16Type()), [1, 2, 3, 4]))
+  expect_trap(StringType(), array_new_fixed(GC_UTF16_ARRAY, [0x61, 0x62, 0x63, 0x64]), 'utf16')
+  definitions.MAX_LIST_BYTE_LENGTH, definitions.MAX_STRING_BYTE_LENGTH = before
+
+  # Handles must be boxed handle indices.
+  store = Store()
+  inst = ComponentInstance(store)
+  rt = ResourceType(inst, 'i32')
+  expect_trap(OwnType(rt), "not a handle")
+  other_inst = ComponentInstance(store)
+  expect_trap(OwnType(rt), HandleRef(other_inst, other_inst.handles.add(ResourceHandle(rt, 0, own = True))))
+
+def test_gc_handles():
+  dtor_value = None
+  def dtor(args):
+    nonlocal dtor_value
+    [dtor_value] = args
+    return []
+
+  store = Store()
+  producer_inst = ComponentInstance(store)
+  rt = ResourceType(producer_inst, 'i32', dtor)
+  inst = ComponentInstance(store)
+  opts = mk_gc_opts()
+
+  host_ft = FuncType([BorrowType(rt), ListType(OwnType(rt))], [OwnType(rt)])
+  def host_func(on_start, on_return, wait_until):
+    args = on_start()
+    assert(args == [42, [43]])
+    on_return([45])
+  host_func_inst = mk_host_func(store, host_func, host_ft)
+
+  def core_wasm(args):
+    nonlocal dtor_value
+    [h1, h2] = args
+    assert(isinstance(h1, HandleRef) and isinstance(h2, HandleRef))
+    assert(canon_gc_resource_rep(rt, h1) == [42])
+    assert(canon_gc_resource_rep(rt, h2) == [43])
+    hs = array_new_fixed(gc_list_type(LiftLowerContext('lower', opts, inst), OwnType(rt)), [h2])
+    [h3] = store.lower(host_func_inst, host_ft, opts, inst)([h1, hs])
+    assert(isinstance(h3, HandleRef))
+    assert(canon_gc_resource_rep(rt, h3) == [45])
+    # h2 was moved to the callee, so its index was reused for h3 and h2 is stale.
+    assert(h2.index == h3.index)
+    expect_fail(lambda: canon_gc_resource_rep(rt, h2))
+    expect_fail(lambda: canon_gc_resource_rep(rt, h2.index))
+    [h4] = canon_gc_resource_new(rt, 46)
+    assert(isinstance(h4, HandleRef))
+    dtor_value = None
+    assert(canon_gc_resource_drop(rt, h1) == [])
+    assert(dtor_value == 42)
+    return [h3, h4]
+
+  ft = FuncType([OwnType(rt), OwnType(rt)], [TupleType([OwnType(rt), OwnType(rt)])])
+  got = None
+  def on_resolve(results):
+    nonlocal got
+    got = results
+  lift_and_run(opts, inst, ft, core_wasm, lambda: [42, 43], on_resolve)
+  assert(got == [mk_tup(45, 46)])
+  assert(all(h is None for h in inst.handles.array))
+
+  # Borrows lowered into the defining component pass the rep, both as flat
+  # values and in GC heap storage.
+  rt2 = ResourceType(inst, 'i64')
+  def core_wasm2(args):
+    [rep, rs] = args
+    assert(rep == 7)
+    assert(rs.elems == [8, 9])
+    return []
+  ft = FuncType([BorrowType(rt2), ListType(BorrowType(rt2))], [])
+  lift_and_run(opts, inst, ft, core_wasm2, lambda: [7, [8, 9]], lambda _: ())
+
+def test_gc_streams():
+  store = Store()
+  inst = ComponentInstance(store)
+  stream_t = StreamType(U8Type())
+  future_t = FutureType(U8Type())
+  def core_wasm(args):
+    packed = canon_stream_new(stream_t)[0]
+    ri, wi = unpack_new_ends(packed)
+    r = HandleRef(inst, ri)
+    assert(canon_gc_stream_drop_readable(stream_t, r) == [])
+    assert(canon_gc_stream_drop_writable(stream_t, HandleRef(inst, wi)) == [])
+    expect_fail(lambda: canon_gc_stream_drop_readable(stream_t, r))
+    packed = canon_future_new(future_t)[0]
+    ri, wi = unpack_new_ends(packed)
+    r = HandleRef(inst, ri)
+    assert(canon_gc_future_drop_readable(future_t, r) == [])
+    expect_fail(lambda: canon_gc_future_drop_readable(future_t, r))
+    expect_fail(lambda: canon_gc_future_drop_writable(future_t, wi))
+    [gc_r, gc_w] = canon_gc_stream_new(stream_t)
+    assert(isinstance(inst.handles.get(gc_w.index), WritableStreamEnd))
+    assert(isinstance(inst.handles.get(gc_r.index), ReadableStreamEnd))
+    assert(inst.handles.get(gc_w.index).other is inst.handles.get(gc_r.index))
+    assert(canon_gc_stream_drop_writable(stream_t, gc_w) == [])
+    assert(canon_gc_stream_drop_readable(stream_t, gc_r) == [])
+    [gc_r, gc_w] = canon_gc_future_new(future_t)
+    assert(isinstance(inst.handles.get(gc_w.index), WritableFutureEnd))
+    assert(isinstance(inst.handles.get(gc_r.index), ReadableFutureEnd))
+    assert(inst.handles.get(gc_w.index).other is inst.handles.get(gc_r.index))
+    assert(canon_gc_future_drop_readable(future_t, gc_r) == [])
+    return []
+  lift_and_run(mk_opts(), inst, FuncType([], []), core_wasm, lambda: [], lambda _: ())
+
+def test_gc_futures():
+  store = Store()
+  inst = ComponentInstance(store)
+  gc_opts = mk_gc_opts()
+  async_gc_opts = mk_gc_opts()
+  async_gc_opts.async_ = True
+
+  def host_end(end):
+    end.owner = None
+    end.index = None
+    return end
+
+  def guest_end(end):
+    end.owner = inst
+    end.index = inst.handles.add(end)
+    return HandleRef(inst, end.index)
+
+  cx = LiftLowerContext('lower', gc_opts, inst)
+  def mk_cell(t, junk):
+    return struct_new(gc_async_results_type(cx, t), [junk])
+
+  def core_wasm(args):
+    # Futures within the same component: an async write blocks until a sync
+    # read completes it, which overwrites the cell's field with the value's GC
+    # heap storage representation.
+    for t, written, stored, junk in [(S8Type(), 0x1ff, 0xff, 7),
+                                     (U16Type(), 0xbeef, 0xbeef, 7),
+                                     (F64Type(), -1.5, -1.5, 7.0)]:
+      future_t = FutureType(t)
+      [r, w] = canon_gc_future_new(future_t)
+      assert(canon_future_write(future_t, async_gc_opts, w, written) == [BLOCKED])
+      cell = mk_cell(t, junk)
+      assert(canon_future_read(future_t, gc_opts, r, cell) == [CopyResult.COMPLETED])
+      assert(cell.fields == [stored])
+    future_t = FutureType(None)
+    [r, w] = canon_gc_future_new(future_t)
+    assert(canon_future_write(future_t, async_gc_opts, w) == [BLOCKED])
+    assert(canon_future_read(future_t, gc_opts, r) == [CopyResult.COMPLETED])
+
+    # A host writer and a GC reader of a `future<string>`.
+    future_t = FutureType(StringType())
+    reader, writer = new_future(StringType(), None)
+    host_end(writer)
+    r = guest_end(reader)
+    writer.copy(HostReadableBuffer(StringType(), [mk_str("hi")]))
+    cell = mk_cell(StringType(), None)
+    assert(canon_future_read(future_t, gc_opts, r, cell) == [CopyResult.COMPLETED])
+    assert(cell.fields[0].t == GC_UTF8_ARRAY and cell.fields[0].elems == list(b'hi'))
+
+    # If no value is read, the cell is left untouched.
+    reader, writer = new_future(StringType(), None)
+    host_end(writer)
+    r = guest_end(reader)
+    writer.drop()
+    junk = array_new_fixed(GC_UTF8_ARRAY, [])
+    cell = mk_cell(StringType(), junk)
+    assert(canon_future_read(future_t, gc_opts, r, cell) == [CopyResult.DROPPED])
+    assert(cell.fields[0] is junk)
+
+    # A GC writer and a host reader: the written value is lifted when read.
+    reader, writer = new_future(StringType(), None)
+    host_end(reader)
+    w = guest_end(writer)
+    a = array_new_fixed(GC_UTF8_ARRAY, list(b'yo'))
+    assert(canon_future_write(future_t, async_gc_opts, w, a) == [BLOCKED])
+    buffer = HostWritableBuffer(StringType(), 1)
+    reader.copy(buffer)
+    assert(buffer.received == [('yo', StringHint.UTF8, 2)])
+
+    # An async read that blocks writes the cell when the value arrives.
+    reader, writer = new_future(StringType(), None)
+    host_end(writer)
+    r = guest_end(reader)
+    cell = mk_cell(StringType(), None)
+    assert(canon_future_read(future_t, async_gc_opts, r, cell) == [BLOCKED])
+    assert(cell.fields[0] is None)
+    writer.copy(HostReadableBuffer(StringType(), [mk_str("later")]))
+    assert(cell.fields[0].elems == list(b'later'))
+
+    # Cancelling a blocked read leaves the cell untouched.
+    reader, writer = new_future(StringType(), None)
+    host_end(writer)
+    r = guest_end(reader)
+    cell = mk_cell(StringType(), junk)
+    assert(canon_future_read(future_t, async_gc_opts, r, cell) == [BLOCKED])
+    assert(canon_gc_future_cancel_read(future_t, False, r) == [CopyResult.CANCELLED])
+    assert(cell.fields[0] is junk)
+    return []
+
+  lift_and_run(mk_opts(), inst, FuncType([], []), core_wasm, lambda: [], lambda _: ())
+
+def test_gc_stream_copy():
+  store = Store()
+  inst = ComponentInstance(store)
+  gc_opts = mk_gc_opts()
+  async_gc_opts = mk_gc_opts()
+  async_gc_opts.async_ = True
+  cx = LiftLowerContext('lower', gc_opts, inst)
+
+  def read_array_t(t):
+    elem = CoreFieldType(nullable_type(gc_storage_type(cx, t)), mutable = True)
+    return gc_final_type(CoreArrayType(elem))
+
+  def packed(result, progress):
+    return result | (progress << 4)
+
+  def host_end(end):
+    end.owner = None
+    end.index = None
+    return end
+
+  def guest_end(end):
+    end.owner = inst
+    end.index = inst.handles.add(end)
+    return HandleRef(inst, end.index)
+
+  def core_wasm(args):
+    # A stream within the same component: an async write blocks until a sync
+    # read copies into the given range of the reader's array.
+    stream_t = StreamType(U8Type())
+    [r, w] = canon_gc_stream_new(stream_t)
+    src = array_new_fixed(gc_list_type(cx, U8Type()), [7, 1, 2, 3])
+    assert(canon_stream_write(stream_t, async_gc_opts, w, src, 1, 3) == [BLOCKED])
+    dst = array_new_fixed(read_array_t(U8Type()), [0, 0, 0, 0, 0])
+    assert(canon_stream_read(stream_t, gc_opts, r, dst, 1, 4) == [packed(CopyResult.COMPLETED, 3)])
+    assert(dst.elems == [0, 1, 2, 3, 0])
+
+    # Out-of-bounds buffers trap eagerly, even when the length is 0.
+    expect_fail(lambda: canon_stream_read(stream_t, gc_opts, r, dst, 6, 0))
+    [r, w] = canon_gc_stream_new(stream_t)
+    expect_fail(lambda: canon_stream_write(stream_t, gc_opts, w, src, 2, 3))
+
+    # An async read that blocks returns BLOCKED and is filled in later.
+    [r, w] = canon_gc_stream_new(stream_t)
+    dst = array_new_fixed(read_array_t(U8Type()), [0, 0])
+    assert(canon_stream_read(stream_t, async_gc_opts, r, dst, 0, 2) == [BLOCKED])
+    assert(canon_stream_write(stream_t, gc_opts, w, src, 0, 2) == [packed(CopyResult.COMPLETED, 2)])
+    assert(dst.elems == [7, 1])
+
+    # A stream without an element type just takes a length.
+    stream_t = StreamType(None)
+    [r, w] = canon_gc_stream_new(stream_t)
+    assert(canon_stream_write(stream_t, async_gc_opts, w, 2) == [BLOCKED])
+    assert(canon_stream_read(stream_t, gc_opts, r, 5) == [packed(CopyResult.COMPLETED, 2)])
+
+    # A host writer and a GC reader of a `stream<string>`.
+    stream_t = StreamType(StringType())
+    reader, writer = new_stream(StringType(), None)
+    host_end(writer)
+    r = guest_end(reader)
+    writer.copy(HostReadableBuffer(StringType(), [mk_str("a"), mk_str("bc")]))
+    dst = array_new_fixed(read_array_t(StringType()), [None, None, None])
+    assert(canon_stream_read(stream_t, gc_opts, r, dst, 0, 3) == [packed(CopyResult.COMPLETED, 2)])
+    assert([a.elems for a in dst.elems[:2]] == [list(b'a'), list(b'bc')] and dst.elems[2] is None)
+
+    # A GC writer and a host reader: elements are lifted when read.
+    reader, writer = new_stream(StringType(), None)
+    host_end(reader)
+    w = guest_end(writer)
+    src = array_new_fixed(gc_list_type(cx, StringType()),
+                          [array_new_fixed(GC_UTF8_ARRAY, list(b'x')),
+                           array_new_fixed(GC_UTF8_ARRAY, list(b'yz'))])
+    assert(canon_stream_write(stream_t, async_gc_opts, w, src, 0, 2) == [BLOCKED])
+    buffer = HostWritableBuffer(StringType(), 2)
+    reader.copy(buffer)
+    assert(buffer.received == [('x', StringHint.UTF8, 1), ('yz', StringHint.UTF8, 2)])
+    return []
+
+  lift_and_run(mk_opts(), inst, FuncType([], []), core_wasm, lambda: [], lambda _: ())
+
+def test_gc_error_context():
+  store = Store()
+  inst = ComponentInstance(store)
+  def core_wasm(args):
+    for s, encoding, array_t, elems in [
+        ('h\u00e9', 'utf8', GC_UTF8_ARRAY, [0x68, 0xc3, 0xa9]),
+        ('h\u00e9', 'utf16', GC_UTF16_ARRAY, [0x68, 0xe9]),
+        ('h\u00e9', 'latin1+utf16', GC_LATIN1_ARRAY, [0x68, 0xe9]),
+        ('h\u0113', 'latin1+utf16', GC_UTF16_ARRAY, [0x68, 0x113])]:
+      r = HandleRef(inst, inst.handles.add(ErrorContext(mk_str(s))))
+      [a] = canon_error_context_debug_message(mk_gc_opts(encoding), r)
+      assert(a.t == array_t and a.elems == elems)
+      assert(canon_gc_error_context_drop(r) == [])
+    expect_fail(lambda: canon_error_context_debug_message(mk_gc_opts(), 1))
+
+    # In the deterministic profile, the debug message is always discarded.
+    [r] = canon_error_context_new(mk_gc_opts(), array_new_fixed(GC_UTF8_ARRAY, list(b'hi')))
+    assert(isinstance(r, HandleRef))
+    [a] = canon_error_context_debug_message(mk_gc_opts(), r)
+    assert(a.t == GC_UTF8_ARRAY and a.elems == [])
+
+    # Otherwise, the debug message is lifted from the GC string array.
+    saved = (definitions.DETERMINISTIC_PROFILE, definitions.random.randint)
+    definitions.DETERMINISTIC_PROFILE = False
+    definitions.random.randint = lambda a, b: 0
+    definitions.host_defined_transformation = lambda s: s
+    try:
+      for encoding, arr in [('utf8', array_new_fixed(GC_UTF8_ARRAY, [0x68, 0xc3, 0xa9])),
+                            ('utf16', array_new_fixed(GC_UTF16_ARRAY, [0x68, 0xe9])),
+                            ('latin1+utf16', array_new_fixed(GC_UTF16_ARRAY, [0x68, 0x113]))]:
+        [r] = canon_error_context_new(mk_gc_opts(encoding), arr)
+        [a] = canon_error_context_debug_message(mk_gc_opts('utf16'), r)
+        assert(a.elems == encode_utf16_code_units(inst.handles.get(r.index).debug_message[0]))
+        assert(inst.handles.get(r.index).debug_message[0] in ('h\u00e9', 'h\u0113'))
+    finally:
+      definitions.DETERMINISTIC_PROFILE, definitions.random.randint = saved
+      del definitions.host_defined_transformation
+    return []
+  lift_and_run(mk_opts(), inst, FuncType([], []), core_wasm, lambda: [], lambda _: ())
+
+def test_gc_waitables():
+  store = Store()
+  inst = ComponentInstance(store)
+  def core_wasm(args):
+    [s] = canon_gc_waitable_set_new()
+    assert(isinstance(s, HandleRef) and isinstance(inst.handles.get(s.index), WaitableSet))
+
+    # Joining a waitable to a set, and a null set removes it again.
+    stream_t = StreamType(U8Type())
+    [r, w] = canon_gc_stream_new(stream_t)
+    assert(canon_gc_waitable_join(r, s) == [])
+    assert(inst.handles.get(r.index).wset is inst.handles.get(s.index))
+    assert(canon_gc_waitable_join(r, None) == [])
+    assert(inst.handles.get(r.index).wset is None)
+    expect_fail(lambda: canon_gc_waitable_join(r, 1))
+    assert(canon_gc_waitable_set_drop(s) == [])
+    expect_fail(lambda: canon_gc_waitable_set_drop(s))
+
+    # Subtasks (created directly, since gc + async lowering is not yet specified).
+    subtask = Subtask()
+    subtask.resolve(Subtask.State.RETURNED, [])
+    subtask.deliver_resolve()
+    st = HandleRef(inst, inst.handles.add(subtask))
+    expect_fail(lambda: canon_gc_subtask_cancel(False, st))
+    assert(canon_gc_subtask_drop(st) == [])
+    expect_fail(lambda: canon_gc_subtask_drop(st))
+
+    # gc.waitable-set.{wait,poll} return the event code, payload and waitable.
+    [s] = canon_gc_waitable_set_new()
+    assert(canon_gc_waitable_set_poll(s) == [EventCode.NONE, 0, None])
+    async_gc_opts = mk_gc_opts()
+    async_gc_opts.async_ = True
+    src = array_new_fixed(gc_list_type(LiftLowerContext('lift', async_gc_opts, inst), U8Type()), [1, 2])
+    dst = array_new_fixed(gc_final_type(CoreArrayType(CoreFieldType('i8', mutable = True))), [0, 0])
+    for wait_or_poll in [canon_gc_waitable_set_poll, canon_gc_waitable_set_wait]:
+      [r, w] = canon_gc_stream_new(stream_t)
+      assert(canon_gc_waitable_join(r, s) == [])
+      assert(canon_stream_read(stream_t, async_gc_opts, r, dst, 0, 2) == [BLOCKED])
+      assert(canon_stream_write(stream_t, mk_gc_opts(), w, src, 0, 2) == [CopyResult.COMPLETED | (2 << 4)])
+      [code, payload, e] = wait_or_poll(s)
+      assert(code == EventCode.STREAM_READ and payload == CopyResult.COMPLETED | (2 << 4))
+      assert(isinstance(e, HandleRef) and e.index == r.index)
+      assert(canon_gc_waitable_join(r, None) == [])
+    expect_fail(lambda: canon_gc_waitable_set_poll(r))
+    return []
+  lift_and_run(mk_opts(), inst, FuncType([], []), core_wasm, lambda: [], lambda _: ())
+
+def test_gc_anyref_reps():
+  store = Store()
+  inst = ComponentInstance(store)
+  dtor_args = None
+  def dtor(args):
+    nonlocal dtor_args
+    dtor_args = args
+    return []
+  rt = ResourceType(inst, ANYREF, dtor)
+  rep1 = struct_new(gc_struct_t('i32'), [1])
+  rep2 = struct_new(gc_struct_t('i32'), [2])
+
+  # gc.resource.{new,rep,drop} with a `(ref any)` rep.
+  def core_new_rep_drop(args):
+    [h] = canon_gc_resource_new(rt, rep1)
+    assert(canon_gc_resource_rep(rt, h) == [rep1])
+    assert(canon_gc_resource_drop(rt, h) == [])
+    assert(dtor_args == [rep1])
+    return []
+  lift_and_run(mk_opts(), inst, FuncType([], []), core_new_rep_drop, lambda: [], lambda _: ())
+
+  # Borrows lowered into the defining component pass the `(ref any)` rep, both
+  # as a flat value and in GC heap storage.
+  def core_gc(args):
+    [r, rs] = args
+    assert(r is rep1)
+    assert(rs.elems[0] is rep1 and rs.elems[1] is rep2)
+    return []
+  ft = FuncType([BorrowType(rt), ListType(BorrowType(rt))], [])
+  cx = LiftLowerContext('lower', mk_gc_opts(), inst)
+  assert(flatten_functype(LiftLowerContext('lift', mk_gc_opts(), inst), ft).params ==
+         [ANYREF, CoreRefType(gc_list_type(cx, BorrowType(rt)))])
+  lift_and_run(mk_gc_opts(), inst, ft, core_gc, lambda: [rep1, [rep1, rep2]], lambda _: ())
+
+def test_gc_handle_refs():
+  store = Store()
+  inst = ComponentInstance(store)
+  stream_t = StreamType(U8Type())
+  def core_wasm(args):
+    # gc.handle-ref.index returns the `i32` handle of a `HandleRef`, and
+    # gc.handle-ref.get returns the unique `HandleRef` of an `i32` handle.
+    [r, w] = canon_gc_stream_new(stream_t)
+    [ri] = canon_gc_handle_ref_index(r)
+    assert(ri == r.index and canon_gc_handle_ref_get(ri) == [r])
+    expect_fail(lambda: canon_gc_handle_ref_new(ri))
+
+    # An `i32` handle without a `HandleRef` can be given one exactly once.
+    packed = canon_stream_new(stream_t)[0]
+    ri2, wi2 = unpack_new_ends(packed)
+    assert(canon_gc_handle_ref_get(ri2) == [None])
+    [r2] = canon_gc_handle_ref_new(ri2)
+    assert(canon_gc_handle_ref_get(ri2) == [r2])
+    expect_fail(lambda: canon_gc_handle_ref_new(ri2))
+
+    # Both trap for out-of-bounds indices, but only gc.handle-ref.new traps for
+    # in-bounds indices without a live handle.
+    expect_fail(lambda: canon_gc_handle_ref_new(1000))
+    expect_fail(lambda: canon_gc_handle_ref_get(1000))
+    assert(canon_gc_handle_ref_get(0) == [None])
+    expect_fail(lambda: canon_gc_handle_ref_new(0))
+
+    # Removing a handle from the table removes its `HandleRef`, which is then
+    # stale (even if its index is reused).
+    assert(canon_gc_stream_drop_readable(stream_t, r2) == [])
+    assert(canon_gc_handle_ref_get(ri2) == [None])
+    expect_fail(lambda: canon_gc_handle_ref_index(r2))
+    [r3, w3] = canon_gc_stream_new(stream_t)
+    assert(r3.index == ri2)
+    expect_fail(lambda: canon_gc_stream_drop_readable(stream_t, r2))
+    expect_fail(lambda: canon_gc_handle_ref_index("not a handle ref"))
+
+    # All three check `may_leave` (and succeed once it is restored).
+    ri4, _ = unpack_new_ends(canon_stream_new(stream_t)[0])
+    inst.may_leave = False
+    expect_fail(lambda: canon_gc_handle_ref_index(r3))
+    expect_fail(lambda: canon_gc_handle_ref_get(ri4))
+    expect_fail(lambda: canon_gc_handle_ref_new(ri4))
+    inst.may_leave = True
+    assert(canon_gc_handle_ref_index(r3) == [r3.index])
+    assert(canon_gc_handle_ref_get(ri4) == [None])
+    [r4] = canon_gc_handle_ref_new(ri4)
+    assert(canon_gc_handle_ref_get(ri4) == [r4])
+
+    # Events from gc.waitable-set.{wait,poll} return the existing `HandleRef`.
+    [s] = canon_gc_waitable_set_new()
+    assert(canon_gc_waitable_join(r3, s) == [])
+    async_gc_opts = mk_gc_opts()
+    async_gc_opts.async_ = True
+    cx = LiftLowerContext('lift', async_gc_opts, inst)
+    dst = array_new_fixed(gc_final_type(CoreArrayType(CoreFieldType('i8', mutable = True))), [0])
+    assert(canon_stream_read(stream_t, async_gc_opts, r3, dst, 0, 1) == [BLOCKED])
+    src = array_new_fixed(gc_list_type(cx, U8Type()), [9])
+    assert(canon_stream_write(stream_t, mk_gc_opts(), w3, src, 0, 1) == [CopyResult.COMPLETED | (1 << 4)])
+    [code, payload, e] = canon_gc_waitable_set_poll(s)
+    assert(code == EventCode.STREAM_READ and e is r3)
+    return []
+  lift_and_run(mk_opts(), inst, FuncType([], []), core_wasm, lambda: [], lambda _: ())
+
+def test_gc_async():
+  store = Store()
+  producer_inst = ComponentInstance(store)
+  producer_opts = mk_gc_opts()
+  producer_opts.async_ = True
+  producer_ft = FuncType([StringType()], [StringType()], async_ = True)
+  big_t = TupleType([U8Type() for _ in range(17)])
+  big_ft = FuncType([], [big_t], async_ = True)
+
+  # A stackful async producer that blocks before returning.
+  fut = RacyBool(False)
+  def core_blocking_producer(args):
+    [a] = args
+    assert(a.t == GC_UTF8_ARRAY and a.elems == list(b'in'))
+    current_thread().wait_until(fut.is_set)
+    canon_task_return([StringType()], producer_opts, [array_new_fixed(GC_UTF8_ARRAY, list(b'out'))])
+    return []
+  blocking_producer = store.lift(core_blocking_producer, producer_ft, producer_opts, producer_inst)
+
+  # A producer that returns immediately.
+  def core_eager_producer(args):
+    canon_task_return([StringType()], producer_opts, [array_new_fixed(GC_UTF8_ARRAY, list(b'now'))])
+    return []
+  eager_producer = store.lift(core_eager_producer, producer_ft, producer_opts, producer_inst)
+
+  # A producer whose result has too many flat values, so task.return takes the
+  # result's storage type directly.
+  def core_big_producer(args):
+    pcx = LiftLowerContext('lift', producer_opts, producer_inst)
+    v = struct_new(gc_record_type(pcx, despecialize(big_t).fields), list(range(17)))
+    canon_task_return([big_t], producer_opts, [v])
+    return []
+  big_producer = store.lift(core_big_producer, big_ft, producer_opts, producer_inst)
+
+  consumer_inst = ComponentInstance(store)
+  consumer_ft = FuncType([], [StringType()], async_ = True)
+  lower_opts = mk_gc_opts()
+  lower_opts.async_ = True
+  cx = LiftLowerContext('lower', lower_opts, consumer_inst)
+  results = struct_new(gc_async_results_type(cx, StringType()), [None])
+  arg = array_new_fixed(GC_UTF8_ARRAY, list(b'in'))
+  st = None
+  step = 0
+
+  def consumer(args):
+    nonlocal st, step
+    [packed, st] = store.lower(blocking_producer, producer_ft, lower_opts, consumer_inst)([arg, results])
+    assert(packed & 0xf == Subtask.State.STARTED)
+    assert(isinstance(st, HandleRef) and packed >> 4 == st.index)
+    assert(results.fields[0] is None)
+    [s] = canon_gc_waitable_set_new()
+    assert(canon_gc_waitable_join(st, s) == [])
+    fut.set()
+    return [CallbackCode.WAIT, s]
+
+  def callback(args):
+    nonlocal step
+    [code, payload, w] = args
+    step += 1
+    match step:
+      case 1:
+        assert(code == EventCode.SUBTASK and payload == Subtask.State.RETURNED and w is st)
+        assert(results.fields[0].t == GC_UTF8_ARRAY and results.fields[0].elems == list(b'out'))
+        assert(canon_gc_subtask_drop(st) == [])
+        return [CallbackCode.YIELD, None]
+      case 2:
+        assert([code, payload, w] == [EventCode.NONE, 0, None])
+        assert(store.lower(eager_producer, producer_ft, lower_opts, consumer_inst)([arg, results]) ==
+               [Subtask.State.RETURNED, None])
+        assert(results.fields[0].elems == list(b'now'))
+        big_results = struct_new(gc_async_results_type(cx, big_t), [None])
+        assert(store.lower(big_producer, big_ft, lower_opts, consumer_inst)([big_results]) ==
+               [Subtask.State.RETURNED, None])
+        assert(big_results.fields[0].fields == list(range(17)))
+        canon_task_return([StringType()], consumer_opts, [array_new_fixed(GC_UTF8_ARRAY, list(b'done'))])
+        return [CallbackCode.EXIT, None]
+
+  consumer_opts = mk_gc_opts()
+  consumer_opts.async_ = True
+  consumer_opts.callback = callback
+  got = None
+  def on_resolve(result):
+    nonlocal got
+    [got] = result
+  lift_and_run(consumer_opts, consumer_inst, consumer_ft, consumer, lambda: [], on_resolve)
+  assert(step == 2)
+  assert(got == ('done', StringHint.UTF8, 4))
+
+def test_gc_post_return():
+  store = Store()
+  inst = ComponentInstance(store)
+  post_return_args = None
+  def post_return(args):
+    nonlocal post_return_args
+    post_return_args = args
+    return []
+  def core_wasm(args):
+    return [array_new_fixed(GC_UTF8_ARRAY, list(b'hi'))]
+  got = None
+  def on_resolve(results):
+    nonlocal got
+    [got] = results
+  ft = FuncType([], [StringType()])
+  lift_and_run(mk_gc_opts(post_return = post_return), inst, ft, core_wasm, lambda: [], on_resolve)
+  assert(got == ('hi', StringHint.UTF8, 2))
+  [a] = post_return_args
+  assert(a.t == GC_UTF8_ARRAY and a.elems == list(b'hi'))
+
+def test_gc_array_new():
+  store = Store()
+  inst = ComponentInstance(store)
+  i8s = gc_array_t('i8')
+  i16s = gc_array_t('i16')
+  f32s = gc_array_t('f32')
+  refs = gc_array_t(EXTERNREF)
+  def f():
+    src = array_new_fixed(i8s, [1, 2, 3, 4])
+    [a] = canon_array_new_array(i8s, i8s, src, 1, 2)
+    assert(a.t == i8s and a.elems == [2, 3])
+    [a] = canon_array_new_array(i8s, i8s, src, 4, 0)
+    assert(a.elems == [])
+    expect_fail(lambda: canon_array_new_array(i8s, i8s, src, 3, 2))
+    expect_fail(lambda: canon_array_new_array(i8s, i8s, None, 0, 0))
+
+    mem = MemInst(bytearray(b'\x01\x02\x03\x04\x00\x00\xc0\x3f'), 'i32')
+    [a] = canon_array_new_memory(i16s, mem, 1, 2)
+    assert(a.t == i16s and a.elems == [0x0302, 0x0004])
+    [a] = canon_array_new_memory(f32s, mem, 4, 1)
+    assert(a.elems == [1.5])
+    expect_fail(lambda: canon_array_new_memory(i16s, mem, 6, 2))
+
+    tbl = [object(), object(), object()]
+    [a] = canon_array_new_table(refs, tbl, 1, 2)
+    assert(a.t == refs and a.elems == tbl[1:])
+    expect_fail(lambda: canon_array_new_table(refs, tbl, 2, 2))
+  run_in_task(inst, f)
+
 test_roundtrips()
 test_trap_propagation()
 test_cross_component_realloc()
@@ -3206,5 +4155,20 @@ test_self_copy(F64Type())
 test_async_flat_params()
 test_threads()
 test_sync_threads()
+test_gc_flatten()
+test_gc_values()
+test_gc_strings()
+test_gc_lift_traps()
+test_gc_handles()
+test_gc_streams()
+test_gc_futures()
+test_gc_stream_copy()
+test_gc_error_context()
+test_gc_waitables()
+test_gc_anyref_reps()
+test_gc_handle_refs()
+test_gc_async()
+test_gc_post_return()
+test_gc_array_new()
 
 print("All tests passed")

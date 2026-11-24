@@ -35,6 +35,7 @@ shipped as part of a future WASI Developer Preview release:
 * 🐘: [memory64]
 * 📡: getters and setters
 * ➡️: `stream.forward` and `future.forward` built-ins
+* 🛸: [GC] mode for the Canonical ABI
 
 
 ## Grammar
@@ -594,6 +595,7 @@ valtype       ::= <typeidx>
 keytype       ::= bool | s8 | u8 | s16 | u16 | s32 | u32 | s64 | u64 | char | string 🗺️
 resourcetype  ::= (resource (rep i32) (dtor core-prefix(<core:funcidx>))?)
                 | (resource (rep i64) (dtor core-prefix(<core:funcidx>))?) 🐘
+                | (resource (rep (ref any)) (dtor core-prefix(<core:funcidx>))?) 🛸
 functype      ::= (func async? (param <labellit> <valtype>)* (result <valtype>)?)
 componenttype ::= (component <componentdecl>*)
 instancetype  ::= (instance <instancedecl>*)
@@ -619,7 +621,7 @@ valuebound    ::= (eq <valueidx>) 🪙
 
 where bind-id(X) parses '(' sort <id>? Y ')' when X parses '(' sort Y ')'
 ```
-Because there is nothing in this type grammar analogous to the [gc] proposal's
+Because there is nothing in this type grammar analogous to the [GC] proposal's
 [`rectype`], none of these types are recursive.
 
 To prevent integer overflow in obscure corner cases, as an extra validation
@@ -717,12 +719,11 @@ handles are analogous to file descriptors, which are stored in a table and may
 only be used indirectly by untrusted user-mode processes via their integer
 index in the table.
 
-In the Component Model, handles are lifted-from and lowered-into `i32` values
-that index an encapsulated per-component-instance table that is maintained by
-the canonical function definitions described [below](#canonical-definitions).
-In the future, handles could be backwards-compatibly lifted and lowered from
-[reference types]  (via the addition of a new `canonopt`, as introduced
-[below](#canonical-abi)).
+In the Component Model, by default handles are lifted-from and lowered-into
+`i32` values that index an encapsulated per-component-instance table that is
+maintained by the canonical function definitions described
+[below](#canonical-definitions). Alternatively, when the the 🛸 `gc` `canonopt`
+is provided, handles are lifted from and lowered into `(ref extern)` values.
 
 The uniqueness and dropping conditions mentioned above are enforced at runtime
 by the Component Model through these canonical definitions. The `typeidx`
@@ -847,14 +848,14 @@ The `resource` type constructor creates a fresh type for each instance of the
 containing component (with "freshness" and its interaction with general
 type-checking described in more detail [below](#type-checking)). Resource types
 can be referred to by handle types (such as `own` and `borrow`) as well as the
-canonical built-ins described [below](#canonical-built-ins). The `rep`
-immediate of a `resource` type specifies its *core representation type*, which
-is currently fixed to `i32` or `i64`, but will potentially be relaxed to include
-other types. When the last handle to a resource is dropped, the resource's
-destructor function specified by the `dtor` immediate will be called (if
-present), allowing the implementing component to perform clean-up like freeing
-linear memory allocations. A destructor for a `resource (rep $T)` must have type
-`($T) -> ()`.
+canonical built-ins described [below](#canonical-built-ins). The `rep` immediate
+of a `resource` type specifies its *core representation type*, which is
+currently fixed to `i32`, `i64` or (🛸) `(ref any)`, but will potentially be
+relaxed to include other types. When the last handle to a resource is dropped,
+the resource's destructor function specified by the `dtor` immediate will be
+called (if present), allowing the implementing component to perform clean-up
+like freeing linear memory allocations. A destructor for a `resource (rep $T)`
+must have type `($T) -> ()`.
 
 The `instance` type constructor describes a list of named, typed definitions
 that can be imported or exported by a component. Informally, instance types
@@ -1368,6 +1369,7 @@ canonopt ::= string-encoding=utf8
            | (post-return core-prefix(<core:funcidx>))
            | async 🔀
            | (callback core-prefix(<core:funcidx>)) 🔀
+           | gc 🛸
 ```
 While the production `externtype` accepts any `sort`, the validation rules
 for `canon lift` would only allow the `func` sort. In the future, other sorts
@@ -1423,7 +1425,24 @@ validated to have the following core function type:
       (param $payload i32)
       (result $done i32))
 ```
+With 🛸 `gc`, the `callback` instead has type
+```wat
+(func (param $event i32)
+      (param $payload i32)
+      (param $waitable (ref null extern))
+      (result $done i32)
+      (result $waitable-set (ref null extern)))
+```
+and it receives the event code, payload, and waitable (if any); it returns the
+callback code and the waitable set (if waiting).
+
 Again, see the [concurrency explainer] for more details.
+
+🛸 The `gc` option may be used to opt into a [GC]-based ABI that uses references
+to managed objects, rather than a linear memory-based ABI that uses pointers. It
+cannot be combined with the `memory` option (and therefore, not with `realloc`
+either). `list`s become `array`s, `record`s with too many flat values and
+`variant`s with payloads become `struct`s, and handles become `(ref extern)`s.
 
 Based on this description of the AST, the [Canonical ABI explainer] gives a
 detailed walkthrough of the static and dynamic semantics of `lift` and `lower`.
@@ -1562,6 +1581,35 @@ canon ::= ...
         | (canon thread.spawn-ref shared? core-prefix(<core:typeidx>) (core func <id>?)) 🧵②
         | (canon thread.spawn-indirect shared? core-prefix(<core:typeidx>) core-prefix(<core:tableidx>) (core func <id>?)) 🧵②
         | (canon thread.available-parallelism shared? (core func <id>?)) 🧵②
+        | (canon gc.resource.new <typeidx> (core func <id>?)) 🛸
+        | (canon gc.resource.drop <typeidx> (core func <id>?)) 🛸
+        | (canon gc.resource.rep <typeidx> (core func <id>?)) 🛸
+        | (canon gc.waitable-set.new (core func <id>?)) 🛸
+        | (canon gc.waitable-set.wait (core func <id>?)) 🛸
+        | (canon gc.waitable-set.poll (core func <id>?)) 🛸
+        | (canon gc.waitable-set.drop (core func <id>?)) 🛸
+        | (canon gc.waitable.join (core func <id>?)) 🛸
+        | (canon gc.subtask.cancel async? (core func <id>?)) 🛸
+        | (canon gc.subtask.drop (core func <id>?)) 🛸
+        | (canon gc.handle-ref.index (core func <id>?)) 🛸
+        | (canon gc.handle-ref.new (core func <id>?)) 🛸
+        | (canon gc.handle-ref.get (core func <id>?)) 🛸
+        | (canon gc.stream.new <typeidx> (core func <id>?)) 🛸
+        | (canon gc.stream.cancel-read <typeidx> async? (core func <id>?)) 🛸
+        | (canon gc.stream.cancel-write <typeidx> async? (core func <id>?)) 🛸
+        | (canon gc.stream.drop-readable <typeidx> (core func <id>?)) 🛸
+        | (canon gc.stream.drop-writable <typeidx> (core func <id>?)) 🛸
+        | (canon gc.stream.forward <typeidx> (core func <id>?)) 🛸
+        | (canon gc.future.new <typeidx> (core func <id>?)) 🛸
+        | (canon gc.future.cancel-read <typeidx> async? (core func <id>?)) 🛸
+        | (canon gc.future.cancel-write <typeidx> async? (core func <id>?)) 🛸
+        | (canon gc.future.drop-readable <typeidx> (core func <id>?)) 🛸
+        | (canon gc.future.drop-writable <typeidx> (core func <id>?)) 🛸
+        | (canon gc.future.forward <typeidx> (core func <id>?)) 🛸
+        | (canon gc.error-context.drop (core func <id>?)) 🛸
+        | (canon array.new-array core-prefix(<core:typeidx>) core-prefix(<core:typeidx>) (core func <id>?)) 🛸
+        | (canon array.new-memory core-prefix(<core:typeidx>) core-prefix(<core:memoryidx>) (core func <id>?)) 🛸
+        | (canon array.new-table core-prefix(<core:typeidx>) core-prefix(<core:tableidx>) (core func <id>?)) 🛸
 ```
 
 ##### Resource built-ins
@@ -1581,7 +1629,7 @@ component that defined `T`.
 In the Canonical ABI, `T.rep` is defined to be the `$rep` in the
 `(type $T (resource (rep $rep) ...))` type definition that defined `T`. While
 it's designed to allow different types in the future, it is currently
-limited to `i32` or `i64`.
+limited to `i32`, `i64` or (🛸) `(ref any)`.
 
 For details, see [`canon_resource_new`] in the Canonical ABI explainer.
 
@@ -1611,7 +1659,7 @@ resource type `T`) pointed to by the handle `t`. Validation only allows
 In the Canonical ABI, `T.rep` is defined to be the `$rep` in the
 `(type $T (resource (rep $rep) ...))` type definition that defined `T`. While
 it's designed to allow different types in the future, it is currently
-limited to `i32` or `i64`.
+limited to `i32`, `i64` or (🛸) `(ref any)`.
 
 As an example, the following component imports the `resource.new` built-in,
 allowing it to create and return new resources to its client:
@@ -1643,6 +1691,19 @@ component instance's table, is immediately returned by `make_R`, thereby
 transferring ownership of the newly-created resource to the export's caller.
 
 For details, see [`canon_resource_rep`] in the Canonical ABI explainer.
+
+###### 🛸 `gc.resource.new`, `gc.resource.drop` and `gc.resource.rep`
+
+| Synopsis                                            |                                  |
+| --------------------------------------------------- | -------------------------------- |
+| Canonical ABI signature for `gc.resource.new`       | `[rep: T.rep] -> [(ref extern)]` |
+| Canonical ABI signature for `gc.resource.drop`      | `[t:(ref extern)] -> []`         |
+| Canonical ABI signature for `gc.resource.rep`       | `[t:(ref extern)] -> [T.rep]`    |
+
+These are the same as `resource.{new,drop,rep}`, except that they operate on
+`(ref extern)` handles instead of `i32` handles.
+
+For details, see [`canon_gc_resource_new`] in the Canonical ABI explainer.
 
 ##### 🔀🧵 Concurrency built-ins
 
@@ -1717,8 +1778,12 @@ from any of a task's threads; if neither is called, the task never resolves.
 
 The `canon task.return` definition takes component-level return type and the
 list of `canonopt` to be used to lift the return value. When called, the
-declared return type and the `string-encoding` and `memory` `canonopt`s are
-checked to exactly match those of the current task.
+declared return type and the `string-encoding`, `memory` and 🛸 `gc`
+`canonopt`s are checked to exactly match those of the current task.
+
+With 🛸 `gc`, the results are passed with the `gc` lowering. If they overflow
+`MAX_FLAT_PARAMS`, the result's GC heap storage type is passed directly (rather
+than a `(ref $params)` struct).
 
 For details, see [Returning] in the concurrency explainer and
 [`canon_task_return`] in the Canonical ABI explainer.
@@ -1901,6 +1966,53 @@ resolution (via `waitable-set.{wait,poll}` or `callback` event).
 
 For details, see [`canon_subtask_drop`] in the Canonical ABI explainer.
 
+###### 🛸 `gc.waitable-set.*`, `gc.waitable.join` and `gc.subtask.*`
+
+| Synopsis                                           |                                                                        |
+| -------------------------------------------------- | ---------------------------------------------------------------------- |
+| Canonical ABI signature for `gc.waitable-set.new`  | `[] -> [(ref extern)]`                                                 |
+| Canonical ABI signature for `gc.waitable-set.wait` | `[s:(ref extern)] -> [event-code:i32 payload:i32 w:(ref null extern)]` |
+| Canonical ABI signature for `gc.waitable-set.poll` | `[s:(ref extern)] -> [event-code:i32 payload:i32 w:(ref null extern)]` |
+| Canonical ABI signature for `gc.waitable-set.drop` | `[s:(ref extern)] -> []`                                               |
+| Canonical ABI signature for `gc.waitable.join`     | `[w:(ref extern) maybe_set:(ref null extern)] -> []`                   |
+| Canonical ABI signature for `gc.subtask.cancel`    | `[subtask:(ref extern)] -> [i32]`                                      |
+| Canonical ABI signature for `gc.subtask.drop`      | `[subtask:(ref extern)] -> []`                                         |
+
+These are the GC versions of the `waitable-set.*`, `waitable.join`, and
+`subtask.*` built-ins, which take and return `(ref extern)` handles instead of
+`i32` handles.
+
+For `gc.waitable.join`, a null `maybe_set` removes the waitable from its set
+(same as passing zero to `waitable.join` does).
+
+For `gc.waitable-set.{wait,poll}`, the `event-code:i32` and `payload:i32`
+results are identical to the event code and payload of the non-`gc.`-prefixed
+versions. They additionally return a `(ref null extern)`, which is the waitable
+in the set that the event applies to, if any, otherwise the reference is
+null. (The `gc.handle-ref.index` canonical definition (see below) can also be
+used to identify which waitable an event is for.)
+
+For details, see [`canon_gc_waitable_set_new`] in the Canonical ABI explainer.
+
+###### 🛸 `gc.handle-ref.index`, `gc.handle-ref.new` and `gc.handle-ref.get`
+
+| Synopsis                                          |                                  |
+| ------------------------------------------------- | -------------------------------- |
+| Canonical ABI signature for `gc.handle-ref.index` | `[r:(ref extern)] -> [i32]`      |
+| Canonical ABI signature for `gc.handle-ref.new`   | `[i:i32] -> [(ref extern)]`      |
+| Canonical ABI signature for `gc.handle-ref.get`   | `[i:i32] -> [(ref null extern)]` |
+
+These builtins convert between `i32` handles and `(ref extern)`
+`HandleRef`s. `gc.handle-ref.index` returns the `i32` index of a `(ref extern)`
+`HandleRef` (allowing core wasm to identify, e.g., which waitable an event from
+`gc.waitable-set.{wait,poll}` is for). `gc.handle-ref.new` creates the
+`HandleRef` for a live `i32` handle, returning it as a `(ref extern)`, or raises
+a trap if it already has one. `gc.handle-ref.get` returns the existing
+`HandleRef` for an `i32` handle as a `(ref null extern)`, or the null reference
+if there is none.
+
+For details, see [`canon_gc_handle_ref_index`] in the Canonical ABI explainer.
+
 ###### 🔀 `stream.new` and `future.new`
 
 | Synopsis                                   |                                                                                 |
@@ -1927,11 +2039,16 @@ For details, see [Streams and Futures] in the concurrency explainer and
 
 ###### 🔀 `stream.read` and `stream.write`
 
-| Synopsis                                     |                                                                                                        |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Approximate WIT signature for `stream.read`  | `func<stream<T?>,memory>(e: readable-stream-end<T?>, b: writable-buffer<T>?) -> option<stream-result>` |
-| Approximate WIT signature for `stream.write` | `func<stream<T?>,memory>(e: writable-stream-end<T?>, b: readable-buffer<T>?) -> option<stream-result>` |
-| Canonical ABI signature                      | `[stream-end:i32 ptr:memory.addrtype num:memory.addrtype] -> [memory.addrtype]`                        |
+| Synopsis                                     | `gc`?           |                                                                                                                                         |
+| -------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Approximate WIT signature for `stream.read`  | (n/a)           | `func<stream<T?>,memory>(e: readable-stream-end<T?>, b: writable-buffer<T>?) -> option<stream-result>`                                  |
+| Approximate WIT signature for `stream.write` | (n/a)           | `func<stream<T?>,memory>(e: writable-stream-end<T?>, b: readable-buffer<T>?) -> option<stream-result>`                                  |
+| Canonical ABI signature for `stream.read`    |                 | `[readable-stream-end:i32 ptr:memory.addrtype num:memory.addrtype] -> [memory.addrtype]`                                                |
+| Canonical ABI signature for `stream.write`   |                 | `[writable-stream-end:i32 ptr:memory.addrtype num:memory.addrtype] -> [memory.addrtype]`                                                |
+| Canonical ABI signature for `stream.read`    | 🛸 `gc`         | `[readable-stream-end:(ref extern) b:(ref (sub final (array (mut nullable_type(gc_storage_type(T)))))) offset:i32 length:i32] -> [i32]` |
+| Canonical ABI signature for `stream.write`   | 🛸 `gc`         | `[writable-stream-end:(ref extern) b:(ref (sub final (array gc_storage_type(T)))) offset:i32 length:i32] -> [i32]`                      |
+| Canonical ABI signature for `stream.read`    | 🛸 `gc`, no `T` | `[readable-stream-end:(ref extern) length:i32] -> [i32]`                                                                                |
+| Canonical ABI signature for `stream.write`   | 🛸 `gc`, no `T` | `[writable-stream-end:(ref extern) length:i32] -> [i32]`                                                                                |
 
 where `stream-result` is defined in WIT as:
 ```wit
@@ -1996,16 +2113,28 @@ bit-packed into a single `memory.addrtype` where:
 * Otherwise, the `result` is in the low 4 bits and the `progress` is in the
   remaining high bits.
 
+🛸 When using `gc`, the `stream.read` function takes a mutable `array`, `i32`
+offset, and `i32` length to write the just-read stream elements into, and
+`stream.write` takes an immutable `array`, `i32` offset, and `i32` length to
+read the to-be-written stream elements from. Instead of an `i32` handle, they
+both take a `(ref extern)` handle. The `i32` result uses the same bit-packing
+as above.
+
 For details, see [Streams and Futures] in the concurrency explainer and
 [`canon_stream_read`] in the Canonical ABI explainer.
 
 ###### 🔀 `future.read` and `future.write`
 
-| Synopsis                                     |                                                                                                                 |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Approximate WIT signature for `future.read`  | `func<future<T?>,memory>(e: readable-future-end<T?>, b: writable-buffer<T; 1>?) -> option<future-read-result>`  |
-| Approximate WIT signature for `future.write` | `func<future<T?>,memory>(e: writable-future-end<T?>, v: readable-buffer<T; 1>?) -> option<future-write-result>` |
-| Canonical ABI signature                      | `[readable-future-end:i32 ptr:memory.addrtype] -> [i32]`                                                        |
+| Synopsis                                     | `gc`?           |                                                                                                                 |
+| -------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------- |
+| Approximate WIT signature for `future.read`  | (n/a)           | `func<future<T?>,memory>(e: readable-future-end<T?>, b: writable-buffer<T; 1>?) -> option<future-read-result>`  |
+| Approximate WIT signature for `future.write` | (n/a)           | `func<future<T?>,memory>(e: writable-future-end<T?>, v: readable-buffer<T; 1>?) -> option<future-write-result>` |
+| Canonical ABI signature for `future.read`    |                 | `[readable-future-end:i32 ptr:memory.addrtype] -> [i32]`                                                        |
+| Canonical ABI signature for `future.write`   |                 | `[writable-future-end:i32 ptr:memory.addrtype] -> [i32]`                                                        |
+| Canonical ABI signature for `future.read`    | 🛸 `gc`         | `[readable-future-end:(ref extern) results:(ref $results)] -> [i32]`                                            |
+| Canonical ABI signature for `future.write`   | 🛸 `gc`         | `[writable-future-end:(ref extern) v:unpacked_type(gc_storage_type(T))] -> [i32]`                               |
+| Canonical ABI signature for `future.read`    | 🛸 `gc`, no `T` | `[readable-future-end:(ref extern)] -> [i32]`                                                                   |
+| Canonical ABI signature for `future.write`   | 🛸 `gc`, no `T` | `[writable-future-end:(ref extern)] -> [i32]`                                                                   |
 
 where `future-{read,write}-result` are defined in WIT as:
 ```wit
@@ -2063,6 +2192,15 @@ return value is bit-packed into the single `i32` return value where all-ones
 represents `none`. And, `future-read-result.cancelled` is encoded
 as the value of `future-write-result.cancelled`, rather than the value implied
 by the `enum` definition above.
+
+🛸 When using `gc`, the `i32` handles are replaced by `(ref extern)` handles,
+and, rather than passing in a pointer to a buffer for `T` to be read from or
+written to, `future.read` takes a `(ref $results)` struct (`final`, no
+supertype, singleton `rec` group, one field of type `(mut
+nullable_type(gc_storage_type(T)))`) whose field is overwritten with the
+future's resolved value, and `future.write` takes the value to resolve the
+future with as an argument. The `future-{read,write}-result` bit-packing is
+unchanged.
 
 For details, see [Streams and Futures] in the concurrency explainer and
 [`canon_future_read`] in the Canonical ABI explainer.
@@ -2133,6 +2271,23 @@ member of a waitable set, or has received its final `dropped` or, for futures,
 
 For details, see [Streams and Futures] in the concurrency explainer and
 [`canon_stream_forward`] in the Canonical ABI explainer.
+
+###### 🛸 `gc.stream.*` and `gc.future.*`
+
+| Synopsis                                                                  |                                                |
+| ------------------------------------------------------------------------- | ---------------------------------------------- |
+| Canonical ABI signature for `gc.{stream,future}.new`                      | `[] -> [read:(ref extern) write:(ref extern)]` |
+| Canonical ABI signature for `gc.{stream,future}.cancel-{read,write}`      | `[e:(ref extern)] -> [i32]`                    |
+| Canonical ABI signature for `gc.{stream,future}.drop-{readable,writable}` | `[end:(ref extern)] -> []`                     |
+| Canonical ABI signature for `gc.{stream,future}.forward`                  | `[r:(ref extern) w:(ref extern)] -> []`        |
+
+These are the same as `stream.*` and `future.*` except that they take and return
+`(ref extern)` handles instead of `i32` handles.
+
+For details, see [`canon_gc_stream_new`] in the Canonical ABI explainer.
+
+> Note: `{stream,future}.{read,write}` are used for both linear-memory and GC
+> ABIs, chosen by the presence of the `gc` `canonopt`.
 
 ###### 🧵 `thread.index`
 
@@ -2338,10 +2493,13 @@ explainer.
 
 ###### 📝 `error-context.new`
 
-| Synopsis                         |                                                      |
-| -------------------------------- | ---------------------------------------------------- |
-| Approximate WIT signature        | `func<memory>(message: string) -> error-context`     |
-| Canonical ABI signature          | `[ptr:memory.addrtype len:memory.addrtype] -> [i32]` |
+| Synopsis                  | `gc`?                                   |                                                      |
+| ------------------------- | --------------------------------------- | ---------------------------------------------------- |
+| Approximate WIT signature | (n/a)                                   | `func<memory>(message: string) -> error-context`     |
+| Canonical ABI signature   |                                         | `[ptr:memory.addrtype len:memory.addrtype] -> [i32]` |
+| Canonical ABI signature   | 🛸 `gc`, `string-encoding=utf8`         | `[(ref (sub final (array i8)))] -> [(ref extern)]`   |
+| Canonical ABI signature   | 🛸 `gc`, `string-encoding=utf16`        | `[(ref (sub final (array i16)))] -> [(ref extern)]`  |
+| Canonical ABI signature   | 🛸 `gc`, `string-encoding=latin1+utf16` | `[(ref array)] -> [(ref extern)]`                    |
 
 The `error-context.new` built-in returns a new `error-context` value. The given
 string is nondeterministically transformed to produce the `error-context`'s
@@ -2350,14 +2508,21 @@ internal [debug message](#error-context-type).
 In the Canonical ABI, the returned value is an index into the current component
 instance's table of a new error context value.
 
+🛸 When using `gc`, the resulting handle is returned as a `(ref extern)` rather
+than an `i32`, and the debug message is passed via the `gc` lowering for
+`string`s.
+
 For details, see [`canon_error_context_new`] in the Canonical ABI explainer.
 
 ###### 📝 `error-context.debug-message`
 
-| Synopsis                         |                                                 |
-| -------------------------------- | ----------------------------------------------- |
-| Approximate WIT signature        | `func<memory>(errctx: error-context) -> string` |
-| Canonical ABI signature          | `[errctxi:i32 ptr:memory.addrtype] -> []`       |
+| Synopsis                  | `gc`?                                   |                                                            |
+| ------------------------- | --------------------------------------- | ---------------------------------------------------------- |
+| Approximate WIT signature | (n/a)                                   | `func<memory>(errctx: error-context) -> string`            |
+| Canonical ABI signature   |                                         | `[errctxi:i32 ptr:memory.addrtype] -> []`                  |
+| Canonical ABI signature   | 🛸 `gc`, `string-encoding=utf8`         | `[errctx:(ref extern)] -> [(ref (sub final (array i8)))]`  |
+| Canonical ABI signature   | 🛸 `gc`, `string-encoding=utf16`        | `[errctx:(ref extern)] -> [(ref (sub final (array i16)))]` |
+| Canonical ABI signature   | 🛸 `gc`, `string-encoding=latin1+utf16` | `[errctx:(ref extern)] -> [(ref array)]`                   |
 
 The `error-context.debug-message` built-in returns the
 [debug message](#error-context-type) of the given `error-context`.
@@ -2366,6 +2531,10 @@ In the Canonical ABI, it writes the debug message into `ptr` as an 8-byte or
 16-byte (`ptr`, `length`) pair, according to the Canonical ABI for `string`,
 given the `<canonopt>*` immediates, trapping if `ptr` is misaligned or out of
 bounds.
+
+🛸 When using `gc`, the handle is passed as a `(ref extern)` instead of an `i32`
+and the message is returned via the `gc` lowering of a `string`, rather than
+through an out pointer.
 
 For details, see [`canon_error_context_debug_message`] in the Canonical ABI
 explainer.
@@ -2385,6 +2554,35 @@ instance's table.
 
 For details, see [`canon_error_context_drop`] in the Canonical ABI explainer.
 
+###### 🛸 `gc.error-context.drop`
+
+| Synopsis                         |                               |
+| -------------------------------- | ----------------------------- |
+| Approximate WIT signature        | `func(errctx: error-context)` |
+| Canonical ABI signature          | `[errctx:(ref extern)] -> []` |
+
+This is the same as `error-context.drop`, but takes a `(ref extern)` handle
+instead of an `i32` handle.
+
+For details, see [`canon_gc_error_context_drop`] in the Canonical ABI explainer.
+
+##### 🛸 Array built-ins
+
+###### 🛸 `array.new-array`, `array.new-memory` and `array.new-table`
+
+| Synopsis                                       |                                               |
+| ---------------------------------------------- | --------------------------------------------- |
+| Canonical ABI signature for `array.new-array`  | `[(ref null src) i32 i32] -> [(ref dst)]`     |
+| Canonical ABI signature for `array.new-memory` | `[mem.addrtype i32] -> [(ref dst)]`           |
+| Canonical ABI signature for `array.new-table`  | `[tbl.addrtype i32] -> [(ref dst)]`           |
+
+These are the same as the `array.new_{array,memory,table}` instructions from the
+[more-array-constructors] proposal.
+
+> Note: these are needed to create immutable arrays of dynamic length and
+> contents.
+
+For details, see [`canon_array_new_array`] in the Canonical ABI explainer.
 
 ### 🪙 Value Definitions
 
@@ -3170,7 +3368,8 @@ For some use-case-focused, worked examples, see:
 [exception-handling]: https://github.com/WebAssembly/exception-handling/blob/main/proposals/exception-handling/Exceptions.md
 [stack-switching]: https://github.com/WebAssembly/stack-switching/blob/main/proposals/stack-switching/Explainer.md
 [ESM-integration]: https://github.com/WebAssembly/esm-integration/tree/main/proposals/esm-integration
-[gc]: https://github.com/WebAssembly/gc/blob/main/proposals/gc/MVP.md
+[GC]: https://github.com/WebAssembly/gc/blob/main/proposals/gc/MVP.md
+[more-array-constructors]: https://github.com/WebAssembly/more-array-constructors/blob/main/proposals/more-array-constructors/Overview.md
 [memory64]: https://github.com/webAssembly/memory64
 [`rectype`]: https://webassembly.github.io/gc/core/text/types.html#text-rectype
 [shared-everything-threads]: https://github.com/WebAssembly/shared-everything-threads
@@ -3199,14 +3398,20 @@ For some use-case-focused, worked examples, see:
 [`canon_stream_cancel_read`]: CanonicalABI.md#-canon-streamfuturecancel-readwrite
 [`canon_stream_drop_readable`]: CanonicalABI.md#-canon-streamfuturedrop-readablewritable
 [`canon_stream_forward`]: CanonicalABI.md#-canon-streamfutureforward
+[`canon_gc_stream_new`]: CanonicalABI.md#-canon-gcstreamfuture
 [`canon_subtask_cancel`]: CanonicalABI.md#-canon-subtaskcancel
 [`canon_subtask_drop`]: CanonicalABI.md#-canon-subtaskdrop
 [`canon_resource_new`]: CanonicalABI.md#canon-resourcenew
 [`canon_resource_drop`]: CanonicalABI.md#canon-resourcedrop
 [`canon_resource_rep`]: CanonicalABI.md#canon-resourcerep
+[`canon_gc_resource_new`]: CanonicalABI.md#-canon-gcresourcenewdroprep
+[`canon_gc_waitable_set_new`]: CanonicalABI.md#-canon-gcwaitable-setwaitablesubtask
+[`canon_gc_handle_ref_index`]: CanonicalABI.md#-canon-gchandle-refindexnewget
 [`canon_error_context_new`]: CanonicalABI.md#-canon-error-contextnew
 [`canon_error_context_debug_message`]: CanonicalABI.md#-canon-error-contextdebug-message
 [`canon_error_context_drop`]: CanonicalABI.md#-canon-error-contextdrop
+[`canon_gc_error_context_drop`]: CanonicalABI.md#-canon-gcerror-contextdrop
+[`canon_array_new_array`]: CanonicalABI.md#-canon-arraynew-arraymemorytable
 [`canon_thread_index`]: CanonicalABI.md#-canon-threadindex
 [`canon_thread_new_indirect`]: CanonicalABI.md#-canon-threadnew-indirect
 [`canon_thread_resume_later`]: CanonicalABI.md#-canon-threadresume-later

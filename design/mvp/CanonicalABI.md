@@ -12,15 +12,15 @@ specified here.
 
 The Canonical ABI specifies, for each component function signature, a
 corresponding core function signature and the process for reading
-component-level values into and out of linear memory. While a full formal
-specification would specify the Canonical ABI in terms of macro-expansion into
-Core WebAssembly instructions augmented with a new set of (spec-internal)
-[administrative instructions], the informal presentation here instead specifies
-the process in terms of Python code that would be logically executed at
-validation- and run-time by a component model implementation. The Python code
-is presented by interleaving definitions with descriptions and eliding some
-boilerplate. For a complete listing of all Python definitions in a single
-executable file with a small unit test suite, see the
+component-level values into and out of linear memory (or, with 🛸 `gc`, the GC
+heap). While a full formal specification would specify the Canonical ABI in
+terms of macro-expansion into Core WebAssembly instructions augmented with a new
+set of (spec-internal) [administrative instructions], the informal presentation
+here instead specifies the process in terms of Python code that would be
+logically executed at validation- and run-time by a component model
+implementation. The Python code is presented by interleaving definitions with
+descriptions and eliding some boilerplate. For a complete listing of all Python
+definitions in a single executable file with a small unit test suite, see the
 [`canonical-abi`](canonical-abi/) directory.
 
 The convention followed by the Python code below is that all traps are raised by
@@ -913,11 +913,16 @@ when lifting individual parameters and results:
 class LiftOptions:
   string_encoding: str = 'utf8'
   memory: Optional[MemInst] = None
+  gc: bool = False
 
   def equal(lhs, rhs):
     return lhs.string_encoding == rhs.string_encoding and \
-           lhs.memory is rhs.memory
+           lhs.memory is rhs.memory and \
+           lhs.gc == rhs.gc
 ```
+By default, values are lifted from linear memory. When the 🛸 `gc` field is
+true, values are lifted from objects in the GC heap instead.
+
 The `equal` static method is used by `task.return` below to dynamically
 compare equality of just this subset of `canonopt`.
 
@@ -1039,8 +1044,13 @@ table containing everything else ([resource handles](#resource-state),
 [waitables and waitable sets](#waitable-state) and
 [error contexts](#-canon-error-contextnew)).
 ```python
+@dataclass
+class TableEntry:
+  item: any
+  handle_ref: Optional[HandleRef] = None
+
 class Table:
-  array: list[any]
+  array: list[Optional[TableEntry]]
   free: list[int]
 
   MAX_LENGTH = 2**28 - 1
@@ -1050,24 +1060,24 @@ class Table:
     self.free = []
 
   def __iter__(self):
-    for e in self.array:
-      if e is not None:
-        yield e
+    for entry in self.array:
+      if entry is not None:
+        yield entry.item
 
   def get(self, i):
     trap_if(i >= len(self.array))
     trap_if(self.array[i] is None)
-    return self.array[i]
+    return self.array[i].item
 
   def add(self, e):
     if self.free:
       i = self.free.pop()
       assert(self.array[i] is None)
-      self.array[i] = e
+      self.array[i] = TableEntry(e)
     else:
       i = len(self.array)
       trap_if(i > Table.MAX_LENGTH)
-      self.array.append(e)
+      self.array.append(TableEntry(e))
     return i
 
   def remove(self, i):
@@ -1075,6 +1085,19 @@ class Table:
     self.array[i] = None
     self.free.append(i)
     return e
+
+  def get_handle_ref(self, i):
+    trap_if(i >= len(self.array))
+    if self.array[i] is None:
+      return None
+    else:
+      return self.array[i].handle_ref
+
+  def set_handle_ref(self, i, r):
+    trap_if(i >= len(self.array))
+    trap_if(self.array[i] is None)
+    trap_if(self.array[i].handle_ref is not None)
+    self.array[i].handle_ref = r
 ```
 `Table` maintains a dense array of elements that can contain holes created by
 the `remove` method (defined above). When table elements are accessed (e.g., by
@@ -1092,6 +1115,13 @@ free list in the free elements of `array`.
 The limit of `2**28` ensures that the high 4 bits of table indices are unset
 and available for other use in guest code (e.g., for tagging, packed words or
 sentinel values).
+
+Each element is stored in a `TableEntry` along with its unique 🛸 `HandleRef`
+(if it has one), so `remove` also removes the index's `HandleRef` (letting the
+index be reused while the old `HandleRef` becomes stale). `get_handle_ref`
+returns the `HandleRef` associated with the given index, if any;
+`set_handle_ref` sets the `HandleRef` for the given index, trapping if it
+already has one.
 
 
 ### Resource State
@@ -1136,9 +1166,11 @@ instances). `ResourceType` Python object identity is used by trapping guards on
 the `rt` field of `ResourceHandle` (above) and thus resource type equality is
 *not* defined structurally (on the contents of `ResourceType`).
 ```python
+ANYREF = CoreRefType('any')
+
 class ResourceType(Type):
   impl_inst: ComponentInstance
-  rep: Literal['i32', 'i64']
+  rep: Literal['i32', 'i64'] | CoreRefType
   dtor: Optional[Callable]
 
   def __init__(self, impl_inst, rep, dtor = None):
@@ -1146,9 +1178,10 @@ class ResourceType(Type):
     self.rep = rep
     self.dtor = dtor
 ```
-The `rep` field stores the core value type given by the `(rep ...)` immediate
-of the `resource` type definition. The `impl_inst` field stores the component
-instance that generated this resource type.
+The `rep` field stores the core value type given by the `(rep ...)` immediate of
+the `resource` type definition (with 🛸, `ANYREF` for `(rep (ref any))`). The
+`impl_inst` field stores the component instance that generated this resource
+type.
 
 
 ### Waitable State
@@ -1520,6 +1553,7 @@ class WritableGuestBuffer(GuestBuffer, WritableBuffer):
       assert(all(v == () for v in vs))
     self.progress += len(vs)
 ```
+
 As with `load_list_from_range` below, the alignment and range checks are
 performed even when `length` is `0`. When `t` is `None` (arising from `stream`
 and `future` with empty element types), the core-wasm-supplied `ptr` is
@@ -1531,6 +1565,79 @@ values.
 The `load_list_from_valid_range` and `store_list_into_valid_range` functions
 that do all the heavy lifting are shared with function parameter/result lifting
 and lowering and defined below.
+
+The 🛸 `gc` buffers are the GC equivalents of the linear memory buffers, holding
+GC reference storage rather than pointing into a region of linear memory. For
+`stream`s, the buffer wraps a GC `array`, whose elements are lifted with
+`lift_gc_value` when the reader reads them and elements are lowered into the
+array via `lower_gc_value`. `future`s use a buffer that wraps its single `(ref
+$results)` cell (see `gc_async_results_type`).
+```python
+class GcBuffer(Buffer):
+  cx: LiftLowerContext
+  t: Optional[ValType]
+  elems: list[any]
+  offset: int
+  length: int
+  progress: int
+
+  def __init__(self, t, cx, elems, offset, length):
+    trap_if(length > Buffer.MAX_LENGTH)
+    if t is not None:
+      trap_if(offset + length > len(elems))
+    self.cx = cx
+    self.t = t
+    self.elems = elems
+    self.offset = offset
+    self.length = length
+    self.progress = 0
+
+  def remain(self):
+    return self.length - self.progress
+
+class ReadableGcBuffer(GcBuffer, ReadableBuffer):
+  def read(self, n):
+    assert(n <= self.remain())
+    if self.t:
+      vs = []
+      for i in range(n):
+        vs.append(self.lift(self.elems[self.offset + self.progress + i]))
+    else:
+      vs = n * [()]
+    self.progress += n
+    return vs
+
+  def lift(self, v):
+    return lift_gc_value(self.cx, v, self.t)
+
+class WritableGcBuffer(GcBuffer, WritableBuffer):
+  def write(self, vs):
+    assert(len(vs) <= self.remain())
+    if self.t:
+      for i,v in enumerate(vs):
+        self.elems[self.offset + self.progress + i] = self.lower(v)
+    else:
+      assert(all(v == () for v in vs))
+    self.progress += len(vs)
+
+  def lower(self, v):
+    return lower_gc_value(self.cx, v, self.t)
+
+class ReadableGcValueBuffer(ReadableGcBuffer):
+  def __init__(self, t, cx, v = None):
+    assert(t is not None or v is None)
+    ReadableGcBuffer.__init__(self, t, cx, [v], 0, 1)
+
+  def lift(self, v):
+    return lift_unpacked_gc_value(self.cx, v, self.t)
+
+def lift_unpacked_gc_value(cx, v, t):
+  match gc_storage_type(cx, t):
+    case 'i8' | 'i16':
+      return lift_flat(cx, CoreValueIter([v]), t)
+    case 'i32' | 'i64' | 'f32' | 'f64' | CoreRefType():
+      return lift_gc_value(cx, v, t)
+```
 
 
 ### Stream and Future State
@@ -2013,6 +2120,7 @@ thus alignment depends on the resource's `(rep $t)`.
 ```python
 def alignment_borrow(cx, borrowt):
   if pass_rep_not_handle(cx, borrowt):
+    assert(borrowt.rt.rep in ['i32', 'i64'])
     return ptr_size(borrowt.rt.rep)
   else:
     return 4
@@ -2091,9 +2199,196 @@ def elem_size_flags(labels):
 
 def elem_size_borrow(cx, borrowt):
   if pass_rep_not_handle(cx, borrowt):
+    assert(borrowt.rt.rep in ['i32', 'i64'])
     return ptr_size(borrowt.rt.rep)
   else:
     return 4
+```
+
+## 🛸 GC Types
+
+This section defines lowering component model types into core Wasm types on the
+GC heap. This is fairly different from type lowering to linear memory, as we
+have to define the various core Wasm GC types that the component-model types
+lower to, rather than their size and alignment in linear memory.
+
+Lowering to flat value types in a function's parameters and results, rather than
+into the GC heap or linear memory, follows different rules, documented in the
+[Flattening](#flattening) section.
+
+To represent core Wasm's GC types, objects, and references in the Python spec
+code, we use the following definitions:
+
+| Core Wasm                                                | Python                                                 |
+| -------------------------------------------------------- | ------------------------------------------------------ |
+| `(ref heapty)` type                                      | `CoreRefType(heapty)`                                  |
+| `(ref null heapty)` type                                 | `CoreRefType(heapty, nullable = True)`                 |
+| `extern`, `any`, `eq`, `struct` and `array` heap types   | `'extern'`, `'any'`, `'eq'`, `'struct'` and `'array'`  |
+| Defined type (the `i`th type of rec group `rec`)         | `CoreDefType(rec, i)`                                  |
+| `(rec subtype*)` rec group                               | `CoreRecType(subtypes)`                                |
+| `(sub final? supertype* comptype)` type                  | `CoreSubType(final, supertypes, comptype)`             |
+| Reference to the `i`th type of the same rec group        | `CoreRecIdx(i)`                                        |
+| `(struct field*)` type                                   | `CoreStructType(fields)`                               |
+| `(array field)` type                                     | `CoreArrayType(elem)`                                  |
+| `(field mut? storagetype)`                               | `CoreFieldType(t, mutable)`                            |
+| `i8`, `i16`, `i32`, `i64`, `f32` and `f64` storage types | `'i8'`, `'i16'`, `'i32'`, `'i64'`, `'f32'` and `'f64'` |
+| Defined type matching (`t1 <: t2`)                       | `t1.matches(t2)`                                       |
+| Null reference                                           | `None`                                                 |
+| `struct` object                                          | `GcStruct(t, fields)`                                  |
+| `array` object                                           | `GcArray(t, elems)`                                    |
+| `struct.new`                                             | `struct_new(t, vs)`                                    |
+| `struct.get` and `struct.get_u`                          | `struct_get(s, i)`                                     |
+| `array.new_fixed`                                        | `array_new_fixed(t, vs)`                               |
+| `array.len`                                              | `array_len(a)`                                         |
+| `array.get` and `array.get_u`                            | `array_get(a, i)`                                      |
+| `ref.test`                                               | `ref_test(v, rt)`                                      |
+
+Where the linear memory ABI uses `i32` handles to `own`s, `borrow`s, `stream`s,
+`future`s, and `error-context`s, the GC ABI uses `(ref extern)` handles instead.
+```python
+EXTERNREF = CoreRefType('extern')
+
+def handle_type(cx):
+  if cx.opts.gc:
+    return EXTERNREF
+  else:
+    return 'i32'
+```
+
+The `gc_storage_type` function defines a component model type's lowering into a
+type in the GC heap (e.g. into a standalone GC object, a `struct` field, or an
+`array` element).
+```python
+def gc_storage_type(cx, t):
+  match despecialize(t):
+    case BoolType() | S8Type() | U8Type()   : return 'i8'
+    case S16Type() | U16Type()              : return 'i16'
+    case S32Type() | U32Type() | CharType() : return 'i32'
+    case F32Type()                          : return 'f32'
+    case S64Type() | U64Type()              : return 'i64'
+    case F64Type()                          : return 'f64'
+    case StringType()                       : return CoreRefType(gc_string_type(cx))
+    case ListType(t, l)                     : return CoreRefType(gc_list_type(cx, t))
+    case RecordType(fields)                 : return CoreRefType(gc_record_type(cx, fields))
+    case VariantType(cases)                 : return gc_variant_type(cx, cases)
+    case FlagsType(labels)                  : return gc_packed_int_type(elem_size_flags(labels))
+    case BorrowType()                       : return gc_borrow_type(cx, t)
+    case OwnType() | StreamType() | FutureType() | ErrorContextType():
+      return EXTERNREF
+
+def gc_borrow_type(cx, borrowt):
+  if pass_rep_not_handle(cx, borrowt):
+    return borrowt.rt.rep
+  else:
+    return EXTERNREF
+
+def gc_packed_int_type(nbytes):
+  match nbytes:
+    case 1: return 'i8'
+    case 2: return 'i16'
+    case 4: return 'i32'
+    case 8: return 'i64'
+```
+
+Other than the types for `variant`s, every `struct` and `array` type in the GC
+ABI is `final`, has no declared supertype, has non-`mut` (immutable) fields or
+elements, and is defined in its own singleton `rec` group.
+```python
+def gc_final_type(comptype):
+  return CoreDefType(CoreRecType((CoreSubType(True, (), comptype),)), 0)
+```
+
+UTF-8 and UTF-16 strings are `array`s of `i8` and `i16` code points
+respectively. Compact `latin1+utf16` strings are lowered to `(ref array)` where
+Latin1 strings are `array`s of `i8` (the same core Wasm type as UTF-8 strings).
+```python
+GC_UTF8_ARRAY = gc_final_type(CoreArrayType(CoreFieldType('i8')))
+GC_LATIN1_ARRAY = gc_final_type(CoreArrayType(CoreFieldType('i8')))
+GC_UTF16_ARRAY = gc_final_type(CoreArrayType(CoreFieldType('i16')))
+
+def gc_string_type(cx):
+  match cx.opts.string_encoding:
+    case 'utf8'         : return GC_UTF8_ARRAY
+    case 'utf16'        : return GC_UTF16_ARRAY
+    case 'latin1+utf16' : return 'array'
+```
+
+`list`s are lowered to `array`s whose elements are of the type of the `list`'s
+element type lowered to a GC heap storage type.
+```python
+def gc_list_type(cx, elem_type):
+  return gc_final_type(CoreArrayType(CoreFieldType(gc_storage_type(cx, elem_type))))
+```
+
+`record`s are lowered to `struct`s whose field types are the `record`'s fields
+point-wise lowered into GC heap storage types.
+```python
+def gc_record_type(cx, fields):
+  return gc_final_type(CoreStructType(tuple(CoreFieldType(gc_storage_type(cx, f.t)) for f in fields)))
+```
+
+`variant`s where none of the `case`s have a payload are lowered to the smallest
+integer that can assign a unique number to each `case`.
+
+`variant`s with at least one `case` with a payload are lowered into a `rec`
+group containing a non-`final` base `struct` with one discriminant field, and
+each `case` is a `struct` that is `final`, declares the base as its supertype,
+and appends the lowered payload as a new, non-`mut` field (if any payload is
+present). The discriminant field enables $O(1)$ exhaustive matching on the
+`case`s -- without it, exhaustive matching would be an $O(n)$ chain of
+`br_on_cast`s or `ref.test`s.
+```python
+def gc_variant_type(cx, cases):
+  if has_payload(cases):
+    return CoreRefType(gc_variant_base_type(cx, cases))
+  else:
+    return gc_storage_type(cx, discriminant_type(cases))
+
+def has_payload(cases):
+  return any(c.t is not None for c in cases)
+
+def gc_variant_rec_type(cx, cases):
+  discriminant = CoreFieldType(gc_storage_type(cx, discriminant_type(cases)))
+  base = CoreSubType(False, (), CoreStructType((discriminant,)))
+  case_types = []
+  for c in cases:
+    fields = (discriminant,)
+    if c.t is not None:
+      fields += (CoreFieldType(gc_storage_type(cx, c.t)),)
+    case_types.append(CoreSubType(True, (CoreRecIdx(0),), CoreStructType(fields)))
+  return CoreRecType((base, *case_types))
+
+def gc_variant_base_type(cx, cases):
+  return CoreDefType(gc_variant_rec_type(cx, cases), 0)
+
+def gc_variant_case_type(cx, cases, case_index):
+  return CoreDefType(gc_variant_rec_type(cx, cases), 1 + case_index)
+```
+
+The `nullable_type` operation converts non-nullable reference types into
+nullable reference types, ensuring that its result type is defaultable. The
+`unpacked_type` operation converts packed `i8` and `i16` heap storage types into
+`i32` value types (like core Wasm's `unpack`). They're used by 🛸 `gc` paths.
+```python
+def nullable_type(t):
+  match t:
+    case CoreRefType(heap_type, _)                    : return CoreRefType(heap_type, nullable = True)
+    case 'i8' | 'i16' | 'i32' | 'i64' | 'f32' | 'f64' : return t
+
+def unpacked_type(t):
+  match t:
+    case 'i8' | 'i16'                                  : return 'i32'
+    case 'i32' | 'i64' | 'f32' | 'f64' | CoreRefType() : return t
+```
+
+`gc_async_results_type` returns the type of the `(ref $results)` out-param
+passed to 🛸 `gc` `async`-lowered functions and to `gc` `future.read`: a `final`
+struct in its own `rec` group with a single mutable, nullable field of the
+result's GC heap storage type, which is overwritten when the result is ready.
+```python
+def gc_async_results_type(cx, t):
+  field = CoreFieldType(nullable_type(gc_storage_type(cx, t)), mutable = True)
+  return gc_final_type(CoreStructType((field,)))
 ```
 
 ## Loading
@@ -2146,10 +2441,10 @@ def convert_int_to_bool(i):
   return bool(i)
 ```
 
-Floats are loaded directly from memory, with the sign and payload information
-of NaN values discarded. Consequently, there is only one unique NaN value per
-floating-point type. This reflects the practical reality that some languages
-and protocols do not preserve these bits. In the Python code below, this is
+Floats are loaded directly from memory, with the sign and payload information of
+NaN values discarded. Consequently, there is only one unique NaN value per
+floating-point type. This reflects the practical reality that some languages and
+protocols do not preserve these bits. In the Python code below, this is
 expressed as canonicalizing NaNs to a particular bit pattern.
 
 See the comments about lowering of float values for a discussion of possible
@@ -2200,11 +2495,15 @@ memory) and a number of [code units]. There are three supported string encodings
 in [`canonopt`]: [UTF-8], [UTF-16] and `latin1+utf16`. This last option allows a
 *dynamic* choice between [Latin-1] and UTF-16, indicated by the high bit of the
 second pointer-sized value (32nd bit on 32-bit memories, 64th bit on 64-bit
-memories). String values include their original encoding and length in tagged
-code units as a "hint" that enables `store_string` (defined below) to make
-better up-front allocation size choices in many cases. Thus, the value produced
-by `load_string` isn't simply a Python `str`, but a *tuple* containing a `str`,
-the original encoding and the number of source code units.
+memories). String values include a "hint" that enables `store_string` (defined
+below) to make better up-front allocation size choices in many cases. Thus, the
+value produced by `load_string` isn't simply a Python `str`, but a *tuple*
+containing a `str`, a `StringHint` and the number of source code units (with
+the UTF-16 tag removed). `StringHint` records the source encoding, splitting
+`latin1+utf16` into `DYNAMIC_LATIN1` and `DYNAMIC_UTF16` according to the
+dynamic choice. Because the hint is independent of the source memory's pointer
+size, it can be stored into a memory with a different pointer size (and thus a
+different UTF-16 tag bit).
 
 The `MAX_STRING_BYTE_LENGTH` constant limits the byte length of a string when
 loading. This limit is low enough to ensure that when storing the string via
@@ -2214,7 +2513,13 @@ short enough to be stored in 32-bit components. The worst case inflation in
 string byte length is by a factor of 2 (e.g. this could occur when converting
 from [UTF-8] to [UTF-16]).
 ```python
-String = tuple[str, str, int]
+class StringHint(Enum):
+  UTF8 = 0
+  UTF16 = 1
+  DYNAMIC_LATIN1 = 2
+  DYNAMIC_UTF16 = 3
+
+String = tuple[str, StringHint, int]
 
 def load_string(cx, ptr) -> String:
   ptr_size = cx.opts.memory.ptr_size()
@@ -2234,20 +2539,28 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   match cx.opts.string_encoding:
     case 'utf8':
       alignment = 1
-      byte_length = tagged_code_units
+      code_units = tagged_code_units
+      byte_length = code_units
       encoding = 'utf-8'
+      hint = StringHint.UTF8
     case 'utf16':
       alignment = 2
-      byte_length = 2 * tagged_code_units
+      code_units = tagged_code_units
+      byte_length = 2 * code_units
       encoding = 'utf-16-le'
+      hint = StringHint.UTF16
     case 'latin1+utf16':
       alignment = 2
       if bool(tagged_code_units & tag):
-        byte_length = 2 * (tagged_code_units ^ tag)
+        code_units = tagged_code_units ^ tag
+        byte_length = 2 * code_units
         encoding = 'utf-16-le'
+        hint = StringHint.DYNAMIC_UTF16
       else:
-        byte_length = tagged_code_units
+        code_units = tagged_code_units
+        byte_length = code_units
         encoding = 'latin-1'
+        hint = StringHint.DYNAMIC_LATIN1
 
   trap_if(byte_length > MAX_STRING_BYTE_LENGTH)
   trap_if(ptr != align_to(ptr, alignment))
@@ -2257,7 +2570,7 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   except UnicodeError:
     trap()
 
-  return (s, cx.opts.string_encoding, tagged_code_units)
+  return (s, hint, code_units)
 ```
 
 Error context values are lifted directly from the current component instance's
@@ -2533,12 +2846,11 @@ approach to update the allocation size during the single copy. A blind
 `realloc` approach would normally suffer from multiple reallocations per string
 (e.g., using the standard doubling-growth strategy). However, as already shown
 in `load_string` above, string values come with two useful hints: their
-original encoding and number of source [code units]. From this hint data,
+`StringHint` and number of source [code units]. From this hint data,
 `store_string` can do a much better job minimizing the number of reallocations.
 
-We start with a case analysis to enumerate all the meaningful encoding
-combinations, subdividing the `latin1+utf16` encoding into either `latin1` or
-`utf16` based on the `utf16_tag` flag set by `load_string`:
+We start with a case analysis to enumerate all the meaningful combinations of
+destination encoding and source `StringHint`:
 ```python
 def store_string(cx, v: String, ptr):
   begin, tagged_code_units = store_string_into_range(cx, v)
@@ -2547,42 +2859,29 @@ def store_string(cx, v: String, ptr):
   store_int(cx, tagged_code_units, ptr + ptr_size, ptr_size)
 
 def store_string_into_range(cx, v: String):
-  src, src_encoding, src_tagged_code_units = v
-  tag = utf16_tag(cx)
-
-  if src_encoding == 'latin1+utf16':
-    if bool(src_tagged_code_units & tag):
-      src_simple_encoding = 'utf16'
-      src_code_units = src_tagged_code_units ^ tag
-    else:
-      src_simple_encoding = 'latin1'
-      src_code_units = src_tagged_code_units
-  else:
-    src_simple_encoding = src_encoding
-    src_code_units = src_tagged_code_units
-
+  src, src_hint, src_code_units = v
   match cx.opts.string_encoding:
     case 'utf8':
-      match src_simple_encoding:
-        case 'utf8'         : return store_string_copy(cx, src, src_code_units, 1, 1, 'utf-8')
-        case 'utf16'        : return store_utf16_to_utf8(cx, src, src_code_units)
-        case 'latin1'       : return store_latin1_to_utf8(cx, src, src_code_units)
+      match src_hint:
+        case StringHint.UTF8           : return store_string_copy(cx, src, src_code_units, 1, 1, 'utf-8')
+        case StringHint.UTF16          : return store_utf16_to_utf8(cx, src, src_code_units)
+        case StringHint.DYNAMIC_LATIN1 : return store_latin1_to_utf8(cx, src, src_code_units)
+        case StringHint.DYNAMIC_UTF16  : return store_utf16_to_utf8(cx, src, src_code_units)
     case 'utf16':
-      match src_simple_encoding:
-        case 'utf8'         : return store_utf8_to_utf16(cx, src, src_code_units)
-        case 'utf16'        : return store_string_copy(cx, src, src_code_units, 2, 2, 'utf-16-le')
-        case 'latin1'       : return store_string_copy(cx, src, src_code_units, 2, 2, 'utf-16-le')
+      match src_hint:
+        case StringHint.UTF8           : return store_utf8_to_utf16(cx, src, src_code_units)
+        case StringHint.UTF16          : return store_string_copy(cx, src, src_code_units, 2, 2, 'utf-16-le')
+        case StringHint.DYNAMIC_LATIN1 : return store_string_copy(cx, src, src_code_units, 2, 2, 'utf-16-le')
+        case StringHint.DYNAMIC_UTF16  : return store_string_copy(cx, src, src_code_units, 2, 2, 'utf-16-le')
     case 'latin1+utf16':
-      match src_encoding:
-        case 'utf8'         : return store_string_to_latin1_or_utf16(cx, src, src_code_units)
-        case 'utf16'        : return store_string_to_latin1_or_utf16(cx, src, src_code_units)
-        case 'latin1+utf16' :
-          match src_simple_encoding:
-            case 'latin1'   : return store_string_copy(cx, src, src_code_units, 1, 2, 'latin-1')
-            case 'utf16'    : return store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units)
+      match src_hint:
+        case StringHint.UTF8           : return store_string_to_latin1_or_utf16(cx, src, src_code_units)
+        case StringHint.UTF16          : return store_string_to_latin1_or_utf16(cx, src, src_code_units)
+        case StringHint.DYNAMIC_LATIN1 : return store_string_copy(cx, src, src_code_units, 1, 2, 'latin-1')
+        case StringHint.DYNAMIC_UTF16  : return store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units)
 ```
 
-The simplest 4 cases above can compute the exact destination size and then copy
+The simplest 5 cases above can compute the exact destination size and then copy
 with a simply loop (that possibly inflates Latin-1 to UTF-16 by injecting a 0
 byte after every Latin-1 byte).
 ```python
@@ -2880,37 +3179,63 @@ lowered (by `canon lower`):
 MAX_FLAT_PARAMS = 16
 MAX_FLAT_ASYNC_PARAMS = 4
 MAX_FLAT_RESULTS = 1
+MAX_FLAT_GC_RESULTS = 16
 
 def flatten_functype(cx, ft):
   flat_params = flatten_types(cx.reverse_direction(), ft.param_types())
   flat_results = flatten_types(cx, ft.result_type())
-  if not cx.opts.async_:
-    if len(flat_params) > MAX_FLAT_PARAMS:
-      flat_params = [cx.opts.memory.ptr_type()]
-    if len(flat_results) > MAX_FLAT_RESULTS:
+  if cx.opts.gc:
+    if not cx.opts.async_:
+      if len(flat_params) > MAX_FLAT_PARAMS:
+        flat_params = [gc_storage_type(cx.reverse_direction(), TupleType(ft.param_types()))]
+      if len(flat_results) > MAX_FLAT_GC_RESULTS:
+        [result_type] = ft.result_type()
+        flat_results = [gc_storage_type(cx, result_type)]
+    else:
       match cx.direction:
         case 'lift':
-          flat_results = [cx.opts.memory.ptr_type()]
+          if len(flat_params) > MAX_FLAT_PARAMS:
+            flat_params = [gc_storage_type(cx.reverse_direction(), TupleType(ft.param_types()))]
+          if cx.opts.callback:
+            flat_results = ['i32', nullable_type(EXTERNREF)]
+          else:
+            flat_results = []
         case 'lower':
-          flat_params += [cx.opts.memory.ptr_type()]
-          flat_results = []
+          if len(flat_params) > MAX_FLAT_ASYNC_PARAMS:
+            flat_params = [gc_storage_type(cx.reverse_direction(), TupleType(ft.param_types()))]
+          if len(flat_results) > 0:
+            [result_type] = ft.result_type()
+            flat_params += [CoreRefType(gc_async_results_type(cx, result_type))]
+          flat_results = ['i32', nullable_type(EXTERNREF)]
     return CoreFuncType(flat_params, flat_results)
   else:
-    match cx.direction:
-      case 'lift':
-        if len(flat_params) > MAX_FLAT_PARAMS:
-          flat_params = [cx.opts.memory.ptr_type()]
-        if cx.opts.callback:
+    if not cx.opts.async_:
+      if len(flat_params) > MAX_FLAT_PARAMS:
+        flat_params = [cx.opts.memory.ptr_type()]
+      if len(flat_results) > MAX_FLAT_RESULTS:
+        match cx.direction:
+          case 'lift':
+            flat_results = [cx.opts.memory.ptr_type()]
+          case 'lower':
+            flat_params += [cx.opts.memory.ptr_type()]
+            flat_results = []
+      return CoreFuncType(flat_params, flat_results)
+    else:
+      match cx.direction:
+        case 'lift':
+          if len(flat_params) > MAX_FLAT_PARAMS:
+            flat_params = [cx.opts.memory.ptr_type()]
+          if cx.opts.callback:
+            flat_results = ['i32']
+          else:
+            flat_results = []
+        case 'lower':
+          if len(flat_params) > MAX_FLAT_ASYNC_PARAMS:
+            flat_params = [cx.opts.memory.ptr_type()]
+          if len(flat_results) > 0:
+            flat_params += [cx.opts.memory.ptr_type()]
           flat_results = ['i32']
-        else:
-          flat_results = []
-      case 'lower':
-        if len(flat_params) > MAX_FLAT_ASYNC_PARAMS:
-          flat_params = [cx.opts.memory.ptr_type()]
-        if len(flat_results) > 0:
-          flat_params += [cx.opts.memory.ptr_type()]
-        flat_results = ['i32']
-    return CoreFuncType(flat_params, flat_results)
+      return CoreFuncType(flat_params, flat_results)
 
 def flatten_types(cx, ts):
   return [ft for t in ts for ft in flatten_type(cx, t)]
@@ -2918,6 +3243,24 @@ def flatten_types(cx, ts):
 As shown here, the core signatures of `async`-lowered functions use a lower
 limit on the maximum number of parameters (4) and results (0) passed as scalars
 before falling back to passing through memory.
+
+With 🛸 `gc` flattening, when the flat parameters overflows the
+`MAX_FLAT_PARAMS`, a single `(ref $params)` parameter is passed instead, where
+`$params` is a GC `struct` (`final` and in its own singleton `rec` group) with
+each of the parameters lowered to GC heap storage types as non-`mut` field. When
+the result flattening overflows `MAX_FLAG_GC_RESULTS`, then the result type is
+lowered to a GC heap storage type and returned; otherwise, when flattening does
+not overflow, results are returned directly (without an out-pointer parameter)
+via multi-value returns.
+
+With 🛸 `gc` and 🔀 `async` flattening, when `MAX_FLAT_PARAMS` overflows,
+lifting spills parameters into a `(ref $params)` and, with a `callback`, return
+`[i32 (ref null extern)]` (the callback code and the waitable set to wait on) or
+no results for stackful concurrency. `async` lowering spills parameters past
+`MAX_FLAT_ASYNC_PARAMS` into a `(ref $params)` and additionally take a `(ref
+$results)` out-parameter (see `gc_async_results_type`) if there is a result; it
+returns `[i32 (ref null extern)]` (the packed subtask state and index, and the
+associated subtask, if any).
 
 Presenting the definition of `flatten_type` piecewise, we start with the
 top-level case analysis:
@@ -2931,24 +3274,38 @@ def flatten_type(cx, t):
     case F32Type()                        : return ['f32']
     case F64Type()                        : return ['f64']
     case CharType()                       : return ['i32']
-    case StringType()                     : return 2 * [cx.opts.memory.ptr_type()]
-    case ErrorContextType()               : return ['i32']
+    case StringType()                     : return flatten_string(cx)
+    case ErrorContextType()               : return [handle_type(cx)]
     case ListType(t, l)                   : return flatten_list(cx, t, l)
     case RecordType(fields)               : return flatten_record(cx, fields)
     case VariantType(cases)               : return flatten_variant(cx, cases)
     case FlagsType(labels)                : return ['i32']
-    case OwnType()                        : return ['i32']
+    case OwnType()                        : return [handle_type(cx)]
     case BorrowType()                     : return flatten_borrow(cx, t)
-    case StreamType() | FutureType()      : return ['i32']
+    case StreamType() | FutureType()      : return [handle_type(cx)]
+```
+
+Strings flatten to a pointer and length into linear memory or, with 🛸 `gc`, to
+a single reference to a GC array.
+```python
+def flatten_string(cx):
+  if cx.opts.gc:
+    return [CoreRefType(gc_string_type(cx))]
+  else:
+    return 2 * [cx.opts.memory.ptr_type()]
 ```
 
 List flattening of a fixed-length list uses the same flattening as a tuple
-(via `flatten_record` below).
+(via `flatten_record` below), except with 🛸 `gc`, where all lists are a single
+reference to a GC array.
 ```python
 def flatten_list(cx, elem_type, maybe_length):
-  if maybe_length is not None:
-    return flatten_type(cx, elem_type) * maybe_length
-  return 2 * [cx.opts.memory.ptr_type()]
+  if cx.opts.gc:
+    return [CoreRefType(gc_list_type(cx, elem_type))]
+  else:
+    if maybe_length is not None:
+      return flatten_type(cx, elem_type) * maybe_length
+    return 2 * [cx.opts.memory.ptr_type()]
 ```
 
 Record flattening simply flattens each field in sequence.
@@ -2968,17 +3325,26 @@ tightest approximation. What this means is that, regardless of the dynamic
 case, all flattened variants are passed with the same static set of core types,
 which may involve, e.g., reinterpreting an `f32` as an `i32` or zero-extending
 an `i32` into an `i64`.
+
+With 🛸 `gc`, a `variant` where none of the `case`s have a payload is flattened
+identically to the linear-memory ABI. However, when any `case` has a payload,
+then the `variant` is lowered with the same approach as when it is lowered to a
+GC heap storage type: a base `struct` type with a discriminant field that is
+subtyped for each `case`, which adds a field for the payload, when present.
 ```python
 def flatten_variant(cx, cases):
-  flat = []
-  for c in cases:
-    if c.t is not None:
-      for i,ft in enumerate(flatten_type(cx, c.t)):
-        if i < len(flat):
-          flat[i] = join(flat[i], ft)
-        else:
-          flat.append(ft)
-  return flatten_type(cx, discriminant_type(cases)) + flat
+  if cx.opts.gc and has_payload(cases):
+    return [CoreRefType(gc_variant_base_type(cx, cases))]
+  else:
+    flat = []
+    for c in cases:
+      if c.t is not None:
+        for i,ft in enumerate(flatten_type(cx, c.t)):
+          if i < len(flat):
+            flat[i] = join(flat[i], ft)
+          else:
+            flat.append(ft)
+    return flatten_type(cx, discriminant_type(cases)) + flat
 
 def join(a, b):
   if a == b: return a
@@ -2991,9 +3357,10 @@ that defined its resource type is passed as its representation value:
 ```python
 def flatten_borrow(cx, borrowt):
   if pass_rep_not_handle(cx, borrowt):
+    assert(cx.opts.gc or borrowt.rt.rep in ['i32', 'i64'])
     return [borrowt.rt.rep]
   else:
-    return ['i32']
+    return [handle_type(cx)]
 ```
 
 ## Flat Lifting
@@ -3017,6 +3384,7 @@ class CoreValueIter:
       case 'i64': assert(isinstance(v, int) and 0 <= v < 2**64)
       case 'f32': assert(isinstance(v, (int,float)))
       case 'f64': assert(isinstance(v, (int,float)))
+      case CoreRefType(): assert(ref_test(v, t))
       case _    : assert(False)
     return v
 ```
@@ -3042,15 +3410,15 @@ def lift_flat(cx, vi, t):
     case F64Type()          : return canonicalize_nan64(vi.next('f64'))
     case CharType()         : return convert_i32_to_char(cx, vi.next('i32'))
     case StringType()       : return lift_flat_string(cx, vi)
-    case ErrorContextType() : return lift_error_context(cx, vi.next('i32'))
+    case ErrorContextType() : return lift_error_context(cx, lift_flat_handle(cx, vi))
     case ListType(t, l)     : return lift_flat_list(cx, vi, t, l)
     case RecordType(fields) : return lift_flat_record(cx, vi, fields)
     case VariantType(cases) : return lift_flat_variant(cx, vi, cases)
     case FlagsType(labels)  : return lift_flat_flags(vi, labels)
-    case OwnType()          : return lift_own(cx, vi.next('i32'), t)
-    case BorrowType()       : return lift_borrow(cx, vi.next('i32'), t)
-    case StreamType(t)      : return lift_stream(cx, vi.next('i32'), t)
-    case FutureType(t)      : return lift_future(cx, vi.next('i32'), t)
+    case OwnType()          : return lift_own(cx, lift_flat_handle(cx, vi), t)
+    case BorrowType()       : return lift_borrow(cx, lift_flat_handle(cx, vi), t)
+    case StreamType(t)      : return lift_stream(cx, lift_flat_handle(cx, vi), t)
+    case FutureType(t)      : return lift_future(cx, lift_flat_handle(cx, vi), t)
 ```
 
 Integers are lifted from core `i32` or `i64` values using the signedness of the
@@ -3068,9 +3436,12 @@ def lift_flat_unsigned(vi, core_width, t_width):
 def lift_flat_signed(vi, core_width, t_width):
   i = vi.next('i' + str(core_width))
   assert(0 <= i < (1 << core_width))
-  i %= (1 << t_width)
-  if i >= (1 << (t_width - 1)):
-    return i - (1 << t_width)
+  return lift_signed(i % (1 << t_width), t_width)
+
+def lift_signed(i, width):
+  assert(0 <= i < (1 << width))
+  if i >= (1 << (width - 1)):
+    return i - (1 << width)
   return i
 ```
 
@@ -3081,19 +3452,89 @@ instead of from linear memory. Fixed-length lists are lifted the same way as a
 tuple.
 ```python
 def lift_flat_string(cx, vi):
-  ptr = vi.next(cx.opts.memory.ptr_type())
-  packed_length = vi.next(cx.opts.memory.ptr_type())
-  return load_string_from_range(cx, ptr, packed_length)
+  if cx.opts.gc:
+    return lift_gc_string(cx, vi.next(CoreRefType(gc_string_type(cx))))
+  else:
+    ptr = vi.next(cx.opts.memory.ptr_type())
+    packed_length = vi.next(cx.opts.memory.ptr_type())
+    return load_string_from_range(cx, ptr, packed_length)
 
 def lift_flat_list(cx, vi, elem_type, maybe_length):
+  if cx.opts.gc:
+    return lift_gc_list(cx, vi.next(CoreRefType(gc_list_type(cx, elem_type))), elem_type, maybe_length)
+  else:
+    if maybe_length is not None:
+      a = []
+      for i in range(maybe_length):
+        a.append(lift_flat(cx, vi, elem_type))
+      return a
+    ptr = vi.next(cx.opts.memory.ptr_type())
+    length = vi.next(cx.opts.memory.ptr_type())
+    return load_list_from_range(cx, ptr, length, elem_type)
+```
+
+With 🛸 `gc`, UTF-8 `string`s are lifted out of an `(array i8)` of UTF-8 code
+point elements and UTF-16 `string`s are lifted out of an `(array i16)` of UTF-16
+code point elements. Compact `latin1+utf16`-encoded `string`s are passed as
+`(ref array)`s and are `ref.test`ed to be either an `(array i8)` of Latin-1 code
+points or an `(array i16)` of UTF-16 code points and then re-encoded
+appropriately. If, however, the given `(ref array)` is not one of those two
+types, then a trap is raised.
+```python
+def lift_gc_string(cx, arr) -> String:
+  match cx.opts.string_encoding:
+    case 'utf8':
+      code_unit_size = 1
+      encoding = 'utf-8'
+      hint = StringHint.UTF8
+    case 'utf16':
+      code_unit_size = 2
+      encoding = 'utf-16-le'
+      hint = StringHint.UTF16
+    case 'latin1+utf16':
+      if ref_test(arr, CoreRefType(GC_LATIN1_ARRAY)):
+        code_unit_size = 1
+        encoding = 'latin-1'
+        hint = StringHint.DYNAMIC_LATIN1
+      else:
+        trap_if(not ref_test(arr, CoreRefType(GC_UTF16_ARRAY)))
+        code_unit_size = 2
+        encoding = 'utf-16-le'
+        hint = StringHint.DYNAMIC_UTF16
+
+  code_units = array_len(arr)
+  trap_if(code_units * code_unit_size > MAX_STRING_BYTE_LENGTH)
+  encoded = b''.join(int.to_bytes(array_get(arr, i), code_unit_size, 'little') for i in range(code_units))
+  try:
+    s = encoded.decode(encoding)
+  except UnicodeError:
+    trap()
+
+  return (s, hint, code_units)
+```
+
+When lifting 🛸 `gc` lists, elements are lifted out of GC `array`s. If a
+fixed-length is specified and the `array`'s actual length does not match the
+specified fixed-length, then a trap is raised. When the `array` elements have a
+defined byte size, then the sum or element sizes is compared to
+`MAX_LIST_BYTE_LENGTH`, and a trap is raised if the sum is greater than the
+maximum. Finally, each `array` element is lifted into a `list` element via
+`lift_gc_value`.
+```python
+def lift_gc_list(cx, arr, elem_type, maybe_length):
+  length = array_len(arr)
   if maybe_length is not None:
-    a = []
-    for i in range(maybe_length):
-      a.append(lift_flat(cx, vi, elem_type))
-    return a
-  ptr = vi.next(cx.opts.memory.ptr_type())
-  length = vi.next(cx.opts.memory.ptr_type())
-  return load_list_from_range(cx, ptr, length, elem_type)
+    trap_if(length != maybe_length)
+  elif not isinstance(gc_storage_type(cx, elem_type), CoreRefType):
+    trap_if(length * elem_size(cx, elem_type) > MAX_LIST_BYTE_LENGTH)
+  else:
+    # TODO FITZGEN: How do we want to impose `MAX_LIST_BYTE_LENGTH` on arrays of
+    # references? Do we want to even impose any limit in this case?
+    pass
+  a = []
+  for i in range(length):
+    a.append(lift_gc_value(cx, array_get(arr, i), elem_type))
+  return a
 ```
 
 Records are lifted by recursively lifting their fields:
@@ -3113,32 +3554,60 @@ reinterprets between the different types appropriately and also wraps
 `i64` values to 32-bit when needed:
 ```python
 def lift_flat_variant(cx, vi, cases):
-  flat_types = flatten_variant(cx, cases)
-  assert(flat_types.pop(0) == 'i32')
-  case_index = vi.next('i32')
-  trap_if(case_index >= len(cases))
-  class CoerceValueIter:
-    def next(self, want):
-      have = flat_types.pop(0)
-      x = vi.next(have)
-      match (have, want):
-        case ('i32', 'f32') : return decode_i32_as_float(x)
-        case ('i64', 'i32') : return wrap_i64_to_i32(x)
-        case ('i64', 'f32') : return decode_i32_as_float(wrap_i64_to_i32(x))
-        case ('i64', 'f64') : return decode_i64_as_float(x)
-        case _              : assert(have == want); return x
-  c = cases[case_index]
-  if c.t is None:
-    v = None
+  if cx.opts.gc and has_payload(cases):
+    return lift_gc_variant(cx, vi.next(CoreRefType(gc_variant_base_type(cx, cases))), cases)
   else:
-    v = lift_flat(cx, CoerceValueIter(), c.t)
-  for have in flat_types:
-    _ = vi.next(have)
-  return { c.label: v }
+    flat_types = flatten_variant(cx, cases)
+    assert(flat_types.pop(0) == 'i32')
+    case_index = vi.next('i32')
+    trap_if(case_index >= len(cases))
+    class CoerceValueIter:
+      def next(self, want):
+        have = flat_types.pop(0)
+        x = vi.next(have)
+        match (have, want):
+          case ('i32', 'f32') : return decode_i32_as_float(x)
+          case ('i64', 'i32') : return wrap_i64_to_i32(x)
+          case ('i64', 'f32') : return decode_i32_as_float(wrap_i64_to_i32(x))
+          case ('i64', 'f64') : return decode_i64_as_float(x)
+          case _              : assert(have == want); return x
+    c = cases[case_index]
+    if c.t is None:
+      v = None
+    else:
+      v = lift_flat(cx, CoerceValueIter(), c.t)
+    for have in flat_types:
+      _ = vi.next(have)
+    return { c.label: v }
 
 def wrap_i64_to_i32(i):
   assert(0 <= i < (1 << 64))
   return i % (1 << 32)
+```
+
+When lifting 🛸 `gc` variants, if the `variant`'s `case`s all do not have any
+payload, then the value is a discriminant integer, which is checked for validity
+(trapping if invalid) and the payload-free `case` is returned. When at least one
+of the `case`s has a payload, then the value is a `(ref $base)`. The
+`case_index` discriminant is read via `struct.get` and checked for validity
+(trapping if invalid). Then it is checked that the given `(ref $base)` is an
+instance of the `case_index`th `case`'s `struct` lowering (which is a subtype of
+`$base`) with `ref.test`, and a trap is raised if it is not. Then the `case` is
+lifted, along with its payload (if present), which is read via `struct.get` on
+the downcasted reference.
+```python
+def lift_gc_variant(cx, v, cases):
+  if has_payload(cases):
+    case_index = struct_get(v, 0)
+    trap_if(case_index >= len(cases))
+    trap_if(not ref_test(v, CoreRefType(gc_variant_case_type(cx, cases, case_index))))
+    c = cases[case_index]
+    if c.t is None:
+      return { c.label: None }
+    return { c.label: lift_gc_value(cx, struct_get(v, 1), c.t) }
+  else:
+    trap_if(v >= len(cases))
+    return { cases[v].label: None }
 ```
 
 Finally, flags are lifted by lifting to a record the same way as when loading
@@ -3148,6 +3617,91 @@ def lift_flat_flags(vi, labels):
   assert(0 < len(labels) <= 32)
   i = vi.next('i32')
   return unpack_flags_from_int(i, labels)
+```
+
+With the default linear-memory ABI, `resource` handles (and `stream`, `future`
+and `error-context` values) are lifted from `i32` table indices. With the 🛸
+`gc` ABI, they are instead lifted from `(ref extern)` `HandleRef` objects that
+box the `i32` table index. A trap is raised if any other kind of `(ref extern)`
+is given.
+
+Each `i32` handle has at most one associated `HandleRef` (tracked in its
+`TableEntry`; attempting to create a second one traps. Unboxing a stale
+`HandleRef` (whose handle has since been removed from the table) traps.
+
+> Non-normative note: the one-`HandleRef`-per-table-entry property sets the
+> stage for automatically dropping owned resource handles and closing
+> streams/futures when their `HandleRef` is garbage collected.
+
+```python
+class HandleRef:
+  index: int
+
+  def __init__(self, inst, index):
+    inst.handles.set_handle_ref(index, self)
+    self.index = index
+
+def lift_flat_handle(cx, vi):
+  v = vi.next(handle_type(cx))
+  if cx.opts.gc:
+    return unbox_handle(cx.inst, v)
+  else:
+    return v
+
+def unbox_handle(inst, r):
+  trap_if(not isinstance(r, HandleRef))
+  trap_if(inst.handles.get_handle_ref(r.index) is not r)
+  return r.index
+```
+
+🛸 `lift_gc_value` lifts a single instance of a GC heap storage type (a `struct`
+field, `array` element, or `variant` payload) into a component model
+value. Packed `i8` and `i16` storage values were already zero-extended to their
+exact bit width when read out of their `struct` or `array` (via
+e.g. `struct.get_u` when necessary) and into an instance of a value type;
+therefore unsigned integers can be returned directly, while signed integers must
+be sign-extended via `lift_signed`.
+
+> Non-normative note: it is expected that non-reference, production
+> implementations can simply use e.g. `struct.get_s` when lifting signed
+> integers out of packed fields and elements, but that optimization would
+> complicate this specification and reference implementation slightly, and the
+> reference implementation's goal is clarity not optimization.
+```python
+def lift_gc_value(cx, v, t):
+  match despecialize(t):
+    case BoolType()         : return convert_int_to_bool(v)
+    case U8Type()           : return v
+    case S8Type()           : return lift_signed(v, 8)
+    case U16Type()          : return v
+    case S16Type()          : return lift_signed(v, 16)
+    case U32Type()          : return v
+    case S32Type()          : return lift_signed(v, 32)
+    case CharType()         : return convert_i32_to_char(cx, v)
+    case F32Type()          : return canonicalize_nan32(v)
+    case U64Type()          : return v
+    case S64Type()          : return lift_signed(v, 64)
+    case F64Type()          : return canonicalize_nan64(v)
+    case StringType()       : return lift_gc_string(cx, v)
+    case ListType(t, l)     : return lift_gc_list(cx, v, t, l)
+    case RecordType(fields) : return lift_gc_record(cx, v, fields)
+    case VariantType(cases) : return lift_gc_variant(cx, v, cases)
+    case FlagsType(labels)  : return unpack_flags_from_int(v, labels)
+    case BorrowType()       : return lift_borrow(cx, unbox_handle(cx.inst, v), t)
+    case OwnType()          : return lift_own(cx, unbox_handle(cx.inst, v), t)
+    case StreamType(t)      : return lift_stream(cx, unbox_handle(cx.inst, v), t)
+    case FutureType(t)      : return lift_future(cx, unbox_handle(cx.inst, v), t)
+    case ErrorContextType() : return lift_error_context(cx, unbox_handle(cx.inst, v))
+```
+
+With 🛸 `gc`, `record`s are lifted from GC heap storage by recursively lifting
+their fields:
+```python
+def lift_gc_record(cx, s, fields):
+  record = {}
+  for i,f in enumerate(fields):
+    record[f.label] = lift_gc_value(cx, struct_get(s, i), f.t)
+  return record
 ```
 
 ## Flat Lowering
@@ -3171,15 +3725,15 @@ def lower_flat(cx, v, t):
     case F64Type()          : return [maybe_scramble_nan64(v)]
     case CharType()         : return [char_to_i32(v)]
     case StringType()       : return lower_flat_string(cx, v)
-    case ErrorContextType() : return [lower_error_context(cx, v)]
+    case ErrorContextType() : return [lower_flat_handle(cx, lower_error_context(cx, v))]
     case ListType(t, l)     : return lower_flat_list(cx, v, t, l)
     case RecordType(fields) : return lower_flat_record(cx, v, fields)
     case VariantType(cases) : return lower_flat_variant(cx, v, cases)
     case FlagsType(labels)  : return lower_flat_flags(v, labels)
     case OwnType()          : return lower_flat_own(cx, v, t)
     case BorrowType()       : return lower_flat_borrow(cx, v, t)
-    case StreamType(t)      : return [lower_stream(cx, v, t)]
-    case FutureType(t)      : return [lower_future(cx, v, t)]
+    case StreamType(t)      : return [lower_flat_handle(cx, lower_stream(cx, v, t))]
+    case FutureType(t)      : return [lower_flat_handle(cx, lower_future(cx, v, t))]
 ```
 
 Since component-level values are assumed in-range and, as previously stated,
@@ -3189,9 +3743,12 @@ converted to unsigned core `i32` or `i64` values by 2s complement arithmetic
 (which again would be a no-op in hardware):
 ```python
 def lower_flat_signed(i, core_bits):
+  return [lower_signed(i, core_bits)]
+
+def lower_signed(i, width):
   if i < 0:
-    i += (1 << core_bits)
-  return [i]
+    i += (1 << width)
+  return i
 ```
 
 Since strings and variable-length lists are stored in linear memory, lowering
@@ -3200,18 +3757,59 @@ differently (as flat values instead of as a pair in linear memory).
 Fixed-length lists are lowered the same way as tuples.
 ```python
 def lower_flat_string(cx, v):
-  ptr, packed_length = store_string_into_range(cx, v)
-  return [ptr, packed_length]
+  if cx.opts.gc:
+    return [lower_gc_string(cx, v)]
+  else:
+    ptr, packed_length = store_string_into_range(cx, v)
+    return [ptr, packed_length]
 
 def lower_flat_list(cx, v, elem_type, maybe_length):
-  if maybe_length is not None:
-    assert(maybe_length == len(v))
-    flat = []
-    for e in v:
-      flat += lower_flat(cx, e, elem_type)
-    return flat
-  (ptr, length) = store_list_into_range(cx, v, elem_type)
-  return [ptr, length]
+  if cx.opts.gc:
+    return [lower_gc_list(cx, v, elem_type, maybe_length)]
+  else:
+    if maybe_length is not None:
+      assert(maybe_length == len(v))
+      flat = []
+      for e in v:
+        flat += lower_flat(cx, e, elem_type)
+      return flat
+    (ptr, length) = store_list_into_range(cx, v, elem_type)
+    return [ptr, length]
+```
+
+🛸 `gc` strings are lowered into new `array` objects. With the compact
+`latin1+utf16` encoding, if every character can be encoded in Latin-1, then an
+`(array i8)` of Latin-1 code points is returned; otherwise, an `(array i16)` of
+UTF-16 code points is returned. With the `utf8` encoding, an `(array i8)` of
+UTF-8 code points is returned. With the `utf16` encoding, an `(array i16)` of
+UTF-16 code points is returned.
+```python
+def lower_gc_string(cx, v: String):
+  src, _, _ = v
+  match cx.opts.string_encoding:
+    case 'utf8':
+      return array_new_fixed(GC_UTF8_ARRAY, list(src.encode('utf-8')))
+    case 'utf16':
+      return array_new_fixed(GC_UTF16_ARRAY, encode_utf16_code_units(src))
+    case 'latin1+utf16':
+      if all(ord(c) < (1 << 8) for c in src):
+        return array_new_fixed(GC_LATIN1_ARRAY, list(src.encode('latin-1')))
+      return array_new_fixed(GC_UTF16_ARRAY, encode_utf16_code_units(src))
+
+def encode_utf16_code_units(src):
+  encoded = src.encode('utf-16-le')
+  return [int.from_bytes(encoded[i : i+2], 'little') for i in range(0, len(encoded), 2)]
+```
+
+🛸 `gc` lists are lowered (regardless whether they have a fixed-length or not)
+to new `array` objects.
+```python
+def lower_gc_list(cx, v, elem_type, maybe_length):
+  assert(maybe_length is None or maybe_length == len(v))
+  elems = []
+  for e in v:
+    elems.append(lower_gc_value(cx, e, elem_type))
+  return array_new_fixed(gc_list_type(cx, elem_type), elems)
 ```
 
 Records are lowered by recursively lowering their fields:
@@ -3228,25 +3826,45 @@ Variants are also lowered recursively. Symmetric to `lift_flat_variant` above,
 manually coercing the otherwise-incompatible type pairings allowed by `join`:
 ```python
 def lower_flat_variant(cx, v, cases):
-  case_index, case_value = match_case(v, cases)
-  flat_types = flatten_variant(cx, cases)
-  assert(flat_types.pop(0) == 'i32')
-  c = cases[case_index]
-  if c.t is None:
-    payload = []
+  if cx.opts.gc and has_payload(cases):
+    return [lower_gc_variant(cx, v, cases)]
   else:
-    payload = lower_flat(cx, case_value, c.t)
-    for i,(fv,have) in enumerate(zip(payload, flatten_type(cx, c.t))):
-      want = flat_types.pop(0)
-      match (have, want):
-        case ('f32', 'i32') : payload[i] = encode_float_as_i32(fv)
-        case ('i32', 'i64') : payload[i] = fv
-        case ('f32', 'i64') : payload[i] = encode_float_as_i32(fv)
-        case ('f64', 'i64') : payload[i] = encode_float_as_i64(fv)
-        case _              : assert(have == want)
-  for _ in flat_types:
-    payload.append(0)
-  return [case_index] + payload
+    case_index, case_value = match_case(v, cases)
+    flat_types = flatten_variant(cx, cases)
+    assert(flat_types.pop(0) == 'i32')
+    c = cases[case_index]
+    if c.t is None:
+      payload = []
+    else:
+      payload = lower_flat(cx, case_value, c.t)
+      for i,(fv,have) in enumerate(zip(payload, flatten_type(cx, c.t))):
+        want = flat_types.pop(0)
+        match (have, want):
+          case ('f32', 'i32') : payload[i] = encode_float_as_i32(fv)
+          case ('i32', 'i64') : payload[i] = fv
+          case ('f32', 'i64') : payload[i] = encode_float_as_i32(fv)
+          case ('f64', 'i64') : payload[i] = encode_float_as_i64(fv)
+          case _              : assert(have == want)
+    for _ in flat_types:
+      payload.append(0)
+    return [case_index] + payload
+```
+
+With 🛸 `gc`, `variant`s where at least one `case` has a payload are lowered
+into a new `struct` of that `case`'s `struct` type lowering and with its first
+field set to its `case`-index discriminant. `variant`s where no `case` has a
+payload are lowered into their `case`-index discriminant integer directly.
+```python
+def lower_gc_variant(cx, v, cases):
+  case_index, case_value = match_case(v, cases)
+  if has_payload(cases):
+    fields = [case_index]
+    c = cases[case_index]
+    if c.t is not None:
+      fields.append(lower_gc_value(cx, case_value, c.t))
+    return struct_new(gc_variant_case_type(cx, cases, case_index), fields)
+  else:
+    return case_index
 ```
 
 Flags are lowered by packing the flags into an `i32` bitvector.
@@ -3260,7 +3878,7 @@ Owned handles are lowered the same way as in `store_own`, except the `i32` table
 index is returned directly.
 ```python
 def lower_flat_own(cx, rep_val, ownt):
-  return [add_own(cx, rep_val, ownt)]
+  return [lower_flat_handle(cx, add_own(cx, rep_val, ownt))]
 ```
 
 Lastly, borrowed handles are lowered with the same optimization as
@@ -3270,7 +3888,73 @@ def lower_flat_borrow(cx, rep_val, borrowt):
   if pass_rep_not_handle(cx, borrowt):
     return [rep_val]
   else:
-    return [add_borrow(cx, rep_val, borrowt)]
+    return [lower_flat_handle(cx, add_borrow(cx, rep_val, borrowt))]
+```
+
+In the default linear-memory ABI, handle indices are loweed into `i32` table
+indices. With 🛸 `gc`, they are instead boxed into `HandleRef` objects and
+returned as `(ref extern)` reference values.
+```python
+def lower_flat_handle(cx, i):
+  if cx.opts.gc:
+    return HandleRef(cx.inst, i)
+  else:
+    return i
+```
+
+🛸 The `lower_gc_value` is the inverse of `lift_gc_value`: it lowers a single
+component model value into an instance of a GC heap storage type. It is used
+when lowering a value into a GC `struct` field or `array` element (as opposed to
+flat values for function parameters or results). Unsigned component model
+integers are already in their already in range for their associated
+two's-complement core value. Signed integers are converted to their
+two's-complement core value representation at their type's width by
+`lower_signed`.
+```python
+def lower_gc_value(cx, v, t):
+  match despecialize(t):
+    case BoolType()         : return int(v)
+    case U8Type()           : return v
+    case S8Type()           : return lower_signed(v, 8)
+    case U16Type()          : return v
+    case S16Type()          : return lower_signed(v, 16)
+    case U32Type()          : return v
+    case S32Type()          : return lower_signed(v, 32)
+    case CharType()         : return char_to_i32(v)
+    case F32Type()          : return maybe_scramble_nan32(v)
+    case U64Type()          : return v
+    case S64Type()          : return lower_signed(v, 64)
+    case F64Type()          : return maybe_scramble_nan64(v)
+    case StringType()       : return lower_gc_string(cx, v)
+    case ListType(t, l)     : return lower_gc_list(cx, v, t, l)
+    case RecordType(fields) : return lower_gc_record(cx, v, fields)
+    case VariantType(cases) : return lower_gc_variant(cx, v, cases)
+    case FlagsType(labels)  : return pack_flags_into_int(v, labels)
+    case BorrowType()       : return lower_gc_borrow(cx, v, t)
+    case OwnType()          : return HandleRef(cx.inst, add_own(cx, v, t))
+    case StreamType(t)      : return HandleRef(cx.inst, lower_stream(cx, v, t))
+    case FutureType(t)      : return HandleRef(cx.inst, lower_future(cx, v, t))
+    case ErrorContextType() : return HandleRef(cx.inst, lower_error_context(cx, v))
+```
+
+With 🛸 `gc`, `borrow`s are passed as their `rep` to the `resource`'s defining
+component, same as with `lower_flat_borrow`.
+```python
+def lower_gc_borrow(cx, rep_val, borrowt):
+  if pass_rep_not_handle(cx, borrowt):
+    return rep_val
+  else:
+    return HandleRef(cx.inst, add_borrow(cx, rep_val, borrowt))
+```
+
+With 🛸 `gc`, `record`s are recursively lowered a field at a time, and then a
+new GC `struct` object is allocated with the lowered fields.
+```python
+def lower_gc_record(cx, v, fields):
+  vs = []
+  for f in fields:
+    vs.append(lower_gc_value(cx, v[f.label], f.t))
+  return struct_new(gc_record_type(cx, fields), vs)
 ```
 
 ## Lifting and Lowering Values
@@ -3279,14 +3963,22 @@ The `lift_flat_values` function defines how to lift a list of core
 parameters or results (given by the `CoreValueIter` `vi`) into a tuple
 of component-level values with types `ts`.
 ```python
-def lift_flat_values(cx, max_flat, vi, ts):
+def lift_flat_values(cx, max_flat, vi, ts, is_result = False):
   flat_types = flatten_types(cx, ts)
   if len(flat_types) > max_flat:
-    ptr = vi.next(cx.opts.memory.ptr_type())
-    tuple_type = TupleType(ts)
-    trap_if(ptr != align_to(ptr, alignment(cx, tuple_type)))
-    trap_if(ptr + elem_size(cx, tuple_type) > len(cx.opts.memory))
-    return list(load(cx, ptr, tuple_type).values())
+    if cx.opts.gc:
+      if is_result:
+        [t] = ts
+        return [lift_gc_value(cx, vi.next(gc_storage_type(cx, t)), t)]
+      else:
+        tuple_type = TupleType(ts)
+        return list(lift_gc_value(cx, vi.next(gc_storage_type(cx, tuple_type)), tuple_type).values())
+    else:
+      ptr = vi.next(cx.opts.memory.ptr_type())
+      tuple_type = TupleType(ts)
+      trap_if(ptr != align_to(ptr, alignment(cx, tuple_type)))
+      trap_if(ptr + elem_size(cx, tuple_type) > len(cx.opts.memory))
+      return list(load(cx, ptr, tuple_type).values())
   else:
     return [ lift_flat(cx, vi, t) for t in ts ]
 ```
@@ -3298,26 +3990,49 @@ lowering handles the greater-than-`max_flat` case by either allocating
 storage with `realloc` or accepting a caller-allocated buffer as an
 out-param:
 ```python
-def lower_flat_values(cx, max_flat, vs, ts, out_param = None):
+def lower_flat_values(cx, max_flat, vs, ts, out_param = None, is_result = False):
   flat_types = flatten_types(cx, ts)
   if len(flat_types) > max_flat:
     tuple_type = TupleType(ts)
     tuple_value = {str(i): v for i,v in enumerate(vs)}
-    if out_param is None:
-      ptr = cx.allocate(alignment(cx, tuple_type), elem_size(cx, tuple_type))
-      flat_vals = [ptr]
+    if cx.opts.gc:
+      if is_result:
+        [v] = vs
+        [t] = ts
+        if cx.opts.async_:
+          results = out_param.next(CoreRefType(gc_async_results_type(cx, t)))
+          struct_set(results, 0, lower_gc_value(cx, v, t))
+          return []
+        else:
+          return [lower_gc_value(cx, v, t)]
+      else:
+        return [lower_gc_value(cx, tuple_value, tuple_type)]
     else:
-      ptr = out_param.next(cx.opts.memory.ptr_type())
-      trap_if(ptr != align_to(ptr, alignment(cx, tuple_type)))
-      trap_if(ptr + elem_size(cx, tuple_type) > len(cx.opts.memory))
-      flat_vals = []
-    store(cx, tuple_value, tuple_type, ptr)
+      if out_param is None:
+        ptr = cx.allocate(alignment(cx, tuple_type), elem_size(cx, tuple_type))
+        flat_vals = [ptr]
+      else:
+        ptr = out_param.next(cx.opts.memory.ptr_type())
+        trap_if(ptr != align_to(ptr, alignment(cx, tuple_type)))
+        trap_if(ptr + elem_size(cx, tuple_type) > len(cx.opts.memory))
+        flat_vals = []
+      store(cx, tuple_value, tuple_type, ptr)
   else:
     flat_vals = []
     for i in range(len(vs)):
       flat_vals += lower_flat(cx, vs[i], ts[i])
   return flat_vals
 ```
+
+With 🛸 `gc`, when the flat parameters overflow their maximum, the parameters
+are lifted from and lowered into a single `(ref $params)` reference
+instead. That `$params` object is a `struct` that is `final`, has no supertype,
+is defined in its own singleton `rec` group, and has a non-`mut` field for every
+parameter, which is an instance of the GC heap storage type lowering of the
+field's component model type. When the flat results overflow their maximum, then
+the component model result type is lowered to a GC heap storage type, and
+results are lifted into and lowered from that type directly. The `is_result`
+parameter to `{lift,lower}_flat_values` discriminates between these cases.
 
 
 ## Canonical Definitions
@@ -3334,31 +4049,59 @@ specifying `string-encoding=utf8` twice is an error. Each individual option, if
 present, is validated as such:
 
 * `string-encoding=N` - can be passed at most once, regardless of `N`.
+
 * `memory` - this is a subtype of `(memory 0)`
+
   * 🐘 `memory` may also be a subtype of `(memory i64 0)`
+
 * `realloc` - the function has type `(func (param addr addr addr addr) (result addr))`
   where `addr` is the address type coming from the [`memtype`] of the `memory`
   canonopt (restricted to `i32`, but with 🐘 may also be `i64`).
+
 * if `realloc` is present then `memory` must be present
+
 * `post-return` - only allowed on [`canon lift`](#canon-lift), which has rules
   for validation
+
 * 🔀 `async` - is only allowed when used with an `async` function type in
   [`canon lift`](#canon-lift) or [`canon lower`](#canon-lower) and cannot be
   present with `post-return`
+
 * 🔀,not(🚟) `async` - `callback` must also be present. Note that with the 🚟
   feature (the "stackful" ABI), this restriction is lifted.
+
 * 🔀 `callback` - the function has type `(func (param i32 i32 i32) (result i32))`
   and cannot be present without `async` and is only allowed with
   [`canon lift`](#canon-lift)
+
+  * 🛸 with `gc`, the function instead has type `(func (param i32 i32 (ref null
+    extern)) (result i32 (ref null extern)))`
+
+* 🛸 `gc` - The `gc` option is allowed on every canonical definition that takes
+  `$opts`: ([`canon lift`](#canon-lift), [`canon lower`](#canon-lower), [`canon
+  task.return`](#-canon-taskreturn), [`canon
+  {stream,future}.{read,write}`](#-canon-streamfuturereadwrite) and [`canon
+  error-context.{new,debug-message}`](#-canon-error-contextnew)). The `gc`
+  option switches its associated definition from the default linear-memory ABI
+  to the GC ABI. The `gc` option must not be present alongside `memory` (and
+  thus not with `realloc`).
+
+  > Non-normative note: for the canonical definitions that do not take `$opts`,
+  > and so the `gc` option cannot be used to switch them over to the GC ABI,
+  > there is a `gc.*` canonical definition that is equivalent to its associated
+  > non-`gc.`-prefixed canonical definition, but which uses the GC ABI instead
+  > of the default linear-memory ABI.
 
 Additionally some options are required depending on lift/lower operations
 performed for a component. These are defined as:
 
 * `lower(T)`
-  * requires `memory` if `T` contains a `list` or `string`
+  * requires `memory` if `T` contains a `list` or `string` (unless 🛸 `gc` is
+    present)
 
 * `lift(T)`
-  * requires `realloc` if `T` contains a `list` or `string`
+  * requires `realloc` if `T` contains a `list` or `string` (unless 🛸 `gc` is
+    present)
 
 Value types used by `lift`/`lower` are already rejected at `defvaltype`
 definition if they exceed the [Element Size](#element-size) bound.
@@ -3375,12 +4118,21 @@ validation is performed with `cx = LiftLowerContext('lift', $opts, inst)` where
 `inst` is the component instance containing this lifting definition:
 
 * `$callee` must have type `flatten_functype(cx, $ft)`
+  * 🛸 with `gc`, `$callee`'s type must instead [match] `flatten_functype(cx, $ft)`
 * `$f` is given type `$ft`
 * if a `post-return` is present, it has type `(func (param flatten_functype(cx, $ft).results))`
+  * 🛸 with `gc`, `post-return`'s type must instead [match] `(func (param
+    flatten_functype(cx, $ft).results))`
 * requires options based on [`lift(param)`](#canonopt-validation) for all parameters in `ft`
 * requires options based on [`lower(result)`](#canonopt-validation) if `ft` has a result
-* if `len(flatten_types(ft.param_types())) > MAX_FLAT_PARAMS`, `realloc` is required
-* if `len(flatten_types(ft.result_type())) > max` (where `max = MAX_FLAT_RESULTS` for sync lifts, and `max = MAX_FLAT_PARAMS` for async lifts), `memory` is required
+* if `len(flatten_types(ft.param_types())) > MAX_FLAT_PARAMS`, `realloc` is
+  required (unless 🛸 `gc` is present)
+* if `len(flatten_types(ft.result_type())) > max` (where `max =
+  MAX_FLAT_RESULTS` for sync lifts, and `max = MAX_FLAT_PARAMS` for async
+  lifts), `memory` is required (unless 🛸 `gc` is present)
+* If 🛸 `gc` is not present, it is a validation error for a `borrow` of a
+  resource type with a `(ref any)` representation to be passed as its
+  representation
 
 Note that an `async`-lifted function whose result type requires a memory to lift
 (either because it contains lists or strings or because the number of flattened
@@ -3431,7 +4183,8 @@ function can free any associated allocations.
     if not opts.async_:
       flat_results = call_and_trap_on_throw(callee, flat_args)
       assert(types_match_values(flat_ft.results, flat_results))
-      result = lift_flat_values(cx, MAX_FLAT_RESULTS, CoreValueIter(flat_results), ft.result_type())
+      max_flat_results = MAX_FLAT_GC_RESULTS if opts.gc else MAX_FLAT_RESULTS
+      result = lift_flat_values(cx, max_flat_results, CoreValueIter(flat_results), ft.result_type(), is_result = True)
       task.return_(result)
       if opts.post_return is not None:
         assert(cx.inst.may_leave)
@@ -3474,8 +4227,12 @@ first calling the core wasm callee and then repeatedly calling the `callback`
 function (specified as a `funcidx` immediate in `canon lift`) until the
 `EXIT` code (`0`) is returned:
 ```python
-    [packed] = call_and_trap_on_throw(callee, flat_args)
-    code,si = unpack_callback_result(packed)
+    if opts.gc:
+      [code, sr] = call_and_trap_on_throw(callee, flat_args)
+      code,si = unpack_gc_callback_result(inst, code, sr)
+    else:
+      [packed] = call_and_trap_on_throw(callee, flat_args)
+      code,si = unpack_callback_result(packed)
     while code != CallbackCode.EXIT:
       if thread.task.deliver_pending_cancel():
         event = (EventCode.TASK_CANCELLED, 0, 0)
@@ -3499,9 +4256,13 @@ function (specified as a `funcidx` immediate in `canon lift`) until the
         assert(inst.exclusive_thread is None)
         thread.cancellable = False
         inst.exclusive_thread = task.implicit_thread
-      event_code, p1, p2 = event
-      [packed] = call_and_trap_on_throw(opts.callback, [event_code, p1, p2])
-      code,si = unpack_callback_result(packed)
+      if opts.gc:
+        [code, sr] = call_and_trap_on_throw(opts.callback, unpack_gc_event(inst, event))
+        code,si = unpack_gc_callback_result(inst, code, sr)
+      else:
+        event_code, p1, p2 = event
+        [packed] = call_and_trap_on_throw(opts.callback, [event_code, p1, p2])
+        code,si = unpack_callback_result(packed)
     task.exit_implicit_thread()
     return
 ```
@@ -3581,7 +4342,21 @@ def unpack_callback_result(packed):
   assert(Table.MAX_LENGTH < 2**28)
   waitable_set_index = packed >> 4
   return (CallbackCode(code), waitable_set_index)
+
+def unpack_gc_callback_result(inst, code, sr):
+  trap_if(code > CallbackCode.MAX)
+  if code == CallbackCode.WAIT and sr is not None:
+    waitable_set_index = unbox_handle(inst, sr)
+  else:
+    waitable_set_index = 0
+  return (CallbackCode(code), waitable_set_index)
 ```
+With 🛸 `gc`, the callee and `callback` return the callback code and
+additionally the waitable set (a `(ref null extern)`, which is only unboxed when
+the code is `WAIT`, and which traps on null) as two results instead of one
+packed `i32`, and the `callback` receives the event code, payload and waitable
+(as returned by `gc.waitable-set.{wait,poll}`) instead of three `i32`s.
+
 The ability to asynchronously wait, yield and exit is thus available to
 both the `callback` and non-`callback` cases, making `callback` just an
 optimization to avoid allocating stacks for async languages that have avoided
@@ -3617,8 +4392,13 @@ instance containing this lowering definition:
 * `$f` is given type `flatten_functype(cx, ft)`
 * requires options [based on `lower(param)`](#canonopt-validation) for all parameters in `ft`
 * requires options [based on `lift(result)`](#canonopt-validation) if `ft` has a result
-* if `len(flatten_types(ft.param_types())) > max_flat_params`, `memory` is required
-* if `len(flatten_types(ft.result_type())) > max_flat_results`, `memory` is required
+* if `len(flatten_types(ft.param_types())) > max_flat_params`, `memory` is
+  required (unless 🛸 `gc` is present)
+* if `len(flatten_types(ft.result_type())) > max_flat_results`, `memory` is
+  required (unless 🛸 `gc` is present)
+* If 🛸 `gc` is not present, it is a validation error for a `borrow` of a
+  resource type with a `(ref any)` representation to be passed as its
+  representation
 
 When instantiating a component instance, the runtime calls `Store.lower` (defined
 above) to capture the `$callee` and `$opts` immediates of `canon lower` along
@@ -3649,7 +4429,7 @@ The values of `max_flat_{params,results}` mirror the flattening logic in
 
   if not opts.async_:
     max_flat_params = MAX_FLAT_PARAMS
-    max_flat_results = MAX_FLAT_RESULTS
+    max_flat_results = MAX_FLAT_GC_RESULTS if opts.gc else MAX_FLAT_RESULTS
   else:
     max_flat_params = MAX_FLAT_ASYNC_PARAMS
     max_flat_results = 0
@@ -3681,7 +4461,7 @@ caller.
         subtask.resolve(Subtask.State.CANCELLED_BEFORE_RETURNED, [])
     else:
       assert(subtask.state == Subtask.State.STARTED)
-      flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args)
+      flat_results = lower_flat_values(cx, max_flat_results, result, ft.result_type(), flat_args, is_result = True)
       subtask.resolve(Subtask.State.RETURNED, flat_results)
 
   subtask.on_cancel = callee(on_start, on_resolve)
@@ -3730,7 +4510,10 @@ reserved.
     if subtask.resolved():
       subtask.deliver_resolve()
       assert(subtask.flat_results == [])
-      return [Subtask.State.RETURNED]
+      if opts.gc:
+        return [Subtask.State.RETURNED, None]
+      else:
+        return [Subtask.State.RETURNED]
     else:
       subtaski = thread.task.inst.handles.add(subtask)
       def on_progress():
@@ -3742,8 +4525,16 @@ reserved.
       maybe_on_progress = on_progress
       assert(0 < subtaski <= Table.MAX_LENGTH < 2**28)
       assert(0 <= subtask.state < 2**4)
-      return [subtask.state | (subtaski << 4)]
+      if opts.gc:
+        return [subtask.state | (subtaski << 4), HandleRef(thread.task.inst, subtaski)]
+      else:
+        return [subtask.state | (subtaski << 4)]
 ```
+With 🛸 `gc`, `async`-lowered calls additionally return the subtask as a `(ref
+null extern)` (a null reference if the call already returned), and that results
+are written into the caller's `(ref $results)` struct (by `lower_flat_values`)
+rather than into linear memory.
+
 When `on_start` and `on_resolve` are called after this initial `async`-lowered
 call returns, the `on_progress` callback (called by `on_start` and `on_resolve`
 above) will set a pending event on the `Subtask` (which derives `Waitable`) so
@@ -3767,6 +4558,7 @@ validation specifies:
 * `$f` is given type `(func (param $rt.rep) (result i32))`, where `$rt.rep` is
   fixed to be `i32`
   * 🐘 - `$rt.rep` may be `i32` or `i64`
+  * 🛸 - `$rt.rep` may also be `(ref any)`
 
 Calling `$f` invokes the following function, which adds an owning handle
 containing the given resource representation to the current component
@@ -3836,6 +4628,7 @@ validation specifies:
 * `$f` is given type `(func (param i32) (result $rt.rep))`, where `$rt.rep` is
   fixed to be `i32`
   * 🐘 - `$rt.rep` may be `i32` or `i64`
+  * 🛸 - `$rt.rep` may also be `(ref any)`
 
 Calling `$f` invokes the following function, which extracts the resource
 representation from the handle in the current component instance's `handles`
@@ -3850,6 +4643,38 @@ def canon_resource_rep(rt, i):
 ```
 Note that the "locally-defined" requirement above ensures that only the
 component instance defining a resource can access its representation.
+
+
+### 🛸 `canon gc.resource.{new,drop,rep}`
+
+For canonical definitions:
+```wat
+(canon gc.resource.new $rt (core func $new))
+(canon gc.resource.drop $rt (core func $drop))
+(canon gc.resource.rep $rt (core func $rep))
+```
+validation specifies all the same rules as [`canon
+resource.new`](#canon-resourcenew), [`canon resource.drop`](#canon-resourcedrop)
+and [`canon resource.rep`](#canon-resourcerep) respectively, except as follows:
+* `$new` is given type `(func (param $rt.rep) (result (ref extern)))`
+* `$drop` is given type `(func (param (ref extern)))`
+* `$rep` is given type `(func (param (ref extern)) (result $rt.rep))`
+
+These are the 🛸 GC versions of the `resource.*`  built-ins, which operate on
+boxed `(ref extern)` handles instead of `i32` handles.
+```python
+def canon_gc_resource_new(rt, rep_val):
+  [i] = canon_resource_new(rt, rep_val)
+  return [HandleRef(current_instance(), i)]
+
+def canon_gc_resource_drop(rt, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_resource_drop(rt, i)
+
+def canon_gc_resource_rep(rt, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_resource_rep(rt, i)
+```
 
 
 ### 🔀 `canon context.get`
@@ -3948,8 +4773,11 @@ specifies:
 
 * `$f` is given type `flatten_functype(('lower', $opts), (func (param $t)?))`
 * `$t` must not transitively contain `borrow`
-* `$opts` may only contain `memory` and `string-encoding`
+* `$opts` may only contain `memory`, `string-encoding`, and 🛸 `gc`
 * [`lift($f.result)` above](#canonopt-validation) defines required options
+* 🛸 with `gc`, if the flattening of `$t` overflows `MAX_FLAT_PARAMS`, `$f`
+  takes `gc_storage_type($t)` directly instead of a `(ref $params)` struct (as
+  with `gc` results of synchronously-lifted functions)
 
 Calling `$f` invokes the following function which lifts the results from core
 wasm state and passes them to the [current task]'s caller via `Task.return_`:
@@ -3961,7 +4789,7 @@ def canon_task_return(result_type, opts: LiftOptions, flat_args):
   trap_if(result_type != task.ft.result)
   trap_if(not LiftOptions.equal(opts, task.opts))
   cx = LiftLowerContext('lift', opts, task.inst, task)
-  result = lift_flat_values(cx, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_type())
+  result = lift_flat_values(cx, MAX_FLAT_PARAMS, CoreValueIter(flat_args), task.ft.result_type(), is_result = True)
   task.return_(result)
   return []
 ```
@@ -4259,6 +5087,141 @@ def canon_subtask_drop(i):
 ```
 
 
+### 🛸 `canon gc.{waitable-set,waitable,subtask}.*`
+
+For canonical definitions:
+```wat
+(canon gc.waitable-set.new (core func $f))
+(canon gc.waitable-set.wait (core func $f))
+(canon gc.waitable-set.poll (core func $f))
+(canon gc.waitable-set.drop (core func $f))
+(canon gc.waitable.join (core func $f))
+(canon gc.subtask.cancel $async? (core func $f))
+(canon gc.subtask.drop (core func $f))
+```
+validation specifies all the same rules as the non-`gc` versions of these built-ins,
+except as follows:
+* `gc.waitable-set.new`: `$f` is given type `(func (result (ref extern)))`
+* `gc.waitable-set.{wait,poll}`: `$f` is given type
+  `(func (param (ref extern)) (result i32 i32 (ref null extern)))`
+* `gc.waitable-set.drop`: `$f` is given type `(func (param (ref extern)))`
+* `gc.waitable.join`: `$f` is given type
+  `(func (param $w (ref extern)) (param $maybe_set (ref null extern)))`
+* `gc.subtask.cancel`: `$f` is given type
+  `(func (param (ref extern)) (result i32))`
+* `gc.subtask.drop`: `$f` is given type `(func (param (ref extern)))`
+
+These are the 🛸 GC versions of the `waitable-set.*`, `waitable.join` and
+`subtask.*` built-ins, which operate on boxed `(ref extern)` handles instead of
+`i32` handles.
+
+Passing a null `$maybe_set` argument to `gc.waitable.join` removes the waitable
+from its waitable set (like passing `0` to `waitable.join` does).
+
+Rather than storing the event's waitable index and payload to memory,
+`gc.waitable-set.{wait,poll}` return three results:
+1. The event code
+2. The payload
+3. A reference to the boxed waitable (or null if the event doesn't have an
+   associated waitable, such as `NONE` and `TASK_CANCELLED`)
+```python
+def canon_gc_waitable_set_new():
+  [si] = canon_waitable_set_new()
+  return [HandleRef(current_instance(), si)]
+
+def canon_gc_waitable_set_wait(r):
+  inst = current_instance()
+  si = unbox_handle(inst, r)
+  trap_if(not inst.may_leave)
+  wset = inst.handles.get(si)
+  trap_if(not isinstance(wset, WaitableSet))
+  event = wset.wait()
+  return unpack_gc_event(inst, event)
+
+def canon_gc_waitable_set_poll(r):
+  inst = current_instance()
+  si = unbox_handle(inst, r)
+  trap_if(not inst.may_leave)
+  wset = inst.handles.get(si)
+  trap_if(not isinstance(wset, WaitableSet))
+  event = wset.poll()
+  return unpack_gc_event(inst, event)
+
+def unpack_gc_event(inst, e: EventTuple):
+  event, p1, p2 = e
+  if p1 == 0:
+    w = None
+  else:
+    w = inst.handles.get_handle_ref(p1)
+    if w is None:
+      w = HandleRef(inst, p1)
+  return [event, p2, w]
+
+def canon_gc_waitable_set_drop(r):
+  i = unbox_handle(current_instance(), r)
+  return canon_waitable_set_drop(i)
+
+def canon_gc_waitable_join(wr, sr):
+  wi = unbox_handle(current_instance(), wr)
+  if sr is None:
+    si = 0
+  else:
+    si = unbox_handle(current_instance(), sr)
+  return canon_waitable_join(wi, si)
+
+def canon_gc_subtask_cancel(async_, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_subtask_cancel(async_, i)
+
+def canon_gc_subtask_drop(r):
+  i = unbox_handle(current_instance(), r)
+  return canon_subtask_drop(i)
+```
+
+
+### 🛸 `canon gc.handle-ref.{index,new,get}`
+
+For canonical definitions:
+```wat
+(canon gc.handle-ref.index (core func $f))
+(canon gc.handle-ref.new (core func $f))
+(canon gc.handle-ref.get (core func $f))
+```
+validation specifies:
+* `gc.handle-ref.index`: `$f` is given type `(func (param (ref extern)) (result
+  i32))`
+* `gc.handle-ref.new`: `$f` is given type `(func (param i32) (result (ref
+  extern)))`
+* `gc.handle-ref.get`: `$f` is given type `(func (param i32) (result (ref null
+  extern)))`
+
+These builtins convert between `i32` handles and `(ref extern)`
+`HandleRef`s. `gc.handle-ref.index` returns the `i32` index of a `(ref extern)`
+`HandleRef` (allowing core wasm to identify, e.g., which waitable an event from
+`gc.waitable-set.{wait,poll}` is for). `gc.handle-ref.new` creates the
+`HandleRef` for a live `i32` handle, returning it as a `(ref extern)`, or raises
+a trap if it already has one. `gc.handle-ref.get` returns the existing
+`HandleRef` for an `i32` handle as a `(ref null extern)`, or the null reference
+if there is none.
+```python
+def canon_gc_handle_ref_index(r):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  i = unbox_handle(inst, r)
+  return [i]
+
+def canon_gc_handle_ref_new(i):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  return [HandleRef(inst, i)]
+
+def canon_gc_handle_ref_get(i):
+  inst = current_instance()
+  trap_if(not inst.may_leave)
+  return [inst.handles.get_handle_ref(i)]
+```
+
+
 ### 🔀 `canon {stream,future}.new`
 
 For canonical definitions:
@@ -4316,25 +5279,68 @@ specifies:
 * If `$t` is present:
   * [`lower($t)` above](#canonopt-validation) defines required options for `write`
   * [`lift($t)` above](#canonopt-validation) defines required options for `read`
-  * `memory` is required to be present
+  * `memory` is required to be present (unless 🛸 `gc` is present)
 * 🚝 - `async` is allowed to be omitted, otherwise it must be present
+* 🛸 with `gc`, `$future_copy` is given type `(func (param (ref extern) (ref
+  $results)) (result i32))` for `future.read`, where `$results` is
+  `gc_async_results_type($t)`, and `(func (param (ref extern) U) (result i32))`
+  for `future.write`, where `U` is `unpacked_type(gc_storage_type($t))` (and the
+  `(ref $results)` and `U` parameters are omitted if `$t` is absent)
+* 🛸 with `gc`, `$stream_copy` is given type `(func (param (ref extern) (ref $a)
+  i32 i32) (result i32))`, where `$a` is `(sub final (array (mut
+  nullable_type(gc_storage_type($t)))))` for `stream.read` and `(sub final
+  (array gc_storage_type($t)))` for `stream.write` (each in its own `rec`
+  group), or `(func (param (ref extern) i32) (result i32))` if `$t` is absent
 
 The implementations of these 4 built-ins all funnel down to a single
 parameterized `copy` function:
 ```python
-def canon_stream_read(stream_t, opts, i, ptr, length):
-  return copy(ReadableStreamEnd, WritableGuestBuffer, 'lower', stream_t, opts, i, ptr, length)
+def canon_stream_read(stream_t, opts, i, *args):
+  if opts.gc:
+    ii = unbox_handle(current_instance(), i)
+    gc_args = gc_stream_buffer_args(stream_t, args)
+    return copy(ReadableStreamEnd, WritableGcBuffer, 'lower', stream_t, opts, ii, *gc_args)
+  else:
+    [ptr, length] = args
+    return copy(ReadableStreamEnd, WritableGuestBuffer, 'lower', stream_t, opts, i, ptr, length)
 
-def canon_stream_write(stream_t, opts, i, ptr, length):
-  return copy(WritableStreamEnd, ReadableGuestBuffer, 'lift', stream_t, opts, i, ptr, length)
+def canon_stream_write(stream_t, opts, i, *args):
+  if opts.gc:
+    ii = unbox_handle(current_instance(), i)
+    gc_args = gc_stream_buffer_args(stream_t, args)
+    return copy(WritableStreamEnd, ReadableGcBuffer, 'lift', stream_t, opts, ii, *gc_args)
+  else:
+    [ptr, length] = args
+    return copy(WritableStreamEnd, ReadableGuestBuffer, 'lift', stream_t, opts, i, ptr, length)
 
-def canon_future_read(future_t, opts, i, ptr):
-  return copy(ReadableFutureEnd, WritableGuestBuffer, 'lower', future_t, opts, i, ptr, 1)
+def gc_stream_buffer_args(stream_t, args):
+  if stream_t.t is None:
+    [length] = args
+    return (None, 0, length)
+  else:
+    [arr, offset, length] = args
+    return (arr.elems, offset, length)
 
-def canon_future_write(future_t, opts, i, ptr):
-  return copy(WritableFutureEnd, ReadableGuestBuffer, 'lift', future_t, opts, i, ptr, 1)
+def canon_future_read(future_t, opts, i, ptr_or_cell = None):
+  if opts.gc:
+    ii = unbox_handle(current_instance(), i)
+    if future_t.t is None:
+      assert(ptr_or_cell is None)
+      elems = None
+    else:
+      elems = ptr_or_cell.fields
+    return copy(ReadableFutureEnd, WritableGcBuffer, 'lower', future_t, opts, ii, elems, 0, 1)
+  else:
+    return copy(ReadableFutureEnd, WritableGuestBuffer, 'lower', future_t, opts, i, ptr_or_cell, 1)
 
-def copy(EndT, BufferT, direction, stream_or_future_t, opts, i, ptr, length):
+def canon_future_write(future_t, opts, i, ptr_or_v = None):
+  if opts.gc:
+    ii = unbox_handle(current_instance(), i)
+    return copy(WritableFutureEnd, ReadableGcValueBuffer, 'lift', future_t, opts, ii, ptr_or_v)
+  else:
+    return copy(WritableFutureEnd, ReadableGuestBuffer, 'lift', future_t, opts, i, ptr_or_v, 1)
+
+def copy(EndT, BufferT, direction, stream_or_future_t, opts, i, *buffer_args):
   thread = current_thread()
   trap_if(not thread.task.inst.may_leave)
   end = thread.task.inst.handles.get(i)
@@ -4343,7 +5349,7 @@ def copy(EndT, BufferT, direction, stream_or_future_t, opts, i, ptr, length):
   trap_if(end.state != End.State.IDLE)
   trap_if(end.in_waitable_set() and not opts.async_)
   cx = LiftLowerContext(direction, opts, thread.task.inst, borrow_scope = None)
-  buffer = BufferT(end.t, cx, ptr, length)
+  buffer = BufferT(end.t, cx, *buffer_args)
   end.copy(buffer)
   if not end.has_pending_event():
     if not opts.async_:
@@ -4360,7 +5366,8 @@ from a stream or future end that is already being asynchronously waited on via
 waitable set, as this might result in the waitable set "stealing" an event from
 the synchronous operation, leaving it hung. After these, a readable or writable
 buffer is created which (in `GuestBuffer`'s constructor) also eagerly guards the
-alignment and bounds of (`ptr`, `length`). The `Buffer` object captures the
+alignment and bounds of (`ptr`, `length`) (or, with 🛸 `gc`, a `GcBuffer`
+holding a single value). The `Buffer` object captures the
 `$opts` immediate passed to `{stream,future}.{read,write}` so that subsequent
 lifting and lowering of elements is well-defined to use these same `$opts`.
 
@@ -4391,6 +5398,16 @@ event `payload`. Otherwise, if `end.has_pending_event()` is false, the call
 immediately returns the sentinel `BLOCKED` code (`-1`) and the caller must add
 `end` to a waitable set and call `waitable-set.{wait,poll}` or return to a
 `callback` event loop to be notified of progress.
+
+With the 🛸 `gc` option, `stream.{read,write}` take a GC `array`, offset index,
+and element length (or just a length if `T` is absent) instead of a pointer and
+length. For `stream.read`, the `array` elements must be `mut` and
+reference-typed elements must be nullable references. For `stream.write`, the
+`array` elements must be non-`mut` and reference-typed elements must be
+non-nullable. They both return the same bitpacked `i32` payload
+result. `future.read` takes a `(ref $results)` cell (like `async`-lowered calls)
+whose field is overwritten with the `future`'s value when it is read. The field
+is never overwritten on cancel or drop.
 
 
 ### 🔀 `canon {stream,future}.cancel-{read,write}`
@@ -4549,6 +5566,96 @@ def forward(ReadableEndT, WritableEndT, stream_or_future_t, ri, wi):
   trap_if(writable_end.in_waitable_set())
   End.forward(readable_end, writable_end)
   return []
+```
+
+
+### 🛸 `canon gc.{stream,future}.*`
+
+For canonical definitions:
+```wat
+(canon gc.stream.new $stream_t (core func $f))
+(canon gc.stream.cancel-read $stream_t $async? (core func $f))
+(canon gc.stream.cancel-write $stream_t $async? (core func $f))
+(canon gc.stream.drop-readable $stream_t (core func $f))
+(canon gc.stream.drop-writable $stream_t (core func $f))
+(canon gc.stream.forward $stream_t (core func $f))
+(canon gc.future.new $future_t (core func $f))
+(canon gc.future.cancel-read $future_t $async? (core func $f))
+(canon gc.future.cancel-write $future_t $async? (core func $f))
+(canon gc.future.drop-readable $future_t (core func $f))
+(canon gc.future.drop-writable $future_t (core func $f))
+(canon gc.future.forward $future_t (core func $f))
+```
+validation specifies all the same rules as the non-`gc`-prefixed versions of
+these built-ins, except as follows:
+* `gc.{stream,future}.cancel-{read,write}`: `$f` is given type
+  `(func (param (ref extern)) (result i32))`
+* `gc.{stream,future}.drop-{readable,writable}`: `$f` is given type
+  `(func (param (ref extern)))`
+* `gc.{stream,future}.forward`: `$f` is given type
+  `(func (param $ri (ref extern)) (param $wi (ref extern)))`
+* `gc.{stream,future}.new`: `$f` is given type
+  `(func (result (ref extern) (ref extern)))` (the readable end, then the
+  writable end)
+
+These are the 🛸 GC versions of the `stream.*` and `future.*` built-ins, which
+operate on boxed `(ref extern)` ends instead of `i32` ends. `new` returns the
+readable end followed by the writable end.
+```python
+def canon_gc_stream_new(stream_t):
+  [packed] = canon_stream_new(stream_t)
+  return box_new_ends(current_instance(), packed)
+
+def canon_gc_future_new(future_t):
+  [packed] = canon_future_new(future_t)
+  return box_new_ends(current_instance(), packed)
+
+def box_new_ends(inst, packed):
+  readable_index = packed & 0xffff_ffff
+  writable_index = packed >> 32
+  return [HandleRef(inst, readable_index), HandleRef(inst, writable_index)]
+
+def canon_gc_stream_cancel_read(stream_t, async_, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_stream_cancel_read(stream_t, async_, i)
+
+def canon_gc_stream_cancel_write(stream_t, async_, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_stream_cancel_write(stream_t, async_, i)
+
+def canon_gc_future_cancel_read(future_t, async_, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_future_cancel_read(future_t, async_, i)
+
+def canon_gc_future_cancel_write(future_t, async_, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_future_cancel_write(future_t, async_, i)
+
+def canon_gc_stream_drop_readable(stream_t, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_stream_drop_readable(stream_t, i)
+
+def canon_gc_stream_drop_writable(stream_t, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_stream_drop_writable(stream_t, i)
+
+def canon_gc_future_drop_readable(future_t, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_future_drop_readable(future_t, i)
+
+def canon_gc_future_drop_writable(future_t, r):
+  i = unbox_handle(current_instance(), r)
+  return canon_future_drop_writable(future_t, i)
+
+def canon_gc_stream_forward(stream_t, rr, wr):
+  ri = unbox_handle(current_instance(), rr)
+  wi = unbox_handle(current_instance(), wr)
+  return canon_stream_forward(stream_t, ri, wi)
+
+def canon_gc_future_forward(future_t, rr, wr):
+  ri = unbox_handle(current_instance(), rr)
+  wi = unbox_handle(current_instance(), wr)
+  return canon_future_forward(future_t, ri, wi)
 ```
 
 
@@ -4800,8 +5907,11 @@ validation specifies:
 * `$f` is given type `(func (param $ptr T) (param $units T) (result i32))` where
   `T` is `i32`
   * 🐘 - `T` is `i32` or `i64` as determined by the `memory` field of `$opts`
+  * 🛸 with `gc`, `$f` is instead given type
+    `(func (param S) (result (ref extern)))` where `S` is the `gc` lowering of
+    `string` for the `string-encoding` in `$opts` (see `gc_string_type`)
 * `async` is not present
-* `memory` must be present
+* `memory` must be present (unless 🛸 `gc` is present)
 
 Calling `$f` calls the following function which uses the `$opts` immediate to
 (nondeterministically) lift the debug message, create a new `ErrorContext`
@@ -4812,17 +5922,24 @@ its index.
 class ErrorContext:
   debug_message: String
 
-def canon_error_context_new(opts, ptr, tagged_code_units):
+def canon_error_context_new(opts, ptr_or_arr, tagged_code_units = None):
   inst = current_instance()
   trap_if(not inst.may_leave)
   if DETERMINISTIC_PROFILE or random.randint(0,1):
-    s = String(('', 'utf8', 0))
+    s = String(('', StringHint.UTF8, 0))
   else:
     cx = LiftLowerContext('lift', opts, inst)
-    s = load_string_from_range(cx, ptr, tagged_code_units)
+    if opts.gc:
+      assert(tagged_code_units is None)
+      s = lift_gc_string(cx, ptr_or_arr)
+    else:
+      s = load_string_from_range(cx, ptr_or_arr, tagged_code_units)
     s = host_defined_transformation(s)
   i = inst.handles.add(ErrorContext(s))
-  return [i]
+  if opts.gc:
+    return [HandleRef(inst, i)]
+  else:
+    return [i]
 ```
 Supporting the requirement (introduced in the
 [explainer](Text.md#-error-context-type)) that wasm code does not depend on
@@ -4832,6 +5949,11 @@ profile, always. Importantly (for performance), when the debug message is
 discarded, it is not even lifted and thus the O(N) well-formedness conditions
 are not checked. (Note that `host_defined_transformation` is not defined by the
 Canonical ABI and stands for an arbitrary host-defined function.)
+
+With 🛸 `gc`, the debug message is passed as a GC string `array` (per
+`string-encoding`, as for any `gc`-lifted `string`), which is likewise only
+lifted (and checked) when it isn't discarded, and the new error context is
+returned as a `(ref extern)` instead of an `i32`.
 
 
 ### 📝 `canon error-context.debug-message`
@@ -4844,9 +5966,12 @@ validation specifies:
 * `$f` is given type `(func (param i32) (param $ptr T))` where `T` is `i32`
   * 🐘 - `T` is `i32` or `i64` as determined by the address type of
     `memory` from `$opts`
+  * 🛸 with `gc`, `$f` is instead given type `(func (param (ref extern)) (result
+    S))` where `S` is the `gc` lowering of `string` for the `string-encoding` in
+    `$opts` (see `gc_string_type`)
 * `async` is not present
-* `memory` must be present
-* `realloc` must be present
+* `memory` must be present (unless 🛸 `gc` is present)
+* `realloc` must be present (unless 🛸 `gc` is present)
 
 Calling `$f` calls the following function which uses the `$opts` immediate to
 lowers the `ErrorContext`'s debug message. While *producing* an `error-context`
@@ -4854,16 +5979,22 @@ value may nondeterministically discard or transform the debug message, a
 single `error-context` value must return the same debug message from
 `error-context.debug-message` over time.
 ```python
-def canon_error_context_debug_message(opts, i, ptr):
+def canon_error_context_debug_message(opts, i, ptr = None):
   inst = current_instance()
   trap_if(not inst.may_leave)
+  if opts.gc:
+    i = unbox_handle(inst, i)
   errctx = inst.handles.get(i)
   trap_if(not isinstance(errctx, ErrorContext))
   cx = LiftLowerContext('lower', opts, inst)
-  trap_if(ptr != align_to(ptr, alignment(cx, StringType())))
-  trap_if(ptr + elem_size(cx, StringType()) > len(cx.opts.memory))
-  store(cx, errctx.debug_message, StringType(), ptr)
-  return []
+  if opts.gc:
+    assert(ptr is None)
+    return [lower_gc_string(cx, errctx.debug_message)]
+  else:
+    trap_if(ptr != align_to(ptr, alignment(cx, StringType())))
+    trap_if(ptr + elem_size(cx, StringType()) > len(cx.opts.memory))
+    store(cx, errctx.debug_message, StringType(), ptr)
+    return []
 ```
 Note that `ptr` points to a region of memory (8 bytes for memory32, 16 bytes
 for memory64) into which will be stored the pointer and length of the debug
@@ -4871,6 +6002,10 @@ string (allocated via `opts.realloc`). As with any `string` stored in linear
 memory, `ptr` must be aligned to the pointer size (4 bytes for memory32, 8 bytes
 for memory64) and the whole region must be in bounds, which is checked
 (trapping otherwise) before `opts.realloc` is called.
+
+With 🛸 `gc`, the debug message is returned as a new GC string `array` (per
+`string-encoding`, as for any `gc`-lowered `string`) instead of being stored
+through `ptr`.
 
 
 ### 📝 `canon error-context.drop`
@@ -4891,6 +6026,84 @@ def canon_error_context_drop(i):
   errctx = inst.handles.remove(i)
   trap_if(not isinstance(errctx, ErrorContext))
   return []
+```
+
+
+### 🛸 `canon gc.error-context.drop`
+
+For a canonical definition:
+```wat
+(canon gc.error-context.drop (core func $f))
+```
+validation specifies:
+* `$f` is given type `(func (param (ref extern)))`
+
+This is the 🛸 GC version of `error-context.drop`, which operates on a boxed
+`(ref extern)` error context instead of an `i32` index.
+```python
+def canon_gc_error_context_drop(r):
+  i = unbox_handle(current_instance(), r)
+  return canon_error_context_drop(i)
+```
+
+
+### 🛸 `canon array.new-{array,memory,table}`
+
+For canonical definitions:
+```wat
+(canon array.new-array $dst $src (core func $f))
+(canon array.new-memory $dst $mem (core func $f))
+(canon array.new-table $dst $tbl (core func $f))
+```
+validation specifies:
+* `array.new-array`: `$f` is given type `(func (param $src-arr (ref null $src))
+  (param $offset i32) (param $len i32) (result (ref $dst)))`
+* `array.new-memory`: `$f` is given type
+  `(func (param $offset $mem.addrtype) (param $len i32) (result (ref $dst)))`
+* `array.new-table`: `$f` is given type
+  `(func (param $ofset $tbl.addrtype) (param $len i32) (result (ref $dst)))`
+* `$dst` must be an `array` type
+* The elements of `$src` must [match] the elements of `$dst`
+* The elements of `$tbl` must [match] the elements of `$dst`
+* For `array.new-memory`, the elements of `$dst` must have a defined byte size
+
+`array.new-array` defines a function that creates a new `array` from
+`$src_param[$offset..($offset + $len)]`.
+
+`array.new-table` defines a function that creates a new `array` from
+`$tbl[$offset..($offset + $len)]`.
+
+`array.new-memory` defines a function that creates a new `array` from
+`$mem[byte_size($dst.elem) * $offset..(byte_size($dst.elem) * ($offset +
+$len))]`.
+
+> Non-normative note: these are polyfills for the `array.new_array`,
+> `array.new_memory` and `array.new_table` instructions of the
+> [more-array-constructors] proposal, which are needed to create immutable
+> arrays of dynamic length and contents (e.g. for lifting and lowering 🛸 `gc`
+> strings and lists).
+```python
+def canon_array_new_array(dst: CoreDefType, src: CoreDefType, a, i, n):
+  trap_if(a is None)
+  trap_if(i + n > array_len(a))
+  return [array_new_fixed(dst, [array_get(a, j) for j in range(i, i + n)])]
+
+def canon_array_new_memory(dst: CoreDefType, mem: MemInst, ptr, n):
+  t = dst.comptype().elem.t
+  nbytes = storage_byte_size(t)
+  trap_if(ptr + n * nbytes > len(mem))
+  vs = []
+  for j in range(n):
+    bits = int.from_bytes(mem[ptr + j*nbytes : ptr + (j+1)*nbytes], 'little')
+    match t:
+      case 'f32'                        : vs.append(core_f32_reinterpret_i32(bits))
+      case 'f64'                        : vs.append(core_f64_reinterpret_i64(bits))
+      case 'i8' | 'i16' | 'i32' | 'i64' : vs.append(bits)
+  return [array_new_fixed(dst, vs)]
+
+def canon_array_new_table(dst: CoreDefType, tbl: list[any], i, n):
+  trap_if(i + n > len(tbl))
+  return [array_new_fixed(dst, tbl[i : i+n])]
 ```
 
 
@@ -5026,6 +6239,9 @@ def canon_thread_available_parallelism():
 [Stream Readiness]: Concurrency.md#stream-readiness
 
 [Lazy Lowering]: https://github.com/WebAssembly/component-model/issues/383
+[more-array-constructors]: https://github.com/WebAssembly/more-array-constructors/blob/main/proposals/more-array-constructors/Overview.md
+[Match]: https://webassembly.github.io/spec/core/valid/matching.html
+[Matching]: https://webassembly.github.io/spec/core/valid/matching.html
 [GC ABI Option]: https://github.com/WebAssembly/component-model/issues/525
 
 [Core WebAssembly Embedding]: https://webassembly.github.io/spec/core/appendix/embedding.html
