@@ -72,7 +72,7 @@ def mk_host_func(store, host_func, ft):
   return func_inst
 
 def mk_str(s):
-  return (s, 'utf8', len(s.encode('utf-8')))
+  return (s, StringHint.UTF8, len(s.encode('utf-8')))
 
 def mk_tup(*a):
   def mk_tup_rec(x):
@@ -118,13 +118,15 @@ def test(t, vals_to_lift, v,
          cx = mk_cx(),
          dst_encoding = None,
          lower_t = None,
-         lower_v = None):
+         lower_v = None,
+         dst_addr_type = None,
+         lowered_vals = None):
   def test_name():
     return "test({},{},{}):".format(t, vals_to_lift, v)
 
   error = None
   def thread_func():
-    nonlocal error, cx, dst_encoding, lower_t, lower_v
+    nonlocal error, cx, dst_encoding, lower_t, lower_v, dst_addr_type
     try:
       vi = CoreValueIter(vals_to_lift)
 
@@ -148,10 +150,14 @@ def test(t, vals_to_lift, v,
       heap = Heap(5*len(cx.opts.memory))
       if dst_encoding is None:
         dst_encoding = cx.opts.string_encoding
-      cx = mk_cx(MemInst(heap.memory, cx.opts.memory.ptr_type()), dst_encoding, heap.realloc)
-      lowered_vals = lower_flat(cx, v, lower_t)
+      if dst_addr_type is None:
+        dst_addr_type = cx.opts.memory.ptr_type()
+      cx = mk_cx(MemInst(heap.memory, dst_addr_type), dst_encoding, heap.realloc)
+      got_lowered_vals = lower_flat(cx, v, lower_t)
+      if lowered_vals is not None and got_lowered_vals != lowered_vals:
+        fail("{} lower_flat() expected {} but got {}".format(test_name(), lowered_vals, got_lowered_vals))
 
-      vi = CoreValueIter(lowered_vals)
+      vi = CoreValueIter(got_lowered_vals)
       got = lift_flat(cx, vi, lower_t)
       if not equal_modulo_string_encoding(got, lower_v):
         fail("{} re-lift expected {} but got {}".format(test_name(), lower_v, got))
@@ -266,44 +272,62 @@ test_nan64(0xffffffffffffffff, CANONICAL_FLOAT64_NAN)
 test_nan64(0x7ff0000000000000, 0x7ff0000000000000)
 test_nan64(0x3ff0000000000000, 0x3ff0000000000000)
 
-def test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, addr_type='i32'):
+def test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, hint,
+                         src_addr_type='i32', dst_addr_type='i32', lowered_vals=None):
   heap = Heap(len(encoded))
   heap.memory[:] = encoded[:]
-  cx = mk_cx(MemInst(heap.memory, addr_type), src_encoding)
-  v = (s, src_encoding, tagged_code_units)
-  test(StringType(), [0, tagged_code_units], v, cx, dst_encoding)
+  cx = mk_cx(MemInst(heap.memory, src_addr_type), src_encoding)
+  tag = 1 << (ptr_size(src_addr_type) * 8 - 1)
+  code_units = tagged_code_units & ~tag
+  v = (s, hint, code_units)
+  test(StringType(), [0, tagged_code_units], v, cx, dst_encoding,
+       dst_addr_type = dst_addr_type, lowered_vals = lowered_vals)
 
-def test_string(src_encoding, dst_encoding, s, addr_type='i32'):
+def test_string(src_encoding, dst_encoding, s, src_addr_type='i32', dst_addr_type='i32'):
+  def run(encoded, tagged_code_units, hint):
+    test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, hint,
+                         src_addr_type, dst_addr_type)
   if src_encoding == 'utf8':
     encoded = s.encode('utf-8')
-    tagged_code_units = len(encoded)
-    test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, addr_type)
+    run(encoded, len(encoded), StringHint.UTF8)
   elif src_encoding == 'utf16':
     encoded = s.encode('utf-16-le')
-    tagged_code_units = int(len(encoded) / 2)
-    test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, addr_type)
+    run(encoded, int(len(encoded) / 2), StringHint.UTF16)
   elif src_encoding == 'latin1+utf16':
     try:
       encoded = s.encode('latin-1')
-      tagged_code_units = len(encoded)
-      test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, addr_type)
+      run(encoded, len(encoded), StringHint.DYNAMIC_LATIN1)
     except UnicodeEncodeError:
       pass
     encoded = s.encode('utf-16-le')
-    tagged_code_units = int(len(encoded) / 2) | (1 << (ptr_size(addr_type) * 8 - 1))
-    test_string_internal(src_encoding, dst_encoding, s, encoded, tagged_code_units, addr_type)
+    tag = 1 << (ptr_size(src_addr_type) * 8 - 1)
+    run(encoded, int(len(encoded) / 2) | tag, StringHint.DYNAMIC_UTF16)
 
 encodings = ['utf8', 'utf16', 'latin1+utf16']
 
 fun_strings = ['', 'a', 'hi', '\x00', 'a\x00b', '\x80', '\x80b', 'ab\xefc',
-               '\u01ffy', 'xy\u01ff', 'a\ud7ffb', 'a\u02ff\u03ff\u04ffbc',
-               '\uf123', '\uf123\uf123abc', 'abcdef\uf123']
+               'ǿy', 'xyǿ', 'a퟿b', 'a˿Ͽӿbc',
+               '', 'abc', 'abcdef']
 
-for addr_type in ['i32', 'i64']:
-  for src_encoding in encodings:
-    for dst_encoding in encodings:
-      for s in fun_strings:
-        test_string(src_encoding, dst_encoding, s, addr_type)
+for src_addr_type in ['i32', 'i64']:
+  for dst_addr_type in ['i32', 'i64']:
+    for src_encoding in encodings:
+      for dst_encoding in encodings:
+        for s in fun_strings:
+          test_string(src_encoding, dst_encoding, s, src_addr_type, dst_addr_type)
+
+# A `latin1+utf16` string's UTF-16 tag is read from the source memory's high
+# pointer bit and written to the destination memory's.
+for src_addr_type, dst_addr_type in [('i32', 'i64'), ('i64', 'i32')]:
+  src_tag = 1 << (ptr_size(src_addr_type) * 8 - 1)
+  dst_tag = 1 << (ptr_size(dst_addr_type) * 8 - 1)
+  def t(s, dst_encoding, lowered_vals):
+    test_string_internal('latin1+utf16', dst_encoding, s, s.encode('utf-16-le'), len(s) | src_tag,
+                         StringHint.DYNAMIC_UTF16, src_addr_type, dst_addr_type, lowered_vals)
+  t('a', 'latin1+utf16', [0, 2 | dst_tag])
+  t('ab', 'latin1+utf16', [4, 2])
+  t('a', 'utf16', [0, 2])
+  t('a', 'utf8', [2, 4])
 
 def test_heap(t, expect, args, byte_array, addr_type='i32'):
   heap = Heap(byte_array)

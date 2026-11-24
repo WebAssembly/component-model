@@ -1334,7 +1334,13 @@ def convert_i32_to_char(cx, i):
   trap_if(0xD800 <= i <= 0xDFFF)
   return chr(i)
 
-String = tuple[str, str, int]
+class StringHint(Enum):
+  UTF8 = 0
+  UTF16 = 1
+  DYNAMIC_LATIN1 = 2
+  DYNAMIC_UTF16 = 3
+
+String = tuple[str, StringHint, int]
 
 def load_string(cx, ptr) -> String:
   ptr_size = cx.opts.memory.ptr_size()
@@ -1354,20 +1360,28 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   match cx.opts.string_encoding:
     case 'utf8':
       alignment = 1
-      byte_length = tagged_code_units
+      code_units = tagged_code_units
+      byte_length = code_units
       encoding = 'utf-8'
+      hint = StringHint.UTF8
     case 'utf16':
       alignment = 2
-      byte_length = 2 * tagged_code_units
+      code_units = tagged_code_units
+      byte_length = 2 * code_units
       encoding = 'utf-16-le'
+      hint = StringHint.UTF16
     case 'latin1+utf16':
       alignment = 2
       if bool(tagged_code_units & tag):
-        byte_length = 2 * (tagged_code_units ^ tag)
+        code_units = tagged_code_units ^ tag
+        byte_length = 2 * code_units
         encoding = 'utf-16-le'
+        hint = StringHint.DYNAMIC_UTF16
       else:
-        byte_length = tagged_code_units
+        code_units = tagged_code_units
+        byte_length = code_units
         encoding = 'latin-1'
+        hint = StringHint.DYNAMIC_LATIN1
 
   trap_if(byte_length > MAX_STRING_BYTE_LENGTH)
   trap_if(ptr != align_to(ptr, alignment))
@@ -1377,7 +1391,7 @@ def load_string_from_range(cx, ptr, tagged_code_units) -> String:
   except UnicodeError:
     trap()
 
-  return (s, cx.opts.string_encoding, tagged_code_units)
+  return (s, hint, code_units)
 
 def lift_error_context(cx, i):
   errctx = cx.inst.handles.get(i)
@@ -1552,39 +1566,26 @@ def store_string(cx, v: String, ptr):
   store_int(cx, tagged_code_units, ptr + ptr_size, ptr_size)
 
 def store_string_into_range(cx, v: String):
-  src, src_encoding, src_tagged_code_units = v
-  tag = utf16_tag(cx)
-
-  if src_encoding == 'latin1+utf16':
-    if bool(src_tagged_code_units & tag):
-      src_simple_encoding = 'utf16'
-      src_code_units = src_tagged_code_units ^ tag
-    else:
-      src_simple_encoding = 'latin1'
-      src_code_units = src_tagged_code_units
-  else:
-    src_simple_encoding = src_encoding
-    src_code_units = src_tagged_code_units
-
+  src, src_hint, src_code_units = v
   match cx.opts.string_encoding:
     case 'utf8':
-      match src_simple_encoding:
-        case 'utf8'         : return store_string_copy(cx, src, src_code_units, 1, 1, 'utf-8')
-        case 'utf16'        : return store_utf16_to_utf8(cx, src, src_code_units)
-        case 'latin1'       : return store_latin1_to_utf8(cx, src, src_code_units)
+      match src_hint:
+        case StringHint.UTF8           : return store_string_copy(cx, src, src_code_units, 1, 1, 'utf-8')
+        case StringHint.UTF16          : return store_utf16_to_utf8(cx, src, src_code_units)
+        case StringHint.DYNAMIC_LATIN1 : return store_latin1_to_utf8(cx, src, src_code_units)
+        case StringHint.DYNAMIC_UTF16  : return store_utf16_to_utf8(cx, src, src_code_units)
     case 'utf16':
-      match src_simple_encoding:
-        case 'utf8'         : return store_utf8_to_utf16(cx, src, src_code_units)
-        case 'utf16'        : return store_string_copy(cx, src, src_code_units, 2, 2, 'utf-16-le')
-        case 'latin1'       : return store_string_copy(cx, src, src_code_units, 2, 2, 'utf-16-le')
+      match src_hint:
+        case StringHint.UTF8           : return store_utf8_to_utf16(cx, src, src_code_units)
+        case StringHint.UTF16          : return store_string_copy(cx, src, src_code_units, 2, 2, 'utf-16-le')
+        case StringHint.DYNAMIC_LATIN1 : return store_string_copy(cx, src, src_code_units, 2, 2, 'utf-16-le')
+        case StringHint.DYNAMIC_UTF16  : return store_string_copy(cx, src, src_code_units, 2, 2, 'utf-16-le')
     case 'latin1+utf16':
-      match src_encoding:
-        case 'utf8'         : return store_string_to_latin1_or_utf16(cx, src, src_code_units)
-        case 'utf16'        : return store_string_to_latin1_or_utf16(cx, src, src_code_units)
-        case 'latin1+utf16' :
-          match src_simple_encoding:
-            case 'latin1'   : return store_string_copy(cx, src, src_code_units, 1, 2, 'latin-1')
-            case 'utf16'    : return store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units)
+      match src_hint:
+        case StringHint.UTF8           : return store_string_to_latin1_or_utf16(cx, src, src_code_units)
+        case StringHint.UTF16          : return store_string_to_latin1_or_utf16(cx, src, src_code_units)
+        case StringHint.DYNAMIC_LATIN1 : return store_string_copy(cx, src, src_code_units, 1, 2, 'latin-1')
+        case StringHint.DYNAMIC_UTF16  : return store_probably_utf16_to_latin1_or_utf16(cx, src, src_code_units)
 
 def store_string_copy(cx, src, src_code_units, dst_code_unit_size, dst_alignment, dst_encoding):
   dst_byte_length = dst_code_unit_size * src_code_units
@@ -2693,7 +2694,7 @@ def canon_error_context_new(opts, ptr, tagged_code_units):
   inst = current_instance()
   trap_if(not inst.may_leave)
   if DETERMINISTIC_PROFILE or random.randint(0,1):
-    s = String(('', 'utf8', 0))
+    s = String(('', StringHint.UTF8, 0))
   else:
     cx = LiftLowerContext('lift', opts, inst)
     s = load_string_from_range(cx, ptr, tagged_code_units)
