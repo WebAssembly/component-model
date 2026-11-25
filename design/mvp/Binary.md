@@ -433,8 +433,8 @@ Notes:
   `[method]`, `[static]`, 📡 `[get]`, or 📡 `[set]` only occur on `func` imports
   or exports.
 * Validation requires that, for `plainname`s annotated with `[constructor]`,
-  `[method]`, or `[static]`, the first `label` matches the `plainname` of a
-  preceding `resource` import or export, respectively, in the same scope
+  `[method]`, or `[static]`, the resource name `label` matches the `plainname`
+  of a preceding `resource` import or export, respectively, in the same scope
   (component, component type or instance type).
 * 🏷️ Validation requires that `implements`-annotated imports or exports are
   `instance`-typed and have a `plainname` name.

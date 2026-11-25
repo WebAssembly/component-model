@@ -252,7 +252,7 @@ Dispatch on `componentValType`:
 - `flags "L"+` → `ToJSValueFlags`(|componentValue|, the labels).
 - `enum "L"+` → String, the label verbatim.
 - `option<T>` not nested within another `option` → **undefined** for `none`, else `ToJSValue`(the payload, T).
-- `variant`, and nested `option`, and `result` outside return position → `ToJSValueVariant`(|componentValue|, the cases). In return position a `result` is unwrapped instead, into a return value or a thrown `ComponentError` (see [Read the imports](#read-the-imports-object) and [Create the exports object](#create-the-exports-object)).
+- `variant`, and nested `option`, and `result` outside return position → `ToJSValueVariant`(|componentValue|). In return position a `result` is unwrapped instead, into a return value or a thrown `ComponentError` (see [Read the imports](#read-the-imports-object) and [Create the exports object](#create-the-exports-object)).
 - `map<K, V>` → `ToJSValueMap`(|componentValue|, K, V).
 - `own<R>` / `borrow<R>` → See [Resource types](#resource-types).
 - `future<T>` → a Promise (TODO).
@@ -293,11 +293,12 @@ The `scalar typed array class` is given by:
     1. Perform `CreateDataPropertyOrThrow`(|object|, `CamelCase`(L), |value|'s `L` bit as a Boolean).
 1. Return |object|.
 
-`ToJSValueVariant(value, cases)`:
+`ToJSValueVariant(value)`:
+1. Let |case| be the current case of the variant |value|.
 1. Let |object| be `OrdinaryObjectCreate`(**null**).
-1. Perform `CreateDataPropertyOrThrow`(|object|, "kind", `CaseLabelOf`(|value|, |cases|)).
-1. If that case has a payload of type T:
-    1. Perform `CreateDataPropertyOrThrow`(|object|, "value", `ToJSValue`(`PayloadOf`(|value|), T)).
+1. Perform `CreateDataPropertyOrThrow`(|object|, "kind", the label of |case|).
+1. If |case| has a payload of type |T|:
+    1. Perform `CreateDataPropertyOrThrow`(|object|, "value", `ToJSValue`(the payload of |value|, |T|)).
 1. Return |object|.
 
 This operation is used for variant, and also cases in the above table where we can't specialize the behavior of `option` and `result`.
@@ -1064,8 +1065,8 @@ To `create the exports object` given an [instance record](#instance-records) |in
             1. Let |value| be ? `create the exports object` given |instance| and the exports of the exported instance.
         1. **component**:
             1. Let |value| be a new `Component` whose [[Component]] is |export|.Component.
-    1. Perform `CreateDataPropertyOrThrow`(|exportsObject|, |key|, |value|).
-1. Perform `SetIntegrityLevel`(|exportsObject|, "frozen").
+    1. Perform ? `CreateDataPropertyOrThrow`(|exportsObject|, |key|, |value|).
+1. Perform ? `SetIntegrityLevel`(|exportsObject|, "frozen").
 1. Return |exportsObject|.
 
 TODO: We need a JSName for members that hit the `reserved class members` list. It needs to concatenate the resource name with the method name somehow.
