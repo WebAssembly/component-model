@@ -253,6 +253,7 @@ Dispatch on `componentValType`:
 - `enum "L"+` → String, the label verbatim.
 - `option<T>` not nested within another `option` → **undefined** for `none`, else `ToJSValue`(the payload, T).
 - `variant`, and nested `option`, and `result` outside return position → `ToJSValueVariant`(|componentValue|). In return position a `result` is unwrapped instead, into a return value or a thrown `ComponentError` (see [Read the imports](#read-the-imports-object) and [Create the exports object](#create-the-exports-object)).
+- `union` → Given the |payload| of |componentValue|, `ToJSValue`(|payload|, type of |payload|).
 - `map<K, V>` → `ToJSValueMap`(|componentValue|, K, V).
 - `own<R>` / `borrow<R>` → See [Resource types](#resource-types).
 - `future<T>` → a Promise (TODO).
@@ -338,6 +339,7 @@ Dispatch on `targetComponentType`:
 - `enum` → ? `ToString`(|jsValue|) must be one of the labels, else throw a `TypeError`.
 - `option<T>` not nested within another `option` → **null** and **undefined** both give `none`; anything else gives `some(ToComponentValue(jsValue, T))`.
 - `variant`, and nested `option`, and `result` outside return position → ? `ToComponentValueVariant`(|jsValue|, the cases). In return position a `result` is unwrapped instead: a JS return value becomes `result.ok`, and a thrown exception becomes `result.error` (see [Read the imports](#read-the-imports-object) and [Create the exports object](#create-the-exports-object)).
+- `union` → ? `ToComponentValueUnion`(|jsValue|, the cases)
 - `map<K, V>` → ? `ToComponentValueMap`(|jsValue|, K, V).
 - `own<R>` / `borrow<R>` → See [Resource types](#resource-types).
 - `future<T>` → TODO.
@@ -453,6 +455,47 @@ An absent property is therefore **false**, matching a `boolean` dictionary membe
 1. Return a variant value of |case| with no payload.
 
 This operation is used for variant, and also cases in the above table where we can't specialize the behavior of `option` and `result`.
+
+`DistinguishableKind(jsValue, resourceTypes)`:
+1. For each |R| in |resourceTypes|:
+    1. Let |abstractTypeKey| be the *abstract type key* of |R|.
+    1. If |R|'s abstract type is one of the component's type imports:
+        1. Let |hostType| be the current call's [[HostResourceTypes]][|abstractTypeKey|].
+        1. Let |matches| be ? `brand check` given |jsValue| and |hostType|.[[ConstructorObject]].
+        1. If |matches|:
+            1. Return **resource |R|**.
+    1. Otherwise:
+        1. Let |class| be the current call's [[GuestResourceClasses]][|abstractTypeKey|].
+        1. If |jsValue| has a [[ResourceClass]] internal slot and |jsValue|.[[ResourceClass]] is |class|:
+            1. Return **resource |R|**.
+1. If |jsValue| is a String, return **string**.
+1. If |jsValue| is a Boolean, return **numeric**.
+1. If |jsValue| is a Number, return **numeric**.
+1. If |jsValue| is a BigInt, return **numeric**.
+1. If |jsValue| is not an Object, throw a `TypeError`.
+1. If `IsArray`(|jsValue|), return **list**.
+1. If |jsValue| has a [[TypedArrayName]] internal slot, return **list**.
+1. Return **object**.
+
+This operation is used for `ToComponentValueUnion`.
+
+`ToComponentValueUnion(jsValue, cases)`:
+1. Let |resourceTypes| be all the resource types in the [distinguishable kinds](Text.md#-union-types) of the members of |cases|, in order.
+1. Let |kind| be ? `DistinguishableKind`(|jsValue|, |resourceTypes|).
+1. For each |case| of |cases|:
+    1. Let |T| be the payload type of |case|.
+    1. Let |caseKinds| be the [distinguishable kinds](Text.md#-union-types) of |T|.
+    1. If |kind| is in |caseKinds|:
+        1. If |kind| is **resource |R|** where |R|'s abstract type is one of the component's type imports:
+            1. Let |abstractTypeKey| be the *abstract type key* of |kind|.
+            1. Let |hostType| be the current call's [[HostResourceTypes]][|abstractTypeKey|].
+            1. Let |payload| be a host resource value whose [[Type]] is |hostType| and whose [[JSValue]] is |jsValue|.
+        1. Otherwise:
+            1. Let |payload| be ? `ToComponentValue`(|jsValue|, |T|).
+        1. Return a union value of |case| whose payload is |payload|.
+1. Throw a `TypeError`.
+
+This operation dynamically selects a union case based on the distinguishable kind of the provided value, before using `ToComponentValue` for the final result. It ensures that `instanceof` is only called once per (non-WebIDL) host resource type in `cases`.
 
 `ToComponentValueMap(jsValue, K, V)`:
 1. If |jsValue| is not an Object:
@@ -1182,7 +1225,6 @@ A component's exports become the bindings of its module namespace object. There 
 
 ## Follow ups
 
-1. How to dynamically pass a union value? Statically passing a single case of the union works, but not dynamic choice.
 1. How to import multiple overloads of a function? Can we just use `external-id`?
 1. How to support class inheritance and casting?
 1. Do we support a reference equality protocol? `ToJSValue` creates a fresh resource object per lift, so two `borrow`s of one component-defined resource are two JS objects that do not compare equal. Reps are opaque and reusable after a drop, so an identity map would need careful invalidation.

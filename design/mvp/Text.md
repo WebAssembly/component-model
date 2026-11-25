@@ -35,6 +35,7 @@ shipped as part of a future WASI Developer Preview release:
 * 🐘: [memory64]
 * 📡: getters and setters
 * ➡️: `stream.forward` and `future.forward` built-ins
+* 💍: the `union` type
 
 
 ## Grammar
@@ -585,6 +586,7 @@ defvaltype    ::= bool
                 | (option <valtype>)
                 | (result <valtype>? (error <valtype>)?)
                 | (map <keytype> <valtype>) 🗺️
+                | (union (case <labellit> <valtype>)+) 💍
                 | (own <typeidx>)
                 | (borrow <typeidx>)
                 | (stream <valtype>?) 🔀
@@ -797,6 +799,7 @@ defined by the following mapping:
 (result <valtype>? (error <valtype>)?) ↦ (variant (case "ok" <valtype>?) (case "error" <valtype>?))
                                 string ↦ (list char)
              (map <keytype> <valtype>) ↦ (list (tuple <keytype> <valtype>))
+  (union (case <labellit> <valtype>)+) ↦ (variant (case <labellit> <valtype>)+)
 ```
 
 Specialized value types have the same set of semantic values as their
@@ -830,6 +833,87 @@ Note that, at least initially, variants must have a non-empty list of
 cases. This could be relaxed in the future to allow an empty list of cases, with
 the empty `(variant)` effectively serving as an [empty type] and indicating
 unreachability.
+
+##### 💍 Union types
+
+A `union` is a `variant` whose cases can be distinguished from each other by
+type. This effectively makes the case names optional in bindings, and enables
+languages to pick a case by inspecting the type of a source-language value.
+Statically-typed languages can choose to represent `union`s like `variant`s
+(with explicit case names) or as simple unions of types if their type system
+permits (e.g. `string | number`).
+
+To make case-selection unambiguous, validation requires every case of a `union`
+to have a payload, and for every pair of cases to be *distinguishable*. Two
+value types are *distinguishable* if their lists of *distinguishable kinds* are
+disjoint, where the distinguishable kinds of each value type are:
+
+| Type | Distinguishable kinds |
+| ---- | --------------------- |
+| `bool`, `s8`, `s16`, `s32`, `s64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64` | [numeric] |
+| `string` | [string] |
+| `record`, `variant`, `result`, `map` | [object] |
+| `list`, `tuple` | [list] |
+| `char`, `enum` | [numeric, string] |
+| `flags` | [numeric, object] |
+| `(option T)` | [...kinds of T, object] |
+| `(own R)`, `(borrow R)` | [resource `R`] (types that are `eq` are indistinguishable) |
+| `union` | kinds of all case payloads in declaration order, excluding duplicates |
+| `stream`, `future`, `error-context` | *not allowed* |
+
+<details>
+<summary>Rationale for distinguishable kinds</summary>
+
+- `bool` is considered "numeric" because some languages treat `bool` as a
+  subtype of some numeric type (e.g. Python).
+- `char` is considered both "numeric" and "string" because some languages
+  idiomatically represent "single characters" as numeric types (e.g.
+  C++/Java/Rust `char`, Go `rune`) while others idiomatically represent
+  characters as short strings (e.g. JavaScript, Python).
+- `enum` is considered both "numeric" and "string" because enums may be
+  idiomatically represented in various languages as numeric types, or strings,
+  or both.
+- `flags` is considered both "numeric" and "object" because flags may be
+  represented in languages as either a number or a record with entries for each
+  flag.
+- `option` picks up "object" in addition to the kinds of its contained type
+  because some languages are expected to "box" optional values while others are
+  not.
+
+</details>
+
+Some types are not allowed to appear as a union case even if they have
+distinguishability rules defined:
+
+- `union` is disallowed because it would require callers (and therefore
+  bindings) to work out the cases of arbitrarily deeply nested unions.
+- `option` is disallowed because `option`s are expected to manifest in various
+  languages in union-like ways (e.g. `string | undefined`), and therefore cause
+  the same problems as `union` itself. Furthermore, the "none" case has no
+  payload. If you want an optional union, represent it as
+  `(option (union ...))`.
+- `result` is disallowed because many languages are expected to translate the
+  "error" case to a thrown exception, and like `option`, the "ok" and "error"
+  cases may not have payloads. If a function that returns a union may fail, the
+  return should be represented as `(result (union ...))`.
+- All types without distinguishable kinds are naturally rejected.
+
+Imported resource types are assumed to be distinct from each other. However,
+it is possible to instantiate a component such that the resource types are not
+in fact distinguishable at runtime; for example, if the same resource type is
+imported twice without an `eq` constraint. In this case, the embedder must pick
+the first matching union case in declaration order. The round-trip is lossy in
+this case, but well-defined.
+
+Authors of source-language bindings must carefully consider how unions map to
+source-language types and values to preserve the desired round-trip property.
+For example, a naive JavaScript binding for
+`(union (case "a" (list string)) (case "b" (map string string)))` might produce
+`Array` for `list` and `Map` for `map`, and might dispatch on the presence of
+`[Symbol.iterator]` when used as a parameter—but this would be incorrect in the
+parameter case, since JS `Map` has `[Symbol.iterator]`, meaning component `map`
+would convert to a JS `Map` and then back to a component `list`. When
+distinguishability is required, narrower source-language types may be required.
 
 #### Definition types
 
@@ -2404,6 +2488,7 @@ val      ::= false | true
            | <core:name>
            | (record <val>+)
            | (variant <labellit> <val>?)
+           | (union <labellit> <val>) 💍
            | (list <val>*)
            | (tuple <val>+)
            | (flags <labellit>*)
@@ -2481,6 +2566,9 @@ For example:
       (entry "b" 2)
     )
   )
+
+  ;; 💍 union:
+  (value $x (union (case "a" u32) (case "b" string)) (union "b" "hello"))
 
   (type $complex
     (tuple
@@ -2788,7 +2876,7 @@ that can be mechanically interpreted by hosts and tooling.
 #### Kebab Case
 
 The `label` production used inside `plainname` as well as the labels of
-`record` and `variant` types must be [kebab case]. The reason for
+`record`, `variant` and `union` (💍) types must be [kebab case]. The reason for
 this particular form of casing is to unambiguously separate words and acronyms
 (represented as all-caps words) so that source language bindings can convert a
 `label` into the idiomatic casing of that language. (Indeed, because hyphens
@@ -3010,8 +3098,9 @@ be rejected at some point in the future.
 #### External Visibility of Types
 
 Resource types and certain compound value types (specifically `record`,
-`variant`, `enum`, `flags`) have an additional **external visibility**
-requirement when used in the function types of imports and exports:
+`variant`, `enum`, `flags`, `union` 💍) have an additional **external
+visibility** requirement when used in the function types of imports and
+exports:
 
 Like other module systems with abstract types, components have to deal with the
 [avoidance problem] wherein a resource type that is in-scope when defining a
@@ -3062,18 +3151,18 @@ imports and exports:
 ```
 
 The Component Model also imposes the same external-visibility requirement on
-`record`, `variant`, `enum` and `flags` value types, even though these types are
-purely structural types. The reason for this theoretically-unnecessary
-requirement is that, in many source languages, the source-level types that
-correspond to these component-level types are not structural and thus require
-some fixed type name to use in generated function signatures. For example, in C,
-`struct`s, `union`s and `enum`s all require a name, and in the absence of a
-component- or WIT-supplied name, a bindings generator would be forced to
-mechanically generate a name that will inevitably be less meaningful than what a
-component or WIT author would choose.
+`record`, `variant`, `enum`, `flags` and `union` (💍) value types, even though
+these types are purely structural types. The reason for this
+theoretically-unnecessary requirement is that, in many source languages, the
+source-level types that correspond to these component-level types are not
+structural and thus require some fixed type name to use in generated function
+signatures. For example, in C, `struct`s, `union`s and `enum`s all require a
+name, and in the absence of a component- or WIT-supplied name, a bindings
+generator would be forced to mechanically generate a name that will inevitably
+be less meaningful than what a component or WIT author would choose.
 
 Thus, the preceding example also applies when `resource` is swapped with
-`record`, `variant`, `enum` and `flags`:
+`record`, `variant`, `enum`, `flags` and `union`:
 ```wat
 (component
   (type $R (record (field "x" u32) (field "y" u32)))
