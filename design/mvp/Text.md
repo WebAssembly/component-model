@@ -36,6 +36,7 @@ shipped as part of a future WASI Developer Preview release:
 * 📡: getters and setters
 * ➡️: `stream.forward` and `future.forward` built-ins
 * 💍: the `union` type
+* 🎭: function overloading
 
 
 ## Grammar
@@ -902,12 +903,12 @@ Imported resource types are assumed to be distinct from each other. However,
 it is possible to instantiate a component such that the resource types are not
 in fact distinguishable at runtime; for example, if the same resource type is
 imported twice without an `eq` constraint. In this case, the embedder must pick
-the first matching union case in declaration order. The round-trip is lossy in
-this case, but well-defined.
+the first matching union case or 🎭 overload in declaration order. The
+round-trip is lossy in this case, but well-defined.
 
-Authors of source-language bindings must carefully consider how unions map to
-source-language types and values to preserve the desired round-trip property.
-For example, a naive JavaScript binding for
+Authors of source-language bindings must carefully consider how unions and
+🎭 overloads map to source-language types and values to preserve the desired
+round-trip property. For example, a naive JavaScript binding for
 `(union (case "a" (list string)) (case "b" (map string string)))` might produce
 `Array` for `list` and `Map` for `map`, and might dispatch on the presence of
 `[Symbol.iterator]` when used as a parameter—but this would be incorrect in the
@@ -2812,12 +2813,16 @@ externnamelit     ::= '"' <externname> '"'
 externname        ::= <plainname>
                     | <interfacename>
 plainname         ::= <label>
+                    | <label> '#' <label> 🎭
                     | '[get]' <label> 📡
                     | '[set]' <label> 📡
                     | '[constructor]' <label>
+                    | '[constructor]' <label> '#' <label> 🎭
                     | '[method]' <label> '.' <label>
+                    | '[method]' <label> '.' <label> '#' <label> 🎭
                     | '[method]' ('[get]' | '[set]') <label> '.' <label> 📡
                     | '[static]' <label> '.' <label>
+                    | '[static]' <label> '.' <label> '#' <label> 🎭
                     | '[static]' ('[get]' | '[set]') <label> '.' <label> 📡
 labellit          ::= '"' <label> '"'
 label             ::= <first-fragment> ( '-' <fragment> )*
@@ -2896,7 +2901,7 @@ Technically, based on the definitions given, the `fragment` `2` (and `3`) in
 `a1-2-3` is ambiguously either a `word` or an `acronym`, but the distinction
 only relates to casing and numbers aren't cased.
 
-#### Name Attributes
+#### Name Attributes and Overloading
 
 The `plainname` production captures several language-neutral syntactic hints
 that allow bindings generators to produce more idiomatic bindings in their
@@ -2904,8 +2909,9 @@ target language. At the top level, a `plainname` adds extra attributes that
 allow functions to be marked as constructors, methods, or static functions of
 a preceding resource, as well as 📡 property getters or 📡 property setters.
 
-Depending on their attributes, `plainname`s can have up to two `label`s. The
-two possible labels are called the *resource name* and the *function name*.
+Depending on their attributes, `plainname`s can have up to three `label`s. The
+three possible labels are called the *resource name*, the *function name*, and
+the 🎭 *overload suffix*.
 
 The `[constructor]`, `[method]`, and `[static]` attributes allow functions to
 be associated with resource types, enabling bindings generators to insert the
@@ -2925,6 +2931,27 @@ in a class `C`. "Standalone" getters and setters are also supported, as some
 languages allow getters and setters that are not associated with a resource or
 class.
 
+🎭 For more ergonomic bindings in languages that support overloading, function
+names can have an optional *overload suffix* appended to the base name. For
+example, for the name `fill#with-path`:
+
+* Languages with static overloading (e.g. C++, C#, Swift) can bind the
+  functions as compile-time overloads of a single function (e.g.
+  `fill(Path path)`).
+* Languages with dynamic overloading (e.g. JS, Python) can bind the functions
+  as one function that dispatches based on the number and runtime types of the
+  arguments (e.g. `fill(...args)`).
+* Languages without overloading (e.g. C) can append the suffix to get a unique
+  name (e.g. `fill_with_path(Path path)`).
+
+Overload suffixes are forbidden on names with `[get]` or `[set]`.
+
+All items with the same base name, in the same scope, form an *overload set*.
+All functions in an overload set must agree on `async`, and within the set,
+each group of functions with the same number of parameters must have a single
+*distinguishing parameter index* `i`, where the types of their `i`th parameters
+are all pairwise [distinguishable](#-union-types).
+
 These options impose additional validation rules on the function type (e.g.
 `[method]` requires a `self` param), as well as on the other function names in
 the same scope (e.g. `[set]foo` requires `[get]foo`). All of these rules are
@@ -2943,12 +2970,19 @@ foo-bar
 [method][get]blob.position                  ;; 📡
 [static][get]blob.max-size                  ;; 📡
 [static][set]blob.max-size                  ;; 📡
+foo#with-options                            ;; 🎭
+[constructor]blob#with-bytes                ;; 🎭
+[method]image.scale#uniform                 ;; 🎭
+[method]image.scale#non-uniform             ;; 🎭
 
 ;; Invalid
 [constructor][method]blob                   ;; [constructor] and [method] are incompatible
 [method]blob                                ;; missing function name
 [constructor]blob.with-bytes                ;; [constructor] cannot take a function name
 [get][method]blob.position                  ;; 📡 attributes in wrong order
+foo#with-options#and-stuff                  ;; 🎭 multiple overload suffixes 
+[get]global-context#special                 ;; 🎭 [get] cannot take an overload suffix
+[set]global-context#special                 ;; 🎭 [set] cannot take an overload suffix
 ```
 
 #### Semver
@@ -2973,7 +3007,7 @@ string equality on all names that appear within the same scope.
 
 First, we define what it means to **canonicalize** a name:
 
-1. Remove all hyphens and lowercase the entire name.
+1. Remove all hyphens and hashtags and lowercase the entire name.
 2. If the resource name and function name are equal, replace the entire name
     with the resource name (e.g. `[method]foo.foo` becomes `foo`).
 3. Strip all `[...]` attributes from the name besides `[constructor]` and
@@ -2982,8 +3016,31 @@ First, we define what it means to **canonicalize** a name:
 For example, `[method]FOO.bar-baz` is canonicalized to `foo.barbaz`, and
 `[constructor]R` is canonicalized to `[constructor]r`.
 
-Then, we say that two names are **strongly-unique** if their canonical forms
-are unequal.
+Then, to determine whether two names (defined as sequences of [Unicode Scalar
+Values]) are **strongly-unique**:
+
+1. Canonicalize both names. If the canonicalized names are equal, then the
+    names are NOT strongly-unique.
+2. Remove any 🎭 overload suffixes from the names, yielding the *base names*.
+3. Canonicalize the base names, yielding the *canonical base names*.
+4. If the canonical base names are equal AND the base names are NOT equal, then
+    the names are NOT strongly-unique.
+5. Otherwise, the names are strongly-unique.
+
+Put more symbolically:
+
+```
+let A = canonicalize(N), A' = canonicalize(N');
+let B = base(N), B' = base(N');
+let C = canonicalize(B), C' = canonicalize(B');
+return A != A' && (B == B' || C != C');
+```
+
+And put more intuitively: two names are strongly-unique if their
+fully-qualified names differ, and either their overload names differ or are
+overloading the exact same item. Equivalently, two names *conflict* if their
+fully-qualified names match, or the overload names match AND refer to different
+base items.
 
 Thus, the following set of names are strongly-unique and can all be imports (or
 exports) of the same component (or component type or instance type):
@@ -2991,24 +3048,34 @@ exports) of the same component (or component type or instance type):
 * `foo`, `foo-bar`, `[constructor]foo`, `[method]foo.bar`, `[static]foo.baz`,
   `foo:bar/baz`, 📡 `[get]prop`, 📡 `[set]prop`, 📡 `[method][get]foo.prop`,
   📡 `[method][set]foo.prop`, 📡 `[static][get]foo.prop-2`,
-  📡 `[static][set]foo.prop-2`, `[method]foo.get-prop`, `[method]foo.set-prop`
+  📡 `[static][set]foo.prop-2`, `[method]foo.get-prop`, `[method]foo.set-prop`,
+  🎭 `foo-bar#with-options`, 🎭 `[constructor]foo#with-options`,
+  🎭 `[method]foo.bar#baz`, 🎭 `[method]foo.bar-baz#extra`,
+  🎭 `[static]foo.baz#extra`
 
 but attempting to add *any* of the following names would be a validation error:
 
 * `foo`, `FOO`, `[method]foo.foo`, 📡 `[get]foo`, 📡 `[method][get]foo.foo`,
   📡 `[static][set]foo.FOO` (conflicts with `foo`)
 * `foo-BAR`, `foobar`, `foob-ar`, `[static]foobar.FOOBAR`,
-  `[static]foo-BAR.FOO-bar` (conflicts with `foo-bar`)
+  `[static]foo-BAR.FOO-bar`, 🎭 `foo#bar` (conflicts with `foo-bar`)
 * `[constructor]FOO` (conflicts with `[constructor]foo`)
-* `[method]foo.BAR`, `[static]foo.bar` (conflicts with `[method]foo.bar`)
-* `[method]foo.baz` (conflicts with `[static]foo.baz`)
+* `[method]foo.BAR`, `[static]foo.bar`, 🎭 `[static]foo.bar#other` (conflicts
+  with `[method]foo.bar`)
+* `[method]foo.baz`, `[method]foo.baz#other` (conflicts with `[static]foo.baz`)
 * `foo:bar/BAZ` (conflicts with `foo:bar/baz`)
 * 📡 `prop` (conflicts with `[get]prop`)
 * 📡 `[set]PROP` (conflicts with `[set]prop`)
 * 📡 `[method]foo.prop`, 📡 `[static]foo.PROP`, 📡 `[method][get]foo.PROP`,
-  📡 `[static][get]foo.prop` (conflicts with `[method][get]foo.prop`)
+  📡 `[static][get]foo.prop`, 🎭 `[method]foo.pr#op` (conflicts with
+  `[method][get]foo.prop`)
 * 📡 `[method][set]foo.PROP`, 📡 `[static][set]foo.prop` (conflicts with
   `[method][set]foo.prop`)
+* `foo-bar-with-options`, `[method]foo-bar-with-options.FOO-BAR-with-options`,
+  🎭 `FOO-bar#WITH-options`, 🎭 `foo-bar-with#options`, 🎭 `FOO-BAR#other`
+  (conflicts with `foo-bar#with-options`)
+* `[constructor]foo-with-options` (conflicts with
+  `[constructor]foo#with-options`)
 
 Note that additional validation rules involving types apply to names with
 attributes. For example, the validation rules for `[constructor]foo` require
@@ -3032,6 +3099,20 @@ strongly-unique, as are `[method][set]foo.prop` and `[method]foo.set-prop`.
 Bindings generators are free to handle conflicts however they choose, e.g.
 renaming a binding, throwing an error, or even ignoring an item. API designers
 are encouraged to avoid overly similar or ambiguous naming.
+
+> [!NOTE]
+> Name uniqueness can be implemented with a hash set S, plus a hash map M from
+> C to B. For each new name:
+> 
+> 1. Check if A is in S. If it is, the new name is NOT strongly-unique.
+> 2. Look up M[C], yielding B' or nothing:
+>     1. If there is no match or B = B', the new name is strongly-unique.
+>     2. Otherwise, the new name is NOT strongly-unique.
+> 3. Add A to S, and let M[C] = B.
+>
+> Note that this does not capture the case where e.g. `foo` is a core module
+> and `foo#with-options` is a function, in which case the names are unique but
+> the overload is not valid.
 
 #### 🔗 Canonical Interface Name
 
